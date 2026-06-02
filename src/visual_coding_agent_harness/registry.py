@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
+
+from .protocol import ToolRequest, ToolResult
 
 
 class ToolError(Exception):
@@ -60,6 +62,13 @@ class ToolRegistry:
         if not isinstance(result, Mapping):
             raise ToolError(f"Tool {name} must return a mapping, got {type(result).__name__}")
         return result
+
+    def execute_batch(self, requests: Sequence[ToolRequest]) -> Sequence[ToolResult]:
+        results = []
+        for request in requests:
+            output = self.execute(request.tool, request.arguments)
+            results.append(ToolResult.from_mapping(request=request, output=output))
+        return results
 
     def _validate_arguments(self, spec: ToolSpec, arguments: Mapping[str, Any]) -> None:
         signature = inspect.signature(spec.handler)

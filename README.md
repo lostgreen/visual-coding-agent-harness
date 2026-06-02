@@ -34,3 +34,33 @@ The demo writes:
 - No GPU requirement.
 - No full long-video pipeline.
 - Dummy tools preserve the schema expected from real VLM, OCR, and verifier backends.
+
+## Tool Protocol
+
+Agents should call tools through `ToolRequest` and consume `ToolResult`.
+
+```python
+from visual_coding_agent_harness.protocol import ToolRequest
+from visual_coding_agent_harness.tools.traditional import build_traditional_registry
+
+registry = build_traditional_registry()
+results = registry.execute_batch([
+    ToolRequest(
+        tool="crop_region",
+        arguments={
+            "image_path": "input/frame.png",
+            "bbox": [0, 0, 500, 500],
+            "output_path": "runs/demo/artifacts/crops/frame_crop.png",
+        },
+        request_id="crop_1",
+        caller="spatial_worker",
+    )
+])
+```
+
+Traditional tools currently include:
+
+- `crop_region`, `zoom_region`, `threshold_image`, `enhance_image`, `edge_detect`
+- `sample_frames`, `extract_clip`
+
+Image tools use Pillow. Video tools build and execute `ffmpeg` commands; they raise a clear tool error when `ffmpeg` is not installed.
