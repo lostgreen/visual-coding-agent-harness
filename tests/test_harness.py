@@ -100,6 +100,18 @@ class HarnessTest(unittest.TestCase):
         self.assertEqual(ocr["claim"], "The visible text reads EXIT.")
         self.assertTrue(verification["confidence"] >= 0.5)
 
+    def test_interpreter_rejects_step_without_tool_name(self):
+        registry = ToolRegistry()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="case_003")
+            interpreter = ProgramInterpreter(registry=registry, workspace=workspace)
+
+            with self.assertRaises(ValueError) as context:
+                interpreter.run([{"args": {}}])
+
+            self.assertIn("missing required 'tool'", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,8 @@ class ProgramInterpreter:
         assignments: Dict[str, str] = {}
 
         for index, step in enumerate(program, start=1):
+            if "tool" not in step:
+                raise ValueError(f"Program step {index} is missing required 'tool'")
             tool_name = str(step["tool"])
             arguments = dict(step.get("args", {}))
             self.workspace.write_trace_event(
