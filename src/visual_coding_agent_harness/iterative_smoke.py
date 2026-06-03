@@ -8,8 +8,9 @@ from typing import Optional
 
 from .agents.iterative_agent import AgentBudget, IterativeRunResult, IterativeVisualAgent
 from .backends.base import VisionLanguageBackend
-from .tools.segments import build_segment_vlm_registry
+from .tools.exploration import build_video_exploration_registry
 from .video_index import SceneIndex, fixed_window_scene_index
+from .video_map import VideoMap
 from .workspace import EvidenceWorkspace
 
 
@@ -44,7 +45,7 @@ def run_iterative_smoke(
     )
     agent = IterativeVisualAgent(
         backend=backend,
-        registry=build_segment_vlm_registry(backend),
+        registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(resolved_index), backend=backend),
         workspace=workspace,
         scene_index=resolved_index,
         budget=budget,
