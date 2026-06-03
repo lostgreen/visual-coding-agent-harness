@@ -305,6 +305,42 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("seg_0002", ledger)
             self.assertIn("aircraft history exhibits", ledger)
 
+    def test_iterative_agent_does_not_inject_media_args_into_navigation_segment_tools(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "read_segment", "args": {"segment_id": "seg_0002"}, "assign": "metadata"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "metadata read", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0, low_fps_caption="opening"),
+                VideoSegment(segment_id="seg_0002", start_sec=30.0, end_sec=60.0, low_fps_caption="aircraft museum"),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="read_segment_args")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(scene_index), backend=backend),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(question="Describe the video.", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.rounds[0].program[0]["tool"], "read_segment")
+            self.assertEqual(result.rounds[0].program[0]["args"], {"segment_id": "seg_0002"})
+            ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
+            self.assertIn("aircraft museum", ledger)
+
     def test_iterative_agent_resolves_segment_id_into_tool_arguments(self):
         backend = ScriptedPlannerBackend(
             [
