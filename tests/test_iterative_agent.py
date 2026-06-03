@@ -117,6 +117,104 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("seg_0002", ledger)
             self.assertIn("aircraft history", ledger)
 
+    def test_iterative_agent_planner_is_text_only_by_default(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "caption_segment", "args": {"segment_id": "seg_0001", "question": "Inspect"}, "assign": "s1"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "done", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=20.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=20.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="text_only")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            planner_requests = [request for request in backend.requests if request.task == "replan"]
+            self.assertTrue(planner_requests)
+            self.assertTrue(all(request.media_path is None for request in planner_requests))
+            self.assertTrue(all(request.media_type is None for request in planner_requests))
+            self.assertIn("Planner input mode: text-only", planner_requests[0].prompt)
+
+    def test_iterative_agent_limits_tool_calls_per_round(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "caption_segment", "args": {"segment_id": "seg_0001", "question": "Inspect 1"}, "assign": "s1"},'
+                    '{"tool": "caption_segment", "args": {"segment_id": "seg_0002", "question": "Inspect 2"}, "assign": "s2"},'
+                    '{"tool": "caption_segment", "args": {"segment_id": "seg_0003", "question": "Inspect 3"}, "assign": "s3"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "done", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=90.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="limit_tools")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_tool_calls_per_round=1),
+            )
+
+            result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(len(result.rounds[0].program), 1)
+            self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
+            self.assertEqual(result.rounds[0].observation_ids, ["obs_0001"])
+
+    def test_iterative_agent_avoids_repeated_segments_with_fallback(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "caption_segment", "args": {"segment_id": "seg_0001", "question": "Inspect"}, "assign": "s1"}'
+                    "]}"
+                ),
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "caption_segment", "args": {"segment_id": "seg_0001", "question": "Inspect again"}, "assign": "repeat"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "done", "citations": ["obs_0001", "obs_0002"]}',
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="dedupe")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
+            self.assertEqual(result.rounds[1].program[0]["args"]["segment_id"], "seg_0002")
+            self.assertIn("Already inspected segments: seg_0001", backend.requests[1].prompt)
+
     def test_iterative_agent_resolves_segment_id_into_tool_arguments(self):
         backend = ScriptedPlannerBackend(
             [
