@@ -90,6 +90,34 @@ class VisualAgentTest(unittest.TestCase):
             self.assertEqual(result.program[0]["args"], {"video_path": "input/demo.mp4", "question": "What happens?"})
             self.assertEqual(result.program_result.observation_ids, ["obs_0001"])
 
+    def test_agent_overrides_placeholder_media_paths_from_planner(self):
+        class PlaceholderPathBackend(RecordingBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "plan":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "planned", "program": ['
+                            '{"tool": "caption_video", "args": {"video_path": "video", "question": "What happens?"}, "assign": "caption"}'
+                            "]}"
+                        )
+                    )
+                return BackendResponse(text=f"caption path: {request.media_path}")
+
+        backend = PlaceholderPathBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="placeholder_media")
+            agent = VisualAgent.with_vlm_tools(backend=backend, workspace=workspace)
+
+            result = agent.run(
+                question="What happens?",
+                media_path="/real/path/demo.mp4",
+                media_type="video",
+            )
+
+            self.assertEqual(result.program[0]["args"]["video_path"], "/real/path/demo.mp4")
+            self.assertEqual(backend.requests[1].media_path, "/real/path/demo.mp4")
+
     def test_smoke_runner_uses_backend_without_pythonpath_coupling(self):
         backend = RecordingBackend()
 
