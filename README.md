@@ -144,3 +144,66 @@ The run writes the same harness artifacts under `runs/<run_id>/`:
 - `observations.jsonl`
 - `trace.jsonl`
 - `ledger.md`
+
+## Iterative Long-Video Agent
+
+The iterative agent is the first autonomous exploration flow. It starts from a
+scene index, asks the main VLM to choose a segment-level tool call, writes the
+tool result into the evidence ledger, and replans from the updated ledger until
+the model returns a final answer or the round budget is exhausted.
+
+Current P1 tools:
+
+- `caption_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
+- `qa_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
+
+The planner only needs to emit `segment_id`; the harness binds the real
+`video_path`, `start_sec`, `end_sec`, and default `nframes` from `SceneIndex`.
+
+Planner output for another exploration round:
+
+```json
+{
+  "status": "continue",
+  "rationale": "Need focused evidence from the likely segment.",
+  "program": [
+    {
+      "tool": "caption_segment",
+      "args": {
+        "segment_id": "seg_0002",
+        "question": "What is discussed in this segment?"
+      },
+      "assign": "focused_caption"
+    }
+  ]
+}
+```
+
+Planner output for final answer:
+
+```json
+{
+  "status": "final",
+  "answer": "...",
+  "citations": ["obs_0001"],
+  "confidence": 0.78
+}
+```
+
+Run with Qwen3-VL:
+
+```bash
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.iterative_smoke \
+  --model-path /m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct \
+  --media-path /path/to/video.mp4 \
+  --question "What is the video mainly about?" \
+  --duration-sec 600 \
+  --window-sec 30 \
+  --max-rounds 4 \
+  --base-dir . \
+  --run-id qwen3_vl_iterative_smoke
+```
+
+This first version passes segment time bounds through tool metadata and prompt
+text. Strict temporal isolation should be added next by extracting short clips
+into `runs/<run_id>/artifacts/clips/` before calling the VLM backend.
