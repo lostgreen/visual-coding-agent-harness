@@ -153,7 +153,9 @@ def _fallback_plan(*, question: str, media_path: str, media_type: str) -> Mappin
 
 
 def _fill_media_argument(args: dict[str, Any], *, tool_name: str, media_path: str) -> None:
+    generic_media_path = args.pop("media_path", None)
+    resolved_media_path = str(generic_media_path or media_path)
     if tool_name.endswith("_video") and not args.get("video_path"):
-        args["video_path"] = media_path
+        args["video_path"] = resolved_media_path
     if tool_name.endswith("_image") and not args.get("image_path"):
-        args["image_path"] = media_path
+        args["image_path"] = resolved_media_path
