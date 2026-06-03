@@ -257,3 +257,9 @@ The comparison loads one shared Qwen backend and records two strategies:
 The summary is written to `runs/<run_id>/comparison.json`; exploration evidence
 is written to `runs/<run_id>_explore/ledger.md`, `observations.jsonl`, and
 `trace.jsonl`.
+
+Current smoke observation: `60s` extracted clips are practical for a first loop;
+`300s` clips are CPU-heavy and should be avoided until we add better frame
+sampling or low-fps VideoMap captions. With no upfront captions/ASR/OCR index,
+`video_ls` falls back to timeline anchors, so the next research iteration should
+enrich VideoMap before planning.

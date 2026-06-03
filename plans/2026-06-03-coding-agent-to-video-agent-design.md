@@ -425,6 +425,24 @@ Both strategies share one loaded backend so the comparison is about tool-use and
 
 The scientific question is whether `video_ls` plus iterative local inspection produces a more complete and better-cited description than direct long-video prompting, especially for videos where important events are sparse or late in the timeline.
 
+Initial KML smoke on one VideoMME long video:
+
+- Run id: `qwen3_vl_4b_compare_videols_20260603_v5_w60`
+- Video duration: `3169.059375s`
+- Direct baseline: `9.959s`, one Qwen3-VL request with `nframes=64`.
+- Map-first exploration: `53.589s`, `4` rounds, status `max_rounds_reached`.
+- Tool trajectory: `video_ls -> caption_segment -> caption_segment -> caption_segment`.
+- Artifacts: `3` physical clips, each `60s`, under `runs/qwen3_vl_4b_compare_videols_20260603_v5_w60_explore/artifacts/clips/`.
+- Evidence: `obs_0001` VideoMap overview plus `obs_0002..obs_0004` clip captions.
+
+Interpretation:
+
+- The harness now produces a real evidence trajectory with clip artifacts and citations, not just prompt-level temporal hints.
+- Direct full-video prompting is faster here, but the excerpt is opening-biased and not traceable to local evidence.
+- Map-first exploration is slower because it makes multiple VLM calls and decodes clips, but it covers multiple local windows and creates reusable evidence.
+- A `300s` clip smoke was too heavy: clip extraction produced a roughly `24.9MB` artifact and remained CPU-bound for minutes. The current practical default should be shorter windows, e.g. `60s`, until we add better indexing and frame-level sampling.
+- With no captions/ASR/OCR indexes, `video_ls` falls back to temporal anchors. This is useful for smoke, but not enough for strong long-video localization. The next improvement should enrich VideoMap with low-fps captions and/or embeddings before planning.
+
 ## Difference From VisProg, ParaVT, And Retool-Style Systems
 
 VisProg-style systems are valuable for expressing visual programs, but they are usually short-horizon and image-centric. Our harness keeps the visual-program idea while adding persistent workspace, ledger, trace, and iterative replanning.
