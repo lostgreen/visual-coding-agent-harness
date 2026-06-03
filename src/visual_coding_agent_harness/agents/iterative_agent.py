@@ -13,6 +13,9 @@ from ..video_index import SceneIndex
 from ..workspace import EvidenceWorkspace
 
 
+_SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment"}
+
+
 @dataclass(frozen=True)
 class AgentBudget:
     max_rounds: int = 4
@@ -206,9 +209,10 @@ class IterativeVisualAgent:
             if len(normalized) >= self.budget.max_tool_calls_per_round:
                 break
 
+            tool_name = str(step["tool"])
             args = dict(step.get("args", {}))
             segment_id = args.get("segment_id")
-            if segment_id:
+            if segment_id and tool_name in _SEGMENT_MEDIA_TOOLS:
                 resolved_segment_id = self._resolve_next_segment_id(str(segment_id), reserved_segment_ids)
                 if resolved_segment_id is None:
                     continue
@@ -229,8 +233,10 @@ class IterativeVisualAgent:
                 args.setdefault("question", question)
                 args.setdefault("nframes", self.budget.default_nframes)
                 reserved_segment_ids.add(segment.segment_id)
+            elif segment_id:
+                self.scene_index.get(str(segment_id))
 
-            normalized_step: dict[str, Any] = {"tool": str(step["tool"]), "args": args}
+            normalized_step: dict[str, Any] = {"tool": tool_name, "args": args}
             if "assign" in step:
                 normalized_step["assign"] = str(step["assign"])
             normalized.append(normalized_step)
@@ -338,6 +344,8 @@ def _extract_json_object(text: str) -> str:
 def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[str]:
     segment_ids = []
     for step in program:
+        if step.get("tool") not in _SEGMENT_MEDIA_TOOLS:
+            continue
         args = step.get("args", {})
         if isinstance(args, Mapping) and args.get("segment_id"):
             segment_ids.append(str(args["segment_id"]))
