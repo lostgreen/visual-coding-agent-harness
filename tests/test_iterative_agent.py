@@ -175,6 +175,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("search_segments(query", prompt)
             self.assertIn("read_segment(segment_id", prompt)
             self.assertIn("expand_window(segment_id", prompt)
+            self.assertIn("Do not spend every round on navigation-only tools", prompt)
 
     def test_iterative_agent_limits_tool_calls_per_round(self):
         backend = ScriptedPlannerBackend(
@@ -474,7 +475,8 @@ class IterativeAgentTest(unittest.TestCase):
 
             self.assertEqual(result.status, "max_rounds_reached")
             self.assertEqual(result.citations, ["obs_0001"])
-            self.assertIn("Stopped after 1 exploration round", result.answer)
+            self.assertIn("Partial evidence summary", result.answer)
+            self.assertIn("aircraft history", result.answer)
 
     def test_segment_vlm_tools_share_backend_and_pass_temporal_metadata(self):
         class SegmentToolBackend(VisionLanguageBackend):
