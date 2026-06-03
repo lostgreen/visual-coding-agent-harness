@@ -287,7 +287,7 @@ def _replanning_prompt(
         "Planner input mode: text-only. Use the scene index and evidence ledger; tools inspect pixels/video.\n"
         "Use coarse-to-fine search: inspect promising segments, read the evidence ledger, then either continue or answer.\n"
         "Available tools:\n"
-        "- video_ls()\n"
+        "- video_ls(query: str = '', max_segments: int = 16, top_k: int = 5)\n"
         "- search_segments(query: str, top_k: int = 5, modalities: list = [])\n"
         "- read_segment(segment_id: str)\n"
         "- expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0)\n"
@@ -297,7 +297,8 @@ def _replanning_prompt(
         '{"status": "continue", "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
         '{"status": "final", "answer": string, "citations": [observation_id], "confidence": number}\n'
         "Rules:\n"
-        "- Use navigation tools first when the relevant segment is unclear.\n"
+        "- Use video_ls first for open-ended description tasks or when the relevant segment is unclear.\n"
+        "- Use navigation output as a map, then call caption_segment or qa_segment on one candidate segment.\n"
         "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.\n"
         f"- Request at most {budget.max_tool_calls_per_round} new tool call(s) this round.\n"
         "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.\n"
