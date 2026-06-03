@@ -16,8 +16,10 @@ from ..workspace import EvidenceWorkspace
 @dataclass(frozen=True)
 class AgentBudget:
     max_rounds: int = 4
+    max_tool_calls_per_round: int = 1
     default_nframes: int = 8
     high_fps_nframes: int = 32
+    planner_receives_media: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,7 @@ class IterativeVisualAgent:
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
         rounds: list[IterativeRound] = []
         citations: list[str] = []
+        inspected_segment_ids: set[str] = set()
 
         for round_number in range(1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
@@ -100,11 +103,16 @@ class IterativeVisualAgent:
                         ledger_text=ledger_text,
                         round_number=round_number,
                         budget=self.budget,
+                        inspected_segment_ids=sorted(inspected_segment_ids),
                     ),
-                    media_path=video_path,
-                    media_type="video",
+                    media_path=video_path if self.budget.planner_receives_media else None,
+                    media_type="video" if self.budget.planner_receives_media else None,
                     max_new_tokens=768,
-                    metadata={"round": round_number, "segment_count": len(self.scene_index.segments)},
+                    metadata={
+                        "round": round_number,
+                        "segment_count": len(self.scene_index.segments),
+                        "planner_input_mode": "video" if self.budget.planner_receives_media else "text-only",
+                    },
                 )
             )
             action = _parse_replan_action(planner_response.text)
@@ -142,6 +150,7 @@ class IterativeVisualAgent:
                 action.get("program", []),
                 question=question,
                 video_path=video_path,
+                inspected_segment_ids=inspected_segment_ids,
             )
             self.workspace.write_trace_event(
                 "iterative_plan",
@@ -150,6 +159,7 @@ class IterativeVisualAgent:
             program_result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(program)
             observation_ids = [str(observation_id) for observation_id in program_result.observation_ids]
             citations.extend(observation_ids)
+            inspected_segment_ids.update(_segment_ids_from_program(program))
             rounds.append(
                 IterativeRound(
                     round_number=round_number,
@@ -181,33 +191,78 @@ class IterativeVisualAgent:
         *,
         question: str,
         video_path: str,
+        inspected_segment_ids: set[str],
     ) -> Sequence[Mapping[str, Any]]:
         if not isinstance(program, list):
             raise ValueError("Planner action status=continue requires a list program")
 
         normalized = []
+        reserved_segment_ids = set(inspected_segment_ids)
         for step in program:
             if not isinstance(step, Mapping):
                 raise ValueError("Planner program steps must be objects")
             if "tool" not in step:
                 raise ValueError("Planner program step is missing required 'tool'")
+            if len(normalized) >= self.budget.max_tool_calls_per_round:
+                break
 
             args = dict(step.get("args", {}))
             segment_id = args.get("segment_id")
             if segment_id:
-                segment = self.scene_index.get(str(segment_id))
+                resolved_segment_id = self._resolve_next_segment_id(str(segment_id), reserved_segment_ids)
+                if resolved_segment_id is None:
+                    continue
+                if resolved_segment_id != str(segment_id):
+                    self.workspace.write_trace_event(
+                        "exploration_policy_adjustment",
+                        {
+                            "reason": "avoid_repeated_segment",
+                            "requested_segment_id": str(segment_id),
+                            "resolved_segment_id": resolved_segment_id,
+                        },
+                    )
+                segment = self.scene_index.get(resolved_segment_id)
                 args["segment_id"] = segment.segment_id
                 args["video_path"] = video_path
                 args["start_sec"] = segment.start_sec
                 args["end_sec"] = segment.end_sec
                 args.setdefault("question", question)
                 args.setdefault("nframes", self.budget.default_nframes)
+                reserved_segment_ids.add(segment.segment_id)
 
             normalized_step: dict[str, Any] = {"tool": str(step["tool"]), "args": args}
             if "assign" in step:
                 normalized_step["assign"] = str(step["assign"])
             normalized.append(normalized_step)
+
+        if not normalized:
+            fallback_segment_id = self._resolve_next_segment_id("", reserved_segment_ids)
+            if fallback_segment_id is not None:
+                segment = self.scene_index.get(fallback_segment_id)
+                normalized.append(
+                    {
+                        "tool": "caption_segment",
+                        "args": {
+                            "video_path": video_path,
+                            "segment_id": segment.segment_id,
+                            "start_sec": segment.start_sec,
+                            "end_sec": segment.end_sec,
+                            "question": question,
+                            "nframes": self.budget.default_nframes,
+                        },
+                        "assign": f"auto_{segment.segment_id}",
+                    }
+                )
         return normalized
+
+    def _resolve_next_segment_id(self, requested_segment_id: str, reserved_segment_ids: set[str]) -> Optional[str]:
+        if requested_segment_id and requested_segment_id not in reserved_segment_ids:
+            self.scene_index.get(requested_segment_id)
+            return requested_segment_id
+        for segment in self.scene_index.segments:
+            if segment.segment_id not in reserved_segment_ids:
+                return segment.segment_id
+        return None
 
     def _read_ledger(self) -> str:
         ledger_path = self.workspace.root / "ledger.md"
@@ -223,9 +278,13 @@ def _replanning_prompt(
     ledger_text: str,
     round_number: int,
     budget: AgentBudget,
+    inspected_segment_ids: Sequence[str] = (),
 ) -> str:
+    inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
+    uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
     return (
         "You are an autonomous visual agent exploring a long video with tools.\n"
+        "Planner input mode: text-only. Use the scene index and evidence ledger; tools inspect pixels/video.\n"
         "Use coarse-to-fine search: inspect promising segments, read the evidence ledger, then either continue or answer.\n"
         "Available tools:\n"
         "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8)\n"
@@ -235,10 +294,14 @@ def _replanning_prompt(
         '{"status": "final", "answer": string, "citations": [observation_id], "confidence": number}\n'
         "Rules:\n"
         "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.\n"
+        f"- Request at most {budget.max_tool_calls_per_round} new tool call(s) this round.\n"
+        "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.\n"
         "- Continue when evidence is missing, ambiguous, or too coarse.\n"
         "- Final answers must cite observation ids from the ledger.\n"
         f"Round: {round_number}/{budget.max_rounds}\n"
         f"Question: {question}\n"
+        f"Already inspected segments: {inspected_line}\n"
+        f"Uninspected segment candidates: {uninspected_line}\n"
         "Scene index:\n"
         f"{scene_index.summary(max_segments=64)}\n"
         "Evidence ledger:\n"
@@ -264,3 +327,22 @@ def _extract_json_object(text: str) -> str:
     if start == -1 or end == -1 or end <= start:
         raise ValueError("No JSON object found")
     return stripped[start : end + 1]
+
+
+def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[str]:
+    segment_ids = []
+    for step in program:
+        args = step.get("args", {})
+        if isinstance(args, Mapping) and args.get("segment_id"):
+            segment_ids.append(str(args["segment_id"]))
+    return segment_ids
+
+
+def _uninspected_segment_summary(*, scene_index: SceneIndex, inspected_segment_ids: Sequence[str], limit: int = 12) -> str:
+    inspected = set(inspected_segment_ids)
+    candidates = [segment.segment_id for segment in scene_index.segments if segment.segment_id not in inspected]
+    if not candidates:
+        return "(none)"
+    visible = candidates[:limit]
+    suffix = f", ... {len(candidates) - limit} more" if len(candidates) > limit else ""
+    return ", ".join(visible) + suffix

@@ -148,9 +148,20 @@ The run writes the same harness artifacts under `runs/<run_id>/`:
 ## Iterative Long-Video Agent
 
 The iterative agent is the first autonomous exploration flow. It starts from a
-scene index, asks the main VLM to choose a segment-level tool call, writes the
+scene index, asks the main model to choose a segment-level tool call, writes the
 tool result into the evidence ledger, and replans from the updated ledger until
-the model returns a final answer or the round budget is exhausted.
+the model returns a final answer or the round budget is exhausted. By default
+the planner is text-only: it receives the question, scene index, inspected
+segment list, and ledger, while tools are responsible for inspecting video.
+
+Autonomous exploration policy:
+
+- The planner sees `Already inspected segments` and `Uninspected segment candidates`.
+- The harness binds `segment_id` to the real `video_path/start_sec/end_sec`.
+- Each round is capped by `AgentBudget.max_tool_calls_per_round`, default `1`.
+- Repeated segment requests are automatically redirected to the next uninspected segment.
+- If the planner emits no usable tool call, the harness falls back to `caption_segment` on the next uninspected segment.
+- Final answers must cite observation ids from `ledger.md`.
 
 Current P1 tools:
 
