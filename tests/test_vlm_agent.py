@@ -56,6 +56,8 @@ class VisualAgentTest(unittest.TestCase):
             self.assertEqual(result.program_result.observation_ids, ["obs_0001", "obs_0002"])
             self.assertEqual([request.task for request in backend.requests], ["plan", "caption_video", "qa_video"])
             self.assertTrue(all(request.media_path == "input/demo.mp4" for request in backend.requests))
+            self.assertEqual(backend.requests[1].metadata["nframes"], 8)
+            self.assertEqual(backend.requests[2].metadata["nframes"], 8)
             ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
             self.assertIn("A person opens a door", ledger)
             self.assertIn("The person opens a door", ledger)

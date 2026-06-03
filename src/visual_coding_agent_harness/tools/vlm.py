@@ -7,7 +7,7 @@ foundation model during smoke tests and later benchmarks.
 
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from typing import Mapping
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
@@ -37,23 +37,37 @@ def build_vlm_registry(backend: VisionLanguageBackend) -> ToolRegistry:
         )
 
     @tool(name="caption_video", description="Caption a video using the shared VLM backend.")
-    def caption_video(video_path: str, question: str = "Describe the video.") -> Mapping[str, object]:
+    def caption_video(
+        video_path: str,
+        question: str = "Describe the video.",
+        nframes: int = 8,
+        max_pixels: int = 360 * 420,
+        fps: float = 0.0,
+    ) -> Mapping[str, object]:
         return _run_vlm_tool(
             backend=backend,
             task="caption_video",
             media_path=video_path,
             media_type="video",
             prompt=question,
+            metadata=_video_metadata(nframes=nframes, max_pixels=max_pixels, fps=fps),
         )
 
     @tool(name="qa_video", description="Answer a video question using the shared VLM backend.")
-    def qa_video(video_path: str, question: str) -> Mapping[str, object]:
+    def qa_video(
+        video_path: str,
+        question: str,
+        nframes: int = 8,
+        max_pixels: int = 360 * 420,
+        fps: float = 0.0,
+    ) -> Mapping[str, object]:
         return _run_vlm_tool(
             backend=backend,
             task="qa_video",
             media_path=video_path,
             media_type="video",
             prompt=question,
+            metadata=_video_metadata(nframes=nframes, max_pixels=max_pixels, fps=fps),
         )
 
     registry.register(caption_image)
@@ -73,6 +87,7 @@ def _run_vlm_tool(
     max_new_tokens: int = 256,
     temperature: float = 0.0,
     confidence: float = 0.65,
+    metadata: Mapping[str, object] | None = None,
 ) -> Mapping[str, object]:
     response = backend.generate(
         BackendRequest(
@@ -82,6 +97,7 @@ def _run_vlm_tool(
             media_type=media_type,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
+            metadata=dict(metadata or {}),
         )
     )
     return {
@@ -92,3 +108,10 @@ def _run_vlm_tool(
         "limitations": "VLM-generated observation; verify with atomic tools for high-stakes claims.",
         "raw_backend": dict(response.raw),
     }
+
+
+def _video_metadata(*, nframes: int, max_pixels: int, fps: float) -> Mapping[str, object]:
+    metadata: dict[str, object] = {"nframes": nframes, "max_pixels": max_pixels}
+    if fps > 0:
+        metadata["fps"] = fps
+    return metadata

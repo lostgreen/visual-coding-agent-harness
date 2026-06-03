@@ -113,7 +113,11 @@ def _message_content(request: BackendRequest) -> list[Mapping[str, Any]]:
     content: list[Mapping[str, Any]] = []
     if request.media_path:
         if request.media_type == "video":
-            content.append({"type": "video", "video": request.media_path})
+            video_item: dict[str, Any] = {"type": "video", "video": request.media_path}
+            for key in ["nframes", "fps", "max_pixels", "min_pixels"]:
+                if key in request.metadata:
+                    video_item[key] = request.metadata[key]
+            content.append(video_item)
         elif request.media_type == "image":
             content.append({"type": "image", "image": request.media_path})
     content.append({"type": "text", "text": request.prompt})
