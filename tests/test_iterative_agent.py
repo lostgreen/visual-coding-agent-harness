@@ -175,6 +175,8 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("search_segments(query", prompt)
             self.assertIn("read_segment(segment_id", prompt)
             self.assertIn("expand_window(segment_id", prompt)
+            self.assertIn("max_pixels", prompt)
+            self.assertIn("fps", prompt)
             self.assertIn("Do not spend every round on navigation-only tools", prompt)
 
     def test_iterative_agent_limits_tool_calls_per_round(self):
@@ -505,10 +507,12 @@ class IterativeAgentTest(unittest.TestCase):
         self.assertEqual(result["claim"], "The segment shows a runway and aircraft.")
         self.assertEqual(backend.requests[0].task, "caption_segment")
         self.assertEqual(backend.requests[0].media_path, "/videos/demo.mp4")
-        self.assertEqual(
-            backend.requests[0].metadata,
-            {"segment_id": "seg_0002", "start_sec": 10.0, "end_sec": 20.0, "nframes": 12},
-        )
+        self.assertEqual(backend.requests[0].metadata["segment_id"], "seg_0002")
+        self.assertEqual(backend.requests[0].metadata["start_sec"], 10.0)
+        self.assertEqual(backend.requests[0].metadata["end_sec"], 20.0)
+        self.assertEqual(backend.requests[0].metadata["nframes"], 12)
+        self.assertEqual(backend.requests[0].metadata["max_pixels"], 151200)
+        self.assertEqual(backend.requests[0].metadata["question"], "What is visible?")
 
     def test_segment_vlm_tools_can_extract_physical_clip_before_backend_call(self):
         class SegmentToolBackend(VisionLanguageBackend):

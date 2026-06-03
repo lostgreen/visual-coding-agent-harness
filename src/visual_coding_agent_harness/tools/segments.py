@@ -32,6 +32,8 @@ def build_segment_vlm_registry(
         end_sec: float,
         question: str = "Describe this video segment.",
         nframes: int = 8,
+        max_pixels: int = 360 * 420,
+        fps: float = 0.0,
     ) -> Mapping[str, object]:
         return _run_segment_tool(
             backend=backend,
@@ -42,6 +44,8 @@ def build_segment_vlm_registry(
             end_sec=end_sec,
             question=question,
             nframes=nframes,
+            max_pixels=max_pixels,
+            fps=fps,
             workspace=workspace,
             extract_clips=extract_clips,
             clip_extractor=clip_extractor,
@@ -55,6 +59,8 @@ def build_segment_vlm_registry(
         end_sec: float,
         question: str,
         nframes: int = 8,
+        max_pixels: int = 360 * 420,
+        fps: float = 0.0,
     ) -> Mapping[str, object]:
         return _run_segment_tool(
             backend=backend,
@@ -65,6 +71,8 @@ def build_segment_vlm_registry(
             end_sec=end_sec,
             question=question,
             nframes=nframes,
+            max_pixels=max_pixels,
+            fps=fps,
             workspace=workspace,
             extract_clips=extract_clips,
             clip_extractor=clip_extractor,
@@ -85,6 +93,8 @@ def _run_segment_tool(
     end_sec: float,
     question: str,
     nframes: int,
+    max_pixels: int,
+    fps: float,
     workspace: Optional[EvidenceWorkspace] = None,
     extract_clips: bool = False,
     clip_extractor: Optional[ClipExtractor] = None,
@@ -94,7 +104,11 @@ def _run_segment_tool(
         "start_sec": float(start_sec),
         "end_sec": float(end_sec),
         "nframes": int(nframes),
+        "max_pixels": int(max_pixels),
+        "question": question,
     }
+    if fps > 0:
+        metadata["fps"] = float(fps)
     media_path = video_path
     input_artifacts = [f"{video_path}#t={float(start_sec):.3f},{float(end_sec):.3f}"]
     limitations = "Segment VLM observation; backend may need physical clipping for strict temporal isolation."
@@ -143,10 +157,12 @@ def _run_segment_tool(
 
 
 def _segment_prompt(*, task: str, segment_id: str, start_sec: float, end_sec: float, question: str) -> str:
-    instruction = "Describe the visual content" if task == "caption_segment" else "Answer the question"
+    mode = "Caption task" if task == "caption_segment" else "QA task"
     return (
-        f"{instruction} for video segment {segment_id} only.\n"
+        f"{mode}: use only visible evidence from video segment {segment_id}.\n"
         f"Target time range: {start_sec:.3f}s to {end_sec:.3f}s.\n"
+        "Do not invent details, identities, text, or temporal order that are not supported.\n"
+        "Mention uncertainty when evidence is ambiguous or too low resolution.\n"
         "Ignore other parts of the video when possible.\n"
         f"Question: {question}"
     )
