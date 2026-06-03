@@ -212,6 +212,20 @@ class IterativeVisualAgent:
             tool_name = str(step["tool"])
             args = dict(step.get("args", {}))
             segment_id = args.get("segment_id")
+            if segment_id:
+                segment = self.scene_index.get(str(segment_id))
+                if tool_name == "read_segment" and not _segment_has_index_text(segment):
+                    self.workspace.write_trace_event(
+                        "exploration_policy_adjustment",
+                        {
+                            "reason": "upgrade_empty_read_segment_to_caption",
+                            "requested_tool": "read_segment",
+                            "resolved_tool": "caption_segment",
+                            "segment_id": segment.segment_id,
+                        },
+                    )
+                    tool_name = "caption_segment"
+
             if segment_id and tool_name in _SEGMENT_MEDIA_TOOLS:
                 resolved_segment_id = self._resolve_next_segment_id(str(segment_id), reserved_segment_ids)
                 if resolved_segment_id is None:
@@ -350,6 +364,10 @@ def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[
         if isinstance(args, Mapping) and args.get("segment_id"):
             segment_ids.append(str(args["segment_id"]))
     return segment_ids
+
+
+def _segment_has_index_text(segment: Any) -> bool:
+    return bool(getattr(segment, "low_fps_caption", ""))
 
 
 def _uninspected_segment_summary(*, scene_index: SceneIndex, inspected_segment_ids: Sequence[str], limit: int = 12) -> str:

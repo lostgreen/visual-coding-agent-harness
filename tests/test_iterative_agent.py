@@ -341,6 +341,56 @@ class IterativeAgentTest(unittest.TestCase):
             ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
             self.assertIn("aircraft museum", ledger)
 
+    def test_iterative_agent_upgrades_empty_read_segment_to_caption_segment(self):
+        class ReadUpgradeBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+                self.replan_calls = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    self.replan_calls += 1
+                    if self.replan_calls == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status": "continue", "program": ['
+                                '{"tool": "read_segment", "args": {"segment_id": "seg_0002"}, "assign": "metadata"}'
+                                "]}"
+                            )
+                        )
+                    return BackendResponse(text='{"status": "final", "answer": "captioned", "citations": ["obs_0001"]}')
+                if request.task == "caption_segment":
+                    return BackendResponse(text="The segment visually shows aircraft exhibits.")
+                return BackendResponse(text="unexpected")
+
+        backend = ReadUpgradeBackend()
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0),
+                VideoSegment(segment_id="seg_0002", start_sec=30.0, end_sec=60.0),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="upgrade_empty_read")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(scene_index), backend=backend),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(question="Describe the video.", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.rounds[0].program[0]["tool"], "caption_segment")
+            self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0002")
+            self.assertEqual(backend.requests[1].task, "caption_segment")
+            ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
+            self.assertIn("aircraft exhibits", ledger)
+
     def test_iterative_agent_resolves_segment_id_into_tool_arguments(self):
         backend = ScriptedPlannerBackend(
             [
