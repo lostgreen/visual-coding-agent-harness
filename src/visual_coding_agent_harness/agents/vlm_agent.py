@@ -14,11 +14,42 @@ from ..workspace import EvidenceWorkspace
 
 
 @dataclass(frozen=True)
+class AgentInput:
+    question: str
+    media_path: str
+    media_type: str
+    tool_policy: str = "required"
+
+    def to_dict(self) -> Mapping[str, str]:
+        return {
+            "question": self.question,
+            "media_path": self.media_path,
+            "media_type": self.media_type,
+            "tool_policy": self.tool_policy,
+        }
+
+
+@dataclass(frozen=True)
 class AgentRunResult:
+    agent_input: AgentInput
     answer: str
     program: Sequence[Mapping[str, Any]]
     program_result: ProgramResult
     planner_text: str
+
+    def to_dict(self) -> Mapping[str, Any]:
+        return {
+            "input": self.agent_input.to_dict(),
+            "output": {
+                "answer": self.answer,
+                "program": list(self.program),
+                "observation_ids": list(self.program_result.observation_ids),
+                "assignments": dict(self.program_result.assignments),
+            },
+            "debug": {
+                "planner_text": self.planner_text,
+            },
+        }
 
 
 class VisualAgent:
@@ -49,14 +80,28 @@ class VisualAgent:
             workspace=workspace,
         )
 
-    def run(self, *, question: str, media_path: str, media_type: str) -> AgentRunResult:
+    def run(
+        self,
+        *,
+        question: str,
+        media_path: str,
+        media_type: str,
+        tool_policy: str = "required",
+    ) -> AgentRunResult:
+        agent_input = AgentInput(
+            question=question,
+            media_path=media_path,
+            media_type=media_type,
+            tool_policy=tool_policy,
+        )
         planner_response = self.backend.generate(
             BackendRequest(
                 task="plan",
-                prompt=_planning_prompt(question=question, media_type=media_type),
+                prompt=_planning_prompt(agent_input=agent_input),
                 media_path=media_path,
                 media_type=media_type,
                 max_new_tokens=512,
+                metadata={"tool_policy": tool_policy},
             )
         )
         plan = _parse_plan(
@@ -75,6 +120,7 @@ class VisualAgent:
             {"answer": plan["answer"], "observation_ids": list(program_result.observation_ids)},
         )
         return AgentRunResult(
+            agent_input=agent_input,
             answer=str(plan["answer"]),
             program=plan["program"],
             program_result=program_result,
@@ -82,14 +128,26 @@ class VisualAgent:
         )
 
 
-def _planning_prompt(*, question: str, media_type: str) -> str:
+def _planning_prompt(*, agent_input: AgentInput) -> str:
     return (
-        "You are a visual agent that may call tools before answering. "
-        "Return only JSON with keys answer and program. "
-        "program is a list of tool calls. For video, prefer caption_video then qa_video. "
-        "For image, prefer caption_image then qa_image. "
-        "Use args with media path fields filled by the caller. "
-        f"Media type: {media_type}. Question: {question}"
+        "You are a visual agent that must plan tool calls before answering.\n"
+        "Use only these tools; do not invent tool names or media paths.\n"
+        "Available tools:\n"
+        "- caption_video(video_path: str, question: str = 'Describe the video.', nframes: int = 8, max_pixels: int = 151200)\n"
+        "- qa_video(video_path: str, question: str, nframes: int = 8, max_pixels: int = 151200)\n"
+        "- caption_image(image_path: str, question: str = 'Describe the image.')\n"
+        "- qa_image(image_path: str, question: str)\n"
+        "Return only JSON in this schema:\n"
+        '{"answer": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
+        "Rules:\n"
+        "- For video and tool_policy=required, call at least caption_video; add qa_video when the question asks for a specific answer.\n"
+        "- For image and tool_policy=required, call at least caption_image; add qa_image when the question asks for a specific answer.\n"
+        "- The caller will bind the real media path; use the media path fields shown in the tool signatures.\n"
+        f"Input:\n"
+        f"- media_type: {agent_input.media_type}\n"
+        f"- media_path: {agent_input.media_path}\n"
+        f"- tool_policy: {agent_input.tool_policy}\n"
+        f"- question: {agent_input.question}"
     )
 
 

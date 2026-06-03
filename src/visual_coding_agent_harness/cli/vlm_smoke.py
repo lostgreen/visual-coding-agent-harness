@@ -29,18 +29,7 @@ def main() -> None:
         ),
         base_dir=Path(args.base_dir),
     )
-    print(
-        json.dumps(
-            {
-                "answer": result.answer,
-                "program": list(result.program),
-                "observation_ids": list(result.program_result.observation_ids),
-                "assignments": dict(result.program_result.assignments),
-            },
-            ensure_ascii=True,
-            sort_keys=True,
-        )
-    )
+    print(json.dumps(result.to_dict(), ensure_ascii=True, sort_keys=True))
 
 
 if __name__ == "__main__":
