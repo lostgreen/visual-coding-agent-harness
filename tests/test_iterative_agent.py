@@ -422,6 +422,52 @@ class IterativeAgentTest(unittest.TestCase):
             {"segment_id": "seg_0002", "start_sec": 10.0, "end_sec": 20.0, "nframes": 12},
         )
 
+    def test_segment_vlm_tools_can_extract_physical_clip_before_backend_call(self):
+        class SegmentToolBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                return BackendResponse(text="The extracted clip shows a museum exhibit.")
+
+        extracted = []
+
+        def fake_clip_extractor(video_path, output_path, start_sec, end_sec):
+            extracted.append((video_path, output_path, start_sec, end_sec))
+            Path(output_path).write_text("fake clip", encoding="utf-8")
+            return output_path
+
+        backend = SegmentToolBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="clip_tools")
+            registry = build_segment_vlm_registry(
+                backend,
+                workspace=workspace,
+                extract_clips=True,
+                clip_extractor=fake_clip_extractor,
+            )
+
+            result = registry.execute(
+                "caption_segment",
+                {
+                    "video_path": "/videos/demo.mp4",
+                    "segment_id": "seg_0002",
+                    "start_sec": 10.0,
+                    "end_sec": 20.0,
+                    "question": "What is visible?",
+                    "nframes": 12,
+                },
+            )
+
+            self.assertEqual(len(extracted), 1)
+            self.assertEqual(extracted[0][0], "/videos/demo.mp4")
+            self.assertIn("seg_0002_10000_20000.mp4", extracted[0][1])
+            self.assertEqual(backend.requests[0].media_path, extracted[0][1])
+            self.assertEqual(result["input_artifacts"], [extracted[0][1]])
+            self.assertEqual(result["regions"][0]["source_video_path"], "/videos/demo.mp4")
+            self.assertEqual(result["regions"][0]["clip_path"], extracted[0][1])
+
     def test_iterative_smoke_runner_uses_shared_backend_and_fixed_window_index(self):
         class SharedBackend(VisionLanguageBackend):
             def __init__(self):

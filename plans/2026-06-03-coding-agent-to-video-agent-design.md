@@ -414,9 +414,9 @@ Metrics:
 The first runnable ablation is intentionally simple:
 
 1. `direct_full_video`: ask the same Qwen-VL backend to describe the full video in one request.
-2. `map_first_explore`: use a text-only planner with `video_ls`, ledger reading, and focused segment tools.
+2. `map_first_explore`: use a text-only planner with `video_ls`, ledger reading, and focused segment tools. When `extract_clips=True`, segment tools first materialize bounded clips under `artifacts/clips/` before calling the VLM.
 
-Both strategies share one loaded backend so the comparison is about tool-use and context management, not model size. The runner writes:
+Both strategies share one loaded backend so the comparison is about tool-use and context management, not model size. The direct request explicitly sets `nframes` and `max_pixels` to keep long-video preprocessing bounded. The runner writes:
 
 - `runs/<run_id>/comparison.json`
 - `runs/<run_id>_explore/ledger.md`

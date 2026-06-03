@@ -24,6 +24,9 @@ class DescriptionComparisonConfig:
     window_sec: float = 30.0
     run_id: str = "qwen_description_comparison"
     max_rounds: int = 4
+    direct_nframes: int = 64
+    max_pixels: int = 151200
+    extract_clips: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,9 @@ def run_description_comparison(
     run_id: str = "description_comparison",
     scene_index: Optional[SceneIndex] = None,
     budget: Optional[AgentBudget] = None,
+    direct_nframes: int = 64,
+    max_pixels: int = 151200,
+    extract_clips: bool = False,
 ) -> DescriptionComparisonResult:
     """Run a direct description baseline and a map-first exploration strategy."""
 
@@ -88,6 +94,8 @@ def run_description_comparison(
             metadata={
                 "strategy": "direct_full_video",
                 "duration_sec": duration_sec,
+                "nframes": int(direct_nframes),
+                "max_pixels": int(max_pixels),
             },
         )
     )
@@ -109,6 +117,7 @@ def run_description_comparison(
         run_id=f"{run_id}_explore",
         scene_index=scene_index,
         budget=budget,
+        extract_clips=extract_clips,
     )
     exploration_seconds = time.perf_counter() - explore_start
 
@@ -156,6 +165,9 @@ def run_qwen_description_comparison(
         run_id=config.run_id,
         scene_index=scene_index,
         budget=AgentBudget(max_rounds=config.max_rounds),
+        direct_nframes=config.direct_nframes,
+        max_pixels=config.max_pixels,
+        extract_clips=config.extract_clips,
     )
 
 

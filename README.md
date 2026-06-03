@@ -220,13 +220,14 @@ PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.iterative_smoke \
   --duration-sec 600 \
   --window-sec 30 \
   --max-rounds 4 \
+  --extract-clips \
   --base-dir . \
   --run-id qwen3_vl_iterative_smoke
 ```
 
-This first version passes segment time bounds through tool metadata and prompt
-text. Strict temporal isolation should be added next by extracting short clips
-into `runs/<run_id>/artifacts/clips/` before calling the VLM backend.
+With `--extract-clips`, segment tools write short videos into
+`runs/<run_id>/artifacts/clips/` before calling the VLM backend. Without it,
+the tools pass segment time bounds through metadata and prompt text only.
 
 ## Direct vs Map-First Description Comparison
 
@@ -240,6 +241,9 @@ PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.description_comparison
   --duration-sec 3169.06 \
   --window-sec 300 \
   --max-rounds 4 \
+  --direct-nframes 64 \
+  --max-pixels 151200 \
+  --extract-clips \
   --base-dir . \
   --run-id qwen_description_compare
 ```

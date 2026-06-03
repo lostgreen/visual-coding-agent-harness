@@ -239,6 +239,9 @@ PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.description_comparison
   --duration-sec 3169.06 \
   --window-sec 300 \
   --max-rounds 4 \
+  --direct-nframes 64 \
+  --max-pixels 151200 \
+  --extract-clips \
   --base-dir . \
   --run-id qwen_description_compare
 ```

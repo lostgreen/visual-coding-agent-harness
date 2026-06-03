@@ -23,6 +23,7 @@ class IterativeSmokeConfig:
     window_sec: float = 30.0
     run_id: str = "qwen_vl_iterative_smoke"
     max_rounds: int = 4
+    extract_clips: bool = False
 
 
 def run_iterative_smoke(
@@ -36,6 +37,7 @@ def run_iterative_smoke(
     run_id: str = "iterative_smoke",
     scene_index: Optional[SceneIndex] = None,
     budget: Optional[AgentBudget] = None,
+    extract_clips: bool = False,
 ) -> IterativeRunResult:
     workspace = EvidenceWorkspace.create(base_dir=base_dir, run_id=run_id)
     resolved_index = scene_index or fixed_window_scene_index(
@@ -45,7 +47,12 @@ def run_iterative_smoke(
     )
     agent = IterativeVisualAgent(
         backend=backend,
-        registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(resolved_index), backend=backend),
+        registry=build_video_exploration_registry(
+            video_map=VideoMap.from_scene_index(resolved_index),
+            backend=backend,
+            workspace=workspace,
+            extract_clips=extract_clips,
+        ),
         workspace=workspace,
         scene_index=resolved_index,
         budget=budget,
@@ -70,4 +77,5 @@ def run_qwen_iterative_smoke(
         window_sec=config.window_sec,
         run_id=config.run_id,
         budget=AgentBudget(max_rounds=config.max_rounds),
+        extract_clips=config.extract_clips,
     )
