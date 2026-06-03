@@ -73,6 +73,21 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(window["regions"][0]["start_sec"], 25.0)
         self.assertEqual(window["regions"][0]["end_sec"], 120.0)
 
+    def test_video_ls_returns_map_first_overview_candidates_and_next_steps(self):
+        registry = build_video_navigation_registry(demo_video_map())
+
+        listing = registry.execute("video_ls", {"query": "aviation aircraft", "max_segments": 2})
+
+        self.assertIn("map-first", listing["claim"])
+        self.assertEqual(listing["coverage"]["segment_count"], 3)
+        self.assertEqual(listing["coverage"]["field_counts"]["ocr_text"], 1)
+        self.assertEqual(len(listing["outline"]), 2)
+        self.assertEqual(listing["candidates"][0]["segment_id"], "seg_0002")
+        self.assertIn("entities", listing["candidates"][0]["matched_fields"])
+        next_tools = [step["tool"] for step in listing["recommended_next_tools"]]
+        self.assertIn("read_segment", next_tools)
+        self.assertIn("caption_segment", next_tools)
+
     def test_exploration_registry_combines_navigation_and_segment_vlm_tools(self):
         backend = NavigationBackend()
         registry = build_video_exploration_registry(video_map=demo_video_map(), backend=backend)

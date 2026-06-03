@@ -6,8 +6,10 @@ from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, Iter
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.registry import ToolRegistry, tool
+from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry
 from visual_coding_agent_harness.video_index import VideoSegment, SceneIndex, fixed_window_scene_index
+from visual_coding_agent_harness.video_map import VideoMap
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -169,7 +171,7 @@ class IterativeAgentTest(unittest.TestCase):
             agent.run(question="What happens?", video_path="/videos/demo.mp4")
 
             prompt = backend.requests[0].prompt
-            self.assertIn("video_ls()", prompt)
+            self.assertIn("video_ls(query", prompt)
             self.assertIn("search_segments(query", prompt)
             self.assertIn("read_segment(segment_id", prompt)
             self.assertIn("expand_window(segment_id", prompt)
@@ -237,6 +239,71 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
             self.assertEqual(result.rounds[1].program[0]["args"]["segment_id"], "seg_0002")
             self.assertIn("Already inspected segments: seg_0001", backend.requests[1].prompt)
+
+    def test_iterative_agent_can_video_ls_then_refine_candidate_segment(self):
+        class NavigationFirstBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+                self.replan_calls = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    self.replan_calls += 1
+                    if self.replan_calls == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status": "continue", "rationale": "Need a map before inspecting pixels.", '
+                                '"program": [{"tool": "video_ls", "args": {"query": "overall description aircraft", "max_segments": 3}, "assign": "map"}]}'
+                            )
+                        )
+                    if self.replan_calls == 2:
+                        return BackendResponse(
+                            text=(
+                                '{"status": "continue", "rationale": "The map points to seg_0002.", '
+                                '"program": [{"tool": "caption_segment", "args": {"segment_id": "seg_0002", "question": "Describe the key event."}, "assign": "detail"}]}'
+                            )
+                        )
+                    return BackendResponse(
+                        text=(
+                            '{"status": "final", "answer": "The video is mainly about aircraft history.", '
+                            '"citations": ["obs_0001", "obs_0002"], "confidence": 0.8}'
+                        )
+                    )
+                if request.task == "caption_segment":
+                    return BackendResponse(text="The segment shows aircraft history exhibits.")
+                return BackendResponse(text="unexpected")
+
+        backend = NavigationFirstBackend()
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=90.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0, low_fps_caption="opening greetings"),
+                VideoSegment(segment_id="seg_0002", start_sec=30.0, end_sec=60.0, low_fps_caption="aircraft museum history"),
+                VideoSegment(segment_id="seg_0003", start_sec=60.0, end_sec=90.0, low_fps_caption="closing credits"),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="video_ls_loop")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(scene_index), backend=backend),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=3),
+            )
+
+            result = agent.run(question="Describe the video.", video_path="/videos/demo.mp4")
+
+            self.assertEqual([round_result.program[0]["tool"] for round_result in result.rounds[:2]], ["video_ls", "caption_segment"])
+            self.assertEqual(result.answer, "The video is mainly about aircraft history.")
+            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "caption_segment", "replan"])
+            ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
+            self.assertIn("Candidate segments", ledger)
+            self.assertIn("seg_0002", ledger)
+            self.assertIn("aircraft history exhibits", ledger)
 
     def test_iterative_agent_resolves_segment_id_into_tool_arguments(self):
         backend = ScriptedPlannerBackend(

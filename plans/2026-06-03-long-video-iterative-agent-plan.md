@@ -87,6 +87,10 @@ The agent may request a high-cost tool only after referencing a segment or evide
 P1 tools:
 
 - `build_scene_index(video_path, window_sec=30)`
+- `video_ls(query="", max_segments=16, top_k=5)`
+- `search_segments(query, top_k=5, modalities=[])`
+- `read_segment(segment_id)`
+- `expand_window(segment_id, before_sec=30, after_sec=30)`
 - `caption_segment(video_path, start_sec, end_sec, nframes=8)`
 - `qa_segment(video_path, start_sec, end_sec, question, nframes=8)`
 - `sample_frames(video_path, start_sec, end_sec, fps or nframes)`
@@ -224,6 +228,22 @@ Final output:
 - Total wall time.
 - Evidence citation quality.
 - Failure mode tags: bad scene retrieval, hallucinated tool, insufficient evidence, decoding failure.
+
+Current implemented comparison runner:
+
+```bash
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.description_comparison \
+  --model-path /m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct \
+  --media-path /path/to/video.mp4 \
+  --question "Describe the video." \
+  --duration-sec 3169.06 \
+  --window-sec 300 \
+  --max-rounds 4 \
+  --base-dir . \
+  --run-id qwen_description_compare
+```
+
+It records `direct_full_video` and `map_first_explore` in `runs/<run_id>/comparison.json`. The exploration run writes evidence under `runs/<run_id>_explore/`.
 
 ### Phase 6: VideoMME Long Smoke
 

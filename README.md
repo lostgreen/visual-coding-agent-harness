@@ -165,7 +165,7 @@ Autonomous exploration policy:
 
 Current P1 tools:
 
-- `video_ls()`
+- `video_ls(query="", max_segments=16, top_k=5)`
 - `search_segments(query, top_k=5, modalities=[])`
 - `read_segment(segment_id)`
 - `expand_window(segment_id, before_sec=30, after_sec=30)`
@@ -173,10 +173,12 @@ Current P1 tools:
 - `qa_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
 
 The navigation tools are the video equivalent of repository `ls`, `rg`, and
-local file reads. The planner can search or read indexed metadata before asking
-visual tools to inspect pixels. For segment VLM tools, the planner only needs to
-emit `segment_id`; the harness binds the real `video_path`, `start_sec`,
-`end_sec`, and default `nframes` from `SceneIndex`.
+local file reads. `video_ls` is the map-first entry point: it returns modality
+coverage, a bounded timeline outline, candidate segments for an optional query,
+and recommended next tools. The planner can search or read indexed metadata
+before asking visual tools to inspect pixels. For segment VLM tools, the planner
+only needs to emit `segment_id`; the harness binds the real `video_path`,
+`start_sec`, `end_sec`, and default `nframes` from `SceneIndex`.
 
 Planner output for another exploration round:
 
@@ -225,3 +227,29 @@ PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.iterative_smoke \
 This first version passes segment time bounds through tool metadata and prompt
 text. Strict temporal isolation should be added next by extracting short clips
 into `runs/<run_id>/artifacts/clips/` before calling the VLM backend.
+
+## Direct vs Map-First Description Comparison
+
+Use this runner to test whether the harness helps a long-video description task:
+
+```bash
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.description_comparison \
+  --model-path /m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct \
+  --media-path /path/to/long_video.mp4 \
+  --question "Describe the video." \
+  --duration-sec 3169.06 \
+  --window-sec 300 \
+  --max-rounds 4 \
+  --base-dir . \
+  --run-id qwen_description_compare
+```
+
+The comparison loads one shared Qwen backend and records two strategies:
+
+- `direct_full_video`: one direct VLM description request over the video.
+- `map_first_explore`: text-only planner calls `video_ls`, reads the ledger,
+  then refines candidate segments with local tools.
+
+The summary is written to `runs/<run_id>/comparison.json`; exploration evidence
+is written to `runs/<run_id>_explore/ledger.md`, `observations.jsonl`, and
+`trace.jsonl`.

@@ -8,6 +8,19 @@ Core thesis:
 
 > A long video should be treated like a large codebase. The main agent should not load the whole video into context. It should navigate a structured video workspace, inspect local evidence through tools, maintain a ledger, and answer only from cited observations.
 
+## Related Long-Video Agent Patterns
+
+This design follows a synthesis of several current long-video agent/RAG lines:
+
+- [VideoAgent: Long-form Video Understanding with Large Language Model as Agent](https://arxiv.org/abs/2403.10517) emphasizes iterative planning and retrieval over pushing all frames into one context; its zero-shot result uses only a small average number of frames because the agent actively gathers relevant evidence.
+- [VideoAgent: A Memory-augmented Multimodal Agent for Video Understanding](https://videoagent.github.io/) builds structured temporal and object memory, then exposes tools such as caption retrieval, segment localization, VQA, and object memory querying.
+- [Video-RAG](https://video-rag.github.io/) shows the value of concise auxiliary text from captions, OCR, ASR, and objects as a plug-in retrieval layer for long-video LVLMs.
+- [VideoTree](https://github.com/Ziyang412/VideoTree) contributes the idea of query-adaptive, hierarchical video representation, including low-rate captions and visual features before LLM reasoning.
+- [LongVideo-R1](https://huggingface.co/papers/2602.20913) frames long-video understanding as active navigation from top-level summaries to selected clips, and uses generated tool trajectories for later SFT/RL.
+- [VideoStir](https://arxiv.org/abs/2604.05418) points beyond flat segment retrieval toward structured spatio-temporal graphs and intent-aware relevance scoring.
+
+Our near-term implementation keeps the training-free part: build a compact map, let the agent navigate it, inspect only local clips/segments, write evidence, then replan. Later we can turn successful traces into SFT/RL tool-use data.
+
 ## Why The Coding Agent Analogy Matters
 
 Coding agents work on large repositories without reading every file. They rely on:
@@ -113,7 +126,7 @@ The main agent should call navigation tools similar to how coding agents call se
 
 Core navigation tools:
 
-- `video_ls(video_id)`: summarize duration, segment count, available indexes, inspected segments.
+- `video_ls(query="", max_segments=16, top_k=5)`: map-first overview of duration, segment count, modality coverage, bounded timeline outline, candidate segments, and recommended next tools.
 - `search_segments(query, top_k, modalities)`: retrieve candidate segments from captions, ASR, OCR, entities, and embeddings.
 - `read_segment(segment_id)`: return compact metadata, keyframes, coarse captions, and prior observations.
 - `expand_window(segment_id, before_sec, after_sec)`: inspect temporal neighborhood.
@@ -121,6 +134,64 @@ Core navigation tools:
 - `extract_clip(segment_id, start_sec, end_sec)`: produce a short video artifact for VLM tools.
 
 These are not all perception tools. Some are workspace navigation tools, analogous to `ls`, `rg`, and `sed -n`.
+
+### Why `video_ls` Is A Critical Tool
+
+For a coding agent, `ls` is not just a file listing. It is the first compression of a large workspace into navigable structure. For a long-video agent, `video_ls` should play the same role:
+
+- It tells the planner whether the current map has captions, ASR, OCR, entities, keyframes, or embeddings.
+- It returns a bounded outline sampled across the full timeline instead of dumping the first N segments.
+- It optionally accepts the user question as `query` and returns candidate segments from lexical or future embedding search.
+- It recommends next actions such as `read_segment`, `caption_segment`, `qa_segment`, or `expand_window`.
+- It writes a compact Observation into the ledger, so the next planning round can refine from evidence rather than starting over.
+
+Current implementation:
+
+```json
+{
+  "tool": "video_ls",
+  "args": {
+    "query": "describe aircraft museum",
+    "max_segments": 12,
+    "top_k": 5
+  }
+}
+```
+
+Returns:
+
+```json
+{
+  "coverage": {
+    "segment_count": 11,
+    "duration_sec": 3169.06,
+    "field_counts": {
+      "low_fps_caption": 11,
+      "asr_text": 0,
+      "ocr_text": 0,
+      "entities": 0
+    }
+  },
+  "outline": [
+    {"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 300.0, "summary": "..."}
+  ],
+  "candidates": [
+    {"segment_id": "seg_0004", "score": 0.67, "matched_fields": ["low_fps_caption"]}
+  ],
+  "recommended_next_tools": [
+    {"tool": "read_segment", "args": {"segment_id": "seg_0004"}},
+    {"tool": "caption_segment", "args": {"segment_id": "seg_0004"}}
+  ]
+}
+```
+
+The intended workflow is:
+
+```text
+video_ls(query) -> read_segment(candidate) -> caption_segment/qa_segment(candidate) -> ledger -> replan
+```
+
+This differs from simple video retrieval because the output is formatted for an autonomous planner and is immediately tied to traceable tool calls.
 
 ## Backbone 3: Visual Tool Harness
 
@@ -337,6 +408,22 @@ Metrics:
 - Wall time.
 - GPU memory and utilization.
 - Failure tags: bad retrieval, repeated exploration, insufficient evidence, hallucinated tool, weak perception, verifier rejection.
+
+### Description Ablation
+
+The first runnable ablation is intentionally simple:
+
+1. `direct_full_video`: ask the same Qwen-VL backend to describe the full video in one request.
+2. `map_first_explore`: use a text-only planner with `video_ls`, ledger reading, and focused segment tools.
+
+Both strategies share one loaded backend so the comparison is about tool-use and context management, not model size. The runner writes:
+
+- `runs/<run_id>/comparison.json`
+- `runs/<run_id>_explore/ledger.md`
+- `runs/<run_id>_explore/observations.jsonl`
+- `runs/<run_id>_explore/trace.jsonl`
+
+The scientific question is whether `video_ls` plus iterative local inspection produces a more complete and better-cited description than direct long-video prompting, especially for videos where important events are sparse or late in the timeline.
 
 ## Difference From VisProg, ParaVT, And Retool-Style Systems
 

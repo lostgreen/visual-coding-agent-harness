@@ -11,12 +11,16 @@ from ..video_map import VideoMap, VideoMapSegment
 def build_video_navigation_registry(video_map: VideoMap) -> ToolRegistry:
     registry = ToolRegistry()
 
-    @tool(name="video_ls", description="Summarize the indexed video workspace.")
-    def video_ls() -> Mapping[str, object]:
+    @tool(name="video_ls", description="Build a compact map-first overview of the indexed video workspace.")
+    def video_ls(query: str = "", max_segments: int = 16, top_k: int = 5) -> Mapping[str, object]:
         indexed_fields = _available_indexes(video_map.segments)
+        overview = video_map.overview(query=query, max_segments=max_segments, top_k=top_k)
+        candidate_ids = [str(candidate["segment_id"]) for candidate in overview["candidates"]]
+        candidate_text = ", ".join(candidate_ids) if candidate_ids else "none"
         claim = (
-            f"Video {video_map.video_path} has {len(video_map.segments)} segments "
-            f"over {video_map.duration_sec:.1f} seconds. Available indexes: {', '.join(indexed_fields) or 'none'}."
+            f"map-first video_ls: Video {video_map.video_path} has {len(video_map.segments)} segments "
+            f"over {video_map.duration_sec:.1f} seconds. Available indexes: {', '.join(indexed_fields) or 'none'}. "
+            f"Candidate segments: {candidate_text}."
         )
         return {
             "claim": claim,
@@ -29,6 +33,10 @@ def build_video_navigation_registry(video_map: VideoMap) -> ToolRegistry:
                     "available_indexes": indexed_fields,
                 }
             ],
+            "coverage": overview["coverage"],
+            "outline": overview["outline"],
+            "candidates": overview["candidates"],
+            "recommended_next_tools": overview["recommended_next_tools"],
             "raw_video_map": video_map.to_dict(),
         }
 
