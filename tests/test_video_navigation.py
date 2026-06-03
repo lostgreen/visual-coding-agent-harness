@@ -1,9 +1,12 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
-from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
+from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 class NavigationBackend(VisionLanguageBackend):
@@ -88,6 +91,18 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertIn("read_segment", next_tools)
         self.assertIn("caption_segment", next_tools)
 
+    def test_navigation_registry_reads_updated_video_map_store(self):
+        store = VideoMapStore(demo_video_map())
+        registry = build_video_navigation_registry(store)
+
+        before = registry.execute("video_ls", {"query": "runway", "top_k": 1})
+        store.update_segment("seg_0003", low_fps_caption="A runway aircraft landing sequence.")
+        after = registry.execute("video_ls", {"query": "runway", "top_k": 1})
+
+        self.assertNotEqual(before["candidates"][0]["segment_id"], "seg_0003")
+        self.assertEqual(after["candidates"][0]["segment_id"], "seg_0003")
+        self.assertEqual(after["coverage"]["field_counts"]["low_fps_caption"], 3)
+
     def test_exploration_registry_combines_navigation_and_segment_vlm_tools(self):
         backend = NavigationBackend()
         registry = build_video_exploration_registry(video_map=demo_video_map(), backend=backend)
@@ -107,6 +122,63 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertIn("3 segments", listing["claim"])
         self.assertEqual(caption["claim"], "caption_segment observation")
         self.assertEqual(backend.requests[0].metadata["segment_id"], "seg_0002")
+
+        verification = registry.execute(
+            "verify_ledger_answer",
+            {
+                "answer": "The video shows an aircraft museum.",
+                "ledger_text": "- `obs_0001` claim: A close view of a blue aircraft in a museum.",
+            },
+        )
+        self.assertIn("Ledger support", verification["claim"])
+
+    def test_exploration_tools_can_caption_segments_and_update_video_ls(self):
+        backend = NavigationBackend()
+        store = VideoMapStore(
+            VideoMap(
+                video_path="/videos/demo.mp4",
+                duration_sec=80.0,
+                segments=[
+                    VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=40.0),
+                    VideoMapSegment(segment_id="seg_0002", start_sec=40.0, end_sec=80.0),
+                ],
+            )
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="enrich")
+            registry = build_video_exploration_registry(video_map=store, backend=backend, workspace=workspace)
+
+            enriched = registry.execute(
+                "caption_segments",
+                {
+                    "segment_ids": ["seg_0002"],
+                    "question": "Create a concise search caption.",
+                    "nframes": 4,
+                },
+            )
+            listing = registry.execute("video_ls", {"query": "caption_segment", "top_k": 1})
+
+            self.assertIn("Captioned 1 segment", enriched["claim"])
+            self.assertEqual(listing["candidates"][0]["segment_id"], "seg_0002")
+            self.assertEqual(store.current.get("seg_0002").low_fps_caption, "caption_segment observation")
+
+    def test_exploration_tools_can_ingest_asr_ocr_and_entities(self):
+        store = VideoMapStore(demo_video_map())
+        registry = build_video_exploration_registry(video_map=store, backend=NavigationBackend())
+
+        result = registry.execute(
+            "ingest_segment_metadata",
+            {
+                "segment_id": "seg_0001",
+                "asr_text": "pilot explains the runway approach",
+                "ocr_text": "RUNWAY 27",
+                "entities": ["pilot", "runway"],
+            },
+        )
+        search = registry.execute("search_segments", {"query": "runway", "top_k": 1})
+
+        self.assertIn("Updated seg_0001", result["claim"])
+        self.assertEqual(search["regions"][0]["segment_id"], "seg_0001")
 
 
 if __name__ == "__main__":
