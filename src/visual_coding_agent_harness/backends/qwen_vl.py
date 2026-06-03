@@ -1,0 +1,135 @@
+"""Qwen-VL backend adapter.
+
+The adapter is intentionally small: it owns one loaded model/processor pair and
+serves both the main agent planner call and VLM-backed tools.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Mapping, Optional
+
+from .base import BackendRequest, BackendResponse
+
+
+@dataclass
+class QwenVLBackend:
+    model: Any
+    processor: Any
+    device: Optional[str] = None
+    torch_dtype: Optional[Any] = None
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_path: str,
+        *,
+        device_map: str = "auto",
+        torch_dtype: str = "auto",
+        attn_implementation: Optional[str] = None,
+    ) -> "QwenVLBackend":
+        import torch
+        from transformers import AutoProcessor
+
+        model_class = _resolve_qwen_model_class()
+        dtype = _resolve_dtype(torch_dtype=torch_dtype, torch_module=torch)
+        kwargs: dict[str, Any] = {"device_map": device_map}
+        if dtype is not None:
+            kwargs["torch_dtype"] = dtype
+        if attn_implementation:
+            kwargs["attn_implementation"] = attn_implementation
+        model = model_class.from_pretrained(model_path, **kwargs)
+        processor = AutoProcessor.from_pretrained(model_path)
+        return cls(model=model, processor=processor, torch_dtype=dtype)
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        messages = [
+            {
+                "role": "user",
+                "content": _message_content(request),
+            }
+        ]
+        text = self.processor.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        image_inputs, video_inputs = _process_vision_info(messages)
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = _move_inputs_to_model(inputs, self.model)
+        generated_ids = self.model.generate(
+            **inputs,
+            max_new_tokens=request.max_new_tokens,
+            do_sample=request.temperature > 0,
+            temperature=request.temperature if request.temperature > 0 else None,
+        )
+        generated_trimmed = [
+            output_ids[len(input_ids) :] for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        output_text = self.processor.batch_decode(
+            generated_trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0]
+        return BackendResponse(
+            text=output_text.strip(),
+            raw={"model": self.model.__class__.__name__, "task": request.task},
+        )
+
+
+def _resolve_qwen_model_class() -> Any:
+    import transformers
+
+    for name in [
+        "Qwen3VLForConditionalGeneration",
+        "AutoModelForImageTextToText",
+        "Qwen2_5_VLForConditionalGeneration",
+    ]:
+        model_class = getattr(transformers, name, None)
+        if model_class is not None:
+            return model_class
+    raise ImportError("No Qwen-VL compatible model class found in transformers")
+
+
+def _resolve_dtype(*, torch_dtype: str, torch_module: Any) -> Any:
+    if torch_dtype == "auto":
+        return None
+    if torch_dtype == "bfloat16":
+        return torch_module.bfloat16
+    if torch_dtype == "float16":
+        return torch_module.float16
+    if torch_dtype == "float32":
+        return torch_module.float32
+    raise ValueError(f"Unsupported torch dtype: {torch_dtype}")
+
+
+def _message_content(request: BackendRequest) -> list[Mapping[str, Any]]:
+    content: list[Mapping[str, Any]] = []
+    if request.media_path:
+        if request.media_type == "video":
+            content.append({"type": "video", "video": request.media_path})
+        elif request.media_type == "image":
+            content.append({"type": "image", "image": request.media_path})
+    content.append({"type": "text", "text": request.prompt})
+    return content
+
+
+def _process_vision_info(messages: list[Mapping[str, Any]]) -> tuple[Any, Any]:
+    try:
+        from qwen_vl_utils import process_vision_info
+    except ImportError as exc:
+        raise ImportError("qwen_vl_utils is required for Qwen-VL media preprocessing") from exc
+    return process_vision_info(messages)
+
+
+def _move_inputs_to_model(inputs: Any, model: Any) -> Any:
+    device = getattr(model, "device", None)
+    if device is not None:
+        return inputs.to(device)
+    return inputs
