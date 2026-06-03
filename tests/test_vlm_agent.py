@@ -79,6 +79,8 @@ class VisualAgentTest(unittest.TestCase):
             self.assertIn("Available tools", prompt)
             self.assertIn("caption_video(video_path", prompt)
             self.assertIn("qa_video(video_path", prompt)
+            self.assertIn("caption_region(image_path", prompt)
+            self.assertIn("qa_region(image_path", prompt)
             self.assertIn('"answer"', prompt)
             self.assertIn('"program"', prompt)
             self.assertIn('"tool"', prompt)
@@ -184,6 +186,46 @@ class VisualAgentTest(unittest.TestCase):
             self.assertEqual(result.answer, "The video shows a person opening a door.")
             self.assertEqual(result.program_result.observation_ids, ["obs_0001", "obs_0002"])
             self.assertEqual(len(backend.requests), 3)
+
+    def test_agent_normalizes_generic_media_path_for_region_tools(self):
+        class RegionPlannerBackend(RecordingBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "plan":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "planned", "program": ['
+                            '{"tool": "qa_region", "args": {"media_path": "input/frame.jpg", "bbox": [10, 20, 30, 40], "question": "What text?"}, "assign": "region_qa"}'
+                            "]}"
+                        )
+                    )
+                return BackendResponse(text=f"region answer path: {request.media_path}")
+
+        def fake_cropper(image_path, bbox, output_path):
+            Path(output_path).write_text("fake crop", encoding="utf-8")
+            return {"claim": "crop ok", "confidence": 1.0}
+
+        backend = RegionPlannerBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="region_agent")
+            from visual_coding_agent_harness.tools.vlm import build_vlm_registry
+
+            agent = VisualAgent.with_vlm_tools(
+                backend=backend,
+                workspace=workspace,
+                registry=build_vlm_registry(backend, workspace=workspace, cropper=fake_cropper),
+            )
+
+            result = agent.run(
+                question="What text?",
+                media_path="/real/frame.jpg",
+                media_type="image",
+            )
+
+            self.assertEqual(result.program[0]["args"]["image_path"], "/real/frame.jpg")
+            self.assertEqual(result.program_result.observation_ids, ["obs_0001"])
+            self.assertEqual(backend.requests[1].task, "qa_region")
+            self.assertIn("artifacts/crops", backend.requests[1].media_path)
 
 
 if __name__ == "__main__":

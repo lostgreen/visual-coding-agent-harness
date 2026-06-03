@@ -76,7 +76,7 @@ class VisualAgent:
     ) -> "VisualAgent":
         return cls(
             backend=backend,
-            registry=registry or build_vlm_registry(backend),
+            registry=registry or build_vlm_registry(backend, workspace=workspace),
             workspace=workspace,
         )
 
@@ -137,11 +137,14 @@ def _planning_prompt(*, agent_input: AgentInput) -> str:
         "- qa_video(video_path: str, question: str, nframes: int = 8, max_pixels: int = 151200)\n"
         "- caption_image(image_path: str, question: str = 'Describe the image.')\n"
         "- qa_image(image_path: str, question: str)\n"
+        "- caption_region(image_path: str, bbox: [x1, y1, x2, y2], question: str = 'Describe this image region.')\n"
+        "- qa_region(image_path: str, bbox: [x1, y1, x2, y2], question: str)\n"
         "Return only JSON in this schema:\n"
         '{"answer": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
         "Rules:\n"
         "- For video and tool_policy=required, call at least caption_video; add qa_video when the question asks for a specific answer.\n"
         "- For image and tool_policy=required, call at least caption_image; add qa_image when the question asks for a specific answer.\n"
+        "- Use caption_region or qa_region only when a bbox is available or the question asks about a localized area.\n"
         "- The caller will bind the real media path; use the media path fields shown in the tool signatures.\n"
         f"Input:\n"
         f"- media_type: {agent_input.media_type}\n"
@@ -215,5 +218,5 @@ def _fill_media_argument(args: dict[str, Any], *, tool_name: str, media_path: st
     resolved_media_path = str(media_path)
     if tool_name.endswith("_video"):
         args["video_path"] = resolved_media_path
-    if tool_name.endswith("_image"):
+    if tool_name.endswith("_image") or tool_name.endswith("_region"):
         args["image_path"] = resolved_media_path

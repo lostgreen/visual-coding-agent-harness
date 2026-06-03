@@ -314,8 +314,8 @@ def _replanning_prompt(
         "- search_segments(query: str, top_k: int = 5, modalities: list = [])\n"
         "- read_segment(segment_id: str)\n"
         "- expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0)\n"
-        "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8)\n"
-        "- qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8)\n"
+        "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0)\n"
+        "- qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0)\n"
         "Return only JSON with one of these schemas:\n"
         '{"status": "continue", "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
         '{"status": "final", "answer": string, "citations": [observation_id], "confidence": number}\n'

@@ -77,6 +77,13 @@ The main agent receives a tool-use prompt with a fixed tool catalog:
 - `qa_video(video_path, question, nframes=8, max_pixels=151200)`
 - `caption_image(image_path, question)`
 - `qa_image(image_path, question)`
+- `caption_region(image_path, bbox, question)`
+- `qa_region(image_path, bbox, question)`
+
+Caption/QA tools use structured prompts that force visible-evidence-only
+answers, uncertainty when evidence is weak, and no invented identities/text.
+Region tools first crop the requested normalized `[0,1000]` bbox into
+`runs/<run_id>/artifacts/crops/`, then send that crop to the shared VLM backend.
 
 Input schema:
 
@@ -171,6 +178,8 @@ Current P1 tools:
 - `expand_window(segment_id, before_sec=30, after_sec=30)`
 - `caption_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
 - `qa_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
+- Segment tools also accept `max_pixels=151200` and `fps=0.0` for controlled
+  video sampling.
 
 The navigation tools are the video equivalent of repository `ls`, `rg`, and
 local file reads. `video_ls` is the map-first entry point: it returns modality

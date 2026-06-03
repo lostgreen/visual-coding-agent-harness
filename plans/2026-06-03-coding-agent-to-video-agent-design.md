@@ -200,7 +200,7 @@ The harness owns tool schema, argument validation, artifact writing, and trace l
 Tool categories:
 
 - Structural tools: `ffprobe_duration`, `fixed_window_index`, `shot_detect`, `extract_clip`, `sample_frames`.
-- Semantic tools: `caption_segment`, `qa_segment`, `caption_frame`, `qa_region`.
+- Semantic tools: `caption_video`, `qa_video`, `caption_segment`, `qa_segment`, `caption_image`, `qa_image`, `caption_region`, `qa_region`.
 - Text tools: `ocr_frame`, `ocr_region`, `asr_segment`.
 - Spatial tools: `crop_region`, `zoom_region`, `detect_objects`, `segment_mask`.
 - Temporal tools: `track_object`, `compare_segments`, `temporal_verify`.
@@ -212,6 +212,14 @@ Important separation:
 - Tool implementation can use VLMs, smaller specialist models, or traditional algorithms.
 - Tool contract should hide backend details from the planner.
 - Tool output must always become an `Observation`.
+
+Current Caption/QA harness contract:
+
+- Caption and QA prompts explicitly require visible-evidence-only outputs.
+- Video and segment tools expose `nframes`, `max_pixels`, and optional `fps`.
+- Segment tools can extract physical clips before VLM calls.
+- Region tools materialize bbox crops under `artifacts/crops/` before VLM calls.
+- Outputs store task, question, bbox or segment metadata, sampling controls, source artifacts, and backend raw metadata in the observation.
 
 Observation requirements:
 
