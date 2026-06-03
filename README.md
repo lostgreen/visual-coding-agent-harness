@@ -64,3 +64,24 @@ Traditional tools currently include:
 - `sample_frames`, `extract_clip`
 
 Image tools use Pillow. Video tools build and execute `ffmpeg` commands; they raise a clear tool error when `ffmpeg` is not installed.
+
+## VLM Agent Smoke
+
+The first model-backed path keeps one foundation model instance shared between
+the main visual agent and its VLM tools. This is the baseline for comparing
+direct VLM answering against tool-use behavior without changing model size.
+
+```bash
+python -m visual_coding_agent_harness.cli.vlm_smoke \
+  --model-path /m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct \
+  --media-path /path/to/video.mp4 \
+  --question "What happens in the video?" \
+  --base-dir . \
+  --run-id qwen3_vl_4b_smoke
+```
+
+The run writes the same harness artifacts under `runs/<run_id>/`:
+
+- `observations.jsonl`
+- `trace.jsonl`
+- `ledger.md`
