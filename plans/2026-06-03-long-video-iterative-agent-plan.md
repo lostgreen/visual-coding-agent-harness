@@ -6,6 +6,8 @@
 
 **Architecture:** Keep the current `VisualAgent` as the single-pass baseline and add a separate iterative controller. The controller reads/writes the existing `EvidenceWorkspace`, starts from a cheap scene index, loops over `plan -> tool -> observe ledger -> replan`, and stops by answer confidence, budget, or max rounds.
 
+**Architecture reference:** See `plans/2026-06-03-coding-agent-to-video-agent-design.md` for the higher-level migration design from coding-agent repository navigation to long-video workspace navigation.
+
 **Tech Stack:** Python standard library, current harness registry/workspace/interpreter, ffmpeg/ffprobe for traditional video tools, Qwen3-VL backend for VLM caption/QA tools.
 
 ---
@@ -21,7 +23,7 @@ The long-video agent should not send the whole video at high FPS on every call. 
 5. Replan from the ledger.
 6. Stop with an answer and cited observation IDs.
 
-The main agent can still be a VLM. It receives the original media plus a compact ledger summary. Tools may call the same VLM backend, smaller VLMs, or traditional algorithms.
+The main agent can still be from a VLM model family, but the planner request should default to text/state input: question, scene index, inspected segments, budget, and compact ledger. Raw video should be read by local tools such as clip captioning, OCR, detection, tracking, and verification.
 
 ## Proposed Flow
 
