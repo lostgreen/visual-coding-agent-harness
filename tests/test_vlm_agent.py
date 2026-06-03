@@ -62,6 +62,57 @@ class VisualAgentTest(unittest.TestCase):
             self.assertIn("A person opens a door", ledger)
             self.assertIn("The person opens a door", ledger)
 
+    def test_planner_prompt_contains_tool_use_contract(self):
+        backend = RecordingBackend()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="tool_prompt")
+            agent = VisualAgent.with_vlm_tools(backend=backend, workspace=workspace)
+
+            agent.run(
+                question="What happens?",
+                media_path="input/demo.mp4",
+                media_type="video",
+            )
+
+            prompt = backend.requests[0].prompt
+            self.assertIn("Available tools", prompt)
+            self.assertIn("caption_video(video_path", prompt)
+            self.assertIn("qa_video(video_path", prompt)
+            self.assertIn('"answer"', prompt)
+            self.assertIn('"program"', prompt)
+            self.assertIn('"tool"', prompt)
+            self.assertIn('"args"', prompt)
+            self.assertIn("Use only these tools", prompt)
+
+    def test_run_result_exposes_structured_input_output_payload(self):
+        backend = RecordingBackend()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="io_payload")
+            agent = VisualAgent.with_vlm_tools(backend=backend, workspace=workspace)
+
+            result = agent.run(
+                question="What happens?",
+                media_path="input/demo.mp4",
+                media_type="video",
+            )
+
+            payload = result.to_dict()
+            self.assertEqual(
+                payload["input"],
+                {
+                    "question": "What happens?",
+                    "media_path": "input/demo.mp4",
+                    "media_type": "video",
+                    "tool_policy": "required",
+                },
+            )
+            self.assertEqual(payload["output"]["answer"], "The video shows a person opening a door.")
+            self.assertEqual(payload["output"]["observation_ids"], ["obs_0001", "obs_0002"])
+            self.assertEqual(payload["output"]["assignments"], {"caption": "obs_0001", "qa": "obs_0002"})
+            self.assertEqual(payload["output"]["program"][0]["tool"], "caption_video")
+
     def test_agent_normalizes_generic_media_path_arguments(self):
         class GenericMediaBackend(RecordingBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:

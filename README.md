@@ -71,6 +71,65 @@ The first model-backed path keeps one foundation model instance shared between
 the main visual agent and its VLM tools. This is the baseline for comparing
 direct VLM answering against tool-use behavior without changing model size.
 
+The main agent receives a tool-use prompt with a fixed tool catalog:
+
+- `caption_video(video_path, question, nframes=8, max_pixels=151200)`
+- `qa_video(video_path, question, nframes=8, max_pixels=151200)`
+- `caption_image(image_path, question)`
+- `qa_image(image_path, question)`
+
+Input schema:
+
+```json
+{
+  "question": "What is the video mainly about?",
+  "media_path": "/path/to/video.mp4",
+  "media_type": "video",
+  "tool_policy": "required"
+}
+```
+
+The model planner is asked to emit only:
+
+```json
+{
+  "answer": "...",
+  "program": [
+    {
+      "tool": "caption_video",
+      "args": {
+        "video_path": "/path/to/video.mp4",
+        "question": "What is the video mainly about?"
+      },
+      "assign": "caption"
+    }
+  ]
+}
+```
+
+The harness normalizes media paths to the caller-provided input path, executes
+the program, and returns:
+
+```json
+{
+  "input": {
+    "question": "What is the video mainly about?",
+    "media_path": "/path/to/video.mp4",
+    "media_type": "video",
+    "tool_policy": "required"
+  },
+  "output": {
+    "answer": "...",
+    "program": [],
+    "observation_ids": ["obs_0001"],
+    "assignments": {"caption": "obs_0001"}
+  },
+  "debug": {
+    "planner_text": "raw planner response"
+  }
+}
+```
+
 ```bash
 python -m visual_coding_agent_harness.cli.vlm_smoke \
   --model-path /m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct \
