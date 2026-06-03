@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
@@ -179,10 +180,12 @@ class IterativeVisualAgent:
             {"max_rounds": self.budget.max_rounds, "citations": citations},
         )
         plural = "round" if self.budget.max_rounds == 1 else "rounds"
+        partial_answer = _partial_answer_from_ledger(self._read_ledger())
         return IterativeRunResult(
             question=question,
             video_path=video_path,
-            answer=f"Stopped after {self.budget.max_rounds} exploration {plural} with partial evidence.",
+            answer=partial_answer
+            or f"Stopped after {self.budget.max_rounds} exploration {plural} with partial evidence.",
             status="max_rounds_reached",
             citations=citations,
             rounds=rounds,
@@ -319,6 +322,7 @@ def _replanning_prompt(
         "Rules:\n"
         "- Use video_ls first for open-ended description tasks or when the relevant segment is unclear.\n"
         "- Use navigation output as a map, then call caption_segment or qa_segment on one candidate segment.\n"
+        "- Do not spend every round on navigation-only tools; gather visual evidence before finalizing.\n"
         "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.\n"
         f"- Request at most {budget.max_tool_calls_per_round} new tool call(s) this round.\n"
         "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.\n"
@@ -368,6 +372,23 @@ def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[
 
 def _segment_has_index_text(segment: Any) -> bool:
     return bool(getattr(segment, "low_fps_caption", ""))
+
+
+def _partial_answer_from_ledger(ledger_text: str, max_claims: int = 5) -> str:
+    claims = []
+    for line in ledger_text.splitlines():
+        match = re.search(r"claim:\s*(.*?)\s*\|\s*limitations:", line)
+        if match:
+            claim = match.group(1).strip()
+            if claim:
+                claims.append(claim)
+        if len(claims) >= max_claims:
+            break
+    if not claims:
+        return ""
+    return "Partial evidence summary (budget exhausted): " + " ".join(
+        f"[{index}] {claim}" for index, claim in enumerate(claims, start=1)
+    )
 
 
 def _uninspected_segment_summary(*, scene_index: SceneIndex, inspected_segment_ids: Sequence[str], limit: int = 12) -> str:
