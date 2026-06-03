@@ -151,6 +151,29 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertTrue(all(request.media_type is None for request in planner_requests))
             self.assertIn("Planner input mode: text-only", planner_requests[0].prompt)
 
+    def test_iterative_agent_prompt_exposes_navigation_tools(self):
+        backend = ScriptedPlannerBackend(
+            ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="navigation_prompt")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            prompt = backend.requests[0].prompt
+            self.assertIn("video_ls()", prompt)
+            self.assertIn("search_segments(query", prompt)
+            self.assertIn("read_segment(segment_id", prompt)
+            self.assertIn("expand_window(segment_id", prompt)
+
     def test_iterative_agent_limits_tool_calls_per_round(self):
         backend = ScriptedPlannerBackend(
             [

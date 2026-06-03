@@ -165,11 +165,18 @@ Autonomous exploration policy:
 
 Current P1 tools:
 
+- `video_ls()`
+- `search_segments(query, top_k=5, modalities=[])`
+- `read_segment(segment_id)`
+- `expand_window(segment_id, before_sec=30, after_sec=30)`
 - `caption_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
 - `qa_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
 
-The planner only needs to emit `segment_id`; the harness binds the real
-`video_path`, `start_sec`, `end_sec`, and default `nframes` from `SceneIndex`.
+The navigation tools are the video equivalent of repository `ls`, `rg`, and
+local file reads. The planner can search or read indexed metadata before asking
+visual tools to inspect pixels. For segment VLM tools, the planner only needs to
+emit `segment_id`; the harness binds the real `video_path`, `start_sec`,
+`end_sec`, and default `nframes` from `SceneIndex`.
 
 Planner output for another exploration round:
 

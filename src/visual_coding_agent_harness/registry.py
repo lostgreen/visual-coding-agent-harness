@@ -48,6 +48,13 @@ class ToolRegistry:
             raise ToolError(f"Tool already registered: {spec.name}")
         self._tools[spec.name] = spec
 
+    def extend(self, other: "ToolRegistry") -> None:
+        for spec in other.list_specs():
+            self.register(spec)
+
+    def list_specs(self) -> Sequence[ToolSpec]:
+        return tuple(self._tools.values())
+
     def get(self, name: str) -> ToolSpec:
         try:
             return self._tools[name]
