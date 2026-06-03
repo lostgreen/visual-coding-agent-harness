@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Mapping, Sequence
 
 from .video_index import SceneIndex
@@ -298,3 +298,42 @@ def _recommended_next_tools(*, query: str, candidates: Sequence[VideoSearchResul
 
 def _tokens(text: str) -> set[str]:
     return {token.lower() for token in re.findall(r"[A-Za-z0-9]+", text)}
+
+
+class VideoMapStore:
+    """Mutable holder for an evolving VideoMap workspace."""
+
+    def __init__(self, video_map: VideoMap) -> None:
+        self.current = video_map
+
+    def update_segment(
+        self,
+        segment_id: str,
+        *,
+        low_fps_caption: str | None = None,
+        asr_text: str | None = None,
+        ocr_text: str | None = None,
+        entities: Sequence[str] | None = None,
+        keyframe_paths: Sequence[str] | None = None,
+        embedding_refs: Sequence[str] | None = None,
+    ) -> VideoMapSegment:
+        updated_segments = []
+        updated_segment = None
+        for segment in self.current.segments:
+            if segment.segment_id != segment_id:
+                updated_segments.append(segment)
+                continue
+            updated_segment = replace(
+                segment,
+                low_fps_caption=segment.low_fps_caption if low_fps_caption is None else low_fps_caption,
+                asr_text=segment.asr_text if asr_text is None else asr_text,
+                ocr_text=segment.ocr_text if ocr_text is None else ocr_text,
+                entities=segment.entities if entities is None else list(entities),
+                keyframe_paths=segment.keyframe_paths if keyframe_paths is None else list(keyframe_paths),
+                embedding_refs=segment.embedding_refs if embedding_refs is None else list(embedding_refs),
+            )
+            updated_segments.append(updated_segment)
+        if updated_segment is None:
+            raise ValueError(f"Unknown segment_id: {segment_id}")
+        self.current = replace(self.current, segments=updated_segments)
+        return updated_segment

@@ -176,10 +176,14 @@ Current P1 tools:
 - `search_segments(query, top_k=5, modalities=[])`
 - `read_segment(segment_id)`
 - `expand_window(segment_id, before_sec=30, after_sec=30)`
+- `caption_segments(segment_ids=[], question, nframes=8, max_pixels=151200, fps=0.0, max_segments=3)`
+- `ingest_segment_metadata(segment_id, low_fps_caption="", asr_text="", ocr_text="", entities=[])`
 - `caption_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
 - `qa_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
 - Segment tools also accept `max_pixels=151200` and `fps=0.0` for controlled
   video sampling.
+- `summarize_ledger_evidence(max_claims=5)`
+- `verify_ledger_answer(answer, min_score=0.6)`
 
 The navigation tools are the video equivalent of repository `ls`, `rg`, and
 local file reads. `video_ls` is the map-first entry point: it returns modality
@@ -188,6 +192,12 @@ and recommended next tools. The planner can search or read indexed metadata
 before asking visual tools to inspect pixels. For segment VLM tools, the planner
 only needs to emit `segment_id`; the harness binds the real `video_path`,
 `start_sec`, `end_sec`, and default `nframes` from `SceneIndex`.
+
+`caption_segments` and `ingest_segment_metadata` are VideoMap enrichment tools:
+they make `video_ls` behave like a coding-agent workspace index that improves as
+the agent reads more evidence. `verify_ledger_answer` is a lightweight lexical
+verifier over `ledger.md`; it is intentionally conservative and should later be
+augmented with model-based entailment and temporal consistency checks.
 
 Planner output for another exploration round:
 

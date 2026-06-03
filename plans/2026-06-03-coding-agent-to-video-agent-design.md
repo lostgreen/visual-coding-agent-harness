@@ -221,6 +221,22 @@ Current Caption/QA harness contract:
 - Region tools materialize bbox crops under `artifacts/crops/` before VLM calls.
 - Outputs store task, question, bbox or segment metadata, sampling controls, source artifacts, and backend raw metadata in the observation.
 
+Current Claude-Code-style tool groups implemented:
+
+- Workspace navigation: `video_ls`, `search_segments`, `read_segment`, `expand_window`.
+- Workspace enrichment: `caption_segments`, `ingest_segment_metadata`.
+- Visual readers: `caption_video`, `qa_video`, `caption_image`, `qa_image`, `caption_segment`, `qa_segment`, `caption_region`, `qa_region`.
+- Traditional artifact tools: `sample_frames`, `extract_clip`, `crop_region`, `zoom_region`, `threshold_image`, `enhance_image`, `edge_detect`.
+- Verification tools: `summarize_ledger_evidence`, `verify_ledger_answer`.
+
+Next backend adapters to add:
+
+- ASR adapter: Whisper or dataset-provided subtitles into `asr_text`.
+- OCR adapter: PaddleOCR/EasyOCR/Tesseract into `ocr_text`.
+- Object/entity adapter: detector or open-vocabulary VLM extraction into `entities`.
+- Embedding adapter: text/vision embeddings into `embedding_refs` and semantic `search_segments`.
+- Temporal tools: shot detection, track object, compare segments, temporal order verification.
+
 Observation requirements:
 
 ```json
