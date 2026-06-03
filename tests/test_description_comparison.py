@@ -75,6 +75,8 @@ class DescriptionComparisonTest(unittest.TestCase):
             self.assertEqual(result.direct_answer, "Direct baseline describes only the opening.")
             self.assertEqual(result.exploration_result.answer, "Exploration describes the aircraft museum section.")
             self.assertEqual([request.task for request in backend.requests], ["direct_description", "replan", "replan", "caption_segment", "replan"])
+            self.assertEqual(backend.requests[0].metadata["nframes"], 64)
+            self.assertEqual(backend.requests[0].metadata["max_pixels"], 151200)
             report_path = Path(tmp) / "runs" / "compare" / "comparison.json"
             self.assertTrue(report_path.exists())
             report = json.loads(report_path.read_text(encoding="utf-8"))

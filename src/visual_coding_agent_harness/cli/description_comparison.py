@@ -17,6 +17,9 @@ def main() -> None:
     parser.add_argument("--duration-sec", required=True, type=float)
     parser.add_argument("--window-sec", default=30.0, type=float)
     parser.add_argument("--max-rounds", default=4, type=int)
+    parser.add_argument("--direct-nframes", default=64, type=int)
+    parser.add_argument("--max-pixels", default=151200, type=int)
+    parser.add_argument("--extract-clips", action="store_true")
     parser.add_argument("--base-dir", default=".")
     parser.add_argument("--run-id", default="qwen_description_comparison")
     args = parser.parse_args()
@@ -30,6 +33,9 @@ def main() -> None:
             window_sec=args.window_sec,
             run_id=args.run_id,
             max_rounds=args.max_rounds,
+            direct_nframes=args.direct_nframes,
+            max_pixels=args.max_pixels,
+            extract_clips=args.extract_clips,
         ),
         base_dir=Path(args.base_dir),
     )

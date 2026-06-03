@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+import re
+import subprocess
+from pathlib import Path
+from typing import Callable, Mapping, Optional
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
+from ..workspace import EvidenceWorkspace
 
 
-def build_segment_vlm_registry(backend: VisionLanguageBackend) -> ToolRegistry:
+ClipExtractor = Callable[[str, str, float, float], str]
+
+
+def build_segment_vlm_registry(
+    backend: VisionLanguageBackend,
+    *,
+    workspace: Optional[EvidenceWorkspace] = None,
+    extract_clips: bool = False,
+    clip_extractor: Optional[ClipExtractor] = None,
+) -> ToolRegistry:
     registry = ToolRegistry()
 
     @tool(name="caption_segment", description="Caption a time-bounded video segment with the shared VLM backend.")
@@ -29,6 +42,9 @@ def build_segment_vlm_registry(backend: VisionLanguageBackend) -> ToolRegistry:
             end_sec=end_sec,
             question=question,
             nframes=nframes,
+            workspace=workspace,
+            extract_clips=extract_clips,
+            clip_extractor=clip_extractor,
         )
 
     @tool(name="qa_segment", description="Answer a question about a time-bounded video segment with the shared VLM backend.")
@@ -49,6 +65,9 @@ def build_segment_vlm_registry(backend: VisionLanguageBackend) -> ToolRegistry:
             end_sec=end_sec,
             question=question,
             nframes=nframes,
+            workspace=workspace,
+            extract_clips=extract_clips,
+            clip_extractor=clip_extractor,
         )
 
     registry.register(caption_segment)
@@ -66,6 +85,9 @@ def _run_segment_tool(
     end_sec: float,
     question: str,
     nframes: int,
+    workspace: Optional[EvidenceWorkspace] = None,
+    extract_clips: bool = False,
+    clip_extractor: Optional[ClipExtractor] = None,
 ) -> Mapping[str, object]:
     metadata = {
         "segment_id": segment_id,
@@ -73,6 +95,27 @@ def _run_segment_tool(
         "end_sec": float(end_sec),
         "nframes": int(nframes),
     }
+    media_path = video_path
+    input_artifacts = [f"{video_path}#t={float(start_sec):.3f},{float(end_sec):.3f}"]
+    limitations = "Segment VLM observation; backend may need physical clipping for strict temporal isolation."
+
+    if extract_clips:
+        if workspace is None:
+            raise ValueError("extract_clips=True requires an EvidenceWorkspace")
+        output_path = _clip_output_path(
+            workspace=workspace,
+            segment_id=segment_id,
+            start_sec=float(start_sec),
+            end_sec=float(end_sec),
+        )
+        extractor = clip_extractor or _extract_clip_ffmpeg
+        clip_path = extractor(video_path, str(output_path), float(start_sec), float(end_sec))
+        media_path = clip_path
+        input_artifacts = [clip_path]
+        metadata["source_video_path"] = video_path
+        metadata["clip_path"] = clip_path
+        limitations = "Physical segment clip extracted before VLM call; fine-grained motion may still be limited by nframes."
+
     response = backend.generate(
         BackendRequest(
             task=task,
@@ -83,7 +126,7 @@ def _run_segment_tool(
                 end_sec=float(end_sec),
                 question=question,
             ),
-            media_path=video_path,
+            media_path=media_path,
             media_type="video",
             max_new_tokens=256,
             metadata=metadata,
@@ -92,9 +135,9 @@ def _run_segment_tool(
     return {
         "claim": response.text.strip(),
         "confidence": 0.66,
-        "input_artifacts": [f"{video_path}#t={float(start_sec):.3f},{float(end_sec):.3f}"],
+        "input_artifacts": input_artifacts,
         "regions": [metadata],
-        "limitations": "Segment VLM observation; backend may need physical clipping for strict temporal isolation.",
+        "limitations": limitations,
         "raw_backend": dict(response.raw),
     }
 
@@ -107,3 +150,47 @@ def _segment_prompt(*, task: str, segment_id: str, start_sec: float, end_sec: fl
         "Ignore other parts of the video when possible.\n"
         f"Question: {question}"
     )
+
+
+def _clip_output_path(*, workspace: EvidenceWorkspace, segment_id: str, start_sec: float, end_sec: float) -> Path:
+    safe_segment_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", segment_id)
+    start_ms = int(round(start_sec * 1000))
+    end_ms = int(round(end_sec * 1000))
+    return workspace.root / "artifacts" / "clips" / f"{safe_segment_id}_{start_ms}_{end_ms}.mp4"
+
+
+def _extract_clip_ffmpeg(video_path: str, output_path: str, start_sec: float, end_sec: float) -> str:
+    output = Path(output_path)
+    if output.exists() and output.stat().st_size > 0:
+        return str(output)
+    duration = max(0.001, float(end_sec) - float(start_sec))
+    command = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{float(start_sec):.3f}",
+        "-i",
+        video_path,
+        "-t",
+        f"{duration:.3f}",
+        "-map",
+        "0:v:0",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "28",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg is required to extract segment clips") from exc
+    except subprocess.CalledProcessError as exc:
+        message = (exc.stderr or exc.stdout or "").strip().splitlines()[-3:]
+        raise RuntimeError(f"ffmpeg failed to extract clip: {' | '.join(message)}") from exc
+    return output_path
