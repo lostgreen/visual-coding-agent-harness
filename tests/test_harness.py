@@ -52,6 +52,76 @@ class HarnessTest(unittest.TestCase):
             self.assertEqual((workspace.root / "trace.jsonl").read_text().count("tool_result"), 1)
             self.assertIn("The sign reads EXIT.", (workspace.root / "ledger.md").read_text())
 
+    def test_workspace_compacts_ledger_for_planner_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="compact")
+            ledger_path = workspace.root / "ledger.md"
+            ledger_path.write_text(
+                "# Evidence Ledger\n\n"
+                "- `obs_0001` | tool: `video_ls` | confidence: 1.00 | artifacts: demo.mp4 | claim: Candidate segments include seg_0002 and seg_0003 with a very long navigation explanation. | limitations: -\n"
+                "- `obs_0002` | tool: `search_segments` | confidence: 0.85 | artifacts: demo.mp4 | claim: Search returned seg_0002 for aircraft. | limitations: lexical\n"
+                "- `obs_0003` | tool: `inspect_segment` | confidence: 0.78 | artifacts: demo.mp4#t=30,42 | claim: The localized segment shows aircraft history. | limitations: slight blur\n"
+                "- `obs_0004` | tool: `qa_segment` | confidence: 0.66 | artifacts: demo.mp4#t=42,50 | claim: A narrator discusses aviation exhibits. | limitations: low resolution\n",
+                encoding="utf-8",
+            )
+
+            compact = workspace.compact_ledger_text(max_working_observations=1)
+
+            self.assertIn("Long-Term Visual Evidence", compact)
+            self.assertIn("obs_0003", compact)
+            self.assertIn("The localized segment shows aircraft history", compact)
+            self.assertIn("Short-Term Working Buffer", compact)
+            self.assertIn("obs_0004", compact)
+            self.assertIn("Navigation Summary", compact)
+            self.assertIn("obs_0001: video_ls", compact)
+            self.assertNotIn("very long navigation explanation", compact)
+
+    def test_workspace_builds_option_grouped_evidence_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="evidence_table")
+            navigation = workspace.write_observation(
+                tool_name="video_ls",
+                input_artifacts=["demo.mp4"],
+                claim="Candidate windows include seg_0001 and seg_0002.",
+                confidence=1.0,
+                limitations="-",
+                raw_output={"supported_option": "A"},
+            )
+            d_observation = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["demo.mp4#t=300,600"],
+                claim="The localized visual evidence matches the fourth sequence.",
+                confidence=0.82,
+                regions=[{"segment_id": "seg_0002", "start_sec": 300.0, "end_sec": 600.0}],
+                limitations="Directly visible in the sampled segment.",
+                raw_output={"supported_option": "D", "grounding_quality": "visually_confirmed"},
+            )
+            a_observation = workspace.write_observation(
+                tool_name="caption_segment",
+                input_artifacts=["demo.mp4#t=1500,1800"],
+                claim="The caption guesses the first sequence.",
+                confidence=0.91,
+                regions=[{"segment_id": "seg_0005", "start_sec": 1500.0, "end_sec": 1800.0}],
+                limitations="Inferred from context; lacks explicit visual confirmation.",
+                raw_output={"supported_option": "A"},
+            )
+            for observation in [navigation, d_observation, a_observation]:
+                workspace.write_ledger_entry(observation)
+
+            table = workspace.evidence_table(
+                question="Which sequence is correct?",
+                options=["A. first sequence", "B. second sequence", "C. third sequence", "D. fourth sequence"],
+            )
+
+            self.assertEqual(table["question"], "Which sequence is correct?")
+            self.assertNotIn("obs_0001", [row["obs_id"] for row in table["rows"]])
+            self.assertEqual(table["groups"]["D"][0]["obs_id"], "obs_0002")
+            self.assertEqual(table["groups"]["D"][0]["grounding_quality"], "visually_confirmed")
+            self.assertEqual(table["groups"]["D"][0]["time_range"], [300.0, 600.0])
+            self.assertEqual(table["groups"]["A"][0]["obs_id"], "obs_0003")
+            self.assertEqual(table["groups"]["A"][0]["grounding_quality"], "inferred")
+            self.assertEqual(table["groups"]["A"][0]["artifact"], "demo.mp4#t=1500,1800")
+
     def test_interpreter_runs_visual_program_and_returns_observation_ids(self):
         registry = ToolRegistry()
 
