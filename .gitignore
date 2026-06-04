@@ -9,6 +9,7 @@ __pycache__/
 **/._*
 runs/*
 !runs/*.py
+runs/._*.py
 dist/
 build/
 *.egg-info/
