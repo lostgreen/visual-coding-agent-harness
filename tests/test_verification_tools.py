@@ -84,7 +84,12 @@ class VerificationToolsTest(unittest.TestCase):
                 confidence=0.82,
                 regions=[{"start_sec": 300.0, "end_sec": 600.0}],
                 limitations="Directly visible in the sampled segment.",
-                raw_output={"supported_option": "D", "grounding_quality": "visually_confirmed"},
+                raw_output={
+                    "candidate_option_relations": [
+                        {"option": "D", "relation": "support", "strength": 0.82, "assigned_by": "answer_agent"}
+                    ],
+                    "grounding_quality": "visually_confirmed",
+                },
             )
             a_observation = workspace.write_observation(
                 tool_name="caption_segment",
@@ -93,7 +98,11 @@ class VerificationToolsTest(unittest.TestCase):
                 confidence=0.91,
                 regions=[{"start_sec": 1500.0, "end_sec": 1800.0}],
                 limitations="Inferred from context; lacks explicit visual confirmation.",
-                raw_output={"supported_option": "A"},
+                raw_output={
+                    "candidate_option_relations": [
+                        {"option": "A", "relation": "support", "strength": 0.91, "assigned_by": "answer_agent"}
+                    ]
+                },
             )
             workspace.write_ledger_entry(d_observation)
             workspace.write_ledger_entry(a_observation)
@@ -123,7 +132,12 @@ class VerificationToolsTest(unittest.TestCase):
                 claim="Visual evidence supports option A.",
                 confidence=0.8,
                 limitations="Directly visible.",
-                raw_output={"supported_option": "A", "grounding_quality": "visually_confirmed"},
+                raw_output={
+                    "candidate_option_relations": [
+                        {"option": "A", "relation": "support", "strength": 0.8, "assigned_by": "answer_agent"}
+                    ],
+                    "grounding_quality": "visually_confirmed",
+                },
             )
             conflicting = workspace.write_observation(
                 tool_name="inspect_segment",
@@ -131,7 +145,12 @@ class VerificationToolsTest(unittest.TestCase):
                 claim="Visual evidence supports option B.",
                 confidence=0.79,
                 limitations="Directly visible.",
-                raw_output={"supported_option": "B", "grounding_quality": "visually_confirmed"},
+                raw_output={
+                    "candidate_option_relations": [
+                        {"option": "B", "relation": "support", "strength": 0.79, "assigned_by": "answer_agent"}
+                    ],
+                    "grounding_quality": "visually_confirmed",
+                },
             )
             neutral = workspace.write_observation(
                 tool_name="inspect_segment",

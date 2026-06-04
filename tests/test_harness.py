@@ -111,6 +111,7 @@ class HarnessTest(unittest.TestCase):
             table = workspace.evidence_table(
                 question="Which sequence is correct?",
                 options=["A. first sequence", "B. second sequence", "C. third sequence", "D. fourth sequence"],
+                include_legacy_worker_votes=True,
             )
 
             self.assertEqual(table["question"], "Which sequence is correct?")
@@ -122,7 +123,7 @@ class HarnessTest(unittest.TestCase):
             self.assertEqual(table["groups"]["A"][0]["grounding_quality"], "inferred")
             self.assertEqual(table["groups"]["A"][0]["artifact"], "demo.mp4#t=1500,1800")
 
-    def test_workspace_extracts_supported_option_from_inspector_claim_text(self):
+    def test_evidence_table_ignores_legacy_worker_vote_claim_text_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = EvidenceWorkspace.create(Path(tmp), run_id="claim_supported_option")
             observation = workspace.write_observation(
@@ -144,8 +145,36 @@ class HarnessTest(unittest.TestCase):
                 options=["A. first sequence", "B. second sequence", "C. third sequence", "D. fourth sequence"],
             )
 
+            self.assertEqual(table["groups"]["D"], [])
+            self.assertEqual(table["groups"]["unassigned"][0]["obs_id"], "obs_0001")
+            self.assertTrue(table["groups"]["unassigned"][0]["legacy_worker_vote"])
+
+    def test_evidence_table_can_replay_legacy_worker_votes_explicitly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="legacy_claim_supported_option")
+            observation = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["demo.mp4#t=0,300"],
+                claim=(
+                    "Claim: The visible artwork order matches the fourth sequence.\n"
+                    "Supported option: D.\n"
+                    "Confidence: High."
+                ),
+                confidence=0.74,
+                limitations="Inspector used a physical segment clip.",
+                raw_output={},
+            )
+            workspace.write_ledger_entry(observation)
+
+            table = workspace.evidence_table(
+                question="Which sequence is correct?",
+                options=["A. first sequence", "B. second sequence", "C. third sequence", "D. fourth sequence"],
+                include_legacy_worker_votes=True,
+            )
+
             self.assertEqual(table["groups"]["D"][0]["obs_id"], "obs_0001")
             self.assertEqual(table["groups"]["D"][0]["supported_option"], "D")
+            self.assertTrue(table["groups"]["D"][0]["legacy_worker_vote"])
 
     def test_interpreter_runs_visual_program_and_returns_observation_ids(self):
         registry = ToolRegistry()

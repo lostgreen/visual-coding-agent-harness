@@ -9,17 +9,20 @@ from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..interpreter import ProgramInterpreter
-from ..registry import ToolRegistry
+from ..registry import ToolError, ToolRegistry
 from ..video_index import SceneIndex, VideoSegment
 from ..workspace import EvidenceWorkspace
 from .answer_agent import AnswerAgent
-from .question_policy import extract_candidate_options, select_question_playbook
+from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
 
 
-_SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment"}
+_SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read"}
+_GLOBAL_VIEW_TOOLS = {"global_gist"}
 _CHEAP_TOOLS = {"video_ls", "search_segments", "read_segment", "expand_window", "zoom", "summarize_ledger_evidence"}
 _EXPENSIVE_TOOLS = {
+    "global_gist",
     "inspect_segment",
+    "vision_read",
     "caption_segment",
     "qa_segment",
     "caption_segments",
@@ -125,6 +128,11 @@ class IterativeVisualAgent:
         self.budget = budget or AgentBudget()
 
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
+        if classify_question_route(question) == "gist_global" and self._has_tool("global_gist"):
+            global_result = self._try_global_gist_route(question=question, video_path=video_path)
+            if global_result is not None:
+                return global_result
+
         rounds: list[IterativeRound] = []
         citations: list[str] = []
         inspected_segment_ids: set[str] = set()
@@ -486,13 +494,19 @@ class IterativeVisualAgent:
                 args["video_path"] = video_path
                 args["start_sec"] = segment.start_sec
                 args["end_sec"] = segment.end_sec
-                args.setdefault("question", question)
+                if tool_name == "vision_read":
+                    args.setdefault("ask_for", args.pop("question", question))
+                else:
+                    args.setdefault("question", question)
                 candidate_options = list(extract_candidate_options(question))
                 if candidate_options:
-                    args["question"] = _append_candidate_options_to_tool_question(
-                        str(args["question"]),
-                        candidate_options=candidate_options,
-                    )
+                    if tool_name == "vision_read":
+                        args.setdefault("event_label", str(args.get("ask_for", "")))
+                    else:
+                        args["question"] = _append_candidate_options_to_tool_question(
+                            str(args["question"]),
+                            candidate_options=candidate_options,
+                        )
                     if tool_name == "inspect_segment":
                         args["candidate_options"] = candidate_options
                 args.setdefault("nframes", self.budget.default_nframes)
@@ -622,9 +636,80 @@ class IterativeVisualAgent:
         return self.workspace.compact_ledger_text()
 
     def _answer_evidence_table(self, question: str) -> Mapping[str, Any]:
-        return self.workspace.evidence_table(
+        return self.workspace.evidence_table_v2(
             question=question,
             options=extract_candidate_options(question),
+        )
+
+    def _has_tool(self, tool_name: str) -> bool:
+        try:
+            self.registry.get(tool_name)
+        except ToolError:
+            return False
+        return True
+
+    def _try_global_gist_route(self, *, question: str, video_path: str) -> IterativeRunResult | None:
+        program = [
+            {
+                "tool": "global_gist",
+                "args": {
+                    "video_path": video_path,
+                    "question": question,
+                    "duration_sec": self.scene_index.duration_sec,
+                },
+                "assign": "global_gist",
+            }
+        ]
+        self.workspace.write_trace_event(
+            "iterative_route",
+            {"route": "gist_global", "tool": "global_gist"},
+        )
+        program_result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(program)
+        answer_result = AnswerAgent(self.backend).run(
+            question=question,
+            evidence_text=self._read_ledger(),
+            evidence_table=self._answer_evidence_table(question),
+        )
+        self.workspace.write_trace_event(
+            "iterative_answer_agent",
+            {
+                "round": 1,
+                "source": "global_gist_route",
+                "status": answer_result.status,
+                "answer": answer_result.answer,
+                "citations": list(answer_result.citations),
+                "missing_evidence": list(answer_result.missing_evidence),
+            },
+        )
+        if answer_result.status != "final":
+            return None
+
+        self.workspace.write_trace_event(
+            "iterative_final",
+            {
+                "round": 1,
+                "answer": answer_result.answer,
+                "citations": list(answer_result.citations),
+                "source": "global_gist_route",
+            },
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer=answer_result.answer,
+            status="final",
+            citations=list(answer_result.citations),
+            confidence=answer_result.confidence,
+            rounds=[
+                IterativeRound(
+                    round_number=1,
+                    status="final",
+                    planner_text=answer_result.raw_text,
+                    rationale=answer_result.rationale,
+                    program=program,
+                    observation_ids=list(program_result.observation_ids),
+                )
+            ],
         )
 
 
@@ -676,10 +761,12 @@ def _replanning_prompt(
         "- read_segment(segment_id: str)\n"
         "- expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0)\n"
         "- zoom(segment_id: str, target_granularity_sec: float = 60.0)\n"
+        "- global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 64, max_pixels: int = 151200)\n"
         "- caption_segments(segment_ids: list = [], question: str = 'Create a concise search caption for this segment.', nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0, max_segments: int = 3)\n"
         "- ingest_segment_metadata(segment_id: str, low_fps_caption: str = '', asr_text: str = '', ocr_text: str = '', entities: list = [])\n"
         "- summarize_ledger_evidence(max_claims: int = 5)\n"
         "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
+        "- vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = '', nframes: int = 16, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 16, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0)\n"
@@ -688,14 +775,16 @@ def _replanning_prompt(
         '{"status": "final", "answer": string, "citations": [observation_id], "confidence": number}\n'
         "Rules:\n"
         "- Use video_ls first for open-ended description tasks or when the relevant segment is unclear.\n"
+        "- For gist/global questions, use global_gist before local decomposition and cite it as the direct floor when sufficient.\n"
         "- caption_segments is offline VideoMap cache building; avoid it in online reasoning unless the cache/indexes are empty.\n"
-        "- Use navigation output as a map, then delegate localized visual inspection to inspect_segment on one candidate segment.\n"
-        "- Use zoom when a coarse segment is relevant but too long; then call inspect_segment with the returned child segment_id and start_sec/end_sec.\n"
+        "- Use navigation output as a map, then delegate localized visual reading to vision_read or inspect_segment on one candidate segment.\n"
+        "- Use zoom when a coarse segment is relevant but too long; then call vision_read or inspect_segment with the returned child segment_id and start_sec/end_sec.\n"
         "- Do not spend every round on navigation-only tools; gather visual evidence before finalizing.\n"
-        "- Multiple-choice answers must use inspect_segment on a localized candidate before finalizing, with the options included in candidate_options.\n"
+        "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.\n"
+        "- Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.\n"
         '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.\n'
         "- Do not copy quoted option text into JSON string values; refer to option letters instead.\n"
-        "- Final answers require at least one non-navigation visual observation from inspect_segment, caption_segment, or qa_segment; navigation-only evidence is insufficient.\n"
+        "- Final answers require at least one non-navigation visual observation from vision_read, inspect_segment, caption_segment, or qa_segment; navigation-only evidence is insufficient.\n"
         "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.\n"
         f"- Request at most {budget.max_tool_calls_per_round} new tool call(s) this round.\n"
         "- Cheap navigation tools and expensive VLM tools have separate budgets unless free exploration mode is active.\n"
@@ -756,6 +845,8 @@ def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[
 
 def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, Any]]) -> bool:
     for step in program:
+        if step.get("tool") == "vision_read":
+            return True
         if step.get("tool") != "inspect_segment":
             continue
         args = step.get("args", {})
@@ -766,7 +857,7 @@ def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, A
 
 def _blocked_final_reason(*, question: str, has_inspect_with_candidate_options: bool) -> str:
     if extract_candidate_options(question) and not has_inspect_with_candidate_options:
-        return "mcq_final_requires_inspect_segment_with_candidate_options"
+        return "mcq_final_requires_local_visual_read"
     return ""
 
 

@@ -48,6 +48,7 @@ class AnswerAgent:
 
 
 GROUNDING_WEIGHTS = {
+    "global_sparse": 1.0,
     "visually_confirmed": 1.0,
     "inferred": 0.35,
     "weak": 0.2,
@@ -61,12 +62,20 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
 
     option_text = _option_text_map(table.get("options", []))
     option_scores = _score_options(table)
+    global_floor = _global_floor_support(table)
     ranked = sorted(
         [(option, score) for option, score in option_scores.items() if option != "unassigned" and score > 0],
         key=lambda item: (-item[1], item[0]),
     )
     if not ranked:
         return _need_more_evidence("targeted follow-up needed: inspect the most relevant option-specific window.")
+
+    if global_floor is not None:
+        return _final_from_global_floor(
+            option_text=option_text,
+            option_scores=option_scores,
+            global_floor=global_floor,
+        )
 
     winner, winning_score = ranked[0]
     runner_up, runner_up_score = ranked[1] if len(ranked) > 1 else ("", 0.0)
@@ -175,6 +184,55 @@ def _score_options(table: Mapping[str, Any]) -> dict[str, float]:
             score += _row_score(row)
         scores[str(option)] = score
     return scores
+
+
+def _global_floor_support(table: Mapping[str, Any]) -> tuple[str, Mapping[str, Any], float] | None:
+    groups = table.get("groups", {}) if isinstance(table.get("groups", {}), Mapping) else {}
+    candidates: list[tuple[str, Mapping[str, Any], float]] = []
+    for option, rows in groups.items():
+        if option == "unassigned" or not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("tool", "")) != "global_gist" and str(row.get("grounding_quality", "")) != "global_sparse":
+                continue
+            score = _row_score(row)
+            if score > 0 and not _is_weak_grounding(row):
+                candidates.append((str(option), row, score))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (-item[2], str(item[1].get("obs_id", ""))))
+    return candidates[0]
+
+
+def _final_from_global_floor(
+    *,
+    option_text: Mapping[str, str],
+    option_scores: Mapping[str, float],
+    global_floor: tuple[str, Mapping[str, Any], float],
+) -> AnswerAgentResult:
+    option, row, score = global_floor
+    citations = [str(row.get("obs_id", ""))] if row.get("obs_id") else []
+    conflict_options = sorted(option for option, value in option_scores.items() if option != "unassigned" and value > 0)
+    conflict = {
+        "options": conflict_options,
+        "winner": option,
+        "runner_up": "",
+        "scores": {option: round(value, 3) for option, value in option_scores.items()},
+        "global_floor": True,
+    }
+    return AnswerAgentResult(
+        status="final",
+        answer=option_text.get(option, option),
+        rationale=(
+            f"Option {option} is the global sparse whole-video floor "
+            f"({score:.2f}); local evidence must not undercut it on gist questions."
+        ),
+        citations=citations,
+        confidence=min(1.0, score),
+        conflict=conflict,
+    )
 
 
 def _has_option_support(table: Mapping[str, Any]) -> bool:

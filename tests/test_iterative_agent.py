@@ -96,6 +96,38 @@ def build_segment_test_registry() -> ToolRegistry:
     return registry
 
 
+def build_global_route_test_registry() -> ToolRegistry:
+    registry = build_segment_test_registry()
+
+    @tool(name="global_gist", description="Inspect a sparse whole-video view.")
+    def global_gist(
+        video_path: str,
+        question: str,
+        duration_sec: float,
+        nframes: int = 64,
+        max_pixels: int = 151200,
+    ):
+        return {
+            "claim": "Supported option: D. The sparse whole-video view shows an aviation documentary.",
+            "confidence": 0.76,
+            "input_artifacts": [video_path],
+            "regions": [
+                {
+                    "start_sec": 0.0,
+                    "end_sec": duration_sec,
+                    "nframes": nframes,
+                    "max_pixels": max_pixels,
+                }
+            ],
+            "limitations": "Sparse full-video sampling.",
+            "supported_option": "D",
+            "grounding_quality": "global_sparse",
+        }
+
+    registry.register(global_gist)
+    return registry
+
+
 class IterativeAgentTest(unittest.TestCase):
     def test_agent_budget_defaults_to_answer_capable_loop(self):
         budget = AgentBudget()
@@ -249,11 +281,12 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("ingest_segment_metadata(segment_id", prompt)
             self.assertIn("verify_ledger_answer(answer", prompt)
             self.assertIn("summarize_ledger_evidence", prompt)
+            self.assertIn("vision_read(video_path", prompt)
             self.assertIn("max_pixels", prompt)
             self.assertIn("fps", prompt)
-            self.assertIn("delegate localized visual inspection to inspect_segment", prompt)
+            self.assertIn("delegate localized visual reading to vision_read or inspect_segment", prompt)
             self.assertIn("Do not spend every round on navigation-only tools", prompt)
-            self.assertIn("Multiple-choice answers must use inspect_segment", prompt)
+            self.assertIn("Multiple-choice answers must use vision_read or inspect_segment", prompt)
             self.assertIn("non-navigation visual observation", prompt)
             self.assertIn("caption_segments is offline VideoMap cache building", prompt)
 
@@ -286,6 +319,36 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("Task playbook: multiple_choice", prompt)
             self.assertIn("candidate_options", prompt)
             self.assertIn("verify option consistency", prompt)
+
+    def test_gist_global_mcq_routes_through_global_gist_before_planning(self):
+        backend = ScriptedPlannerBackend([])
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=1896.0, window_sec=300.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="global_route")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_global_route_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(
+                question=(
+                    "What is the video mainly about?\n"
+                    "A. cooking\n"
+                    "B. a local airport scene\n"
+                    "C. a city walk\n"
+                    "D. an aviation documentary"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "D. an aviation documentary")
+            self.assertEqual(result.citations, ["obs_0001"])
+            self.assertEqual(backend.requests, [])
+            self.assertEqual(result.rounds[0].program[0]["tool"], "global_gist")
 
     def test_iterative_agent_prompt_tells_planner_to_use_option_letters_in_json(self):
         backend = ScriptedPlannerBackend(
@@ -1109,8 +1172,10 @@ class IterativeAgentTest(unittest.TestCase):
                     "input_artifacts": [f"{video_path}#t={start_sec:.1f},{end_sec:.1f}"],
                     "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
                     "limitations": "Directly visible in the sampled segment.",
-                    "supported_option": "D",
                     "grounding_quality": "visually_confirmed",
+                    "candidate_option_relations": [
+                        {"option": "D", "relation": "support", "strength": 0.72, "assigned_by": "answer_agent"}
+                    ],
                 }
             return {
                 "claim": "Caption-like evidence guesses option A.",
@@ -1118,7 +1183,9 @@ class IterativeAgentTest(unittest.TestCase):
                 "input_artifacts": [f"{video_path}#t={start_sec:.1f},{end_sec:.1f}"],
                 "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
                 "limitations": "Inferred from context; lacks explicit visual confirmation.",
-                "supported_option": "A",
+                "candidate_option_relations": [
+                    {"option": "A", "relation": "support", "strength": 0.95, "assigned_by": "answer_agent"}
+                ],
             }
 
         registry.register(inspect_segment)

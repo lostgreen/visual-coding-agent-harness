@@ -47,7 +47,59 @@ def build_segment_inspector_registry(
             clip_extractor=clip_extractor,
         )
 
+    @tool(name="vision_read", description="Read typed visual facts from one localized time window without option voting.")
+    def vision_read(
+        video_path: str,
+        segment_id: str,
+        start_sec: float,
+        end_sec: float,
+        ask_for: str,
+        event_label: str = "",
+        nframes: int = 16,
+        max_pixels: int = 360 * 420,
+        fps: float = 0.0,
+    ) -> Mapping[str, object]:
+        result = dict(
+            _run_inspector(
+                backend=backend,
+                video_path=video_path,
+                segment_id=segment_id,
+                start_sec=start_sec,
+                end_sec=end_sec,
+                question=ask_for,
+                candidate_options=(),
+                nframes=nframes,
+                max_pixels=max_pixels,
+                fps=fps,
+                workspace=workspace,
+                extract_clips=extract_clips,
+                clip_extractor=clip_extractor,
+                task_name="vision_read",
+                prompt_style="vision_read",
+            )
+        )
+        resolved_event = event_label or ask_for
+        time_range = [float(start_sec), float(end_sec)]
+        result.update(
+            {
+                "facts": [
+                    {
+                        "fact": str(result.get("claim", "")),
+                        "event_label": resolved_event,
+                        "polarity": "present",
+                        "time_range": time_range,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+                "event_label": resolved_event,
+                "time_range": time_range,
+                "grounding_quality": "visually_confirmed",
+            }
+        )
+        return result
+
     registry.register(inspect_segment)
+    registry.register(vision_read)
     return registry
 
 
@@ -66,6 +118,8 @@ def _run_inspector(
     workspace: Optional[EvidenceWorkspace],
     extract_clips: bool,
     clip_extractor: Optional[ClipExtractor],
+    task_name: str = "inspect_segment",
+    prompt_style: str = "inspect_segment",
 ) -> Mapping[str, object]:
     metadata = {
         "tool_role": "segment_inspector",
@@ -109,13 +163,22 @@ def _run_inspector(
 
     response = backend.generate(
         BackendRequest(
-            task="inspect_segment",
-            prompt=_inspector_prompt(
-                segment_id=segment_id,
-                start_sec=float(start_sec),
-                end_sec=float(end_sec),
-                question=question,
-                candidate_options=candidate_options,
+            task=task_name,
+            prompt=(
+                _vision_read_prompt(
+                    segment_id=segment_id,
+                    start_sec=float(start_sec),
+                    end_sec=float(end_sec),
+                    ask_for=question,
+                )
+                if prompt_style == "vision_read"
+                else _inspector_prompt(
+                    segment_id=segment_id,
+                    start_sec=float(start_sec),
+                    end_sec=float(end_sec),
+                    question=question,
+                    candidate_options=candidate_options,
+                )
             ),
             media_path=media_path,
             media_type="video",
@@ -146,9 +209,28 @@ def _inspector_prompt(
         "You are a Segment Inspector subagent for long-video reasoning.\n"
         "Your context is intentionally isolated from the master planner.\n"
         "Inspect only the provided time window and do not rely on outside video context.\n"
-        "Return one distilled observation: claim, supported option if any, confidence, and limitation.\n"
+        "Return one distilled local observation: visible facts, confidence, and limitation.\n"
+        "Use candidate options only to understand what facts to look for.\n"
+        "Do not choose an option. Do not emit supported_option, answer_option, or final_answer.\n"
         "Do not include step-by-step reasoning or raw frame descriptions unless essential evidence.\n"
         f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]\n"
         f"Question: {question}\n"
         f"Candidate options:\n{options_text}"
+    )
+
+
+def _vision_read_prompt(
+    *,
+    segment_id: str,
+    start_sec: float,
+    end_sec: float,
+    ask_for: str,
+) -> str:
+    return (
+        "You are a v4 VisionAgent reading one localized long-video window.\n"
+        "Return typed visual facts only: fact, event label if present, polarity, timestamp, and limitation.\n"
+        "Do not choose an option. Do not emit supported_option, answer_option, or final_answer.\n"
+        "Do not use outside video context or external knowledge.\n"
+        f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]\n"
+        f"Ask for: {ask_for}"
     )

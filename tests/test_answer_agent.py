@@ -97,6 +97,37 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertTrue(result.missing_evidence)
         self.assertIn("targeted", result.missing_evidence[0])
 
+    def test_arbitration_holds_global_gist_floor_for_gist_questions(self):
+        table = {
+            "options": ["B. a local scene guess", "D. whole-video synopsis"],
+            "groups": {
+                "B": [
+                    {
+                        "obs_id": "obs_0002",
+                        "tool": "inspect_segment",
+                        "claim": "One local window appears to support option B.",
+                        "confidence": 0.8,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+                "D": [
+                    {
+                        "obs_id": "obs_0001",
+                        "tool": "global_gist",
+                        "claim": "Supported option: D. The global sparse view captures the whole-video synopsis.",
+                        "confidence": 0.74,
+                        "grounding_quality": "global_sparse",
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table)
+
+        self.assertEqual(result.status, "final")
+        self.assertEqual(result.answer, "D. whole-video synopsis")
+        self.assertEqual(result.citations, ["obs_0001"])
+
 
 if __name__ == "__main__":
     unittest.main()

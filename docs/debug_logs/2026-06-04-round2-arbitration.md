@@ -10,7 +10,8 @@ Execute Round 2 from `videomme-agent-implementation-plan-round2.md`: make eviden
 
 Current valid local check:
 
-- `PYTHONPATH=src python -m pytest tests` -> 93 passed.
+- `PYTHONPATH=src python -m pytest tests` -> 94 passed.
+- KML source-machine check with `/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python` -> 94 unittest tests OK.
 
 Current implementation progress:
 
@@ -62,6 +63,7 @@ Latest failure fingerprint after run:
 - Real inspector outputs encode option support inside claim text, e.g. `Supported option: A.`, not in `raw_output.supported_option`.
 - Existing `evidence_table()` did not parse the colon form, so AnswerAgent/Verifier arbitration saw many visual observations as `unassigned`.
 - Mitigation added: parse `Supported option: X.` claim text into structured table support.
+- Reporter was rerun on `videomme_agent_visual_harness_full_20260604`: `agent_v2` remains 1/3 with final_rate 100%, incomplete_rate 0%, avg 304 sec; this confirms execution/finality is fixed but answer quality remains below direct baseline.
 
 ## Files Changed In This Iteration
 
@@ -88,8 +90,8 @@ The round-2 direction is locally validated: explicit table arbitration can remov
 
 ## Next Actions
 
-1. Rerun reporter on `videomme_agent_visual_harness_full_20260604` after the claim-text parser fix to quantify conflict/unsupported-final tags.
-2. Rerun a focused `agent_v2 --free-explore` slice if the parser fix affects verifier/AnswerAgent behavior.
+1. Add a final-answer gate for MCQ: when final choice has no structured support, or citations are navigation/search-only, require verifier/AnswerAgent arbitration before accepting final.
+2. Rerun a focused `agent_v2 --free-explore` slice after final-answer gating to verify `605-1` no longer accepts unsupported C.
 3. Move Stage 4 Inspector self-report earlier if claim-text parsing is still too weak for `grounding_quality` and `event_label`.
-4. Add a final-answer gate for MCQ: when final choice has no structured support but other options do, require verifier/AnswerAgent arbitration before accepting final.
+4. Add temporal-order verifier behavior for `611-2`: extract the four Bernini works as events and compare each MCQ sequence.
 5. Then rerun the 3-case anchor set before expanding benchmark coverage.

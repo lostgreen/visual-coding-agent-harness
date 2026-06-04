@@ -11,6 +11,7 @@ from visual_coding_agent_harness.workspace import EvidenceWorkspace
 INCOMPLETE_STATUSES = {"max_rounds_reached", "incomplete", "error", "failed"}
 VISUAL_SEGMENT_TOOLS = {"inspect_segment", "caption_segment", "qa_segment", "caption_segments"}
 GROUNDING_WEIGHTS = {
+    "global_sparse": 1.0,
     "visually_confirmed": 1.0,
     "inferred": 0.35,
     "weak": 0.2,
@@ -105,22 +106,41 @@ def _strategy_report(cases: Sequence[Mapping[str, Any]], strategy: str) -> dict[
     conflict = sum(1 for row in rows if row["has_conflict"])
     final_with_conflict = sum(1 for row in rows if row["final_with_conflict"])
     unsupported_final = sum(1 for row in rows if row["unsupported_final"])
+    legacy_worker_vote_rows = sum(int(row["legacy_worker_vote_rows"]) for row in rows)
     consistency_rows = [row for row in rows if row["option_support_consistency"] is not None]
     consistent = sum(1 for row in consistency_rows if row["option_support_consistency"])
     seconds = [row["seconds"] for row in rows if row["seconds"] is not None]
     ratios = [row["walltime_vs_direct"] for row in rows if row["walltime_vs_direct"] is not None]
+    direct_regressions = _direct_regressions(cases=cases, strategy=strategy)
     return {
         "accuracy": f"{correct}/{total}",
         "accuracy_rate": correct / total if total else 0.0,
+        "direct_regressions": direct_regressions,
         "final_rate": finals / total if total else 0.0,
         "incomplete_rate": incomplete / total if total else 0.0,
         "conflict_rate": conflict / total if total else 0.0,
         "final_with_conflict_rate": final_with_conflict / total if total else 0.0,
         "unsupported_final_rate": unsupported_final / total if total else 0.0,
+        "legacy_worker_vote_rows": legacy_worker_vote_rows,
         "option_support_consistency_rate": consistent / len(consistency_rows) if consistency_rows else 0.0,
         "avg_seconds": round(sum(seconds) / len(seconds), 3) if seconds else None,
         "avg_walltime_vs_direct": round(sum(ratios) / len(ratios), 3) if ratios else None,
     }
+
+
+def _direct_regressions(*, cases: Sequence[Mapping[str, Any]], strategy: str) -> int:
+    if strategy == "direct_full_video":
+        return 0
+    regressions = 0
+    for case in cases:
+        strategies = case.get("strategies", {}) if isinstance(case.get("strategies", {}), Mapping) else {}
+        direct = strategies.get("direct_full_video")
+        row = strategies.get(strategy)
+        if not isinstance(direct, Mapping) or not isinstance(row, Mapping):
+            continue
+        if bool(direct.get("correct")) and not bool(row.get("correct")):
+            regressions += 1
+    return regressions
 
 
 def _trace_summary(workspace_path: Path | None) -> dict[str, list[str]]:
@@ -179,6 +199,8 @@ def _workspace_path(*, strategy: str, raw_artifacts: Mapping[str, Any], summary_
 def _resolve_path(path: Path, *, summary_path: Path) -> Path:
     if path.is_absolute():
         return path
+    if path.exists():
+        return path
     return summary_path.parent / path
 
 
@@ -224,6 +246,7 @@ def _arbitration_report(
         "option_support_consistency": None,
         "final_with_conflict": False,
         "unsupported_final": False,
+        "legacy_worker_vote_rows": 0,
     }
     if workspace_path is None or not workspace_path.exists():
         return default
@@ -233,6 +256,7 @@ def _arbitration_report(
         options=options if isinstance(options, Sequence) and not isinstance(options, (str, bytes)) else [],
     )
     support = _weighted_option_support(table)
+    legacy_worker_vote_rows = _legacy_worker_vote_rows(table)
     supported_options = [option for option, score in support.items() if option != "unassigned" and score > 0]
     has_conflict = len(supported_options) >= 2
     top_supported_option = _top_supported_option(support)
@@ -263,6 +287,7 @@ def _arbitration_report(
         "option_support_consistency": option_support_consistency,
         "final_with_conflict": final_with_conflict,
         "unsupported_final": unsupported_final,
+        "legacy_worker_vote_rows": legacy_worker_vote_rows,
     }
 
 
@@ -280,7 +305,12 @@ def _weighted_option_support(table: Mapping[str, Any]) -> dict[str, float]:
                     0.2,
                 )
         support[str(option)] = score
-    return support
+    return {option: score for option, score in support.items() if score > 0}
+
+
+def _legacy_worker_vote_rows(table: Mapping[str, Any]) -> int:
+    rows = table.get("rows", []) if isinstance(table.get("rows", []), Sequence) else []
+    return sum(1 for row in rows if isinstance(row, Mapping) and row.get("legacy_worker_vote"))
 
 
 def _top_supported_option(support: Mapping[str, float]) -> str:
@@ -346,17 +376,19 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "# VideoMME Metrics",
         "",
-        "| Strategy | Accuracy | Final Rate | Incomplete Rate | Avg Sec | Avg vs Direct |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Strategy | Accuracy | Direct Regressions | Legacy Worker Votes | Final Rate | Incomplete Rate | Avg Sec | Avg vs Direct |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for strategy, metrics in report["strategies"].items():
         lines.append(
             "| "
             + " | ".join(
-                [
-                    strategy,
-                    str(metrics["accuracy"]),
-                    _pct(metrics["final_rate"]),
+                    [
+                        strategy,
+                        str(metrics["accuracy"]),
+                        str(metrics["direct_regressions"]),
+                        str(metrics["legacy_worker_vote_rows"]),
+                        _pct(metrics["final_rate"]),
                     _pct(metrics["incomplete_rate"]),
                     _fmt(metrics["avg_seconds"]),
                     _fmt(metrics["avg_walltime_vs_direct"]),

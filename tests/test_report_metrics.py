@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -115,7 +116,7 @@ class ReportMetricsTest(unittest.TestCase):
             root = Path(tmp)
             workspace = EvidenceWorkspace.create(root / "workspaces", run_id="case_611_agent_v2")
             d_observation = workspace.write_observation(
-                tool_name="inspect_segment",
+                tool_name="verify_local_claim",
                 input_artifacts=["clip_d.mp4"],
                 claim="The visible order supports option D.",
                 confidence=0.82,
@@ -124,7 +125,7 @@ class ReportMetricsTest(unittest.TestCase):
                 raw_output={"supported_option": "D", "grounding_quality": "visually_confirmed"},
             )
             a_observation = workspace.write_observation(
-                tool_name="caption_segment",
+                tool_name="verify_local_claim",
                 input_artifacts=["clip_a.mp4"],
                 claim="The caption guesses option A.",
                 confidence=0.91,
@@ -185,6 +186,173 @@ class ReportMetricsTest(unittest.TestCase):
             self.assertEqual(metrics["final_with_conflict_rate"], 1.0)
             self.assertEqual(metrics["unsupported_final_rate"], 1.0)
             self.assertEqual(metrics["option_support_consistency_rate"], 0.0)
+
+    def test_build_report_counts_direct_regressions_per_strategy(self):
+        from runs import report_metrics
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            summary_path = root / "summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "question_id": "605-1",
+                                "gt": "D",
+                                "strategies": {
+                                    "direct_full_video": {"choice": "D", "correct": True, "status": "ok"},
+                                    "agent_v2": {"choice": "C", "correct": False, "status": "final"},
+                                },
+                            },
+                            {
+                                "question_id": "611-2",
+                                "gt": "D",
+                                "strategies": {
+                                    "direct_full_video": {"choice": "A", "correct": False, "status": "ok"},
+                                    "agent_v2": {"choice": "A", "correct": False, "status": "final"},
+                                },
+                            },
+                        ]
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            report = report_metrics.build_report(summary_path)
+
+            self.assertEqual(report["strategies"]["agent_v2"]["direct_regressions"], 1)
+            self.assertEqual(report["strategies"]["direct_full_video"]["direct_regressions"], 0)
+            rendered = report_metrics.render_markdown(report)
+            self.assertIn("Direct Regressions", rendered)
+            self.assertIn("agent_v2", rendered)
+
+    def test_build_report_counts_legacy_worker_vote_rows(self):
+        from runs import report_metrics
+        from visual_coding_agent_harness.workspace import EvidenceWorkspace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = EvidenceWorkspace.create(root / "workspaces", run_id="case_legacy_votes")
+            legacy = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["clip.mp4"],
+                claim="The local worker says Supported option: B.",
+                confidence=0.82,
+                limitations="Local observation only.",
+                raw_output={"supported_option": "B", "grounding_quality": "visually_confirmed"},
+            )
+            global_floor = workspace.write_observation(
+                tool_name="global_gist",
+                input_artifacts=["video.mp4"],
+                claim="Supported option: D. Whole-video synopsis.",
+                confidence=0.76,
+                limitations="Sparse full-video sampling.",
+                raw_output={"supported_option": "D", "grounding_quality": "global_sparse"},
+            )
+            workspace.write_ledger_entry(legacy)
+            workspace.write_ledger_entry(global_floor)
+
+            summary_path = root / "summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "question_id": "605-1",
+                                "gt": "D",
+                                "question": "What is the video mainly about?",
+                                "options": ["A. one", "B. local guess", "C. three", "D. synopsis"],
+                                "strategies": {
+                                    "agent_v2": {
+                                        "choice": "D",
+                                        "correct": True,
+                                        "status": "final",
+                                        "citations": ["obs_0002"],
+                                    }
+                                },
+                                "raw_artifacts": {"workspaces": {"agent_v2": str(workspace.root)}},
+                            }
+                        ]
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            report = report_metrics.build_report(summary_path)
+
+            detail = report["cases"][0]["strategies"]["agent_v2"]
+            self.assertEqual(detail["legacy_worker_vote_rows"], 1)
+            self.assertEqual(detail["option_support"]["D"], 0.76)
+            self.assertNotIn("B", detail["option_support"])
+            self.assertEqual(report["strategies"]["agent_v2"]["legacy_worker_vote_rows"], 1)
+
+    def test_build_report_resolves_repo_relative_workspace_paths(self):
+        from runs import report_metrics
+        from visual_coding_agent_harness.workspace import EvidenceWorkspace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_root = root / "runs" / "round3"
+            workspace = EvidenceWorkspace.create(run_root / "workspaces", run_id="case_agent_v2")
+            observation = workspace.write_observation(
+                tool_name="global_gist",
+                claim="Supported option: D. The whole video is about the empire rising and falling.",
+                confidence=0.76,
+                regions=[{"start_sec": 0.0, "end_sec": 1896.0}],
+                limitations="Sparse full-video sampling.",
+                raw_output={"supported_option": "D", "grounding_quality": "global_sparse"},
+            )
+            workspace.write_ledger_entry(observation)
+            workspace.write_trace_event(
+                "iterative_final",
+                {"answer": "D. whole-video synopsis", "citations": [observation.observation_id]},
+            )
+            summary_path = run_root / "summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "question_id": "605-1",
+                                "gt": "D",
+                                "question": "Question: What's the main idea of the video?",
+                                "options": ["A. one", "B. two", "C. three", "D. whole-video synopsis"],
+                                "strategies": {
+                                    "direct_full_video": {"choice": "D", "correct": True, "status": "ok"},
+                                    "agent_v2": {
+                                        "choice": "D",
+                                        "correct": True,
+                                        "status": "final",
+                                        "citation_count": 1,
+                                    },
+                                },
+                                "raw_artifacts": {
+                                    "workspaces": {
+                                        "agent_v2": "runs/round3/workspaces/runs/case_agent_v2"
+                                    }
+                                },
+                            }
+                        ]
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(root)
+                report = report_metrics.build_report(summary_path)
+            finally:
+                os.chdir(old_cwd)
+
+            detail = report["cases"][0]["strategies"]["agent_v2"]
+            self.assertEqual(detail["workspace"], "runs/round3/workspaces/runs/case_agent_v2")
+            self.assertEqual(detail["citations"], ["obs_0001"])
+            self.assertEqual(detail["option_support"]["D"], 0.76)
 
 
 if __name__ == "__main__":

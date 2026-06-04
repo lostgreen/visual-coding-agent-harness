@@ -25,13 +25,15 @@ Last updated: 2026-06-04
 ```mermaid
 flowchart TD
     U["User question + image/video"] --> A["Main Agent / Planner"]
-    A --> PB["Task playbook router"]
-    PB --> P["Text context: scene index + compact evidence context + tool schema"]
+    A --> PB["Question route + task playbook"]
+    PB -->|gist_global| G["global_gist: sparse whole-video floor"]
+    G --> W["EvidenceWorkspace"]
+    PB -->|needle_local| P["Text context: scene index + compact evidence context + tool schema"]
     P --> T["Tool program JSON"]
     T --> I["ProgramInterpreter"]
     I --> H["Visual Tool Harness"]
     H --> S["Segment Inspector / visual tools"]
-    S --> W["EvidenceWorkspace"]
+    S --> W
     W --> O["observations.jsonl"]
     W --> Tr["trace.jsonl"]
     W --> L["ledger.md"]
@@ -45,8 +47,9 @@ flowchart TD
 
 - 默认不接收完整视频。
 - 它看到的是 `scene_index.summary()`、task playbook、tool schema 和 `compact_ledger_text()`。
-- 真正的视频像素访问由 `inspect_segment` / `caption_segment` / `qa_segment` 等工具完成。
-- 默认策略是主 planner 派发局部检查任务，Segment Inspector 只回传一条 distilled observation。
+- Round 3 新增 `question_policy.classify_question_route()`：gist/global 类问题先走 `global_gist`，needle/local 类问题继续走导航和局部检查。
+- 真正的视频像素访问由 `global_gist` / `inspect_segment` / `caption_segment` / `qa_segment` 等工具完成。
+- 默认策略是主 planner 派发局部检查任务，Segment Inspector 只回传一条 distilled observation；`inspect_segment(candidate_options=...)` 的选项归因仍是过渡兼容，后续会收紧为 worker 只回局部事实。
 
 ## 当前实现状态
 
@@ -62,18 +65,32 @@ flowchart TD
 - `AgentBudget.free_explore(...)` 支持质量优先的自由探索路径：不做 per-class cost budget，只保留 emergency caps。
 - 动态 window 已修复 tail clamp、动态 id 复用、毫秒/秒单位混用等交互问题。
 - MCQ 工具调用会把 letter-only `candidate_options` 补成完整选项文本。
+- planner JSON 解析失败时会记录 `planner_json_parse_error`，并 fallback 到局部 `inspect_segment`，避免 quoted option 文本直接中断 agent。
+- `EvidenceWorkspace.evidence_table()` 会解析 Inspector claim 中的 `Supported option: X.`，让真实 VLM observation 进入结构化选项仲裁。
+- `global_gist` 已加入工具注册表，作为 gist/global 问题的 sparse whole-video floor，输出 `grounding_quality=global_sparse` 的普通 observation。
+- `AnswerAgent` / `EvidenceWorkspace` / `report_metrics.py` 已支持 `global_sparse` 证据权重、global floor 仲裁和 `direct_regressions` 指标。
+- 路由规则已覆盖 VideoMME wrapper 中的 `main idea` 等 gist 触发词，并避免被 `first option/letter` 这类选项格式文字误判成 temporal/needle 路由。
 
 远端 KML 机器上已通过完整单测：
 
 ```text
-82 tests OK
+103 tests OK
 ```
 
-远端 VideoMME 小样本已完成多轮调试：
+远端 VideoMME 小样本已完成多轮调试。旧的三样本源端完整 run 是 Round 3 之前的基线：
 
-- default AnswerAgent 三例：1/3，final_rate 66.7%，incomplete_rate 33.3%。
-- `611-2` free-explore：final_rate 100%，incomplete_rate 0%，但 final A vs GT D。
-- free-explore 能召回答案相关证据，包括支持正确选项 D 的 observation；失败点转移到 AnswerAgent/Verifier 的冲突仲裁。
+- Python: `/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python`
+- Summary: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_visual_harness_full_20260604/summary.json`
+- `agent_v2 --free-explore`: 1/3，final_rate 100%，incomplete_rate 0%，平均 304s。
+- `direct_full_video`: 2/3，final_rate 100%，平均 5.08s。
+- free-explore 已经能稳定调用工具并 final；失败点转移到 evidence attribution、AnswerAgent/Verifier 冲突仲裁和局部 observation 质量。
+
+Round 3 的最新 sanity probe 是 VideoMME `605-1`：
+
+- Summary: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_round3_605_global_fix_20260604/summary.json`
+- `agent_v2 --free-explore`: 只调用 `global_gist`，答案 D，正确，3.076s。
+- `direct_full_video`: 答案 D，正确，5.101s。
+- `report_metrics.py`: `direct_regressions=0`，`top_supported_option=D`，`unsupported_final=false`，`final_with_conflict=false`。
 
 尚未完成：
 
@@ -154,9 +171,107 @@ Main Agent 必须输出 JSON：
 - bounded loop 下，模型仍可能继续探索到预算耗尽，而不是稳定 final。
 - free-explore 下，模型可以收集更多证据并 final，但仍可能在冲突 observation 中选择错误选项。
 
+## 当前 Agent 交互实例
+
+以下实例来自源端 `videomme_agent_visual_harness_full_20260604`，只保留结构化 trace 摘要和短 observation 指纹；完整 `trace.jsonl` / `observations.jsonl` 留在 KML artifact 中。
+
+### 605-1: 工具跑通但 final 选择无结构化支持
+
+```text
+Question type: Information Synopsis
+GT: D
+Agent final: C
+Correct: false
+Rounds/tools: 9 rounds / 13 tools
+Workspace: runs/videomme_agent_visual_harness_full_20260604/workspaces/runs/605-1_xKiRmesHWIA_agent_v2
+
+Tool path:
+video_ls(query="process of World War One") -> obs_0001
+inspect_segment(candidate_options=[A-D]) -> obs_0002
+search_segments(query="World War One") -> obs_0003
+...
+inspect_segment(...) -> obs_0011
+inspect_segment(...) -> obs_0012
+inspect_segment(...) -> obs_0013
+
+Final cites:
+obs_0001(video_ls), obs_0003(search), obs_0005(search),
+obs_0006(inspect_segment, supports B), obs_0007(inspect_segment, no valid option)
+```
+
+Failure fingerprint:
+
+- 多个 Inspector observation claim 中出现 `Supported option: B.`。
+- final 选择 C，但 C 没有结构化 option support。
+- final citation 混入 navigation/search observation，说明 AnswerAgent/Verifier 需要过滤非视觉证据并检查 selected option 是否被 citation 支持。
+
+### 611-2: caption shortcut 导致错误 final
+
+```text
+Question type: Temporal Reasoning
+GT: D
+Agent final: A
+Correct: false
+Rounds/tools: 6 rounds / 7 tools
+Workspace: runs/videomme_agent_visual_harness_full_20260604/workspaces/runs/611-2_H8fGd3fCJbg_agent_v2
+
+Tool path:
+inspect_segment(...) -> obs_0001
+inspect_segment(...) -> obs_0002
+inspect_segment(...) -> obs_0003
+...
+search_segments(query="Bernini's four masterpieces displayed together...") -> obs_0005
+search_segments(query="Bernini's four masterpieces displayed together...") -> obs_0006
+caption_segment(question="Answer with exactly one option letter...") -> obs_0007
+
+Final cites:
+obs_0007(caption_segment)
+```
+
+Failure fingerprint:
+
+- final citation 是低层 `caption_segment`，claim 直接给 A。
+- 该 case 没有因为预算而 incomplete；错误来自 evidence grounding 和 temporal option-order 检查不足。
+- Verifier 应该比较 Bernini 四件作品的顺序，而不是接受单条 caption answer。
+
+### 612-1: 成功但仍有冲突证据
+
+```text
+Question type: Temporal Reasoning
+GT: B
+Agent final: B
+Correct: true
+Rounds/tools: 20 rounds / 21 tools
+Workspace: runs/videomme_agent_visual_harness_full_20260604/workspaces/runs/612-1_GLW9omJfAdk_agent_v2
+
+Tool path:
+inspect_segment x5 -> caption_segment -> zoom
+-> inspect_segment/caption_segment over later windows
+-> final B
+
+Final cites:
+obs_0014, obs_0018, obs_0019, obs_0021
+```
+
+Success fingerprint:
+
+- 多条 `caption_segment` observation 给出 B。
+- 同一 ledger 里仍有 A-supporting Inspector rows。
+- 这类成功样本也要进入 verifier 训练/规则分析：正确 final 需要说明为什么 B 证据压过 A 冲突，而不是只因为最后几条 caption 都是 B。
+
 ## 当前工具组
 
-### 1. Navigation / Video Workspace Tools
+### 1. Global Floor / Direct View Tool
+
+`global_gist`
+
+- 对整段视频做稀疏采样观察，当前与 `direct_full_video` 使用同类 sparse whole-video 输入，适合 main idea、overall topic、whole-video gist 这类问题。
+- 由 `question_policy.classify_question_route()` 在 gist/global 路由上优先触发，避免把整体理解题强行拆成局部窗口检索。
+- 写入普通 observation，包含 `tool=global_gist`、`grounding_quality=global_sparse`、whole-video region、claim、confidence 和可选 `supported_option`。
+- 它是 global floor，不是定位工具：当问题需要局部细节、时序顺序、OCR、人物动作或对象属性时，仍应回到 `search_segments` / `zoom` / `inspect_segment`。
+- AnswerAgent 会把受支持的 `global_sparse` row 当成可引用视觉证据，但如果局部高质量证据与它冲突，需要显式仲裁。
+
+### 2. Navigation / Video Workspace Tools
 
 `video_ls`
 
@@ -190,13 +305,13 @@ Main Agent 必须输出 JSON：
 - 写回 mutable `VideoMapStore`，后续可被 `video_ls` / `search_segments` 召回。
 - 推荐下一步是对 child segment 调用 `inspect_segment`。
 
-### 2. Visual Evidence Tools
+### 3. Visual Evidence Tools
 
 `inspect_segment`
 
 - 当前首选的局部视觉证据工具。
 - 语义上是 Segment Inspector subagent boundary：内部看局部时间窗，主 planner 只收到一条 distilled observation。
-- 接收 `candidate_options`，用于 MCQ 证据归因。
+- 当前仍接收 `candidate_options`，用于 MCQ 证据归因和兼容旧 trace；这是过渡设计，下一阶段应让 worker 不直接投最终选项票，只回局部可验证事实、矛盾点和局限。
 - 返回 `tool_role=segment_inspector`、time range、question、sampling 参数、claim、confidence、limitations。
 
 `caption_segment`
@@ -222,7 +337,7 @@ Main Agent 必须输出 JSON：
 - 图像和区域级工具已经有基础协议。
 - 后续可接 OCR、detector、SAM、tracking。
 
-### 3. Verification / Answer Tools
+### 4. Verification / Answer Tools
 
 `summarize_ledger_evidence`
 
@@ -235,6 +350,18 @@ Main Agent 必须输出 JSON：
 - 仍是弱验证。
 - 后续应替换为 entailment/temporal verifier。
 
+AnswerAgent / evidence table
+
+- 不是 registry 里的外部视觉工具，而是最终仲裁层。
+- 消费 `EvidenceWorkspace.evidence_table()`，按 `supported_option`、`grounding_quality`、工具类型、confidence、limitations 和冲突关系做结构化选择。
+- 当前权重顺序大致是 `visually_confirmed` / `global_sparse` 高于 `inferred`、`weak` 和 `external_knowledge`。
+- 对 gist/global 路由保留 global floor：如果 `global_gist` 明确支持某个选项且没有更强反证，可以直接作为最终 citation。
+
+`report_metrics.py`
+
+- 汇总每个 case 的 final rate、accuracy、latency、unsupported final、conflict 和 option support。
+- 新增 `direct_regressions`，用于标记 direct baseline 正确但 agent 错误的回归样本。
+
 ## Tool Output Protocol
 
 工具返回统一结构：
@@ -243,6 +370,8 @@ Main Agent 必须输出 JSON：
 {
     "claim": "...",
     "confidence": 0.66,
+    "supported_option": "D",
+    "grounding_quality": "global_sparse",
     "input_artifacts": ["..."],
     "regions": [
         {
@@ -262,6 +391,8 @@ Main Agent 必须输出 JSON：
 
 - `claim`: 给下一轮 Agent/Answer Agent 读的自然语言证据。
 - `confidence`: 工具自评或启发式置信度。
+- `supported_option`: MCQ 场景下，这条 observation 明确或弱支持的选项；AnswerAgent 会结合 `grounding_quality` 和 `limitations` 再决定是否采纳。
+- `grounding_quality`: 证据强度标签，例如 `visually_confirmed`、`global_sparse`、`inferred`、`weak`、`external_knowledge`。
 - `input_artifacts`: 原视频、clip、crop、frame 等证据来源。
 - `regions`: 结构化时空定位信息。
 - `limitations`: 告诉 Answer Agent 这条证据有什么限制。
@@ -609,6 +740,9 @@ Recommended:
 Current:
 
 - 已有轻量 text-only AnswerAgent / final-answer wiring。
+- 已有 deterministic evidence-table arbitration：从 observation claim、metadata 和 `supported_option` 中抽取结构化支持关系。
+- 已有 `global_gist` floor：gist/global 路由下，明确支持某个选项的 `global_sparse` row 可以作为最终引用证据。
+- 已有基本 conflict/report 指标：`unsupported_final`、`final_with_conflict`、`direct_regressions`、option support table。
 - bounded loop 下仍可能因为 `max_rounds_reached` incomplete。
 - free-explore 下可以 final，但可能选择错误的冲突 observation。
 
@@ -617,8 +751,9 @@ Problem:
 - Partial answer can accidentally include an option letter.
 - Navigation claims and evidence claims are mixed.
 - There is no strict final-validation stage.
-- `supported_option` 可能来自弱 caption / 推断，而不是明确视觉证据。
-- AnswerAgent 需要比较整张 evidence table，而不是只引用最近或最顺手的一条 observation。
+- `supported_option` 仍可能来自弱 caption / 推断，而不是明确视觉证据。
+- `inspect_segment(candidate_options=...)` 仍可能让局部 worker 直接投 MCQ 票，Phase C 应改成 worker no-vote，只回事实和局限，由 AnswerAgent 统一判选项。
+- AnswerAgent 已开始比较整张 evidence table，但还没有模型式 entailment、temporal verifier 和反事实检查。
 
 Recommended Answer Agent:
 
@@ -649,6 +784,7 @@ Rules:
 
 - Cannot cite `video_ls` alone as visual evidence.
 - Must cite at least one visual/ASR/OCR/QA observation.
+- For gist/global questions, supported `global_gist` can satisfy the visual evidence requirement as a sparse whole-video floor.
 - For MCQ, final answer must start with option letter.
 - If evidence is insufficient, output `need_more_evidence`, not a guessed answer.
 - If the ledger contains conflicting supported options, explain the conflict and either resolve it with cited evidence or request targeted follow-up.
@@ -761,6 +897,11 @@ Historical 2026-06-03 three-case baseline:
 - Prefinal AnswerAgent probe was negative: 0/3, final_rate 0%, incomplete_rate 100%; keep disabled by default.
 - Free-explore `611-2`: final_rate 100%, incomplete_rate 0%, final A vs GT D.
 - The free-explore trace retrieved a D-supporting observation, but final synthesis cited a later A-supporting observation.
+- Round 2 free sync exposed planner JSON brittleness from quoted MCQ options; fallback now prevents aborting before tools.
+- Source-machine visual harness full run: `agent_v2 --free-explore` 1/3, final_rate 100%, incomplete_rate 0%, avg 304s; direct sparse-video baseline 2/3, avg 5.08s.
+- Real Inspector support often appears in claim text as `Supported option: X.`, so claim-text parsing is required before AnswerAgent/Verifier can see true option support.
+- Round 3 added the `global_gist` route/floor for gist/global questions. On `605-1`, agent answer changed to D with one `global_gist` call and was correct in 3.076s; direct sparse-video was also D/correct in 5.101s.
+- This is a targeted sanity improvement, not yet a full benchmark claim. The current evidence only says: global/gist questions no longer need to pay the local exploration cost when a sparse whole-video observation is sufficient.
 
 This does not mean the architecture is wrong.
 
@@ -768,12 +909,14 @@ It means the current implementation is still a weak planner:
 
 - bounded mode still has too little tool budget
 - too much navigation-only behavior
-- AnswerAgent/Verifier do not yet arbitrate conflicting MCQ evidence
+- AnswerAgent/Verifier only have rule-based arbitration, not model-based entailment or temporal reasoning
+- final answers may cite navigation/search rows or caption shortcuts that do not structurally support the selected option
 - compact evidence context is rule-based and not yet entailment-aware
 - task-aware MCQ policy helps tool calls but does not guarantee final correctness
 - coarse windows too large for final QA
+- local worker option voting still leaks answer selection into `inspect_segment`
 
-The positive signal is stronger now: free exploration can call tools repeatedly, inspect diverse windows, and retrieve answer-bearing evidence. The next bottleneck is converting that evidence into a verified answer.
+The positive signal is stronger now: free exploration can call tools repeatedly, inspect diverse windows, and reliably reach final; gist/global questions can also short-circuit through `global_gist`. The next bottleneck is converting all local evidence into a verified answer whose selected option is structurally supported and whose conflicts are explicitly resolved.
 
 ## Optimization Roadmap
 
@@ -782,7 +925,7 @@ The positive signal is stronger now: free exploration can call tools repeatedly,
 - Keep free-explore as a quality-first path.
 - Use bounded budget only as an efficiency ablation.
 - Task-aware MCQ policy is implemented via `question_policy.py`; continue remote validation.
-- Require `inspect_segment`.
+- Require real visual evidence: `global_gist` for gist/global, `inspect_segment` for needle/local.
 - Treat `max_rounds_reached` as incomplete.
 
 ### P2: Improve Context Management
@@ -793,17 +936,19 @@ The positive signal is stronger now: free exploration can call tools repeatedly,
 
 ### P3: Improve Long-video Tools
 
+- `global_gist` sparse whole-video floor is implemented for gist/global questions.
 - Coarse 300s map.
 - `zoom` now materializes child 60s/30s windows locally.
 - Frame/clip cache.
 - Subtitle/ASR index.
 - OCR index.
 - Embedding retrieval.
+- Next: worker no-vote `inspect_segment` and local fact schema, so option selection stays in AnswerAgent.
 
 ### P4: Improve Verification
 
-- MCQ option verifier.
-- Conflict detector over supported options.
+- MCQ option verifier baseline exists through evidence-table arbitration; next step is model-based entailment.
+- Conflict detector over supported options exists as report/heuristic; next step is explicit follow-up planning.
 - Temporal order verifier.
 - Citation sufficiency checker.
 - Model-based entailment over evidence table.

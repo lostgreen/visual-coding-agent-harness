@@ -1,20 +1,20 @@
-# Visual Coding-Agent Multimodal Harness 汇报方案
+# Visual Coding-Agent Multimodal Harness 当前实现汇报
 
-日期：2026-06-02
+日期：2026-06-04
 
 ## 0. 核心目标
 
-我们想把 Claude Code / coding agent 的 harness 设计思想迁移到多模态 Agent 中，让 MLLM 不再只是一次性看图或看视频后直接回答，而是在一个可执行、可复核、可收集轨迹的视觉工作环境里主动调用工具、拆分任务、检查证据、压缩上下文，并把完整工具轨迹沉淀为后续训练数据。
+我们把 Claude Code / coding agent 的 harness 设计思想迁移到多模态 Agent 中，让 MLLM 不再只是一次性看图或看视频后直接回答，而是在一个可执行、可复核、可收集轨迹的视觉工作环境里主动调用工具、拆分任务、检查证据、压缩上下文，并把完整工具轨迹沉淀为后续训练数据。
 
 一句话概括：
 
 > 做一个面向复杂视觉任务的 Visual Coding-Agent Harness：主 Agent 像 Claude Code 管理代码任务一样，管理图像、视频、视觉工具、证据账本、子 Agent、验证器和训练轨迹。
 
-这个方向可以分成三条实施主线：
+当前实现已经收敛成三条能力线：
 
 1. 多工具整合的视觉导向 harness。
-2. 一套协同合作的 workflow。
-3. training-free 观察模型行为，再做工具调用训练和行为改善。
+2. 一套可追踪的证据工作流。
+3. training-free 观察模型行为，并把工具轨迹沉淀为后续训练和诊断数据。
 
 ## 1. Claude Code 是如何管理任务的
 
@@ -37,15 +37,13 @@ Claude Code 的核心不是复杂 prompt chain，而是一个稳定的 agent loo
 | Claude Code 机制 | 管理内容 | 迁移到多模态 Agent |
 | --- | --- | --- |
 | Agent loop | 模型和真实环境的交互循环 | 保持同样循环，把代码工具换成视觉工具。 |
-| Tool registry / dispatch map | 工具 schema、参数校验、handler 分发 | 把 detector、OCR、crop、zoom、tracking、VQA 等包装成统一 visual tools。 |
-| Workspace | 文件、代码、diff、运行结果 | 视觉 evidence workspace：原图、视频帧、crop、mask、OCR patch、证据记录。 |
+| Tool registry / dispatch map | 工具 schema、参数校验、handler 分发 | 把视频导航、局部检查、caption、QA、验证等包装成统一 visual tools。 |
+| Workspace | 文件、代码、diff、运行结果 | 视觉 evidence workspace：原视频、视频帧、clip、crop、证据记录。 |
 | Context compact | 防止命令输出和文件内容污染上下文 | 大图、长视频、长 OCR 不直接塞进 prompt，只保留短 observation 和 artifact path。 |
-| Subagent | 用干净上下文处理局部任务 | 用 temporal/spatial/OCR/verifier worker 分别检查局部视觉证据。 |
-| Task DAG | 持久化任务依赖和状态 | 把复杂视觉任务拆成定位、裁剪、识别、验证、回答等子任务。 |
-| Permission / hooks | 控制危险操作、成本、审批 | 控制高成本模型、web search、隐私图像、外部知识检索。 |
+| Subagent | 用干净上下文处理局部任务 | 用 Segment Inspector 处理局部视频窗口，只向主 Agent 返回 distilled observation。 |
 | Event stream | 统一 status、tool_use、tool_result、usage | 统一视觉工具调用事件、artifact 写入事件、observation、verifier 结果。 |
 
-OpenDesign 的 Claude 源码进一步说明了 adapter 思路：它不重新实现 Claude Code，而是把 Claude 原生 `stream-json` 输出解析成统一事件，例如 `tool_use`、`tool_result`、`text_delta`、`usage`，再交给 UI 和持久化系统。多模态 harness 也应该这样做：不同视觉 foundation model 可以不同，但输出必须进入统一事件和证据协议。
+OpenDesign 的 Claude 源码进一步说明了 adapter 思路：它不重新实现 Claude Code，而是把 Claude 原生 `stream-json` 输出解析成统一事件，例如 `tool_use`、`tool_result`、`text_delta`、`usage`，再交给 UI 和持久化系统。多模态 harness 也采用同样的原则：不同视觉 backend 可以不同，但输出必须进入统一事件和证据协议。
 
 ## 2. 为什么多模态 Agent 需要这种 harness
 
@@ -69,7 +67,7 @@ OpenDesign 的 Claude 源码进一步说明了 adapter 思路：它不重新实�
 | --- | --- |
 | Learn Claude Code | agent loop 很简单，真正关键是工具、上下文、任务系统、subagent、memory、protocol 等 harness 层。 |
 | OpenDesign Claude runtime | adapter + event stream：保留底层 agent 能力，把不同输出解析成统一事件和 artifact 管理。 |
-| Visual ChatGPT | Prompt Manager 把 22 个 Visual Foundation Models 包装成工具，让 ChatGPT 做主调度。 |
+| Visual ChatGPT | Prompt Manager 把多个 Visual Foundation Models 包装成工具，让 ChatGPT 做主调度。 |
 | VisProg | training-free 地让 LLM 写 visual program，解释器维护 program state 并调用视觉/知识/逻辑模块。 |
 | ReTool-Video | 从粗粒度视频工具扩展到 base/meta tool library，用递归 resolver 把高层视频意图落地为可执行工具链。 |
 | ParaVT | 用并行 temporal crop 和共享权重 subagents 减少顺序工具调用的错误传播和上下文污染。 |
@@ -85,670 +83,462 @@ OpenDesign 的 Claude 源码进一步说明了 adapter 思路：它不重新实�
 
 | 工作 | 它主要解决什么 | 我们的差异 |
 | --- | --- | --- |
-| VisProg | LLM 生成 python-like visual program，解释器调用视觉/知识/逻辑模块。 | VisProg 更像一次性 program execution；我们是持续 agent loop，有 workspace、trace、ledger、subagent、verifier 和 context compact。 |
+| VisProg | LLM 生成 python-like visual program，解释器调用视觉/知识/逻辑模块。 | VisProg 更像一次性 program execution；我们是持续 agent loop，有 workspace、trace、ledger、verifier 和 context compact。 |
 | ReTool-Video | 构建丰富 video tool library，用 recursive grounding 把高层视频意图落成工具链。 | ReTool 强在工具库和递归解析；我们强在 evidence workspace、answer authority、工具轨迹治理和跨工具协作协议。 |
-| ParaVT | 用并行 temporal crop 和 RL 解决顺序工具调用的错误传播、格式崩溃和 skip-tool shortcut。 | ParaVT 聚焦 parallel crop-video；我们把并行扩展成通用 visual workers：temporal、spatial、OCR、entity、verifier 都能协作。 |
+| ParaVT | 用并行 temporal crop 和 RL 解决顺序工具调用的错误传播、格式崩溃和 skip-tool shortcut。 | ParaVT 聚焦 parallel crop-video；我们把它泛化成可扩展的 visual worker / inspector 协议。 |
 
 我们的核心优势有四点：
 
-1. **Evidence discipline 更强。** 每个工具输出都必须绑定 artifact、timestamp、bbox、claim、confidence 和 limitation，最终答案只能引用 evidence ledger，而不能直接依赖 planner trace 或 caption shortcut。
-2. **更像真实 coding agent。** 我们迁移的是 Claude Code 的完整 harness：tool registry、workspace、context compact、subagent isolation、task DAG、permission、event stream，而不是只迁移 tool calling。
-3. **Subagent 更一般。** ParaVT 的 subagents 主要并行检查不同 temporal crops；我们的 workers 可以按时间、空间、OCR、实体、动作、验证等维度拆分，返回结构化 observation。
-4. **Training-free 到训练数据的闭环更明确。** VisProg 可以 training-free 执行，但不天然产生高质量行为训练数据；我们从一开始就把 trace 设计成 SFT / preference / RL 可用的数据资产。
+1. **Evidence discipline 更强。** 每个工具输出都必须绑定 artifact、timestamp、claim、confidence 和 limitation，最终答案只能引用 evidence ledger，而不能直接依赖 planner trace 或 caption shortcut。
+2. **更像真实 coding agent。** 我们迁移的是 Claude Code 的完整 harness：tool registry、workspace、context compact、subagent isolation、event stream，而不是只迁移 tool calling。
+3. **Subagent 边界更清楚。** 当前 `inspect_segment` 已经作为 Segment Inspector 边界存在：主 Agent 选择时间窗和问题，Inspector 只返回局部 distilled observation。
+4. **Training-free 到训练数据的闭环更明确。** Trace 从一开始就按 SFT / preference / RL 可用的数据资产来记录，成功和失败都可以被诊断。
 
 一句话区分：
 
 > VisProg 是“LLM 写视觉程序”；ReTool-Video 是“递归调用更多视频工具”；ParaVT 是“并行视频工具调用训练”；我们是“让多模态 Agent 像 Claude Code 一样工作”。
 
-## 5. 总体系统设计
+## 5. 当前系统总览
 
-整体结构：
+当前系统结构如下：
 
 ```text
 用户问题 / benchmark case
   -> Main Agent
-  -> Task Planner
+  -> question route + task playbook
   -> Visual Tool Registry
-  -> Tool Executor
+  -> ProgramInterpreter / Tool Executor
   -> Evidence Workspace
-  -> Evidence Ledger
-  -> Answer Agent
-  -> Verifier
-  -> 最终答案 / 追加工具调用
+  -> compact ledger
+  -> AnswerAgent
+  -> Verifier / Reporter
+  -> final answer / follow-up tool calls
 ```
 
-### 5.1 主 Agent 可以是纯文本 Agent
+当前 Main Agent 是 text-only controller：
 
-P0 阶段建议把 Main Agent 设计成纯文本 planner/controller。它不直接看图或视频，而是通过工具获得视觉 observation。这和 VisProg 中 GPT-3 不直接看图、只生成 visual program 的思想相近，但我们的执行方式更像 Claude Code 的多轮 loop。
+- 它不直接接收完整视频或全部帧。
+- 它看到用户问题、选项、工具 schema、scene index 摘要、已写入的 compact evidence ledger。
+- 真正的视频像素访问由工具完成，当前主要是 `global_gist`、`inspect_segment`、`caption_segment`、`qa_segment`。
+- 每次工具调用都会写入 workspace：`trace.jsonl` 记录动作过程，`observations.jsonl` 记录结构化视觉证据，`ledger.md` 给后续轮次和 AnswerAgent 使用。
 
-```text
-Text-only Main Agent
-  -> chooses visual tools
-  -> reads structured observations
-  -> updates task DAG and ledger
-  -> asks verifier whether evidence is enough
-  -> answers with cited evidence
-```
+Round 3 后，系统不再把所有问题都强行送进局部检索，而是先做问题路由：
 
-这样做的好处是：
-
-- 防止主模型偷看图后直接凭直觉回答，保证视觉信息都来自工具轨迹。
-- 每个视觉结论都能追溯到具体 tool call、artifact、timestamp、bbox。
-- 更容易诊断失败：是 planner 没选对工具、crop 错了、OCR/VQA 错了，还是 verifier 没拦住。
-- 轨迹天然是 `state -> tool_call -> observation -> next_tool_call -> answer`，适合后续训练。
-- 主 Agent 可以用强文本 LLM，视觉工具可以混合使用 Qwen-VL、InternVL、OCR、SAM、Grounding DINO、tracking model 等。
-
-后续可以做一个重要消融：
-
-| 设置 | 含义 | 目的 |
+| 路由 | 适用问题 | 当前路径 |
 | --- | --- | --- |
-| Text-only Main Agent | 主 Agent 只能读 observation/ledger，不能直接看图。 | 验证 harness 是否足以支撑复杂视觉推理。 |
-| Multimodal Main Agent | 主 Agent 可以直接看图/视频帧。 | 测试直接视觉访问是否提升或污染证据链。 |
-| Hybrid Main Agent | 默认 text-only，只在 verifier 要求时看 selected artifacts。 | 在证据可控和视觉直观性之间折中。 |
+| `gist_global` | main idea、overall topic、whole-video summary、信息概括类问题 | 先调用 `global_gist`，形成 sparse whole-video evidence floor。 |
+| `temporal_order` | before、after、first、last、sequence、order 等时序比较题 | 先定位候选事件窗口，再用局部视觉事实和 temporal verifier 做顺序比较。 |
+| `needle_local` | 局部动作、细节识别、OCR、对象属性、counting、特定人物/物体/场景 | 走 `video_ls/search_segments/read_segment/zoom/inspect_segment` 的局部定位路径。 |
 
-### 5.2 主 Agent 的输入边界
+这个路由修复了一个关键问题：VideoMME wrapper 里常有 “answer with the option letter first” 之类格式提示，旧规则容易把它误判成 temporal/needle 问题。当前规则优先识别 `main idea` 等 gist marker，再处理局部/时序 marker。
 
-主 Agent 不直接吞完整视频、全部帧、长 OCR 和长 caption。它看到的是：
-
-- 用户问题；
-- 当前任务状态；
-- 可用工具列表；
-- compact evidence ledger；
-- verifier 给出的 missing evidence；
-- 少量必要 artifact path。
-
-视觉工具输出写入 workspace，主上下文只保留结构化 observation。
-
-## 6. 主线一：多工具整合的视觉导向 Harness
-
-### 6.1 Evidence Workspace
-
-Evidence workspace 是多模态版本的代码工作区。
-
-建议目录：
+v4 计划把这套路由进一步收紧成一个硬约束：
 
 ```text
-visual-coding-agent-harness/
-  runs/<run_id>/
-    input/
-      task.json
-      media/
-    artifacts/
-      frames/
-      clips/
-      crops/
-      masks/
-      ocr_regions/
-      retrieved_images/
-    observations.jsonl
-    ledger.md
-    tasks.json
-    trace.jsonl
-    answer.json
+global_gist gives the direct floor,
+grounding finds candidate clips,
+vision reads local facts,
+AnswerAgent maps facts to options,
+Verifier blocks unsupported or conflicted answers,
+and every final answer cites evidence.
+```
+
+## 6. 当前工具设计
+
+当前工具不是一组平铺 API，而是四层协作。
+
+| 层级 | 当前工具 / 模块 | 作用 |
+| --- | --- | --- |
+| Global floor | `global_gist` | 对 gist/global 问题先看稀疏整段视频，给出 whole-video sparse observation，避免整体理解题被误拆成局部检索。 |
+| Video workspace | `video_ls`、`search_segments`、`read_segment`、`zoom` | 像代码 Agent 的 `ls/grep/read` 一样管理长视频地图、候选窗口和 coarse-to-fine 定位。 |
+| Local visual evidence | `inspect_segment`、`caption_segment`、`qa_segment`、`caption_segments`、image/region tools | 真正访问像素，产生带 artifact、时间窗、claim、confidence、limitations 的 observation。 |
+| Evidence arbitration | `EvidenceWorkspace`、AnswerAgent、`verify_ledger_answer`、`report_metrics.py` | 把 observation 变成 evidence table，按 grounding quality 和冲突关系选答案，并记录 unsupported/conflict/direct regression。 |
+
+### 6.1 Global Floor
+
+`global_gist`
+
+- 对整段视频做稀疏采样观察，当前与 `direct_full_video` 使用同类 sparse whole-video 输入。
+- 适合 main idea、overall topic、whole-video gist、Information Synopsis 这类问题。
+- 输出普通 observation，包含 `tool=global_gist`、`grounding_quality=global_sparse`、whole-video region、claim、confidence 和可选 `supported_option`。
+- 它是 global floor，不是定位工具。局部细节、时序顺序、OCR、人物动作或对象属性仍要回到局部工具。
+- AnswerAgent 会把受支持的 `global_sparse` row 当成可引用视觉证据；如果后续局部高质量证据与它冲突，需要显式仲裁。
+
+### 6.2 Video Workspace Tools
+
+`video_ls`
+
+- 给出视频总览、segment 数量、时长、可用索引类型。
+- 返回候选 segments、outline、coverage、recommended tools。
+- 候选包含 `relevance_reason`，推荐下一步通常是 `inspect_segment` 或 `zoom`。
+- 对应代码 Agent 的 `ls`。
+
+`search_segments`
+
+- 在 VideoMap 的 caption/asr/ocr/entities 中做检索。
+- 返回每个候选的分通道 `matches`、命中字段、score、evidence snippet。
+- 当前是 training-free lexical search，embedding retrieval 尚未接入。
+- 对应代码 Agent 的 `grep`。
+
+`read_segment`
+
+- 读取某个 segment 的 compact metadata。
+- 不访问像素，只读索引。
+- 对应代码 Agent 的 `read file/span`。
+
+`zoom`
+
+- 把 coarse segment 物化成稳定 child segments，例如 `seg_0002_z01`。
+- 写回 mutable `VideoMapStore`，后续能被 `video_ls` / `search_segments` 召回。
+- 用于 coarse-to-fine localization。
+
+### 6.3 Local Visual Evidence Tools
+
+`inspect_segment`
+
+- 当前首选的局部视觉证据工具。
+- 语义上是 Segment Inspector subagent boundary：内部看局部时间窗，主 planner 只收到一条 distilled observation。
+- 当前仍可接收 `candidate_options`，但只把选项当作“要找什么事实”的提示。
+- 默认 prompt 已经要求 worker 不选择 MCQ 选项、不输出 `supported_option`、不写 final answer；选项归因转移到 AnswerAgent / Verifier。
+- 旧 trace 里如果出现 `Supported option: X.` 这类 worker 投票，默认 evidence table 会忽略，并由 reporter 统计为 `legacy_worker_vote_rows`。
+
+`caption_segment`
+
+- 低层 VLM 工具：对指定时间段做 caption。
+- 返回 claim、clip path、time range、nframes、limitations。
+- 当前保留为兼容和诊断工具，但不能让单条 caption shortcut 直接成为答案权威。
+
+`qa_segment`
+
+- 低层 VLM 工具：对指定时间段做 QA。
+- 可作为 Inspector 内部能力或兼容路径使用。
+
+`caption_segments`
+
+- 批量 caption 若干 segments，并写回 mutable VideoMap。
+- 用于离线或低索引场景，把空地图变成可搜索地图。
+- 在线问答里需要谨慎使用，避免把索引构建成本混进回答预算。
+
+`caption_image / qa_image / caption_region / qa_region`
+
+- 图像和区域级工具已经有基础协议。
+- 当前不是 VideoMME 主路径，但协议上能接 OCR、detector、SAM、tracking 等模块。
+
+### 6.4 Verification / Answer Tools
+
+`summarize_ledger_evidence`
+
+- 从 ledger 中抽取 claim 列表。
+
+`verify_ledger_answer`
+
+- 当前是 lexical support score + citation gate + 非 navigation 视觉证据 gate。
+- `global_gist`、`inspect_segment`、`caption_segment`、`qa_segment` 都可以算视觉证据。
+- 仍是弱验证，还不能替代模型式 entailment / temporal verifier。
+
+AnswerAgent / evidence table
+
+- 不是外部视觉工具，而是最终仲裁层。
+- 消费 `EvidenceWorkspace.evidence_table()`，按 `candidate_option_relations`、`grounding_quality`、工具类型、confidence、limitations 和冲突关系做结构化选择。
+- `global_gist` 的 `supported_option` 暂时允许作为 direct-style whole-video evidence；local worker 的 `supported_option` 或 claim-text option vote 默认不再参与仲裁。
+- 当前权重顺序大致是 `visually_confirmed` / `global_sparse` 高于 `inferred`、`weak` 和 `external_knowledge`。
+- 对 gist/global 路由保留 global floor：如果 `global_gist` 明确支持某个选项且没有更强反证，可以直接作为最终 citation。
+
+`report_metrics.py`
+
+- 汇总每个 case 的 final rate、accuracy、latency、unsupported final、conflict 和 option support。
+- 新增 `direct_regressions`，用于标记 direct baseline 正确但 agent 错误的回归样本。
+- 新增 `legacy_worker_vote_rows`，用于暴露旧 worker 投票痕迹，防止局部 worker 的错误 MCQ 票偷偷影响最终答案。
+
+## 7. 当前 Evidence Workspace 和 Observation 协议
+
+每个 run 都会生成 evidence workspace。核心文件是：
+
+```text
+runs/<run_id>/
+  artifacts/
+    frames/
+    clips/
+    crops/
+  observations.jsonl
+  trace.jsonl
+  ledger.md
 ```
 
 各部分作用：
 
 | 文件/目录 | 作用 |
 | --- | --- |
-| `artifacts/` | 保存原图、关键帧、clip、crop、mask、OCR patch 等视觉证据。 |
-| `observations.jsonl` | 每次工具调用后的结构化观察。 |
-| `ledger.md` | 给 Answer Agent 使用的短证据账本。 |
-| `tasks.json` | 子任务 DAG：状态、依赖、owner、blocked reason。 |
-| `trace.jsonl` | 完整工具轨迹，用于后续训练和分析。 |
-| `answer.json` | 最终答案、引用证据、置信度、未解决条件。 |
+| `artifacts/` | 保存原视频片段、关键帧、clip、crop 等视觉证据。 |
+| `observations.jsonl` | 每次工具调用后的结构化观察，是 AnswerAgent 的主要证据来源。 |
+| `trace.jsonl` | 完整工具轨迹，用于调试、指标和后续训练数据。 |
+| `ledger.md` | 给主 Agent 和 AnswerAgent 使用的短证据账本。 |
 
-### 6.2 P0 工具列表
-
-第一版工具不要贪多，先形成闭环。
-
-| 工具 | 作用 | 输入 | 输出 |
-| --- | --- | --- | --- |
-| `sample_frames` | 粗粒度探索视频 | video path、采样策略 | frame path、timestamp |
-| `seek_clip` | 提取目标时间段 | video path、start/end | clip path、关键帧 |
-| `crop_region` | 裁剪局部区域 | image/frame path、bbox | crop path |
-| `zoom_region` | 放大小目标或文字 | image/frame path、bbox、scale | zoom crop path |
-| `ocr_region` | 读取文字、UI、标牌、文档 | image/crop path | text span、bbox、confidence |
-| `caption_image` | 粗略语义描述 | image/crop path | 短 caption 和不确定性 |
-| `inspect_region` / `verify_local_claim` | 对局部区域做事实检查，而不是让另一个模型替主模型回答整题 | image/crop path、local question 或 claim | artifact-linked local observation |
-| `compare_frames` | 比较前后状态或动作变化 | 多个 frame path | temporal/change observation |
-| `detect_objects` | 找候选物体/实体 | image path、可选类别 | boxes、labels、confidence |
-| `write_observation` | 记录证据 claim | claim、source artifacts | observation / ledger candidate |
-| `summarize_evidence` | 压缩观察成证据账本 | observation ids | updated ledger |
-| `verify_answer` | 验证答案是否有证据支撑 | answer、ledger | pass/fail、missing evidence |
-
-### 6.3 为什么还需要 OCR / caption / local VQA 类工具
-
-多模态模型本身确实具备 OCR、caption、VQA、物体识别等能力。因此这些工具的价值不是“给模型增加一种它完全没有的能力”，而是把模型隐式感知变成显式、可定位、可复核、可训练的视觉操作。
-
-| 直接问 MLLM | 工具化视觉操作 |
-| --- | --- |
-| 模型看整张图/整段视频后直接回答。 | 指定时间、区域和局部问题后调用工具。 |
-| 输出是一段自然语言，很难知道证据来自哪里。 | 输出带 frame、timestamp、bbox、crop path、confidence。 |
-| 错了难诊断：没看到、看错、推理错混在一起。 | 可以定位错误来自时间段、区域、OCR/VQA、ledger 或 answer。 |
-| 长视频/多图时上下文容易混。 | 观察写入 evidence ledger，压缩后再回答。 |
-| 不容易变成训练信号。 | 每步 tool call 都能标注对错，用于 SFT/preference/RL。 |
-
-因此 `inspect_region` 更准确的定义是：
-
-> 对一个明确视觉区域执行局部事实检查，并返回 artifact-linked observation。
-
-它可以由同一个 MLLM、更小的 VLM、更强的 inspector VLM、专用 classifier，或者 ensemble 实现。重点不在模型大小，而在角色边界：Main Agent 决定看哪里、问什么、证据是否足够；`inspect_region` 只回答指定区域的局部事实。
-
-视觉工具可以分成三类：
-
-| 类别 | 例子 | 价值 |
-| --- | --- | --- |
-| 模型本身会，但工具化后更可控 | caption、OCR、local VQA、attribute recognition | 定位、约束、证据化、可审计。 |
-| 模型本身较弱，专用工具明显补强 | tracking、segmentation、精确 detection、temporal retrieval、chart/layout parser | 专业模块更稳定，也更容易评估。 |
-| harness 管理能力 | write_observation、summarize_evidence、verify_answer、compact_trace、spawn_worker | 管理证据、上下文、协作和训练数据。 |
-
-论文贡献应该重点放在第二类和第三类，第一类只作为基础视觉操作 primitive，不能包装成主要贡献。
-
-### 6.4 P1/P2 Foundation Model 工具
-
-后续可以扩展为更完整的 visual foundation model 工具池：
-
-| 工具类别 | 可选 foundation model / 模块 |
-| --- | --- |
-| Segmentation | SAM / SAM2，mask proposal，object mask refinement。 |
-| Detection | Grounding DINO、OWL-style open-vocabulary detector、Florence-style detector、YOLO fast baseline。 |
-| OCR / document | PaddleOCR、EasyOCR、TrOCR、layout parser。 |
-| Video tracking | SAM2 video propagation、ByteTrack、DeepSORT、optical flow。 |
-| Temporal retrieval | CLIP/SigLIP frame embedding、caption index、moment retriever、temporal grounding model。 |
-| VQA / caption | Qwen-VL、GPT-4o/4.1-style VLM、LLaVA/InternVL-style open-source VLM。 |
-| Depth / pose / geometry | depth estimator、pose estimator、3D/4D spatial understanding tools。 |
-| External knowledge | logo/product/place/entity lookup、web search，但必须绑定视觉证据。 |
-| Memory / skill | 数据集协议、常见失败模式、成功工具轨迹、任务专用 skill。 |
-
-### 6.5 Observation Formatter
-
-工具结果不能只是一句话。每个工具输出都要变成可复核 observation：
+工具输出统一变成 observation：
 
 ```json
 {
   "observation_id": "obs_0042",
-  "tool": "ocr_region",
-  "input_artifacts": ["artifacts/crops/frame_01240_box_3.png"],
-  "time_range": [41.2, 41.2],
-  "regions": [
-    {"frame": "frame_01240.jpg", "bbox": [312, 180, 498, 330]}
-  ],
-  "claim": "The sign reads 'EXIT'.",
-  "raw_output": "EXIT",
-  "confidence": 0.91,
-  "supports_question": true,
-  "limitations": "Text is partially blurred; verifier may request another frame."
-}
-```
-
-这样 Answer Agent 不能只依赖 caption 或长 trace，而必须引用具体 observation、frame、timestamp、bbox 和 artifact path。
-
-### 6.6 Context Compact
-
-迁移 Claude Code 的 context compact 机制：
-
-1. micro-compact：旧 tool result 只保留工具名、observation id、artifact path 和一句摘要。
-2. ledger compact：把多条 observation 压缩成 answer-ready evidence table。
-3. trace archive：完整 raw trace 只写入 `trace.jsonl`，不长期留在活跃上下文。
-
-这对应 VideoSEAL 的核心问题：防止 planner trace、caption shortcut 或长上下文污染最终答案权威。
-
-## 7. 超长视频调度：像查大型代码库一样查视频
-
-超长视频不能直接塞给模型，也不能一次性抽很多帧让模型硬看。更稳的方式是把视频当作一个大型代码仓库：先建立索引，问题来了以后再粗搜定位、局部深挖、证据验证。
-
-### 7.1 初始视频索引
-
-初始 shot / scene segmentation 建议用传统或专用轻量算法，而不是让 MLLM 判断所有边界。TransNetV2、PySceneDetect、ffmpeg scene filter、embedding change score 都可以作为 indexing 层工具。
-
-P0 建议混合三种切分：
-
-| 切分方式 | 作用 |
-| --- | --- |
-| Uniform windows | 保底覆盖，例如每 30s 或 60s 一段，防止 shot detector 漏掉静态长镜头。 |
-| Shot boundary detection | 找视觉镜头切换，适合电影、剪辑、新闻、短视频。 |
-| Adaptive keyframe sampling | 在每个 window/shot 内选择代表帧和高变化帧。 |
-
-因为不同视频类型差异很大：
-
-- 电影/剪辑视频：shot boundary 很有用。
-- 监控/egocentric/课堂/会议：镜头不切，uniform window 和 motion score 更重要。
-- 屏幕录制/GUI：画面变化小，但 OCR change score 很重要。
-- 体育/游戏：镜头切换和动作变化都重要。
-
-建议初始 index pipeline：
-
-```text
-video
-  -> uniform temporal windows
-  -> shot boundary detector
-  -> motion/change score
-  -> sparse keyframes
-  -> sparse OCR / caption / embedding
-  -> merged timeline_index.json
-```
-
-`timeline_index.json` 示例：
-
-```json
-{
-  "unit_id": "u_0042",
-  "time_range": [1260.0, 1290.0],
-  "source": ["uniform_window", "shot_boundary"],
-  "keyframes": [
-    "artifacts/frames/u_0042_k0.jpg",
-    "artifacts/frames/u_0042_k1.jpg"
-  ],
-  "caption": "A person stands near a table with several cups.",
-  "ocr": [],
-  "embedding_id": "emb_0042",
-  "motion_score": 0.37,
-  "change_score": 0.52
-}
-```
-
-这些传统/轻量工具不是核心智能贡献，而是 harness indexing 基础设施。真正贡献在 query-driven retrieval、parallel visual workers、evidence ledger、verifier refinement 和 trace-to-training。
-
-### 7.2 Query-Driven 调度循环
-
-超长视频回答可以采用：
-
-```text
-Index -> Retrieve -> Parallel Inspect -> Ledger -> Verify -> Refine/Answer
-```
-
-具体步骤：
-
-1. Build 或 load video index。
-2. Main Agent 把问题解析成 evidence goals。
-3. `retrieve_moments(query, top_k)` 返回候选时间单元。
-4. 对 top-k 候选片段启动 parallel visual workers。
-5. workers 把局部检查写成 observations。
-6. Ledger Agent 更新 evidence ledger。
-7. Verifier 检查证据是否足够。
-8. 如果不足，扩大 top-k、缩窄时间窗、dense sample、crop/zoom 或 track object。
-9. 如果足够，Answer Agent 基于 ledger 回答。
-
-主 Agent 的关键调度决策包括：
-
-- `top_k` 取多少；
-- 先查 transcript/OCR，还是先查 visual embedding；
-- 是否并行检查多个候选片段；
-- 是否扩大或缩小时间窗口；
-- 是否从 sparse sampling 切换到 dense sampling；
-- 是否调用 tracking、OCR、segmentation；
-- 是否让 verifier 先判断证据是否足够；
-- 何时停止。
-
-### 7.3 超长视频例子
-
-问题：视频中第一次有人把红色杯子从桌上拿走后，桌上还剩几个杯子？
-
-调度：
-
-```text
-1. retrieve_moments("red cup on table person picks up cup", top_k=8)
-2. Temporal workers 并行检查 top-8 clips
-3. 找到最早可信事件 02:13:42-02:13:50
-4. seek_clip(02:13:35, 02:13:55)
-5. dense_sample_frames
-6. crop_region(table area before and after pickup)
-7. inspect_region(after_crop, "How many cups remain on the table?")
-8. compare_frames(before, after)
-9. write_observation
-10. verify_answer
-11. answer with cited evidence
-```
-
-这比 ParaVT 更一般：ParaVT 主要是 one-turn parallel crop-video；我们的系统是 persistent video index + query-driven retrieval + parallel specialist workers + evidence ledger + verifier-controlled refinement。
-
-## 8. 主线二：协同合作 Workflow
-
-### 8.1 角色划分
-
-| 角色 | 职责 | 上下文边界 |
-| --- | --- | --- |
-| Main Agent | 理解任务、创建 DAG、选择工具、管理预算、决定是否回答。 | 看问题、工具表、任务状态、compact ledger。 |
-| Temporal Worker | 定位相关视频时间段。 | 看视频元数据、采样帧、局部 temporal objective。 |
-| Spatial Worker | 检查物体、区域、空间关系。 | 只看选中的 frame/crop。 |
-| OCR/UI Worker | 读文字、UI、图表、文档、标牌。 | 只看 OCR 相关 crop。 |
-| Entity/Knowledge Worker | 把视觉实体链接到外部知识。 | 只在视觉证据明确后做外部检索。 |
-| Ledger Agent | 把 observation 压缩成 evidence ledger。 | 看 observation，不看完整 raw trace。 |
-| Answer Agent | 基于 ledger 生成答案。 | 只看问题、ledger、候选约束。 |
-| Verifier | 检查答案和证据是否一致。 | 看 answer、ledger，必要时查看局部 artifact。 |
-
-关键是 subagent isolation：每个 worker 可以读很多帧或 crop，但返回给主 Agent 的只有结构化 observation 和短建议，避免污染主上下文。
-
-### 8.2 工作流
-
-1. Main Agent 解析问题：
-   - 需要找时间段吗？
-   - 需要看局部区域吗？
-   - 需要 OCR 吗？
-   - 需要外部知识吗？
-   - 答案是否要求 temporal order / spatial relation / counting？
-2. Main Agent 创建 task DAG：
-   - 粗探索；
-   - 时间定位；
-   - 局部裁剪；
-   - OCR / detection / VQA；
-   - evidence ledger；
-   - answer；
-   - verification。
-3. 先调用低成本工具：
-   - frame sampling；
-   - coarse caption；
-   - rough OCR；
-   - cheap retrieval。
-4. 对互不依赖的目标启动 subagents：
-   - 不同时间窗并行检查；
-   - 不同候选区域并行检查；
-   - 不同候选答案并行找证据；
-   - OCR、object、action 分开检查。
-5. Tool Executor 执行工具，把 artifact 和 observation 写入 workspace。
-6. Ledger Agent 汇总相关 observation，更新 `ledger.md`。
-7. Answer Agent 只基于 ledger 回答。
-8. Verifier 检查：
-   - 答案是否引用具体证据；
-   - 是否检查了正确时间段；
-   - 是否检查了正确区域；
-   - 是否有 unsupported claim；
-   - 是否 evidence misalignment；
-   - 是否工具过度调用。
-9. 如果验证失败，Verifier 返回 targeted follow-up tool call，而不是重新开始。
-
-### 8.3 Worker 通信协议
-
-Worker request 示例：
-
-```json
-{
-  "task_id": "t_temporal_02",
-  "role": "temporal_worker",
-  "objective": "Find the time window where the person picks up the red cup.",
-  "allowed_tools": ["sample_frames", "seek_clip", "compare_frames", "caption_image"],
+  "tool": "global_gist",
+  "claim": "The video mainly explains the process and impact of World War One.",
+  "confidence": 0.76,
+  "supported_option": "D",
+  "grounding_quality": "global_sparse",
   "input_artifacts": ["input/media/video.mp4"],
-  "budget": {"max_tool_calls": 8, "max_seconds": 90},
-  "return_format": "observations_json"
-}
-```
-
-Worker response 示例：
-
-```json
-{
-  "task_id": "t_temporal_02",
-  "status": "completed",
-  "observations": ["obs_0011", "obs_0012"],
-  "recommended_next_actions": [
-    "crop frame_00480 around the table to confirm cup color"
+  "regions": [
+    {
+      "segment_id": "global",
+      "start_sec": 0.0,
+      "end_sec": 1782.0,
+      "nframes": 64
+    }
   ],
-  "confidence": 0.72,
-  "missing_conditions": [
-    "Need local crop because sampled frame is low resolution"
-  ]
+  "limitations": "Sparse whole-video sampling may miss fine-grained local events.",
+  "raw_output": {}
 }
 ```
 
-这就是 Claude Code team protocol 在视觉任务中的迁移：所有协作都带 task id、role、allowed tools、budget、return format、missing conditions。
+字段含义：
 
-### 8.4 一个具体例子
+- `claim`: 给下一轮 Agent / AnswerAgent 读的自然语言证据。
+- `confidence`: 工具自评或启发式置信度。
+- `supported_option`: 过渡字段。当前只允许 `global_gist` 作为 direct-style whole-video evidence 使用；局部 worker 默认不应输出，旧 trace 中的局部 worker 选项票会被 `evidence_table()` 忽略并被 reporter 计数。
+- `grounding_quality`: 证据强度标签，例如 `visually_confirmed`、`global_sparse`、`inferred`、`weak`、`external_knowledge`。
+- `input_artifacts`: 原视频、clip、crop、frame 等证据来源。
+- `regions`: 结构化时空定位信息。
+- `limitations`: 告诉 AnswerAgent 这条证据有什么限制。
+- `raw_output`: 完整工具输出写入文件，默认不直接塞进 prompt。
 
-问题：视频中，人在读完标牌之后立刻做了什么？
+`compact_ledger_text()` 当前已经把长 trace 压成 bounded context view，主 Agent 看到的是短证据，而不是完整 raw tool output。这一点对应 VideoSEAL 的核心问题：防止 planner trace、caption shortcut 或长上下文污染最终答案权威。
 
-流程：
+## 8. 当前 Agent Loop
 
-1. Main Agent 判断需要两个证据：读标牌的时间点，以及之后的动作。
-2. Temporal Worker 采样帧，定位疑似看标牌的时间段。
-3. OCR Worker 裁剪标牌，确认文字。
-4. Spatial/Action Worker 检查之后几秒的人物动作。
-5. Ledger Agent 写入：
-   - `obs_07`：00:41.2 标牌可见，crop path，OCR 结果。
-   - `obs_11`：00:43.0-00:45.5 人转向右侧并打开门，frame path。
-6. Answer Agent 回答：读完标牌后，人物转向右侧并打开门。
-7. Verifier 检查时间顺序和证据是否足够；若不足，要求 `compare_frames` 检查 00:41-00:46。
+当前回答流程可以分成两条路径。
 
-## 9. 主线三：Training-Free 观察到工具调用训练
-
-### 9.1 Stage A：Training-Free Harness
-
-第一阶段不训练模型，先观察模型在 harness 中自然怎么用工具。
-
-需要记录：
-
-- 模型调用了哪些工具；
-- 工具参数是否正确：timestamp、bbox、class、local question；
-- crop/zoom/seek 是否命中正确证据；
-- 是否过早回答；
-- 是否过度调用工具；
-- final answer 是否被 evidence ledger 支持；
-- verifier feedback 后能否恢复。
-
-对比 baseline：
-
-| Baseline | 用途 |
-| --- | --- |
-| Direct MLLM | 不用工具时的原始能力。 |
-| Caption-only agent | 检查文本化视频是否造成 evidence shortcut。 |
-| Few-tool agent | 验证少量 zoom/crop/retrieve 是否足够。 |
-| Multi-tool no ledger | 验证“堆工具但无 harness”是否增加噪声。 |
-| Full visual coding-agent harness | 验证 registry + workspace + subagent + compact + verifier 的完整收益。 |
-
-2026-06-04 实验修正：
-
-- 当前优先跑 no-budget/free-explore 质量路径，而不是先压工具成本。
-- 目标是验证工具使用是否提高证据召回、final_rate 和可追溯性。
-- 若 free-explore 仍答错，要看是工具没召回证据，还是 AnswerAgent/Verifier 没仲裁证据冲突。
-- 成本、latency、调用次数先作为记录指标；等质量路径成立后，再进入效率预算和 Agentic RL。
-
-当前 VideoMME 小样本信号：
-
-- default AnswerAgent 三例：1/3，final_rate 66.7%，incomplete_rate 33.3%。
-- `611-2` free-explore：final_rate 100%，incomplete_rate 0%，但 final A vs GT D。
-- 该 free-explore trace 找到了支持 GT D 的 observation，但 final 选择了后续 A-supporting observation。
-
-这说明工具使用能增强 evidence recall 和 finality，但 AnswerAgent/Verifier 仍是准确率瓶颈。
-
-### 9.2 Stage B：轨迹过滤和失败分类
-
-每条轨迹都要打标签：
-
-| 标签 | 含义 |
-| --- | --- |
-| `successful_grounded` | 答案正确，证据正确，工具成本合理。 |
-| `answer_correct_evidence_wrong` | 答案看似正确，但 trace 没有支撑，VideoSEAL-style evidence misalignment。 |
-| `tool_format_failure` | JSON 或工具格式失败，ParaVT 中 format collapse 类问题。 |
-| `wrong_visual_action` | crop/seek/zoom 没有命中目标。 |
-| `under_tool_use` | 该看证据时没有调用工具。 |
-| `over_tool_use` | 调用了太多无关或高成本工具。 |
-| `recovered_by_verifier` | 初始失败，但 verifier 的 targeted follow-up 修复了问题。 |
-| `conflicting_evidence_unresolved` | ledger 中存在多个选项支持，final 没有显式仲裁。 |
-| `weak_caption_shortcut` | final 依赖 caption/推断型 observation，而 limitation 已说明证据不强。 |
-| `option_grounding_drift` | 工具调用只传 letter options 或选项文本不完整，导致 MCQ 证据归因漂移。 |
-
-这些标签就是后续 SFT、preference tuning、RL 和 verifier 训练的数据资产。
-
-### 9.3 Stage C：可训练模块
-
-不必一开始训练完整 MLLM，可以先训练 harness 内部组件。
-
-| 模块 | 训练目标 | 数据来源 |
-| --- | --- | --- |
-| Tool selection policy | 学会何时调用 crop/OCR/seek/detect/verify。 | 成功与失败轨迹。 |
-| Tool argument generator | 学会生成正确 bbox、timestamp、class、local question。 | 工具参数 + verifier/evidence 标签。 |
-| Observation summarizer | 把 raw tool output 写成结构化 claim。 | `observations.jsonl` 和 accepted ledger rows。 |
-| Verifier | 判断答案是否缺证据、是否有 unsupported claim。 | pass/fail verdict、人类审核、自动指标。 |
-| Stopping policy | 判断证据是否足够，可以回答。 | 成功轨迹 vs premature answer。 |
-| Recovery policy | 失败后选择 targeted follow-up action。 | recovered trajectories。 |
-
-### 9.4 Stage D：SFT / Preference / RL
-
-训练路线：
-
-0. Trace filtering first：
-   - 先过滤 free-explore 轨迹，保留 evidence support、冲突解决、引用一致的样本；
-   - 不把长但 unsupported 的探索轨迹当正样本。
-1. SFT cold start：
-   - 用 `successful_grounded` 轨迹教模型工具格式和基本调用策略。
-2. Step-wise preference tuning：
-   - 偏好命中正确证据、成本更低、过程更短的工具调用；
-   - 惩罚 irrelevant tool、wrong crop、unsupported answer。
-3. Verifier-guided improvement：
-   - 让 verifier 评价候选工具轨迹；
-   - 用 evidence support、missing conditions、cost 做偏好信号。
-4. RL / GRPO-style training：
-   - reward 同时考虑答案、证据、工具格式、视觉动作命中率和成本；
-   - 避免 ParaVT 提到的工具 prior 副作用：format collapse、skip-tool shortcut、parseable-but-useless tool call。
-
-Reward 草图：
+### 8.1 gist/global 路径
 
 ```text
-R = answer_accuracy
-  + evidence_support
-  + temporal_grounding
-  + spatial_grounding
-  + visual_action_hit
-  + format_validity
-  - unsupported_claim_penalty
-  - unnecessary_tool_cost
-  - premature_stop_penalty
+question
+  -> classify_question_route() = gist_global
+  -> global_gist
+  -> EvidenceWorkspace writes global_sparse observation
+  -> AnswerAgent reads evidence_table
+  -> final answer with citation
 ```
 
-核心是：不能只优化 final answer，要优化 process。
+这条路径解决的是整体理解题。它避免先 `video_ls -> search -> zoom -> inspect`，因此在 `605-1` 这类 main idea 问题上明显缩短工具路径。
 
-## 10. 评估方案
-
-### 10.1 指标
-
-| 指标 | 检查内容 |
-| --- | --- |
-| Answer accuracy | 最终答案是否正确。 |
-| Evidence support | 答案 claim 是否被 observation 支撑。 |
-| Temporal grounding | 是否检查了正确视频时间段。 |
-| Spatial grounding | crop/zoom/detect 是否命中正确区域。 |
-| Tool-use precision | 调用的工具是否必要。 |
-| Tool-use recall | 需要工具时是否真的调用。 |
-| Recovery success | verifier 指出问题后能否修复。 |
-| Cost / latency | 工具调用次数、耗时、高成本工具使用。 |
-| Context pressure | 长 trace 是否降低 evidence support。 |
-| Overthinking | 相对人类/oracle 轨迹是否冗余。 |
-| Final rate | 是否稳定产出合规 final JSON。 |
-| Incomplete rate | 是否因 max rounds / missing evidence 结束。 |
-| Conflict rate | ledger 中是否出现多个互斥答案支持。 |
-| Option-support consistency | final 选项、rationale、citation 的选项支持是否一致。 |
-| Unsupported final rate | final 是否依赖 navigation-only、弱 caption 或外部知识推断。 |
-
-### 10.2 消融实验
-
-| 消融 | 要回答的问题 |
-| --- | --- |
-| full trace vs compact ledger | 压缩 evidence 是否减少 hallucination/context pollution？ |
-| no verifier | 没有 verifier 时 unsupported answer 是否上升？ |
-| no subagents | 共享上下文是否伤害长视频/多图任务？ |
-| sequential vs parallel workers | ParaVT-style 并行是否减少错误传播？ |
-| text-only observation vs artifact-linked observation | 是否必须保留视觉 artifact provenance？ |
-| few tools vs full registry | 工具数量是否只有在 harness 化后才有效？ |
-| rule router vs model-chosen tools | coding-agent-style 自主调度是否优于规则流程？ |
-| no cost budget / free-explore | 没有成本预算时是否提升 evidence recall 和 final_rate？是否暴露更多冲突证据或 wrong final？ |
-| bounded budget after verifier | verifier 稳定后，较小预算是否仍能保持 grounded accuracy？ |
-
-## 11. 开发里程碑
-
-### Milestone 0：项目骨架
-
-当前已建立：
+### 8.2 temporal/local 路径
 
 ```text
-visual-coding-agent-harness/
-  docs/
-  src/
-  experiments/
-  artifacts/
+question
+  -> classify_question_route() = temporal_order or needle_local
+  -> video_ls / search_segments
+  -> read_segment / zoom
+  -> inspect_segment
+  -> EvidenceWorkspace writes local observation
+  -> AnswerAgent / Verifier
+  -> final or targeted follow-up
 ```
 
-### Milestone 1：最小 Visual Harness
+这条路径解决的是局部动作、局部事实、时序、OCR、counting 等问题。当前它已经能稳定调用工具并产出 trace，但准确率瓶颈转移到三处：
 
-实现：
+- 是否找到正确时间窗。
+- `inspect_segment` 是否给出明确、局部、可验证的事实，而不是局部窗口里的 MCQ 选项票。
+- AnswerAgent / Verifier 是否能解决冲突证据，而不是引用最近或最顺手的一条 observation。
 
-- `agent_loop.py`
-- `registry.py`
-- `workspace.py`
-- `events.py`
-- P0 tools：sample、crop、zoom、OCR、caption/VQA placeholder。
-- `trace.jsonl`、`observations.jsonl`、`ledger.md` 写入。
+### 8.3 当前运行策略
 
-交付：一个图像 case 和一个短视频 case 跑通。
+- `AgentBudget.free_explore(...)` 支持质量优先的自由探索路径：不做 per-class cost budget，只保留 emergency caps。
+- bounded mode 仍可能因为 `max_rounds_reached` incomplete，当前主要作为效率对照。
+- planner JSON 解析失败会记录 `planner_json_parse_error`，并 fallback 到局部 `inspect_segment`，避免 quoted option 文本直接中断 agent。
+- MCQ 工具调用会把 letter-only `candidate_options` 补成完整选项文本，减少 option grounding drift；但局部 worker 只能用这些选项理解待查事实，不能把选项当作最终答案输出。
 
-### Milestone 2：Evidence Ledger + Verifier
+## 9. 当前 Answer / Verifier / Reporter 设计
 
-实现：
+### 9.1 AnswerAgent
 
-- structured observation formatter；
-- ledger compact；
-- answer-with-citations；
-- verifier pass/fail + targeted follow-up。
+AnswerAgent 当前不是再让模型凭直觉综合，而是读取 evidence table 做结构化仲裁：
 
-交付：20 个 case 上比较 direct answer 和 harness answer。
+```text
+question
+options if MCQ
+evidence table
+candidate observations
+limitations
+required citation format
+```
 
-### Milestone 3：Visual Subagents
+当前规则：
 
-实现：
+- 不能只引用 `video_ls` / `search_segments` 作为视觉证据。
+- MCQ final answer 必须以选项字母开头。
+- `global_sparse` 可以作为 gist/global 问题的 sparse whole-video visual evidence。
+- `visually_confirmed` / `global_sparse` 高于 `inferred` / `weak` / `external_knowledge`。
+- 如果 evidence table 中有多个互斥 supported options，需要在 reporter 中显式暴露冲突。
+- 对局部 worker 的 legacy option vote 默认不采信；显式 option mapping 应来自 AnswerAgent / Verifier 生成的 `candidate_option_relations`。
 
-- worker request/response schema；
-- temporal worker；
-- spatial worker；
-- OCR worker；
-- parallel execution。
+### 9.2 Verifier
 
-交付：长视频任务中展示并行时间窗检查和主上下文压缩。
+当前 verifier 是规则基线：
 
-### Milestone 4：轨迹数据和分析
+- lexical overlap between answer and compact evidence context。
+- citation gate。
+- non-navigation visual-evidence gate。
 
-实现：
+它能拦住一部分没有 citation 或只引用导航工具的答案，但还不能可靠处理 temporal ordering、复杂 entailment、反事实比较和多证据冲突。
 
-- free-explore trace collection；
-- trajectory labeling；
-- tool-use metrics；
-- failure taxonomy；
-- conflict / option-consistency metrics；
-- SFT/preference 数据导出格式。
+### 9.3 Reporter
 
-交付：第一版 trajectory dataset report，明确哪些 free-explore 轨迹可作为训练正样本，哪些只能作为失败案例。
+`report_metrics.py` 当前输出：
 
-### Milestone 5：工具调用训练原型
+- final rate / incomplete rate。
+- accuracy。
+- latency。
+- option support table。
+- unsupported final。
+- final with conflict。
+- direct regressions。
+- legacy worker vote rows。
 
-在 AnswerAgent/Verifier 能过滤冲突轨迹后，先训练一个组件：
+这些指标让失败不再只是“答错了”，而是能定位到 selected option 无结构化支持、caption shortcut、conflicting evidence unresolved、direct baseline regression 等类型。
 
-- tool selection classifier；
-- verifier；
-- observation summarizer；
-- 或小规模 tool-call SFT。
+## 10. 当前实验信号
 
-交付：在 held-out cases 上展示行为改善。
+当前已经验证的事实：
 
-## 12. 第一版技术选择
+- 本地单测通过：`106 tests OK`。
+- 远端 KML 机器单测通过：`106 tests OK`。
+- Qwen3-VL remote backend 可以跑通 harness，生成工具调用、trace、observations、ledger 和 summary。
 
-建议第一版保守实现：
+Round 3 最新 sanity probe：
 
-- Python harness；
-- 本地 artifact workspace；
-- JSON schema-like tool definitions；
-- OpenCV/PIL/moviepy 做基础图像视频处理；
-- OCR 先用可用本地包或 placeholder；
-- MLLM/API adapter 先抽象，后续可接 Claude、OpenAI、Qwen-VL、InternVL 等；
-- foundation model 工具先走 wrapper，不和主 loop 耦合。
+| Case | 方法 | 工具路径 | 答案 | 正确性 | 耗时 |
+| --- | --- | --- | --- | --- | --- |
+| VideoMME `605-1` | `agent_v2 --free-explore` | `global_gist` | D | 正确 | 3.076s |
+| VideoMME `605-1` | `direct_full_video` | direct sparse video | D | 正确 | 5.101s |
 
-第一版目标不是追求最高 benchmark，而是让所有视觉动作都可执行、可记录、可压缩、可复核、可训练。
+对应 artifact：
+
+```text
+/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_round3_605_global_fix_20260604/summary.json
+```
+
+这一条说明：对 gist/global 问题，`global_gist` 可以把 agent 路径从多轮局部探索缩短成一次 whole-video sparse observation，并保持正确答案。
+
+v4 no-vote 改动同步到 KML 后，3-case anchor 已跑完：
+
+```text
+/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_round4_worker_no_vote_3case_20260604/summary.json
+```
+
+Compact case result：
+
+| Case | GT | Direct | Agent v2 | 当前诊断 |
+| --- | --- | --- | --- | --- |
+| VideoMME `605-1` | D | D, correct | D via `global_gist`, correct | global floor 保住。 |
+| VideoMME `611-2` | D | A, wrong | C, wrong | unsupported final；需要 temporal grounding/facts 和 `need_more_evidence` 阻断。 |
+| VideoMME `612-1` | B | B, correct | A, wrong | direct regression；需要 temporal verifier / option mapping 阻断 unsupported A。 |
+
+Strategy-level metrics：
+
+| Strategy | Accuracy | Final Rate | Direct Regressions | Unsupported Final Rate | Legacy Worker Votes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `agent_v2 --free-explore` | 1/3 | 100% | 1 | 66.7% | 1 |
+| `direct_full_video` | 2/3 | 100% | 0 | 0% | 0 |
+
+这一轮说明：
+
+- `605-1` 的 global floor 没有被 worker no-vote / legacy filter 打碎。
+- fresh run 里仍出现 `legacy_worker_vote_rows=1`，说明 prompt 约束还不够，需要 worker-output validation 或 `vision_read` schema。
+- 两个 temporal case 都 final 了，但都是 unsupported final；AnswerAgent 应该返回 `need_more_evidence`，而不是给出无结构化支持的 C/A。
+- `612-1` 是 direct 正确、agent 错误，因此是 v4 定义下的 release blocker。
+
+Round 3 之前的三样本完整 run 保留为诊断参考：
+
+| 方法 | 样本数 | 准确率 | final rate | incomplete rate | 平均耗时 |
+| --- | --- | --- | --- | --- | --- |
+| `agent_v2 --free-explore` | 3 | 1/3 | 100% | 0% | 304s |
+| `direct_full_video` | 3 | 2/3 | 100% | 0% | 5.08s |
+
+这个旧 run 的价值不是证明当前 agent 更强，而是暴露失败形态：
+
+- Agent 已经能稳定调用工具并 final。
+- 失败点从“不会调用工具/跑不通”转移到 evidence attribution、AnswerAgent/Verifier 冲突仲裁和局部 observation 质量。
+- 真实 Inspector 支持曾经常出现在 claim 文本中，例如 `Supported option: X.`；v4 后默认不再让局部 worker 票参与仲裁，而是单独计入 `legacy_worker_vote_rows`。
+- caption shortcut 和 navigation-only citation 会污染最终答案权威。
+
+所以当前结论是：
+
+```text
+global/gist 题的路径已经变短，并在 605-1 上保持正确；
+temporal/local 题的失败已经从“跑不完”变成“unsupported final / direct regression”；
+下一步必须先做 GroundingAgent、VisionFact schema、AnswerAgent blocking 和 temporal verifier。
+```
+
+## 11. 当前限制
+
+当前系统已经是一个能跑通、能记录、能诊断的 long-video visual tool harness，但还不是强 AnswerAgent。
+
+主要限制：
+
+- `inspect_segment` 仍是 one-shot isolated VLM call，不是内部可多轮 tool-use 的真正 subagent runtime。
+- `inspect_segment` 的 no-vote prompt 和 legacy-vote filter 已经落地，但还没有完整升级成 `vision_read` schema：`facts`、`event_label`、`polarity`、`time_range`、`grounding_quality` 仍需要结构化。
+- GroundingAgent 还没有独立成 `ground_question` wrapper；当前仍主要由主 planner 显式调用 `video_ls/search_segments/zoom`。
+- Verifier 仍是规则基线，缺少模型式 entailment、temporal ordering verifier 和反事实检查。
+- bounded mode 仍可能因预算耗尽 incomplete。
+- 局部 needle/temporal 题仍可能出现 caption shortcut、错误时间窗、冲突 evidence 未解决。
+- 当前实验样本太小，不能用来声明整体 benchmark 提升。
+
+当前最重要的下一步是：
+
+1. 完成 `ground_question` / GroundingAgent：定位候选 clip，只输出候选，不投选项票。
+2. 把 `inspect_segment` 升级到 `vision_read` 风格局部事实 schema。
+3. 加强 AnswerAgent / Verifier 的 option consistency、temporal order 和 conflict resolution。
+4. 在更大 VideoMME long-video 切片上同时看 accuracy、latency、final rate、direct_regressions、unsupported final 和 legacy_worker_vote_rows。
+
+## 12. v4 开发路线和验收门
+
+v4 不建议继续先堆 OCR、tracking、embedding retrieval、RL 或 SFT。当前瓶颈是 evidence-to-answer reliability，而不是工具库存。
+
+建议的编码顺序：
+
+1. schema 和测试先行：`GroundingCandidate`、`VisionFact`、`EvidenceRowV2`、`CandidateOptionRelation`、`AnswerAgentDecision`、`TemporalVerifierResult`。
+2. 加固 global floor：`605-1` 必须继续 `global_gist -> D`，并把 `direct_regressions == 0` 当 release blocker。
+3. 实现 GroundingAgent wrapper：内部可以调用导航工具，但对主 Agent 只返回 candidate clips。
+4. 实现 VisionAgent no-vote：局部工具只回事实、时间、模态、置信度和限制。
+5. 升级 AnswerAgent：由全局层把事实映射到 option relations，无法区分时返回 `need_more_evidence`。
+6. 升级 Verifier：冲突检查、direct floor 检查、temporal-order 检查、grounding-quality weighting。
+7. 扩展评测：保留 3-case anchor，再加入 5-10 个 needle/local long-video case，并按 route 汇报。
+
+验收门：
+
+| Gate | 要求 |
+| --- | --- |
+| Stop the bleeding | `605-1 -> D via global_gist`，anchor set `direct_regressions == 0`，`unsupported_final == 0`。 |
+| Role split | fresh run 中 local worker 不输出 `supported_option`，`legacy_worker_vote_rows == 0`，GroundingAgent 只输出候选，VisionAgent 只输出事实。 |
+| Arbitration | selected option 必须有结构化支持；unresolved conflict 不能 final；`611-2` 应返回 D 或 targeted `need_more_evidence`；`612-1` 应保持 B 并显式解决冲突。 |
+| Evaluation honesty | 按 route 汇报；标准 VideoMME 使用 stateless per-QA；stateful memory 实验单独标记；gist/global 保 direct floor，needle/local 才是 agent 增值目标。 |
 
 ## 13. 汇报总结
 
 Claude Code 的成功说明：强 Agent 不是单纯靠模型，而是模型被放进一个可执行、可管理、可恢复的工作环境。对于多模态复杂任务，这个工作环境应该是 visual evidence workspace。
 
-我们的方案是：
+当前系统已经实现：
 
-1. 把多种 visual foundation models 包装成 typed visual tools，形成多工具视觉 harness。
-2. 用 Main Agent、visual workers、ledger、Answer Agent、Verifier 组成协同 workflow。
-3. training-free 先观察和收集工具轨迹，再把成功、失败和恢复轨迹转成 SFT/preference/RL 数据，改善工具调用和视觉动作执行能力。
+1. typed visual tools + registry + interpreter。
+2. long-video workspace tools：`video_ls/search_segments/read_segment/zoom`。
+3. global/gist floor：`global_gist`。
+4. local visual evidence boundary：`inspect_segment`。
+5. evidence workspace：`observations.jsonl`、`trace.jsonl`、`ledger.md`。
+6. AnswerAgent evidence-table arbitration。
+7. verifier / reporter 指标，包括 unsupported final、conflict、direct regression 和 legacy worker vote rows。
 
-最终贡献不是“加了更多工具”，而是让多模态工具变得可组合、可审计、可压缩、可验证，并能持续产生训练数据。
+当前最准确的定位是：
+
+```text
+A working long-video visual tool harness with traceable evidence,
+and an early rule-based answer arbitration layer.
+```
+
+下一步不是继续堆更多工具，而是把局部 worker 输出、AnswerAgent 仲裁和 verifier 证据一致性做强，让工具轨迹真正转化成稳定准确率。

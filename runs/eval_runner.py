@@ -17,7 +17,7 @@ from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 
 
-REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/VLMEvalKit/bin/python"
+REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
 MODEL_PATH = "/m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct"
 DATA_ROOT = Path(
     "/ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/"
@@ -323,6 +323,8 @@ def run_eval_cases(
             "task_type": str(row_get(row, "task_type")),
             "duration_sec": round(duration_sec, 1),
             "gt": gt,
+            "question": question,
+            "options": normalize_options(row_get(row, "options", [])),
             "question_excerpt": compact_text(str(row_get(row, "question")), limit=220),
             "strategies": {},
             "raw_artifacts": {"workspaces": {}},

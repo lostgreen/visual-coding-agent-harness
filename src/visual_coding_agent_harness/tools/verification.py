@@ -7,6 +7,13 @@ from typing import Any, Mapping, Optional, Sequence
 
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
+from ..agents.skills.predicates import (
+    direct_floor_holds,
+    no_decisive_weak_grounding,
+    no_unaddressed_conflict,
+    selected_option_has_structured_support,
+    temporal_order_consistent,
+)
 
 
 _VISUAL_EVIDENCE_TOOLS = {"caption_segment", "qa_segment", "inspect_segment"}
@@ -185,7 +192,7 @@ def _option_conflict_gate(
     if not answer_option:
         return default
 
-    table = workspace.evidence_table(question=question, options=candidate_options)
+    table = workspace.evidence_table_v2(question=question, options=candidate_options)
     rows = table.get("rows", []) if isinstance(table.get("rows", []), Sequence) else []
     cited = set(str(item) for item in required_citations)
     option_relations = {}
@@ -212,6 +219,19 @@ def _option_conflict_gate(
         reasons.append("uncited stronger conflicting option support")
         top_conflicting_observation = conflicts[0][1]
         top_conflict_relation = conflicts[0][2]
+
+    predicate_results = [
+        selected_option_has_structured_support(table, selected_option=answer_option),
+        no_decisive_weak_grounding(table, selected_option=answer_option),
+        no_unaddressed_conflict(table, selected_option=answer_option, cited_obs_ids=required_citations),
+        direct_floor_holds(table, selected_option=answer_option),
+    ]
+    for result in predicate_results:
+        if result.passed:
+            continue
+        for reason in result.reasons:
+            if reason not in reasons:
+                reasons.append(str(reason))
 
     return {
         "reasons": reasons,
@@ -241,7 +261,7 @@ def _temporal_order_gate(
     if len(expected_events) < 2:
         return default
 
-    table = workspace.evidence_table(question=question, options=candidate_options)
+    table = workspace.evidence_table_v2(question=question, options=candidate_options)
     rows = table.get("rows", []) if isinstance(table.get("rows", []), Sequence) else []
     observed_events = _observed_events(rows)
     if len(observed_events) < 2:
@@ -258,6 +278,15 @@ def _temporal_order_gate(
     matched_times = [float(item["start_sec"]) for item in matched]
     verdict = "Support" if matched_times == sorted(matched_times) else "Contradict"
     reasons = ["temporal order contradicts evidence"] if verdict == "Contradict" else []
+    predicate_result = temporal_order_consistent(
+        table,
+        selected_option=_answer_option(answer),
+        expected_events=expected_events,
+    )
+    if not predicate_result.passed:
+        for reason in predicate_result.reasons:
+            if reason not in reasons:
+                reasons.append(str(reason))
     return {
         "reasons": reasons,
         "temporal_order_verdict": verdict,
@@ -270,7 +299,7 @@ def _temporal_order_gate(
 
 
 def _answer_option(answer: str) -> str:
-    match = re.search(r"^\s*([A-H])\b", answer.strip(), flags=re.IGNORECASE)
+    match = re.search(r"^\s*([A-H])(?:[\).:-]|\s*$|\s+(?:option|choice|answer)\b)", answer.strip(), flags=re.IGNORECASE)
     if match:
         return match.group(1).upper()
     match = re.search(r"\b(?:answer|choice|option)\s*(?:is|:)?\s*([A-H])\b", answer, flags=re.IGNORECASE)

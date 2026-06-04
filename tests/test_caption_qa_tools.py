@@ -133,11 +133,45 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(request.media_path, "/videos/demo.mp4")
         self.assertEqual(request.metadata["candidate_options"], ["A. aircraft", "B. submarine"])
         self.assertIn("You are a Segment Inspector subagent", request.prompt)
-        self.assertIn("Return one distilled observation", request.prompt)
+        self.assertIn("Return one distilled local observation", request.prompt)
+        self.assertIn("Do not choose an option", request.prompt)
+        self.assertIn("Do not emit supported_option", request.prompt)
+        self.assertNotIn("supported option if any", request.prompt)
         self.assertIn("A. aircraft", request.prompt)
         self.assertEqual(result["claim"], "inspect_segment answer")
+        self.assertNotIn("supported_option", result)
+        self.assertNotIn("answer_option", result)
         self.assertEqual(result["regions"][0]["tool_role"], "segment_inspector")
         self.assertEqual(result["regions"][0]["segment_id"], "seg_0004")
+
+    def test_vision_read_emits_typed_fact_without_option_vote(self):
+        backend = CaptionQARecordingBackend()
+        registry = build_segment_inspector_registry(backend)
+
+        result = registry.execute(
+            "vision_read",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0004",
+                "start_sec": 30.0,
+                "end_sec": 42.0,
+                "ask_for": "presence and timestamp of: red object",
+                "event_label": "red object",
+                "nframes": 20,
+            },
+        )
+
+        request = backend.requests[0]
+        self.assertEqual(request.task, "vision_read")
+        self.assertIn("Return typed visual facts", request.prompt)
+        self.assertNotIn("supported option if any", request.prompt)
+        self.assertNotIn("supported_option", result)
+        self.assertNotIn("answer_option", result)
+        self.assertEqual(result["event_label"], "red object")
+        self.assertEqual(result["time_range"], [30.0, 42.0])
+        self.assertEqual(result["grounding_quality"], "visually_confirmed")
+        self.assertEqual(result["facts"][0]["event_label"], "red object")
+        self.assertEqual(result["facts"][0]["time_range"], [30.0, 42.0])
 
 
 if __name__ == "__main__":

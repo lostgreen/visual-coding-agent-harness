@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .schemas import EvidenceRowV2
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -26,7 +28,18 @@ class Observation:
 class EvidenceWorkspace:
     """Persist artifacts, observations, trace events, and an answer-facing ledger."""
 
-    VISUAL_EVIDENCE_TOOLS = {"caption_segment", "qa_segment", "inspect_segment"}
+    VISUAL_EVIDENCE_TOOLS = {"global_gist", "caption_segment", "qa_segment", "inspect_segment", "vision_read"}
+    LOCAL_WORKER_EVIDENCE_TOOLS = {
+        "caption_image",
+        "caption_region",
+        "caption_segment",
+        "caption_segments",
+        "inspect_region",
+        "inspect_segment",
+        "ocr_region",
+        "qa_region",
+        "qa_segment",
+    }
     NAVIGATION_TOOLS = {"video_ls", "search_segments", "read_segment", "expand_window", "zoom"}
     ANSWER_EVIDENCE_TOOLS = VISUAL_EVIDENCE_TOOLS | {
         "caption_image",
@@ -157,7 +170,13 @@ class EvidenceWorkspace:
         sections.append("")
         return "\n".join(sections)
 
-    def evidence_table(self, *, question: str, options: Sequence[str] = ()) -> dict[str, Any]:
+    def evidence_table(
+        self,
+        *,
+        question: str,
+        options: Sequence[str] = (),
+        include_legacy_worker_votes: bool = False,
+    ) -> dict[str, Any]:
         """Return an option-grouped answer evidence table for arbitration."""
 
         option_map = _option_letter_map(options)
@@ -175,35 +194,46 @@ class EvidenceWorkspace:
             raw_output = observation.get("raw_output", {})
             if not isinstance(raw_output, Mapping):
                 raw_output = {}
-            supported_option = _normalize_supported_option(
+            legacy_worker_vote = _has_worker_option_vote(
+                tool_name=tool_name,
+                raw_output=raw_output,
+                claim=str(observation.get("claim", "")),
+            )
+            option_source = (
                 raw_output.get("supported_option")
                 or raw_output.get("supported_option_letter")
                 or raw_output.get("answer_option")
                 or _first_item(raw_output.get("supported_options"))
-                or _supported_option_from_claim(str(observation.get("claim", ""))),
-                option_map=option_map,
+                or _supported_option_from_relations(raw_output.get("candidate_option_relations"), option_map=option_map)
+                or _supported_option_from_claim(str(observation.get("claim", "")))
             )
+            if legacy_worker_vote and not include_legacy_worker_votes:
+                supported_option = None
+            else:
+                supported_option = _normalize_supported_option(option_source, option_map=option_map)
             group_key = supported_option or "unassigned"
             groups.setdefault(group_key, [])
 
-            row = {
-                "obs_id": str(observation.get("observation_id", "")),
-                "time_range": _observation_time_range(observation),
-                "tool": tool_name,
-                "supported_option": supported_option,
-                "event_label": _observation_event_label(
+            row = EvidenceRowV2(
+                obs_id=str(observation.get("observation_id", "")),
+                time_range=_observation_time_range(observation),
+                tool=tool_name,
+                supported_option=supported_option,
+                event_label=_observation_event_label(
                     raw_output=raw_output,
                     claim=str(observation.get("claim", "")),
                 ),
-                "claim": str(observation.get("claim", "")),
-                "confidence": float(observation.get("confidence", 0.0) or 0.0),
-                "grounding_quality": _grounding_quality(
+                claim=str(observation.get("claim", "")),
+                confidence=float(observation.get("confidence", 0.0) or 0.0),
+                grounding_quality=_grounding_quality(
                     raw_output=raw_output,
                     limitations=str(observation.get("limitations", "")),
                 ),
-                "limitations": str(observation.get("limitations", "")),
-                "artifact": _first_item(observation.get("input_artifacts")) or "",
-            }
+                candidate_option_relations=_candidate_option_relations(raw_output.get("candidate_option_relations")),
+                legacy_worker_vote=legacy_worker_vote,
+                limitations=str(observation.get("limitations", "")),
+                artifact=_first_item(observation.get("input_artifacts")) or "",
+            ).to_dict()
             rows.append(row)
             groups[group_key].append(row)
 
@@ -218,6 +248,32 @@ class EvidenceWorkspace:
             "options": list(options),
             "groups": sorted_groups,
             "rows": sorted_rows,
+        }
+
+    def evidence_table_v2(
+        self,
+        *,
+        question: str,
+        options: Sequence[str] = (),
+        include_legacy_worker_votes: bool = False,
+    ) -> dict[str, Any]:
+        """Return the v4 typed evidence table with explicit schema metadata."""
+
+        table = self.evidence_table(
+            question=question,
+            options=options,
+            include_legacy_worker_votes=include_legacy_worker_votes,
+        )
+        rows = table.get("rows", [])
+        legacy_count = 0
+        if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
+            legacy_count = sum(
+                1 for row in rows if isinstance(row, Mapping) and bool(row.get("legacy_worker_vote"))
+            )
+        return {
+            "schema_version": "EvidenceTableV2",
+            **table,
+            "legacy_worker_vote_rows": legacy_count,
         }
 
     def _append_jsonl(self, filename: str, payload: Mapping[str, Any]) -> None:
@@ -313,6 +369,36 @@ def _supported_option_from_claim(claim: str) -> str | None:
     return None
 
 
+def _supported_option_from_relations(value: Any, *, option_map: Mapping[str, str]) -> str | None:
+    relations = _candidate_option_relations(value)
+    support_relations = [
+        relation
+        for relation in relations
+        if str(relation.get("relation", "")).strip().lower() in {"support", "supports", "supported"}
+    ]
+    if not support_relations:
+        return None
+    support_relations.sort(key=lambda relation: (-float(relation.get("strength", 0.0) or 0.0), str(relation.get("option", ""))))
+    return _normalize_supported_option(support_relations[0].get("option"), option_map=option_map)
+
+
+def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _has_worker_option_vote(*, tool_name: str, raw_output: Mapping[str, Any], claim: str) -> bool:
+    if tool_name not in EvidenceWorkspace.LOCAL_WORKER_EVIDENCE_TOOLS:
+        return False
+    if _candidate_option_relations(raw_output.get("candidate_option_relations")):
+        return False
+    vote_fields = ["supported_option", "supported_option_letter", "answer_option", "supported_options"]
+    if any(raw_output.get(field) for field in vote_fields):
+        return True
+    return _supported_option_from_claim(claim) is not None
+
+
 def _first_item(value: Any) -> Any:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return value[0] if value else None
@@ -353,7 +439,7 @@ def _observation_event_label(*, raw_output: Mapping[str, Any], claim: str) -> st
 
 def _grounding_quality(*, raw_output: Mapping[str, Any], limitations: str) -> str:
     explicit = str(raw_output.get("grounding_quality", "")).strip().lower()
-    if explicit in {"visually_confirmed", "inferred", "external_knowledge", "weak"}:
+    if explicit in {"global_sparse", "visually_confirmed", "inferred", "external_knowledge", "weak"}:
         return explicit
 
     text = limitations.lower()
@@ -381,6 +467,7 @@ def _grounding_quality(*, raw_output: Mapping[str, Any], limitations: str) -> st
 
 def _sort_evidence_rows(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     grounding_rank = {
+        "global_sparse": 0,
         "visually_confirmed": 0,
         "inferred": 1,
         "weak": 2,
