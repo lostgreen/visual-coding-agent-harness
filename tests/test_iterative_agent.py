@@ -287,6 +287,33 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("candidate_options", prompt)
             self.assertIn("verify option consistency", prompt)
 
+    def test_iterative_agent_prompt_tells_planner_to_use_option_letters_in_json(self):
+        backend = ScriptedPlannerBackend(
+            ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="option_letter_prompt")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            agent.run(
+                question='Which artwork is first?\nA. "David"\nB. "Apollo and Daphne"',
+                video_path="/videos/demo.mp4",
+            )
+
+            prompt = backend.requests[0].prompt
+            self.assertIn(
+                'candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]',
+                prompt,
+            )
+            self.assertIn("Do not copy quoted option text into JSON string values", prompt)
+
     def test_iterative_agent_limits_tool_calls_per_round(self):
         backend = ScriptedPlannerBackend(
             [
@@ -792,6 +819,43 @@ class IterativeAgentTest(unittest.TestCase):
 
             tool_args = result.rounds[0].program[0]["args"]
             self.assertEqual(tool_args["candidate_options"], ["A. aircraft museum", "B. submarine"])
+
+    def test_iterative_agent_recovers_when_planner_copies_unescaped_option_quotes(self):
+        malformed_planner_json = (
+            '{"status": "continue", "program": [{"tool": "inspect_segment", '
+            '"args": {"segment_id": "seg_0001", "question": "Which artwork appears after "David"?", '
+            '"candidate_options": ["A. "David" then Apollo", "B. plain option"]}, "assign": "bad_json"}]}'
+        )
+        backend = ScriptedPlannerBackend(
+            [
+                malformed_planner_json,
+                '{"status": "final", "answer": "A. The cited inspection supports A.", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="planner_bad_json_recovery")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(
+                question='Which artwork appears after David?\nA. "David" then Apollo\nB. plain option',
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.rounds[0].program[0]["tool"], "inspect_segment")
+            self.assertEqual(
+                result.rounds[0].program[0]["args"]["candidate_options"],
+                ['A. "David" then Apollo', "B. plain option"],
+            )
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("planner_json_parse_error", trace)
 
     def test_iterative_agent_appends_mcq_options_to_caption_question(self):
         backend = ScriptedPlannerBackend(

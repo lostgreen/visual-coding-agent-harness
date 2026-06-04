@@ -40,6 +40,7 @@ Remote summaries:
 | Free-explore options fix | `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_free_explore_611_optionsfix_20260604/summary.json` | Dynamic window id reuse was not resolvable. |
 | Free-explore dynamic-id fix | `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_free_explore_611_dynamicfix_20260604/summary.json` | Planner supplied millisecond values in `start_sec` / `end_sec`. |
 | Free-explore ms fix | `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_free_explore_611_msfix_20260604/summary.json` | Current free-explore result for `611-2`: final_rate 100%, incomplete_rate 0%, answer A vs GT D. |
+| Round 2 free sync | `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_round2_free_sync_20260604/summary.json` | `direct_full_video` 2/3; `agent_v2` solved `612-1` but `605-1` and `611-2` aborted before tools due to planner JSON parse errors from quoted option text. |
 
 Remote workspaces for each run are under:
 
@@ -129,6 +130,23 @@ Interpretation:
 - More exploration alone does not guarantee accuracy.
 - The next quality bottleneck is AnswerAgent/Verifier arbitration, not simply more rounds or more tool calls.
 
+### 6. Planner JSON Brittleness On Quoted Options
+
+The Round 2 free sync run exposed a separate reliability failure before tool use:
+
+- `605-1` and `611-2` `agent_v2` returned `status=error`.
+- Failure fingerprint: `JSONDecodeError: Expecting ',' delimiter`.
+- Likely cause: planner copied MCQ option text containing double quotes into JSON string values without escaping.
+- This is a model-output contract issue, not a vision-tool failure.
+
+Current mitigation:
+
+- Prompt now tells the planner to pass only option letters in JSON `candidate_options`, such as `["A", "B", "C", "D"]`.
+- The harness restores full candidate option text from the original question before invoking `inspect_segment`.
+- If planner JSON still fails to parse, the agent writes a compact `planner_json_parse_error` trace event and falls back to localized `inspect_segment` instead of aborting the strategy.
+
+Remaining risk: parser fallback preserves execution but does not recover the planner's intended target segment if the malformed JSON contained a non-default segment id. The next trace should verify whether fallback segment choice is sufficient for `605-1` and `611-2`.
+
 ## Design Decision
 
 For the current research phase, keep a free-exploration path:
@@ -145,5 +163,6 @@ Efficiency budgets and Agentic RL should come later, after the verifier can dist
 1. Keep collecting free-explore traces on a small anchor set, but treat them as quality diagnostics rather than efficiency results.
 2. Strengthen AnswerAgent and Verifier around MCQ option consistency, evidence conflict detection, and temporal-order comparison.
 3. Add metrics for conflict_rate, option_support_consistency, final_with_conflict, and unsupported_final.
-4. Rerun `611-2` after verifier arbitration before expanding to a larger benchmark slice.
-5. Use filtered free-explore traces later for SFT/preference/RL; do not train on unresolved conflicting traces as positive examples.
+4. Rerun `605-1,611-2` after planner JSON fallback to ensure quoted option text no longer aborts tool use.
+5. Rerun `611-2` after verifier arbitration before expanding to a larger benchmark slice.
+6. Use filtered free-explore traces later for SFT/preference/RL; do not train on unresolved conflicting traces as positive examples.

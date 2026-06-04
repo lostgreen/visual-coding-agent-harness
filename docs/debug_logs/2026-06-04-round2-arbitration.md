@@ -10,7 +10,7 @@ Execute Round 2 from `videomme-agent-implementation-plan-round2.md`: make eviden
 
 Current valid local check:
 
-- `PYTHONPATH=src python -m pytest tests` -> 91 passed.
+- `PYTHONPATH=src python -m pytest tests` -> 93 passed.
 
 Current implementation progress:
 
@@ -40,6 +40,14 @@ New local synthetic coverage:
 - Verifier rejects final A when a stronger uncited D observation exists.
 - Verifier rejects a temporal-order final when the selected option sequence is the reverse of timestamped `event_label` observations.
 
+Latest KML free-explore sync run:
+
+- Summary: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_round2_free_sync_20260604/summary.json`
+- `direct_full_video`: 2/3 (`605-1`, `612-1` correct; `611-2` wrong).
+- `agent_v2`: `612-1` final B and correct, but `605-1` and `611-2` failed before tool use with planner JSON parse errors.
+- Failure fingerprint: `JSONDecodeError: Expecting ',' delimiter`, caused by planner responses copying quoted MCQ option text into JSON string values.
+- Mitigation added: prompt tells planner to pass option letters only in JSON `candidate_options`, and the agent now records `planner_json_parse_error` then falls back to localized `inspect_segment` instead of aborting.
+
 ## Files Changed In This Iteration
 
 - `src/visual_coding_agent_harness/workspace.py`
@@ -55,7 +63,7 @@ New local synthetic coverage:
 
 ## Current Hypothesis
 
-The round-2 direction is locally validated: explicit table arbitration can remove recency/position bias in the known failure class. The next question is whether the real `611-2` trace contains enough structured `supported_option` / `grounding_quality` information for this deterministic layer to fire, or whether Stage 4 Inspector self-report is needed sooner.
+The round-2 direction is locally validated: explicit table arbitration can remove recency/position bias in the known failure class. The latest KML run also shows that model-output JSON brittleness is a first-class reliability issue for MCQ questions with quoted option text. After the parser fallback is synced, the next question is whether the real failed cases produce enough structured `supported_option` / `grounding_quality` information for deterministic arbitration to fire.
 
 ## Stale Evidence
 
@@ -65,8 +73,8 @@ The round-2 direction is locally validated: explicit table arbitration can remov
 
 ## Next Actions
 
-1. Sync this patch to KML and run remote unit tests with compact output.
-2. Run reporter on the existing `videomme_agent_free_explore_611_msfix_20260604` workspace to confirm the real trace is flagged.
-3. If real trace lacks structured `supported_option`, add a parser or move Stage 4 grounding self-report earlier.
-4. If real temporal-order traces lack structured `event_label`, move the Stage 4 Inspector self-report earlier so observations emit event names with timestamps.
-5. Then rerun `611-2` free-explore with the AnswerAgent/Verifier changes.
+1. Sync the planner JSON fallback patch to KML and run remote unit tests with compact output.
+2. Rerun `agent_v2 --free-explore` on failed `605-1,611-2` cases to confirm the parser failure no longer aborts tool use.
+3. Run reporter on the existing `videomme_agent_free_explore_611_msfix_20260604` workspace to confirm the real trace is flagged.
+4. If real trace lacks structured `supported_option` or `event_label`, move the Stage 4 Inspector self-report earlier.
+5. Then rerun the 3-case anchor set before expanding benchmark coverage.

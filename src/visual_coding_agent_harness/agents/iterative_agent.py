@@ -163,7 +163,25 @@ class IterativeVisualAgent:
                     },
                 )
             )
-            action = _parse_replan_action(planner_response.text)
+            try:
+                action = _parse_replan_action(planner_response.text)
+            except (json.JSONDecodeError, ValueError) as exc:
+                self.workspace.write_trace_event(
+                    "planner_json_parse_error",
+                    {
+                        "round": round_number,
+                        "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+                        "response_excerpt": _compact_planner_response(planner_response.text),
+                    },
+                )
+                action = {
+                    "status": "continue",
+                    "rationale": "planner_json_parse_error",
+                    "program": self._fallback_inspector_program(
+                        question=question,
+                        inspected_segment_ids=inspected_segment_ids,
+                    ),
+                }
             status = str(action.get("status", "continue"))
             rationale = str(action.get("rationale", ""))
             planned_program: Any = action.get("program", [])
@@ -675,6 +693,8 @@ def _replanning_prompt(
         "- Use zoom when a coarse segment is relevant but too long; then call inspect_segment with the returned child segment_id and start_sec/end_sec.\n"
         "- Do not spend every round on navigation-only tools; gather visual evidence before finalizing.\n"
         "- Multiple-choice answers must use inspect_segment on a localized candidate before finalizing, with the options included in candidate_options.\n"
+        '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.\n'
+        "- Do not copy quoted option text into JSON string values; refer to option letters instead.\n"
         "- Final answers require at least one non-navigation visual observation from inspect_segment, caption_segment, or qa_segment; navigation-only evidence is insufficient.\n"
         "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.\n"
         f"- Request at most {budget.max_tool_calls_per_round} new tool call(s) this round.\n"
@@ -716,6 +736,11 @@ def _extract_json_object(text: str) -> str:
     if start == -1 or end == -1 or end <= start:
         raise ValueError("No JSON object found")
     return stripped[start : end + 1]
+
+
+def _compact_planner_response(text: str, limit: int = 480) -> str:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    return compact[:limit] + ("..." if len(compact) > limit else "")
 
 
 def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[str]:
