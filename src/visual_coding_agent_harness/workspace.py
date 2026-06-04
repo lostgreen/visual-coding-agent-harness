@@ -303,7 +303,11 @@ def _normalize_supported_option(value: Any, *, option_map: Mapping[str, str]) ->
 
 
 def _supported_option_from_claim(claim: str) -> str | None:
-    match = re.search(r"\b(?:supports?|matches|chooses?|answer(?:s)?|option)\s+(?:option\s*)?([A-Za-z])\b", claim)
+    match = re.search(
+        r"\b(?:supported\s+option|supports?|matches|chooses?|answer(?:s)?|option)\s*:?\s+(?:option\s*)?([A-Za-z])\b",
+        claim,
+        flags=re.IGNORECASE,
+    )
     if match:
         return match.group(1).upper()
     return None

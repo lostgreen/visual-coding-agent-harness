@@ -48,6 +48,21 @@ Latest KML free-explore sync run:
 - Failure fingerprint: `JSONDecodeError: Expecting ',' delimiter`, caused by planner responses copying quoted MCQ option text into JSON string values.
 - Mitigation added: prompt tells planner to pass option letters only in JSON `candidate_options`, and the agent now records `planner_json_parse_error` then falls back to localized `inspect_segment` instead of aborting.
 
+Latest source-machine visual-harness run:
+
+- Python: `/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python`
+- Summary: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_visual_harness_full_20260604/summary.json`
+- `direct_full_video`: 2/3; `605-1=D` correct, `611-2=A` wrong, `612-1=B` correct.
+- `agent_v2 --free-explore`: 1/3; all cases reached `final` with tool use and no JSON/runtime error.
+- Case metrics: `605-1` final C after 9 rounds / 13 tools; `611-2` final A after 6 rounds / 7 tools; `612-1` final B after 20 rounds / 21 tools.
+- Reporter: `agent_v2` final_rate 100%, incomplete_rate 0%, avg 304 sec, but accuracy still below direct baseline.
+
+Latest failure fingerprint after run:
+
+- Real inspector outputs encode option support inside claim text, e.g. `Supported option: A.`, not in `raw_output.supported_option`.
+- Existing `evidence_table()` did not parse the colon form, so AnswerAgent/Verifier arbitration saw many visual observations as `unassigned`.
+- Mitigation added: parse `Supported option: X.` claim text into structured table support.
+
 ## Files Changed In This Iteration
 
 - `src/visual_coding_agent_harness/workspace.py`
@@ -73,8 +88,8 @@ The round-2 direction is locally validated: explicit table arbitration can remov
 
 ## Next Actions
 
-1. Sync the planner JSON fallback patch to KML and run remote unit tests with compact output.
-2. Rerun `agent_v2 --free-explore` on failed `605-1,611-2` cases to confirm the parser failure no longer aborts tool use.
-3. Run reporter on the existing `videomme_agent_free_explore_611_msfix_20260604` workspace to confirm the real trace is flagged.
-4. If real trace lacks structured `supported_option` or `event_label`, move the Stage 4 Inspector self-report earlier.
+1. Rerun reporter on `videomme_agent_visual_harness_full_20260604` after the claim-text parser fix to quantify conflict/unsupported-final tags.
+2. Rerun a focused `agent_v2 --free-explore` slice if the parser fix affects verifier/AnswerAgent behavior.
+3. Move Stage 4 Inspector self-report earlier if claim-text parsing is still too weak for `grounding_quality` and `event_label`.
+4. Add a final-answer gate for MCQ: when final choice has no structured support but other options do, require verifier/AnswerAgent arbitration before accepting final.
 5. Then rerun the 3-case anchor set before expanding benchmark coverage.
