@@ -76,7 +76,9 @@ Current KML status:
 
 - New requested KML URL works when passed explicitly with `--base-url https://kml-dtmachine-23666-prod-0.kmlhb2az1l3-2.corp.kuaishou.com`.
 - `pwd` on the requested KML returned `/home/xuboshen`.
-- Synced the v4 foundation files to `/home/xuboshen/zgw/visual-coding-agent-harness` via `/tmp/v4-skill-framework-sync.tar` (`317440` bytes, SHA256 `daa671b2d6bcf8804c13d4bd2c723165ad759a08d8e2805448a2b75d7a523098`).
+- Branch alignment is complete across local, GitHub, and KML on `codex/v4-skill-framework`; the v4 implementation sync baseline was `aa35b1aafa29caeabdf37b15ef74ebf5f95c68e7`.
+- KML has successfully fetched `codex/v4-skill-framework` from GitHub using temporary askpass credentials; no token was persisted in the remote URL or git config.
+- The previous KML dirty working tree was stashed as `stash@{0}: On main: codex-v4-align-backup`; all code/test files from that stash are now absorbed into the branch. The only remaining stash-vs-HEAD differences are documentation/debug-note updates.
 - Remote check passed:
 
 ```text
@@ -116,6 +118,12 @@ Current Round 3 global floor note:
 
 ```text
 docs/debug_logs/2026-06-04-round3-global-floor.md
+```
+
+Current v4 branch sync note:
+
+```text
+docs/debug_logs/2026-06-04-v4-branch-sync.md
 ```
 
 Remote summary artifacts:
@@ -169,8 +177,8 @@ PYTHONPATH=src \
 Proxy for current KML work:
 
 ```bash
-export http_proxy=http://oversea-squid1.jp.txyun:11080
-export https_proxy=http://oversea-squid1.jp.txyun:11080
+export http_proxy=http://oversea-squid2.ko.txyun:11080
+export https_proxy=http://oversea-squid2.ko.txyun:11080
 export no_proxy=localhost,127.0.0.1,localaddress,localdomain.com,internal,corp.kuaishou.com,test.gifshow.com,staging.kuaishou.com
 ```
 
