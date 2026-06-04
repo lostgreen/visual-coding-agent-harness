@@ -12,7 +12,7 @@ Unify the v4 development branch across local, GitHub, and the requested KML mach
 - Implementation sync baseline before the report-doc update: `4e8f55e9603f7cf2a77a0555ee638d0257a33fa1`
 - Report-doc update pushed to local/GitHub: `b78dc07`
 - Before the report-doc update, local HEAD, GitHub `origin/codex/v4-skill-framework`, KML HEAD, and KML `origin/codex/v4-skill-framework` all matched the implementation baseline.
-- KML is currently running the full VideoMME tmux evaluation from the implementation baseline; the report-doc commit is documentation-only and was not pulled into that running worktree mid-eval.
+- KML was later fast-forwarded with a local git bundle for documentation-only commits after confirming the worktree was clean; the full VideoMME tmux evaluation session remained alive.
 - KML worktree: clean on `codex/v4-skill-framework`
 
 ## KML Access
