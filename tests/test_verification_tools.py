@@ -38,6 +38,42 @@ class VerificationToolsTest(unittest.TestCase):
         self.assertIn("insufficient", result["claim"])
         self.assertIn("submarine", result["regions"][0]["missing_terms"])
 
+    def test_verify_ledger_answer_rejects_navigation_only_support(self):
+        registry = build_verification_registry()
+
+        result = registry.execute(
+            "verify_ledger_answer",
+            {
+                "answer": "The video shows an aircraft museum.",
+                "ledger_text": (
+                    "- `obs_0001` | tool: `video_ls` | confidence: 1.00 | artifacts: demo.mp4 | "
+                    "claim: Candidate segments include an aircraft museum. | limitations: -\n"
+                ),
+            },
+        )
+
+        self.assertIn("insufficient", result["claim"])
+        self.assertEqual(result["regions"][0]["evidence_gate"]["visual_observation_ids"], [])
+        self.assertIn("no non-navigation visual evidence", result["regions"][0]["evidence_gate"]["reasons"])
+
+    def test_verify_ledger_answer_checks_required_citations(self):
+        registry = build_verification_registry()
+
+        result = registry.execute(
+            "verify_ledger_answer",
+            {
+                "answer": "The segment shows aircraft history.",
+                "ledger_text": (
+                    "- `obs_0001` | tool: `qa_segment` | confidence: 0.80 | artifacts: clip.mp4 | "
+                    "claim: The segment shows aircraft history. | limitations: -\n"
+                ),
+                "required_citations": ["obs_0001", "obs_0002"],
+            },
+        )
+
+        self.assertIn("insufficient", result["claim"])
+        self.assertEqual(result["regions"][0]["evidence_gate"]["missing_citations"], ["obs_0002"])
+
     def test_summarize_ledger_evidence_extracts_compact_claims(self):
         registry = build_verification_registry()
 

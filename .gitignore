@@ -4,7 +4,11 @@ experiments/
 .pytest_cache/
 __pycache__/
 *.pyc
-runs/
+.DS_Store
+._*
+**/._*
+runs/*
+!runs/*.py
 dist/
 build/
 *.egg-info/

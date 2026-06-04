@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.tools.inspector import build_segment_inspector_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry
 from visual_coding_agent_harness.tools.vlm import build_vlm_registry
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -109,6 +110,34 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(request.metadata["fps"], 2.0)
         self.assertIn("QA task", request.prompt)
         self.assertEqual(result["regions"][0]["max_pixels"], 200000)
+
+    def test_segment_inspector_returns_one_distilled_observation(self):
+        backend = CaptionQARecordingBackend()
+        registry = build_segment_inspector_registry(backend)
+
+        result = registry.execute(
+            "inspect_segment",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0004",
+                "start_sec": 30.0,
+                "end_sec": 42.0,
+                "question": "Which option is supported?",
+                "candidate_options": ["A. aircraft", "B. submarine"],
+                "nframes": 20,
+            },
+        )
+
+        request = backend.requests[0]
+        self.assertEqual(request.task, "inspect_segment")
+        self.assertEqual(request.media_path, "/videos/demo.mp4")
+        self.assertEqual(request.metadata["candidate_options"], ["A. aircraft", "B. submarine"])
+        self.assertIn("You are a Segment Inspector subagent", request.prompt)
+        self.assertIn("Return one distilled observation", request.prompt)
+        self.assertIn("A. aircraft", request.prompt)
+        self.assertEqual(result["claim"], "inspect_segment answer")
+        self.assertEqual(result["regions"][0]["tool_role"], "segment_inspector")
+        self.assertEqual(result["regions"][0]["segment_id"], "seg_0004")
 
 
 if __name__ == "__main__":

@@ -47,10 +47,78 @@ def build_segment_test_registry() -> ToolRegistry:
         }
 
     registry.register(caption_segment)
+
+    @tool(name="qa_segment", description="Answer a question about one indexed video segment.")
+    def qa_segment(
+        video_path: str,
+        segment_id: str,
+        start_sec: float,
+        end_sec: float,
+        question: str,
+        nframes: int = 8,
+    ):
+        return {
+            "claim": f"{segment_id} from {start_sec:.1f}s to {end_sec:.1f}s answers: aircraft history.",
+            "confidence": 0.78,
+            "input_artifacts": [video_path],
+            "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec, "question": question, "nframes": nframes}],
+        }
+
+    registry.register(qa_segment)
+
+    @tool(name="inspect_segment", description="Inspect one indexed video segment through a subagent boundary.")
+    def inspect_segment(
+        video_path: str,
+        segment_id: str,
+        start_sec: float,
+        end_sec: float,
+        question: str,
+        candidate_options=None,
+        nframes: int = 16,
+    ):
+        return {
+            "claim": f"{segment_id} inspector answers: aircraft history.",
+            "confidence": 0.8,
+            "input_artifacts": [video_path],
+            "regions": [
+                {
+                    "segment_id": segment_id,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "question": question,
+                    "candidate_options": list(candidate_options or []),
+                    "nframes": nframes,
+                }
+            ],
+        }
+
+    registry.register(inspect_segment)
     return registry
 
 
 class IterativeAgentTest(unittest.TestCase):
+    def test_agent_budget_defaults_to_answer_capable_loop(self):
+        budget = AgentBudget()
+
+        self.assertEqual(budget.max_rounds, 8)
+        self.assertEqual(budget.max_tool_calls_per_round, 2)
+        self.assertTrue(budget.reserve_final_round)
+        self.assertGreaterEqual(budget.cheap_tool_budget, budget.max_rounds)
+        self.assertGreaterEqual(budget.expensive_tool_budget, 4)
+        self.assertGreaterEqual(budget.verifier_tool_budget, 1)
+        self.assertEqual(budget.answer_probe_rounds_before_final, 0)
+
+    def test_free_exploration_budget_disables_policy_budgets_but_keeps_safety_caps(self):
+        budget = AgentBudget.free_explore(max_rounds=24, max_tool_calls_per_round=4)
+
+        self.assertTrue(budget.free_exploration)
+        self.assertEqual(budget.max_rounds, 24)
+        self.assertEqual(budget.max_tool_calls_per_round, 4)
+        self.assertFalse(budget.reserve_final_round)
+        self.assertEqual(budget.cheap_tool_budget, 0)
+        self.assertEqual(budget.expensive_tool_budget, 0)
+        self.assertEqual(budget.verifier_tool_budget, 0)
+
     def test_fixed_window_scene_index_creates_addressable_segments(self):
         index = fixed_window_scene_index(video_path="demo.mp4", duration_sec=65.0, window_sec=30.0)
 
@@ -175,13 +243,49 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("search_segments(query", prompt)
             self.assertIn("read_segment(segment_id", prompt)
             self.assertIn("expand_window(segment_id", prompt)
+            self.assertIn("zoom(segment_id", prompt)
+            self.assertIn("inspect_segment(video_path", prompt)
             self.assertIn("caption_segments(segment_ids", prompt)
             self.assertIn("ingest_segment_metadata(segment_id", prompt)
             self.assertIn("verify_ledger_answer(answer", prompt)
             self.assertIn("summarize_ledger_evidence", prompt)
             self.assertIn("max_pixels", prompt)
             self.assertIn("fps", prompt)
+            self.assertIn("delegate localized visual inspection to inspect_segment", prompt)
             self.assertIn("Do not spend every round on navigation-only tools", prompt)
+            self.assertIn("Multiple-choice answers must use inspect_segment", prompt)
+            self.assertIn("non-navigation visual observation", prompt)
+            self.assertIn("caption_segments is offline VideoMap cache building", prompt)
+
+    def test_iterative_agent_prompt_includes_task_type_playbook(self):
+        backend = ScriptedPlannerBackend(
+            ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_playbook")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            agent.run(
+                question=(
+                    "Which option is visible?\n"
+                    "A. aircraft museum\n"
+                    "B. submarine\n"
+                    "C. mountain road"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            prompt = backend.requests[0].prompt
+            self.assertIn("Task playbook: multiple_choice", prompt)
+            self.assertIn("candidate_options", prompt)
+            self.assertIn("verify option consistency", prompt)
 
     def test_iterative_agent_limits_tool_calls_per_round(self):
         backend = ScriptedPlannerBackend(
@@ -213,6 +317,38 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(len(result.rounds[0].program), 1)
             self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
             self.assertEqual(result.rounds[0].observation_ids, ["obs_0001"])
+
+    def test_iterative_agent_gates_expensive_tools_by_budget(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "Inspect 1"}, "assign": "s1"},'
+                    '{"tool": "inspect_segment", "args": {"segment_id": "seg_0002", "question": "Inspect 2"}, "assign": "s2"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "done", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="expensive_budget")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_tool_calls_per_round=2, expensive_tool_budget=1, reserve_final_round=False),
+            )
+
+            result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            self.assertEqual([step["tool"] for step in result.rounds[0].program], ["inspect_segment"])
+            self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
+            self.assertEqual(result.rounds[0].observation_ids, ["obs_0001"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("tool_budget_exhausted", trace)
 
     def test_iterative_agent_avoids_repeated_segments_with_fallback(self):
         backend = ScriptedPlannerBackend(
@@ -432,6 +568,295 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(tool_args["end_sec"], 17.5)
             self.assertEqual(tool_args["nframes"], 8)
 
+    def test_iterative_agent_allows_zoom_child_segments_with_explicit_window(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "qa_segment", "args": {"segment_id": "seg_0002_z01", "start_sec": 30.0, "end_sec": 45.0, "question": "Which option is supported?"}, "assign": "zoomed_qa"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "done", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0),
+                VideoSegment(segment_id="seg_0002", start_sec=30.0, end_sec=60.0),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="dynamic_zoom_child")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(question="Which option is supported?", video_path="/videos/demo.mp4")
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertEqual(tool_args["segment_id"], "seg_0002_z01")
+            self.assertEqual(tool_args["start_sec"], 30.0)
+            self.assertEqual(tool_args["end_sec"], 45.0)
+            self.assertEqual(result.rounds[0].program[0]["tool"], "qa_segment")
+
+    def test_iterative_agent_repairs_media_tool_missing_segment_id_from_time_window(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {'
+                    '"video_path": "artifacts/clips/seg_0002.mp4", '
+                    '"start_sec": 30.0, "end_sec": 45.0, "question": "Inspect this window"}'
+                    ', "assign": "detail"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "done", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="repair_missing_segment")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertTrue(tool_args["segment_id"].startswith("window_"))
+            self.assertEqual(tool_args["video_path"], "/videos/demo.mp4")
+            self.assertEqual(tool_args["start_sec"], 30.0)
+            self.assertEqual(tool_args["end_sec"], 45.0)
+            self.assertEqual(result.rounds[0].observation_ids, ["obs_0001"])
+
+    def test_iterative_agent_clamps_dynamic_tail_window_to_video_duration(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {'
+                    '"start_sec": 1800.0, "end_sec": 1805.0, "question": "Inspect the tail"}'
+                    ', "assign": "tail"}'
+                    "]}"
+                )
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=1804.96, window_sec=300.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="tail_window")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(question="What happens at the end?", video_path="/videos/demo.mp4")
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertEqual(tool_args["start_sec"], 1800.0)
+            self.assertEqual(tool_args["end_sec"], 1804.96)
+            self.assertTrue(tool_args["segment_id"].startswith("window_"))
+
+    def test_iterative_agent_resolves_reused_dynamic_window_segment_id(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {"segment_id": "window_000300000_000600000", '
+                    '"question": "Reinspect this dynamic window"}'
+                    ', "assign": "dyn"}'
+                    "]}"
+                )
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=900.0, window_sec=300.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="reused_dynamic_window")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertEqual(tool_args["segment_id"], "window_000300000_000600000")
+            self.assertEqual(tool_args["start_sec"], 300.0)
+            self.assertEqual(tool_args["end_sec"], 600.0)
+
+    def test_iterative_agent_normalizes_dynamic_window_milliseconds(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {"start_sec": 1800000.0, "end_sec": 1804957.0, '
+                    '"question": "Inspect this millisecond window"}'
+                    ', "assign": "dyn"}'
+                    "]}"
+                )
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=1804.957, window_sec=300.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="dynamic_window_ms")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertEqual(tool_args["start_sec"], 1800.0)
+            self.assertEqual(tool_args["end_sec"], 1804.957)
+            self.assertEqual(tool_args["segment_id"], "window_001800000_001804957")
+
+    def test_iterative_agent_injects_mcq_options_into_inspector_args(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "Which option is visible?"}, "assign": "inspection"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "A", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="inject_mcq_options")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. aircraft museum\nB. submarine",
+                video_path="/videos/demo.mp4",
+            )
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertEqual(tool_args["candidate_options"], ["A. aircraft museum", "B. submarine"])
+
+    def test_iterative_agent_replaces_letter_only_candidate_options_with_full_options(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "Which option is visible?", '
+                    '"candidate_options": ["A", "B"]}, "assign": "inspection"}'
+                    "]}"
+                )
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_full_options")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. aircraft museum\nB. submarine",
+                video_path="/videos/demo.mp4",
+            )
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertEqual(tool_args["candidate_options"], ["A. aircraft museum", "B. submarine"])
+
+    def test_iterative_agent_appends_mcq_options_to_caption_question(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "caption_segment", "args": {"segment_id": "seg_0001", "question": "Describe the sequence."}, '
+                    '"assign": "caption"}'
+                    "]}"
+                )
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="caption_options")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="Which order is shown?\nA. red then blue\nB. blue then red",
+                video_path="/videos/demo.mp4",
+            )
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertIn("Options:", tool_args["question"])
+            self.assertIn("A. red then blue", tool_args["question"])
+            self.assertIn("B. blue then red", tool_args["question"])
+
+    def test_iterative_agent_blocks_mcq_final_until_inspector_with_options(self):
+        backend = ScriptedPlannerBackend(
+            [
+                '{"status": "final", "answer": "A", "citations": [], "confidence": 0.9}',
+                '{"status": "final", "answer": "A", "citations": ["obs_0001"], "confidence": 0.9}',
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="block_unsupported_mcq_final")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. aircraft museum\nB. submarine",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.citations, ["obs_0001"])
+            self.assertEqual(result.rounds[0].status, "continue")
+            self.assertEqual(result.rounds[0].program[0]["tool"], "inspect_segment")
+            self.assertEqual(result.rounds[0].program[0]["args"]["candidate_options"], ["A. aircraft museum", "B. submarine"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_final_blocked", trace)
+
     def test_iterative_agent_prompt_includes_broad_long_video_index(self):
         backend = ScriptedPlannerBackend(
             ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']
@@ -474,7 +899,7 @@ class IterativeAgentTest(unittest.TestCase):
                 registry=build_segment_test_registry(),
                 workspace=workspace,
                 scene_index=scene_index,
-                budget=AgentBudget(max_rounds=1),
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
             )
 
             result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
@@ -483,6 +908,182 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.citations, ["obs_0001"])
             self.assertIn("Partial evidence summary", result.answer)
             self.assertIn("aircraft history", result.answer)
+
+    def test_iterative_agent_reserves_final_round_from_new_visual_tools(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "Inspect"}, "assign": "s1"}'
+                    "]}"
+                )
+            ]
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=10.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=10.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="reserved_final")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=True),
+            )
+
+            result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.citations, [])
+            self.assertEqual(result.rounds[0].program, [])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("reserve_final_round", trace)
+
+    def test_iterative_agent_uses_answer_agent_when_reserved_final_round_would_continue(self):
+        class ReservedFinalAnswerBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+                self.replan_calls = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    self.replan_calls += 1
+                    if self.replan_calls == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status": "continue", "program": ['
+                                '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "Inspect"}, "assign": "s1"}'
+                                "]}"
+                            )
+                        )
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            '{"tool": "inspect_segment", "args": {"segment_id": "seg_0002", "question": "Inspect more"}, "assign": "s2"}'
+                            "]}"
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    self.answer_prompt = request.prompt
+                    return BackendResponse(
+                        text='{"answer": "B", "rationale": "obs_0001 supports B.", "citations": ["obs_0001"], "missing_evidence": [], "confidence": 0.82}'
+                    )
+                return BackendResponse(text="unexpected")
+
+        backend = ReservedFinalAnswerBackend()
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="reserved_final_answer")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=2, reserve_final_round=True),
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. submarine\nB. aircraft museum",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.citations, ["obs_0001"])
+            self.assertIn("obs_0001", backend.answer_prompt)
+            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "answer_from_evidence"])
+
+    def test_iterative_agent_feeds_prefinal_answer_gaps_into_next_prompt(self):
+        class PrefinalProbeBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+                self.replan_calls = 0
+                self.answer_calls = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    self.replan_calls += 1
+                    if self.replan_calls == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status": "continue", "program": ['
+                                '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "Inspect first option", '
+                                '"candidate_options": ["A. first", "B. second", "C. third", "D. fourth"]}, "assign": "s1"}'
+                                "]}"
+                            )
+                        )
+                    if self.replan_calls == 2:
+                        return BackendResponse(
+                            text=(
+                                '{"status": "continue", "program": ['
+                                '{"tool": "inspect_segment", "args": {"segment_id": "seg_0002", "question": "Inspect second option", '
+                                '"candidate_options": ["A. first", "B. second", "C. third", "D. fourth"]}, "assign": "s2"}'
+                                "]}"
+                            )
+                        )
+                    if self.replan_calls == 3:
+                        self.round3_prompt = request.prompt
+                        return BackendResponse(
+                            text=(
+                                '{"status": "continue", "program": ['
+                                '{"tool": "inspect_segment", "args": {"segment_id": "seg_0003", "question": "Resolve the missing ordering evidence", '
+                                '"candidate_options": ["A. first", "B. second", "C. third", "D. fourth"]}, "assign": "s3"}'
+                                "]}"
+                            )
+                        )
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            '{"tool": "inspect_segment", "args": {"segment_id": "seg_0004", "question": "Should be reserved"}, "assign": "s4"}'
+                            "]}"
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    self.answer_calls += 1
+                    if self.answer_calls == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"answer": "need_more_evidence", "rationale": "Need order evidence.", '
+                                '"citations": [], "missing_evidence": ["explicit order of the four options"], "confidence": 0.0}'
+                            )
+                        )
+                    return BackendResponse(
+                        text='{"answer": "D", "rationale": "obs_0003 resolves the order.", "citations": ["obs_0003"], "missing_evidence": [], "confidence": 0.86}'
+                    )
+                return BackendResponse(text="unexpected")
+
+        backend = PrefinalProbeBackend()
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=120.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="prefinal_answer_probe")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=4, reserve_final_round=True, answer_probe_rounds_before_final=2),
+            )
+
+            result = agent.run(
+                question="Which option is correct?\nA. first\nB. second\nC. third\nD. fourth",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "D")
+            self.assertIn("Answer Agent says these evidence gaps", backend.round3_prompt)
+            self.assertIn("explicit order of the four options", backend.round3_prompt)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("prefinal_probe", trace)
+            self.assertIn("reserved_final", trace)
 
     def test_segment_vlm_tools_share_backend_and_pass_temporal_metadata(self):
         class SegmentToolBackend(VisionLanguageBackend):

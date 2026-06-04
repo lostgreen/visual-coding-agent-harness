@@ -52,6 +52,30 @@ class HarnessTest(unittest.TestCase):
             self.assertEqual((workspace.root / "trace.jsonl").read_text().count("tool_result"), 1)
             self.assertIn("The sign reads EXIT.", (workspace.root / "ledger.md").read_text())
 
+    def test_workspace_compacts_ledger_for_planner_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="compact")
+            ledger_path = workspace.root / "ledger.md"
+            ledger_path.write_text(
+                "# Evidence Ledger\n\n"
+                "- `obs_0001` | tool: `video_ls` | confidence: 1.00 | artifacts: demo.mp4 | claim: Candidate segments include seg_0002 and seg_0003 with a very long navigation explanation. | limitations: -\n"
+                "- `obs_0002` | tool: `search_segments` | confidence: 0.85 | artifacts: demo.mp4 | claim: Search returned seg_0002 for aircraft. | limitations: lexical\n"
+                "- `obs_0003` | tool: `inspect_segment` | confidence: 0.78 | artifacts: demo.mp4#t=30,42 | claim: The localized segment shows aircraft history. | limitations: slight blur\n"
+                "- `obs_0004` | tool: `qa_segment` | confidence: 0.66 | artifacts: demo.mp4#t=42,50 | claim: A narrator discusses aviation exhibits. | limitations: low resolution\n",
+                encoding="utf-8",
+            )
+
+            compact = workspace.compact_ledger_text(max_working_observations=1)
+
+            self.assertIn("Long-Term Visual Evidence", compact)
+            self.assertIn("obs_0003", compact)
+            self.assertIn("The localized segment shows aircraft history", compact)
+            self.assertIn("Short-Term Working Buffer", compact)
+            self.assertIn("obs_0004", compact)
+            self.assertIn("Navigation Summary", compact)
+            self.assertIn("obs_0001: video_ls", compact)
+            self.assertNotIn("very long navigation explanation", compact)
+
     def test_interpreter_runs_visual_program_and_returns_observation_ids(self):
         registry = ToolRegistry()
 
