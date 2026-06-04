@@ -143,6 +143,96 @@ Verifier blocks unsupported or conflicted answers,
 and every final answer cites evidence.
 ```
 
+### 5.1 当前 Skill 模式的源码入口
+
+当前分支运行的是 v4 skill-aware agent loop：主循环已经按 skill 的边界拆成 planner、local visual worker、workspace、AnswerAgent / Verifier；同时源码里也有声明式 `SkillSpec` / `SkillRegistry` / `compile_skill_program`，用于把后续 skill 从“prompt 规则”收紧成“可编译流程”。因此当前实现不是一个裸 prompt agent，也还不是完全硬接入的 skill executor，而是一个过渡形态：planner 仍生成 JSON program，runtime 用 skill playbook 和 evidence contract 约束它。
+
+| 模块 | 文件链接 | 当前作用 |
+| --- | --- | --- |
+| 主循环 / planner prompt | [agents/iterative_agent.py](../src/visual_coding_agent_harness/agents/iterative_agent.py) | 构造每轮 planner prompt，解析 `continue/final` JSON，执行工具 program，控制 final gate。 |
+| 问题路由和 playbook | [agents/question_policy.py](../src/visual_coding_agent_harness/agents/question_policy.py) | 把问题分成 `gist_global`、`needle_local`、`temporal_order` 等 route，并把 route-specific playbook 写入 planner prompt。 |
+| Skill 声明和编译 | [agents/skills/specs.py](../src/visual_coding_agent_harness/agents/skills/specs.py) | 定义 `gist_qa`、`grounded_factual_qa`、`temporal_ordering` 三个内置 skill，以及 selector / compiler。 |
+| Program runtime | [interpreter.py](../src/visual_coding_agent_harness/interpreter.py) | 执行 JSON program，支持 `foreach`、slot assignment、tool observation 写入和 sufficiency-stop trace。 |
+| Evidence workspace | [workspace.py](../src/visual_coding_agent_harness/workspace.py) | 维护 `trace.jsonl`、`observations.jsonl`、`ledger.md`、`evidence_table_v2()`。 |
+| Global skill 工具 | [tools/global_view.py](../src/visual_coding_agent_harness/tools/global_view.py) | 实现 `global_gist`，为整体理解题提供 sparse whole-video direct floor。 |
+| Local visual workers | [tools/inspector.py](../src/visual_coding_agent_harness/tools/inspector.py) | 实现 `inspect_segment` 和 `vision_read` 的局部视觉读取提示词与 observation 协议。 |
+| 评测入口 | [runs/eval_runner.py](../runs/eval_runner.py) | 暴露 `agent_v2`、`--free-explore`、`--free-max-rounds`、`--temperature` 等评测配置。 |
+
+### 5.2 当前 Skill 模式的关键提示词
+
+主 planner 的核心提示词来自 [agents/iterative_agent.py](../src/visual_coding_agent_harness/agents/iterative_agent.py)，关键约束是：
+
+```text
+You are an autonomous visual agent exploring a long video with tools.
+Planner input mode: text-only. Use the scene index and evidence ledger; tools inspect pixels/video.
+Use coarse-to-fine search: inspect promising segments, read the evidence ledger, then either continue or answer.
+Return only JSON with status=continue/program or status=final/answer/citations/confidence.
+For gist/global questions, use global_gist before local decomposition and cite it as the direct floor when sufficient.
+Use navigation output as a map, then delegate localized visual reading to vision_read or inspect_segment.
+Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.
+Final answers require at least one non-navigation visual observation.
+In free exploration mode, prioritize answer quality: keep using tools until evidence is sufficient.
+Final answers must cite observation ids from the ledger.
+```
+
+`global_gist` 的提示词来自 [tools/global_view.py](../src/visual_coding_agent_harness/tools/global_view.py)，它把整体理解题的第一步固定成 sparse full-video baseline：
+
+```text
+Answer from a sparse full-video view before any local decomposition.
+Use the sampled whole-video context as a direct baseline floor.
+Start multiple-choice answers with exactly one option letter when options are provided.
+Mention uncertainty if the sparse global view is insufficient for fine local details.
+```
+
+`inspect_segment` / `vision_read` 的提示词来自 [tools/inspector.py](../src/visual_coding_agent_harness/tools/inspector.py)，它们把局部 worker 限定成“事实读取器”，不允许提前投票：
+
+```text
+You are a Segment Inspector subagent for long-video reasoning.
+Your context is intentionally isolated from the master planner.
+Inspect only the provided time window and do not rely on outside video context.
+Return one distilled local observation: visible facts, confidence, and limitation.
+Use candidate options only to understand what facts to look for.
+Do not choose an option. Do not emit supported_option, answer_option, or final_answer.
+
+You are a v4 VisionAgent reading one localized long-video window.
+Return typed visual facts only: fact, event label if present, polarity, timestamp, and limitation.
+Do not use outside video context or external knowledge.
+```
+
+这几段提示词对应当前 skill 模式的核心原则：planner 只做计划和全局仲裁，global/local worker 只产出视觉证据，最终选项映射集中到 AnswerAgent / Verifier，避免旧版本里“局部 caption 直接投票导致答案漂移”的问题。
+
+### 5.3 Agent Loop 如何执行
+
+实际执行路径在 [agents/iterative_agent.py](../src/visual_coding_agent_harness/agents/iterative_agent.py) 和 [interpreter.py](../src/visual_coding_agent_harness/interpreter.py)：
+
+1. 初始化 `SceneIndex`、`EvidenceWorkspace` 和 `AgentBudget`。如果使用 `--free-explore`，则关闭 cheap / expensive / verifier 的常规预算，只保留最大轮次和每轮工具数作为 emergency caps。
+2. 每轮把用户问题、route playbook、tool schema、scene index、已检查 segment、compact ledger、AnswerAgent feedback 拼成 planner prompt。
+3. planner 只能返回 JSON：`status=continue` 时给出工具 program；`status=final` 时给出答案、citation、confidence。
+4. 如果 planner JSON 解析失败，主循环记录 `planner_json_parse_error`，并回退到一个保守的 `inspect_segment` program。
+5. `ProgramInterpreter` 逐步执行 program：绑定 `segment_id` 到视频路径和时间窗，展开 `foreach`，调用工具，写入 observation，并把 observation id 写入 assignment / ledger。
+6. 工具输出经过 [workspace.py](../src/visual_coding_agent_harness/workspace.py) 形成 compact ledger 和 `evidence_table_v2()`；下一轮 planner 和 AnswerAgent 都只看压缩证据，而不是原始视频帧或完整日志。
+7. planner 想 final 时，AnswerAgent 会先检查证据缺口；如果 citation 缺失、只有 navigation 证据、或者 route 所需的视觉事实不足，主循环会把 feedback 写回下一轮继续找证据。
+8. 只有 final answer 能引用至少一个非 navigation visual observation，并且没有被 AnswerAgent / Verifier 判定为 unsupported / conflict，才真正结束。
+
+### 5.4 Skill 设计和当前三种模式
+
+声明式 skill 目前定义在 [agents/skills/specs.py](../src/visual_coding_agent_harness/agents/skills/specs.py)。每个 skill 都包含 trigger、input slots、procedure、sufficiency、verifier checks、recovery 和 self-check，目标是把“怎么查、什么时候够、失败怎么恢复”从 prompt 经验固化成可测试的流程。
+
+| Skill | Route / 触发 | Procedure | Sufficiency / Verifier | Recovery |
+| --- | --- | --- | --- | --- |
+| `gist_qa` | `gist_global`；`main idea`、`overall`、`summary`、`mainly about`、`synopsis` | `global_gist -> answer_agent` | `gist_supports_single_option`；`selected_option_has_structured_support`、`direct_floor_holds` | ambiguous 时 escalate 到 `grounded_factual_qa` |
+| `grounded_factual_qa` | `needle_local`；`which`、`what`、`where`、`who` | `ground_question -> vision_read foreach candidates -> answer_agent` | `distinguishing_fact_exists`；selected option 有结构化支持、无 weak grounding、无 unresolved conflict | insufficient 时继续找 distinguishing fact window |
+| `temporal_ordering` | `temporal_order`；`before`、`after`、`first`、`last`、`then`、`order`、`sequence` | `ground each event -> vision_read each event -> answer_agent` | 每个事件都有 timestamp，观察到的顺序能匹配一个选项；temporal order consistent | 缺事件或时间冲突时继续找对应窗口 |
+
+从实现关系看，当前有两条路径：
+
+- **运行中的 skill-aware prompt path**：`classify_question_route -> select_question_playbook -> planner JSON program -> ProgramInterpreter -> EvidenceWorkspace -> AnswerAgent / Verifier`。这是当前 VideoMME full eval 使用的路径。
+- **待硬接入的 declarative skill path**：`select_skill -> compile_skill_program -> ProgramInterpreter -> sufficiency predicate -> AnswerAgent / Verifier`。这条路径已经有 registry / compiler 骨架，下一步要把 skill selection、predicate 和 recovery 接到主 loop，减少 planner 自由漂移。
+
+### 5.5 当前评测模式
+
+当前 KML 上跑的完整 VideoMME 评测使用 `agent_v2 --free-explore`，temperature 为 0。对应含义是：不限制常规交互轮次预算，让 agent 持续使用工具直到证据充分；同时仍保留超大但有限的 emergency caps，避免坏 case 无限循环。这个模式更适合验证 skill 设计的上限和 debug evidence contract，而不是测最省预算的线上策略。
+
 ## 6. 当前工具设计
 
 当前工具不是一组平铺 API，而是四层协作。
