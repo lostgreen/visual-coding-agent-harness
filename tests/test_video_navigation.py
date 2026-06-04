@@ -69,12 +69,17 @@ class VideoNavigationTest(unittest.TestCase):
         search = registry.execute("search_segments", {"query": "aviation aircraft", "top_k": 1})
         segment = registry.execute("read_segment", {"segment_id": "seg_0002"})
         window = registry.execute("expand_window", {"segment_id": "seg_0002", "before_sec": 15.0, "after_sec": 50.0})
+        zoom = registry.execute("zoom", {"segment_id": "seg_0002", "target_granularity_sec": 20.0})
 
         self.assertIn("3 segments", listing["claim"])
         self.assertEqual(search["regions"][0]["segment_id"], "seg_0002")
         self.assertIn("AVIATION HISTORY", segment["claim"])
         self.assertEqual(window["regions"][0]["start_sec"], 25.0)
         self.assertEqual(window["regions"][0]["end_sec"], 120.0)
+        self.assertIn("Materialized", zoom["claim"])
+        self.assertEqual([child["segment_id"] for child in zoom["regions"][0]["child_segments"]], ["seg_0002_z01", "seg_0002_z02"])
+        zoomed_listing = registry.execute("video_ls", {"query": "aviation aircraft", "top_k": 5})
+        self.assertIn("seg_0002_z01", [candidate["segment_id"] for candidate in zoomed_listing["candidates"]])
 
     def test_video_ls_returns_map_first_overview_candidates_and_next_steps(self):
         registry = build_video_navigation_registry(demo_video_map())
@@ -87,9 +92,32 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(len(listing["outline"]), 2)
         self.assertEqual(listing["candidates"][0]["segment_id"], "seg_0002")
         self.assertIn("entities", listing["candidates"][0]["matched_fields"])
+        self.assertIn("relevance_reason", listing["candidates"][0])
         next_tools = [step["tool"] for step in listing["recommended_next_tools"]]
         self.assertIn("read_segment", next_tools)
-        self.assertIn("caption_segment", next_tools)
+        self.assertIn("inspect_segment", next_tools)
+        self.assertIn("zoom", next_tools)
+
+    def test_search_segments_returns_modality_channels_and_evidence_snippets(self):
+        registry = build_video_navigation_registry(demo_video_map())
+
+        result = registry.execute("search_segments", {"query": "aviation aircraft", "top_k": 1})
+
+        self.assertEqual(result["regions"][0]["segment_id"], "seg_0002")
+        channels = {match["modality"]: match for match in result["regions"][0]["matches"]}
+        self.assertIn("caption", channels)
+        self.assertIn("ocr", channels)
+        self.assertIn("entities", channels)
+        self.assertIn("blue aircraft", channels["caption"]["evidence"])
+        self.assertEqual(result["modalities"]["caption"][0]["segment_id"], "seg_0002")
+
+    def test_search_segments_accepts_literature_style_modality_aliases(self):
+        registry = build_video_navigation_registry(demo_video_map())
+
+        result = registry.execute("search_segments", {"query": "welcome", "modalities": ["asr"], "top_k": 1})
+
+        self.assertEqual(result["regions"][0]["segment_id"], "seg_0001")
+        self.assertEqual(result["regions"][0]["matched_fields"], ["asr_text"])
 
     def test_navigation_registry_reads_updated_video_map_store(self):
         store = VideoMapStore(demo_video_map())
@@ -118,10 +146,22 @@ class VideoNavigationTest(unittest.TestCase):
                 "question": "What is visible?",
             },
         )
+        inspection = registry.execute(
+            "inspect_segment",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0002",
+                "start_sec": 40.0,
+                "end_sec": 80.0,
+                "question": "Which evidence is visible?",
+            },
+        )
 
         self.assertIn("3 segments", listing["claim"])
         self.assertEqual(caption["claim"], "caption_segment observation")
+        self.assertEqual(inspection["claim"], "inspect_segment observation")
         self.assertEqual(backend.requests[0].metadata["segment_id"], "seg_0002")
+        self.assertEqual(backend.requests[1].task, "inspect_segment")
 
         verification = registry.execute(
             "verify_ledger_answer",

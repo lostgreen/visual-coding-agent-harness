@@ -51,6 +51,8 @@ class VideoSearchResult:
     segment: VideoMapSegment
     score: float
     matched_fields: Sequence[str] = field(default_factory=list)
+    matches: Sequence[Mapping[str, object]] = field(default_factory=list)
+    relevance_reason: str = ""
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -59,7 +61,9 @@ class VideoSearchResult:
             "end_sec": self.segment.end_sec,
             "score": self.score,
             "matched_fields": list(self.matched_fields),
+            "matches": [dict(match) for match in self.matches],
             "summary": self.segment.compact_text(),
+            "relevance_reason": self.relevance_reason or _relevance_reason(self.matched_fields),
         }
 
 
@@ -175,7 +179,14 @@ class VideoMap:
         for index, segment in enumerate(selected[:max_segments]):
             matched_fields = _populated_fields(segment) or ["timeline_anchor"]
             score = max(0.1, round(1.0 - (index * 0.1), 3))
-            results.append(VideoSearchResult(segment=segment, score=score, matched_fields=matched_fields))
+            results.append(
+                VideoSearchResult(
+                    segment=segment,
+                    score=score,
+                    matched_fields=matched_fields,
+                    relevance_reason="Timeline anchor selected for broad coverage.",
+                )
+            )
         return results
 
     def overview(self, query: str = "", max_segments: int = 16, top_k: int = 5) -> Mapping[str, object]:
@@ -191,11 +202,12 @@ class VideoMap:
         query_terms = _tokens(query)
         if not query_terms:
             return []
-        allowed_fields = set(modalities or ["low_fps_caption", "asr_text", "ocr_text", "entities"])
+        allowed_fields = _resolve_search_fields(modalities)
         results = []
         for segment in self.segments:
             score = 0.0
             matched_fields = []
+            matches = []
             for field_name, field_value in _search_fields(segment).items():
                 if field_name not in allowed_fields:
                     continue
@@ -203,13 +215,25 @@ class VideoMap:
                 overlap = query_terms.intersection(field_terms)
                 if overlap:
                     matched_fields.append(field_name)
-                    score += len(overlap) / max(len(query_terms), 1)
+                    field_score = len(overlap) / max(len(query_terms), 1)
+                    score += field_score
+                    matches.append(
+                        {
+                            "modality": _field_modality(field_name),
+                            "field": field_name,
+                            "score": round(field_score, 3),
+                            "matched_terms": sorted(overlap),
+                            "evidence": _evidence_snippet(field_value),
+                        }
+                    )
             if score > 0:
                 results.append(
                     VideoSearchResult(
                         segment=segment,
                         score=round(score, 3),
                         matched_fields=matched_fields,
+                        matches=matches,
+                        relevance_reason=_match_reason(matches),
                     )
                 )
         return sorted(results, key=lambda result: (-result.score, result.segment.start_sec))[:top_k]
@@ -238,6 +262,70 @@ def _search_fields(segment: VideoMapSegment) -> Mapping[str, str]:
         "ocr_text": segment.ocr_text,
         "entities": " ".join(segment.entities),
     }
+
+
+def _resolve_search_fields(modalities: Sequence[str]) -> set[str]:
+    if not modalities:
+        return {"low_fps_caption", "asr_text", "ocr_text", "entities"}
+
+    aliases = {
+        "caption": {"low_fps_caption"},
+        "captions": {"low_fps_caption"},
+        "visual": {"low_fps_caption", "entities"},
+        "asr": {"asr_text"},
+        "audio": {"asr_text"},
+        "speech": {"asr_text"},
+        "ocr": {"ocr_text"},
+        "screen": {"ocr_text"},
+        "text": {"ocr_text", "asr_text", "low_fps_caption"},
+        "entities": {"entities"},
+        "objects": {"entities"},
+        "low_fps_caption": {"low_fps_caption"},
+        "asr_text": {"asr_text"},
+        "ocr_text": {"ocr_text"},
+    }
+    fields: set[str] = set()
+    for modality in modalities:
+        fields.update(aliases.get(str(modality).lower(), {str(modality)}))
+    return fields
+
+
+def _field_modality(field_name: str) -> str:
+    return {
+        "low_fps_caption": "caption",
+        "asr_text": "asr",
+        "ocr_text": "ocr",
+        "entities": "entities",
+    }.get(field_name, field_name)
+
+
+def _evidence_snippet(text: str, max_chars: int = 160) -> str:
+    compact = " ".join(text.split())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3].rstrip() + "..."
+
+
+def _match_reason(matches: Sequence[Mapping[str, object]]) -> str:
+    modalities = []
+    terms = []
+    for match in matches:
+        modality = str(match.get("modality", ""))
+        if modality and modality not in modalities:
+            modalities.append(modality)
+        for term in match.get("matched_terms", []):
+            term_text = str(term)
+            if term_text not in terms:
+                terms.append(term_text)
+    if not matches:
+        return "No query-specific index match."
+    return f"Matched query terms {', '.join(terms)} in {', '.join(modalities)} indexes."
+
+
+def _relevance_reason(matched_fields: Sequence[str]) -> str:
+    if not matched_fields:
+        return "No indexed fields matched."
+    return f"Selected from indexed fields: {', '.join(matched_fields)}."
 
 
 def _populated_fields(segment: VideoMapSegment) -> Sequence[str]:
@@ -272,25 +360,27 @@ def _recommended_next_tools(*, query: str, candidates: Sequence[VideoSearchResul
             "args": {"segment_id": best.segment_id},
             "reason": "Read compact metadata before spending VLM budget.",
         },
-        {
-            "tool": "caption_segment",
-            "args": {"segment_id": best.segment_id},
-            "reason": "Use the shared VLM to verify the top candidate visually.",
-        },
     ]
     if query.strip():
         next_tools.append(
             {
-                "tool": "qa_segment",
+                "tool": "inspect_segment",
                 "args": {"segment_id": best.segment_id, "question": query},
-                "reason": "Ask a targeted question on the best localized segment.",
+                "reason": "Delegate targeted visual inspection on the best localized segment.",
             }
         )
     next_tools.append(
         {
-            "tool": "expand_window",
-            "args": {"segment_id": best.segment_id, "before_sec": 30.0, "after_sec": 30.0},
-            "reason": "Expand temporal context if the local observation is incomplete.",
+            "tool": "caption_segment",
+            "args": {"segment_id": best.segment_id},
+            "reason": "Use the shared VLM to verify the top candidate visually.",
+        }
+    )
+    next_tools.append(
+        {
+            "tool": "zoom",
+            "args": {"segment_id": best.segment_id, "target_granularity_sec": 60.0},
+            "reason": "Materialize finer child segments when the local observation is too coarse.",
         }
     )
     return next_tools
@@ -337,3 +427,46 @@ class VideoMapStore:
             raise ValueError(f"Unknown segment_id: {segment_id}")
         self.current = replace(self.current, segments=updated_segments)
         return updated_segment
+
+    def materialize_zoom(self, segment_id: str, *, target_granularity_sec: float) -> Sequence[VideoMapSegment]:
+        if target_granularity_sec <= 0:
+            raise ValueError("target_granularity_sec must be positive")
+
+        parent = self.current.get(segment_id)
+        duration = max(0.0, parent.end_sec - parent.start_sec)
+        if duration <= 0:
+            raise ValueError(f"Segment {segment_id} has empty duration")
+
+        children: list[VideoMapSegment] = []
+        child_start = parent.start_sec
+        child_index = 1
+        while child_start < parent.end_sec:
+            child_end = min(parent.end_sec, child_start + target_granularity_sec)
+            children.append(
+                VideoMapSegment(
+                    segment_id=f"{parent.segment_id}_z{child_index:02d}",
+                    start_sec=round(child_start, 3),
+                    end_sec=round(child_end, 3),
+                    source=f"zoom:{parent.segment_id}",
+                    keyframe_paths=list(parent.keyframe_paths),
+                    low_fps_caption=parent.low_fps_caption,
+                    asr_text=parent.asr_text,
+                    ocr_text=parent.ocr_text,
+                    entities=list(parent.entities),
+                    embedding_refs=list(parent.embedding_refs),
+                )
+            )
+            child_start = child_end
+            child_index += 1
+
+        existing_by_id = {segment.segment_id: segment for segment in self.current.segments}
+        updated_segments = list(self.current.segments)
+        for child in children:
+            if child.segment_id in existing_by_id:
+                updated_segments = [
+                    child if segment.segment_id == child.segment_id else segment for segment in updated_segments
+                ]
+            else:
+                updated_segments.append(child)
+        self.current = replace(self.current, segments=updated_segments)
+        return children
