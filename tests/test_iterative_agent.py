@@ -999,6 +999,88 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("obs_0001", backend.answer_prompt)
             self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "answer_from_evidence"])
 
+    def test_iterative_agent_answer_agent_arbitrates_option_grouped_evidence(self):
+        class ArbitrationBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+                self.replan_calls = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    self.replan_calls += 1
+                    segment_id = f"seg_{self.replan_calls:04d}"
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            '{"tool": "inspect_segment", "args": {"segment_id": "'
+                            + segment_id
+                            + '", "question": "Inspect option support", '
+                            '"candidate_options": ["A. first", "D. fourth"]}, "assign": "s"}'
+                            "]}"
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text='{"answer": "A. first", "rationale": "recency fallback", "citations": ["obs_0002"], "missing_evidence": [], "confidence": 0.95}'
+                    )
+                return BackendResponse(text="unexpected")
+
+        registry = ToolRegistry()
+
+        @tool(name="inspect_segment", description="Inspect one segment with option support.")
+        def inspect_segment(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            question: str,
+            candidate_options=None,
+            nframes: int = 16,
+        ):
+            if segment_id == "seg_0001":
+                return {
+                    "claim": "Visual evidence supports option D.",
+                    "confidence": 0.72,
+                    "input_artifacts": [f"{video_path}#t={start_sec:.1f},{end_sec:.1f}"],
+                    "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                    "limitations": "Directly visible in the sampled segment.",
+                    "supported_option": "D",
+                    "grounding_quality": "visually_confirmed",
+                }
+            return {
+                "claim": "Caption-like evidence guesses option A.",
+                "confidence": 0.95,
+                "input_artifacts": [f"{video_path}#t={start_sec:.1f},{end_sec:.1f}"],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "limitations": "Inferred from context; lacks explicit visual confirmation.",
+                "supported_option": "A",
+            }
+
+        registry.register(inspect_segment)
+        backend = ArbitrationBackend()
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=90.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="answer_arbitration")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=3, reserve_final_round=True),
+            )
+
+            result = agent.run(
+                question="Which option is correct?\nA. first\nD. fourth",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "D. fourth")
+            self.assertEqual(result.citations, ["obs_0001"])
+            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "replan"])
+
     def test_iterative_agent_feeds_prefinal_answer_gaps_into_next_prompt(self):
         class PrefinalProbeBackend(VisionLanguageBackend):
             def __init__(self):

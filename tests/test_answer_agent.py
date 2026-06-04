@@ -1,0 +1,102 @@
+import unittest
+
+from visual_coding_agent_harness.agents.answer_agent import arbitrate_evidence_table
+
+
+class AnswerAgentArbitrationTest(unittest.TestCase):
+    def test_arbitration_prefers_visually_grounded_support_over_weak_caption(self):
+        table = {
+            "options": ["A. first order", "D. fourth order"],
+            "groups": {
+                "A": [
+                    {
+                        "obs_id": "obs_0010",
+                        "claim": "Caption guesses option A.",
+                        "confidence": 0.95,
+                        "grounding_quality": "inferred",
+                    }
+                ],
+                "D": [
+                    {
+                        "obs_id": "obs_0002",
+                        "claim": "Visual evidence supports option D.",
+                        "confidence": 0.72,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table)
+
+        self.assertEqual(result.status, "final")
+        self.assertEqual(result.answer, "D. fourth order")
+        self.assertEqual(result.citations, ["obs_0002"])
+        self.assertEqual(result.conflict["options"], ["A", "D"])
+        self.assertIn("D", result.rationale)
+
+    def test_arbitration_is_invariant_to_observation_order(self):
+        first = {
+            "options": ["A. first order", "D. fourth order"],
+            "groups": {
+                "D": [
+                    {
+                        "obs_id": "obs_0002",
+                        "claim": "Visual evidence supports option D.",
+                        "confidence": 0.8,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+                "A": [
+                    {
+                        "obs_id": "obs_0010",
+                        "claim": "Caption guesses option A.",
+                        "confidence": 0.9,
+                        "grounding_quality": "weak",
+                    }
+                ],
+            },
+        }
+        shuffled = {
+            "options": ["A. first order", "D. fourth order"],
+            "groups": {
+                "A": list(reversed(first["groups"]["A"])),
+                "D": list(reversed(first["groups"]["D"])),
+            },
+        }
+
+        self.assertEqual(arbitrate_evidence_table(first).answer, arbitrate_evidence_table(shuffled).answer)
+
+    def test_arbitration_abstains_when_margin_is_too_small(self):
+        table = {
+            "options": ["A. first order", "D. fourth order"],
+            "groups": {
+                "A": [
+                    {
+                        "obs_id": "obs_0001",
+                        "claim": "One window weakly supports option A.",
+                        "confidence": 0.7,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+                "D": [
+                    {
+                        "obs_id": "obs_0002",
+                        "claim": "Another window weakly supports option D.",
+                        "confidence": 0.66,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table, min_margin=0.1)
+
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertEqual(result.answer, "need_more_evidence")
+        self.assertTrue(result.missing_evidence)
+        self.assertIn("targeted", result.missing_evidence[0])
+
+
+if __name__ == "__main__":
+    unittest.main()

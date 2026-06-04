@@ -6,6 +6,8 @@
 
 **Architecture:** Keep the current `VisualAgent` as the single-pass baseline and add a separate iterative controller. The controller reads/writes the existing `EvidenceWorkspace`, starts from a cheap scene index, loops over `plan -> tool -> observe ledger -> replan`, and stops by answer confidence, budget, or max rounds.
 
+**Architecture reference:** See `plans/2026-06-03-coding-agent-to-video-agent-design.md` for the higher-level migration design from coding-agent repository navigation to long-video workspace navigation.
+
 **Tech Stack:** Python standard library, current harness registry/workspace/interpreter, ffmpeg/ffprobe for traditional video tools, Qwen3-VL backend for VLM caption/QA tools.
 
 ---
@@ -21,7 +23,7 @@ The long-video agent should not send the whole video at high FPS on every call. 
 5. Replan from the ledger.
 6. Stop with an answer and cited observation IDs.
 
-The main agent can still be a VLM. It receives the original media plus a compact ledger summary. Tools may call the same VLM backend, smaller VLMs, or traditional algorithms.
+The main agent can still be from a VLM model family, but the planner request should default to text/state input: question, scene index, inspected segments, budget, and compact ledger. Raw video should be read by local tools such as clip captioning, OCR, detection, tracking, and verification.
 
 ## Proposed Flow
 
@@ -85,6 +87,10 @@ The agent may request a high-cost tool only after referencing a segment or evide
 P1 tools:
 
 - `build_scene_index(video_path, window_sec=30)`
+- `video_ls(query="", max_segments=16, top_k=5)`
+- `search_segments(query, top_k=5, modalities=[])`
+- `read_segment(segment_id)`
+- `expand_window(segment_id, before_sec=30, after_sec=30)`
 - `caption_segment(video_path, start_sec, end_sec, nframes=8)`
 - `qa_segment(video_path, start_sec, end_sec, question, nframes=8)`
 - `sample_frames(video_path, start_sec, end_sec, fps or nframes)`
@@ -222,6 +228,25 @@ Final output:
 - Total wall time.
 - Evidence citation quality.
 - Failure mode tags: bad scene retrieval, hallucinated tool, insufficient evidence, decoding failure.
+
+Current implemented comparison runner:
+
+```bash
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.description_comparison \
+  --model-path /m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct \
+  --media-path /path/to/video.mp4 \
+  --question "Describe the video." \
+  --duration-sec 3169.06 \
+  --window-sec 300 \
+  --max-rounds 4 \
+  --direct-nframes 64 \
+  --max-pixels 151200 \
+  --extract-clips \
+  --base-dir . \
+  --run-id qwen_description_compare
+```
+
+It records `direct_full_video` and `map_first_explore` in `runs/<run_id>/comparison.json`. The exploration run writes evidence under `runs/<run_id>_explore/`.
 
 ### Phase 6: VideoMME Long Smoke
 

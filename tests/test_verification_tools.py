@@ -74,6 +74,130 @@ class VerificationToolsTest(unittest.TestCase):
         self.assertIn("insufficient", result["claim"])
         self.assertEqual(result["regions"][0]["evidence_gate"]["missing_citations"], ["obs_0002"])
 
+    def test_verify_ledger_answer_rejects_uncited_strong_conflicting_option(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_conflict")
+            d_observation = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["clip_d.mp4"],
+                claim="Visual evidence supports option D.",
+                confidence=0.82,
+                regions=[{"start_sec": 300.0, "end_sec": 600.0}],
+                limitations="Directly visible in the sampled segment.",
+                raw_output={"supported_option": "D", "grounding_quality": "visually_confirmed"},
+            )
+            a_observation = workspace.write_observation(
+                tool_name="caption_segment",
+                input_artifacts=["clip_a.mp4"],
+                claim="Caption-like evidence guesses option A.",
+                confidence=0.91,
+                regions=[{"start_sec": 1500.0, "end_sec": 1800.0}],
+                limitations="Inferred from context; lacks explicit visual confirmation.",
+                raw_output={"supported_option": "A"},
+            )
+            workspace.write_ledger_entry(d_observation)
+            workspace.write_ledger_entry(a_observation)
+            registry = build_verification_registry(workspace=workspace)
+
+            result = registry.execute(
+                "verify_ledger_answer",
+                {
+                    "answer": "A. first option",
+                    "required_citations": ["obs_0002"],
+                    "min_score": 0.0,
+                },
+            )
+
+            gate = result["regions"][0]["evidence_gate"]
+            self.assertIn("insufficient", result["claim"])
+            self.assertIn("uncited stronger conflicting option support", gate["reasons"])
+            self.assertEqual(gate["top_conflicting_observation"], "obs_0001")
+            self.assertEqual(gate["top_conflict_relation"], "Contradict")
+
+    def test_verify_ledger_answer_labels_option_relations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_relations")
+            selected = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["clip_a.mp4"],
+                claim="Visual evidence supports option A.",
+                confidence=0.8,
+                limitations="Directly visible.",
+                raw_output={"supported_option": "A", "grounding_quality": "visually_confirmed"},
+            )
+            conflicting = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["clip_b.mp4"],
+                claim="Visual evidence supports option B.",
+                confidence=0.79,
+                limitations="Directly visible.",
+                raw_output={"supported_option": "B", "grounding_quality": "visually_confirmed"},
+            )
+            neutral = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["clip_unknown.mp4"],
+                claim="Visual evidence shows a sculpture but no option mapping.",
+                confidence=0.7,
+                limitations="Directly visible.",
+            )
+            for observation in [selected, conflicting, neutral]:
+                workspace.write_ledger_entry(observation)
+            registry = build_verification_registry(workspace=workspace)
+
+            result = registry.execute(
+                "verify_ledger_answer",
+                {"answer": "A. first option", "required_citations": ["obs_0001"], "min_score": 0.0},
+            )
+
+            relations = result["regions"][0]["evidence_gate"]["option_relations"]
+            self.assertEqual(relations["obs_0001"], "Support")
+            self.assertEqual(relations["obs_0002"], "Contradict")
+            self.assertEqual(relations["obs_0003"], "Neutral")
+
+    def test_verify_ledger_answer_rejects_temporal_order_contradiction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_temporal_order")
+            blue = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["clip_blue.mp4"],
+                claim="The blue object appears first.",
+                confidence=0.88,
+                regions=[{"start_sec": 10.0, "end_sec": 12.0}],
+                limitations="Directly visible.",
+                raw_output={"event_label": "blue object", "grounding_quality": "visually_confirmed"},
+            )
+            red = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["clip_red.mp4"],
+                claim="The red object appears later.",
+                confidence=0.89,
+                regions=[{"start_sec": 20.0, "end_sec": 22.0}],
+                limitations="Directly visible.",
+                raw_output={"event_label": "red object", "grounding_quality": "visually_confirmed"},
+            )
+            for observation in [blue, red]:
+                workspace.write_ledger_entry(observation)
+            registry = build_verification_registry(workspace=workspace)
+
+            result = registry.execute(
+                "verify_ledger_answer",
+                {
+                    "answer": "A. red object then blue object",
+                    "question": "Which order is shown?",
+                    "candidate_options": [
+                        "A. red object then blue object",
+                        "B. blue object then red object",
+                    ],
+                    "required_citations": ["obs_0001", "obs_0002"],
+                    "min_score": 0.0,
+                },
+            )
+
+            gate = result["regions"][0]["evidence_gate"]
+            self.assertIn("insufficient", result["claim"])
+            self.assertIn("temporal order contradicts evidence", gate["reasons"])
+            self.assertEqual(gate["temporal_order_verdict"], "Contradict")
+
     def test_summarize_ledger_evidence_extracts_compact_claims(self):
         registry = build_verification_registry()
 

@@ -230,7 +230,11 @@ class IterativeVisualAgent:
             else:
                 program = []
             if final_round_reserved and not program:
-                answer_result = AnswerAgent(self.backend).run(question=question, evidence_text=ledger_text)
+                answer_result = AnswerAgent(self.backend).run(
+                    question=question,
+                    evidence_text=ledger_text,
+                    evidence_table=self._answer_evidence_table(question),
+                )
                 self.workspace.write_trace_event(
                     "iterative_answer_agent",
                     {
@@ -287,7 +291,11 @@ class IterativeVisualAgent:
                 has_inspect_with_candidate_options=has_inspect_with_candidate_options,
                 citations=citations,
             ):
-                answer_result = AnswerAgent(self.backend).run(question=question, evidence_text=self._read_ledger())
+                answer_result = AnswerAgent(self.backend).run(
+                    question=question,
+                    evidence_text=self._read_ledger(),
+                    evidence_table=self._answer_evidence_table(question),
+                )
                 self.workspace.write_trace_event(
                     "iterative_answer_agent",
                     {
@@ -595,6 +603,12 @@ class IterativeVisualAgent:
     def _read_ledger(self) -> str:
         return self.workspace.compact_ledger_text()
 
+    def _answer_evidence_table(self, question: str) -> Mapping[str, Any]:
+        return self.workspace.evidence_table(
+            question=question,
+            options=extract_candidate_options(question),
+        )
+
 
 def _replanning_prompt(
     *,
@@ -647,7 +661,7 @@ def _replanning_prompt(
         "- caption_segments(segment_ids: list = [], question: str = 'Create a concise search caption for this segment.', nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0, max_segments: int = 3)\n"
         "- ingest_segment_metadata(segment_id: str, low_fps_caption: str = '', asr_text: str = '', ocr_text: str = '', entities: list = [])\n"
         "- summarize_ledger_evidence(max_claims: int = 5)\n"
-        "- verify_ledger_answer(answer: str, min_score: float = 0.6)\n"
+        "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
         "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 16, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0)\n"

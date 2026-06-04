@@ -107,6 +107,85 @@ class ReportMetricsTest(unittest.TestCase):
             self.assertIn("50.0%", rendered)
             self.assertIn("video_ls -> inspect_segment", rendered)
 
+    def test_build_report_flags_conflicting_unsupported_final(self):
+        from runs import report_metrics
+        from visual_coding_agent_harness.workspace import EvidenceWorkspace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = EvidenceWorkspace.create(root / "workspaces", run_id="case_611_agent_v2")
+            d_observation = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["clip_d.mp4"],
+                claim="The visible order supports option D.",
+                confidence=0.82,
+                regions=[{"start_sec": 300.0, "end_sec": 600.0}],
+                limitations="Directly visible in the sampled segment.",
+                raw_output={"supported_option": "D", "grounding_quality": "visually_confirmed"},
+            )
+            a_observation = workspace.write_observation(
+                tool_name="caption_segment",
+                input_artifacts=["clip_a.mp4"],
+                claim="The caption guesses option A.",
+                confidence=0.91,
+                regions=[{"start_sec": 1500.0, "end_sec": 1800.0}],
+                limitations="Inferred from context; lacks explicit visual confirmation.",
+                raw_output={"supported_option": "A"},
+            )
+            workspace.write_ledger_entry(d_observation)
+            workspace.write_ledger_entry(a_observation)
+
+            summary_path = root / "summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "cases": [
+                            {
+                                "question_id": "611-2",
+                                "gt": "D",
+                                "question": "Which sculpture order is correct?",
+                                "options": [
+                                    "A. first order",
+                                    "B. second order",
+                                    "C. third order",
+                                    "D. fourth order",
+                                ],
+                                "strategies": {
+                                    "agent_v2": {
+                                        "choice": "A",
+                                        "correct": False,
+                                        "status": "final",
+                                        "seconds": 271.0,
+                                        "citations": ["obs_0002"],
+                                        "citation_count": 1,
+                                    }
+                                },
+                                "raw_artifacts": {
+                                    "workspaces": {"agent_v2": str(workspace.root)}
+                                },
+                            }
+                        ]
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            report = report_metrics.build_report(summary_path)
+
+            detail = report["cases"][0]["strategies"]["agent_v2"]
+            self.assertTrue(detail["has_conflict"])
+            self.assertTrue(detail["final_with_conflict"])
+            self.assertTrue(detail["unsupported_final"])
+            self.assertFalse(detail["option_support_consistency"])
+            self.assertEqual(detail["top_supported_option"], "D")
+
+            metrics = report["strategies"]["agent_v2"]
+            self.assertEqual(metrics["conflict_rate"], 1.0)
+            self.assertEqual(metrics["final_with_conflict_rate"], 1.0)
+            self.assertEqual(metrics["unsupported_final_rate"], 1.0)
+            self.assertEqual(metrics["option_support_consistency_rate"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

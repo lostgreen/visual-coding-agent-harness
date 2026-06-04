@@ -77,6 +77,13 @@ The main agent receives a tool-use prompt with a fixed tool catalog:
 - `qa_video(video_path, question, nframes=8, max_pixels=151200)`
 - `caption_image(image_path, question)`
 - `qa_image(image_path, question)`
+- `caption_region(image_path, bbox, question)`
+- `qa_region(image_path, bbox, question)`
+
+Caption/QA tools use structured prompts that force visible-evidence-only
+answers, uncertainty when evidence is weak, and no invented identities/text.
+Region tools first crop the requested normalized `[0,1000]` bbox into
+`runs/<run_id>/artifacts/crops/`, then send that crop to the shared VLM backend.
 
 Input schema:
 
@@ -165,18 +172,32 @@ Autonomous exploration policy:
 
 Current P1 tools:
 
-- `video_ls()`
+- `video_ls(query="", max_segments=16, top_k=5)`
 - `search_segments(query, top_k=5, modalities=[])`
 - `read_segment(segment_id)`
 - `expand_window(segment_id, before_sec=30, after_sec=30)`
+- `caption_segments(segment_ids=[], question, nframes=8, max_pixels=151200, fps=0.0, max_segments=3)`
+- `ingest_segment_metadata(segment_id, low_fps_caption="", asr_text="", ocr_text="", entities=[])`
 - `caption_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
 - `qa_segment(video_path, segment_id, start_sec, end_sec, question, nframes=8)`
+- Segment tools also accept `max_pixels=151200` and `fps=0.0` for controlled
+  video sampling.
+- `summarize_ledger_evidence(max_claims=5)`
+- `verify_ledger_answer(answer, min_score=0.6)`
 
 The navigation tools are the video equivalent of repository `ls`, `rg`, and
-local file reads. The planner can search or read indexed metadata before asking
-visual tools to inspect pixels. For segment VLM tools, the planner only needs to
-emit `segment_id`; the harness binds the real `video_path`, `start_sec`,
-`end_sec`, and default `nframes` from `SceneIndex`.
+local file reads. `video_ls` is the map-first entry point: it returns modality
+coverage, a bounded timeline outline, candidate segments for an optional query,
+and recommended next tools. The planner can search or read indexed metadata
+before asking visual tools to inspect pixels. For segment VLM tools, the planner
+only needs to emit `segment_id`; the harness binds the real `video_path`,
+`start_sec`, `end_sec`, and default `nframes` from `SceneIndex`.
+
+`caption_segments` and `ingest_segment_metadata` are VideoMap enrichment tools:
+they make `video_ls` behave like a coding-agent workspace index that improves as
+the agent reads more evidence. `verify_ledger_answer` is a lightweight lexical
+verifier over `ledger.md`; it is intentionally conservative and should later be
+augmented with model-based entailment and temporal consistency checks.
 
 Planner output for another exploration round:
 
@@ -218,10 +239,46 @@ PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.iterative_smoke \
   --duration-sec 600 \
   --window-sec 30 \
   --max-rounds 4 \
+  --extract-clips \
   --base-dir . \
   --run-id qwen3_vl_iterative_smoke
 ```
 
-This first version passes segment time bounds through tool metadata and prompt
-text. Strict temporal isolation should be added next by extracting short clips
-into `runs/<run_id>/artifacts/clips/` before calling the VLM backend.
+With `--extract-clips`, segment tools write short videos into
+`runs/<run_id>/artifacts/clips/` before calling the VLM backend. Without it,
+the tools pass segment time bounds through metadata and prompt text only.
+
+## Direct vs Map-First Description Comparison
+
+Use this runner to test whether the harness helps a long-video description task:
+
+```bash
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.description_comparison \
+  --model-path /m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct \
+  --media-path /path/to/long_video.mp4 \
+  --question "Describe the video." \
+  --duration-sec 3169.06 \
+  --window-sec 300 \
+  --max-rounds 4 \
+  --direct-nframes 64 \
+  --max-pixels 151200 \
+  --extract-clips \
+  --base-dir . \
+  --run-id qwen_description_compare
+```
+
+The comparison loads one shared Qwen backend and records two strategies:
+
+- `direct_full_video`: one direct VLM description request over the video.
+- `map_first_explore`: text-only planner calls `video_ls`, reads the ledger,
+  then refines candidate segments with local tools.
+
+The summary is written to `runs/<run_id>/comparison.json`; exploration evidence
+is written to `runs/<run_id>_explore/ledger.md`, `observations.jsonl`, and
+`trace.jsonl`.
+
+Current smoke observation: `60s` extracted clips are practical for a first loop;
+`300s` clips are CPU-heavy and should be avoided until we add better frame
+sampling or low-fps VideoMap captions. With no upfront captions/ASR/OCR index,
+`video_ls` falls back to timeline anchors, so the next research iteration should
+enrich VideoMap before planning.
