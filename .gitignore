@@ -4,7 +4,8 @@ experiments/
 .pytest_cache/
 __pycache__/
 *.pyc
-runs/
+runs/*
+!runs/*.py
 dist/
 build/
 *.egg-info/
