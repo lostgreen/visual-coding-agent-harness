@@ -5,11 +5,12 @@ from __future__ import annotations
 import re
 from typing import Mapping
 
+from ..agents.contracts import VISUAL_EVIDENCE_NFRAMES, resolve_nframes
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 
 
-DEFAULT_GLOBAL_NFRAMES = 64
+DEFAULT_GLOBAL_NFRAMES = VISUAL_EVIDENCE_NFRAMES
 DEFAULT_MAX_PIXELS = 151200
 
 
@@ -21,9 +22,10 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
         video_path: str,
         question: str,
         duration_sec: float,
-        nframes: int = DEFAULT_GLOBAL_NFRAMES,
+        nframes: int | None = None,
         max_pixels: int = DEFAULT_MAX_PIXELS,
     ) -> Mapping[str, object]:
+        resolved_nframes, _ = resolve_nframes(nframes)
         response = backend.generate(
             BackendRequest(
                 task="global_gist",
@@ -32,7 +34,7 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
                 media_type="video",
                 max_new_tokens=256,
                 metadata={
-                    "nframes": int(nframes),
+                    "nframes": int(resolved_nframes),
                     "max_pixels": int(max_pixels),
                     "duration_sec": float(duration_sec),
                     "question": question,
@@ -45,7 +47,7 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
             "supported_option": supported_option,
             "grounding_quality": "global_sparse",
             "time_range": [0.0, float(duration_sec)],
-            "nframes": int(nframes),
+            "nframes": int(resolved_nframes),
             "max_pixels": int(max_pixels),
             "raw_backend": dict(response.raw),
         }
@@ -58,7 +60,7 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
                     "tool_role": "global_view",
                     "start_sec": 0.0,
                     "end_sec": float(duration_sec),
-                    "nframes": int(nframes),
+                    "nframes": int(resolved_nframes),
                     "max_pixels": int(max_pixels),
                     "grounding_quality": "global_sparse",
                 }

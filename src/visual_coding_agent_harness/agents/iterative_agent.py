@@ -13,6 +13,7 @@ from ..registry import ToolError, ToolRegistry
 from ..video_index import SceneIndex, VideoSegment
 from ..workspace import EvidenceWorkspace
 from .answer_agent import AnswerAgent
+from .contracts import VISUAL_EVIDENCE_NFRAMES
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
 from .prompt_stack import compose_replanning_prompt_blocks, render_prompt_blocks
 from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
@@ -58,7 +59,7 @@ _TOOL_CLASSES = {
 class AgentBudget:
     max_rounds: int = 8
     max_tool_calls_per_round: int = 2
-    default_nframes: int = 8
+    default_nframes: int = VISUAL_EVIDENCE_NFRAMES
     high_fps_nframes: int = 32
     planner_receives_media: bool = False
     reserve_final_round: bool = True

@@ -105,7 +105,7 @@ class CaptionQAToolsTest(unittest.TestCase):
         )
 
         request = backend.requests[0]
-        self.assertEqual(request.metadata["nframes"], 16)
+        self.assertEqual(request.metadata["nframes"], 64)
         self.assertEqual(request.metadata["max_pixels"], 200000)
         self.assertEqual(request.metadata["fps"], 2.0)
         self.assertIn("QA task", request.prompt)

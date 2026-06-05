@@ -656,7 +656,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(tool_args["video_path"], "/videos/demo.mp4")
             self.assertEqual(tool_args["start_sec"], 5.0)
             self.assertEqual(tool_args["end_sec"], 17.5)
-            self.assertEqual(tool_args["nframes"], 8)
+            self.assertEqual(tool_args["nframes"], 128)
 
     def test_iterative_agent_persists_planner_prompt_and_response_artifacts(self):
         backend = ScriptedPlannerBackend(
@@ -1454,7 +1454,7 @@ class IterativeAgentTest(unittest.TestCase):
         self.assertEqual(backend.requests[0].metadata["segment_id"], "seg_0002")
         self.assertEqual(backend.requests[0].metadata["start_sec"], 10.0)
         self.assertEqual(backend.requests[0].metadata["end_sec"], 20.0)
-        self.assertEqual(backend.requests[0].metadata["nframes"], 12)
+        self.assertEqual(backend.requests[0].metadata["nframes"], 64)
         self.assertEqual(backend.requests[0].metadata["max_pixels"], 151200)
         self.assertEqual(backend.requests[0].metadata["question"], "What is visible?")
 

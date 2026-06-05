@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
+from ..agents.contracts import resolve_nframes
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
@@ -31,7 +32,7 @@ def build_segment_vlm_registry(
         start_sec: float,
         end_sec: float,
         question: str = "Describe this video segment.",
-        nframes: int = 8,
+        nframes: int | None = None,
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
@@ -58,7 +59,7 @@ def build_segment_vlm_registry(
         start_sec: float,
         end_sec: float,
         question: str,
-        nframes: int = 8,
+        nframes: int | None = None,
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
@@ -92,18 +93,19 @@ def _run_segment_tool(
     start_sec: float,
     end_sec: float,
     question: str,
-    nframes: int,
+    nframes: int | None,
     max_pixels: int,
     fps: float,
     workspace: Optional[EvidenceWorkspace] = None,
     extract_clips: bool = False,
     clip_extractor: Optional[ClipExtractor] = None,
 ) -> Mapping[str, object]:
+    resolved_nframes, _ = resolve_nframes(nframes)
     metadata = {
         "segment_id": segment_id,
         "start_sec": float(start_sec),
         "end_sec": float(end_sec),
-        "nframes": int(nframes),
+        "nframes": int(resolved_nframes),
         "max_pixels": int(max_pixels),
         "question": question,
     }

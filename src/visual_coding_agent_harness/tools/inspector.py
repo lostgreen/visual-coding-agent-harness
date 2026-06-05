@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping, Optional, Sequence
 
+from ..agents.contracts import resolve_nframes
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
@@ -27,7 +28,7 @@ def build_segment_inspector_registry(
         end_sec: float,
         question: str,
         candidate_options: Sequence[str] = (),
-        nframes: int = 16,
+        nframes: int | None = None,
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
@@ -55,7 +56,7 @@ def build_segment_inspector_registry(
         end_sec: float,
         ask_for: str,
         event_label: str = "",
-        nframes: int = 16,
+        nframes: int | None = None,
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
@@ -112,7 +113,7 @@ def _run_inspector(
     end_sec: float,
     question: str,
     candidate_options: Sequence[str],
-    nframes: int,
+    nframes: int | None,
     max_pixels: int,
     fps: float,
     workspace: Optional[EvidenceWorkspace],
@@ -121,6 +122,7 @@ def _run_inspector(
     task_name: str = "inspect_segment",
     prompt_style: str = "inspect_segment",
 ) -> Mapping[str, object]:
+    resolved_nframes, _ = resolve_nframes(nframes)
     metadata = {
         "tool_role": "segment_inspector",
         "context_tier": "isolated_subagent",
@@ -129,7 +131,7 @@ def _run_inspector(
         "end_sec": float(end_sec),
         "question": question,
         "candidate_options": list(candidate_options),
-        "nframes": int(nframes),
+        "nframes": int(resolved_nframes),
         "max_pixels": int(max_pixels),
     }
     if fps > 0:

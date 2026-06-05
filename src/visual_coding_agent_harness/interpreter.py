@@ -11,9 +11,10 @@ from dataclasses import dataclass, field
 from string import Formatter
 from typing import Any, Callable, Dict, Mapping, Sequence
 
+from .agents.contracts import resolve_nframes
 from .agents.distill import distill
 from .registry import ToolRegistry
-from .workspace import EvidenceWorkspace
+from .workspace import EvidenceWorkspace, Observation
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,12 @@ class ProgramInterpreter:
             limitations=str(raw_output.get("limitations", "")),
             raw_output=raw_output,
         )
+        observation = self._attach_visual_manifest(
+            tool_name=tool_name,
+            arguments=arguments,
+            raw_output=raw_output,
+            observation=observation,
+        )
         self.workspace.write_trace_event(
             "tool_result",
             {
@@ -116,6 +123,28 @@ class ProgramInterpreter:
         if "assign" in step:
             assignments[str(step["assign"])] = observation.observation_id
         return observation.observation_id
+
+    def _attach_visual_manifest(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        raw_output: Mapping[str, Any],
+        observation: Observation,
+    ) -> Observation:
+        if tool_name not in EvidenceWorkspace.VISUAL_EVIDENCE_TOOLS:
+            return observation
+        manifest_args = _visual_manifest_args(
+            tool_name=tool_name,
+            arguments=arguments,
+            raw_output=raw_output,
+            observation=observation,
+        )
+        if manifest_args is None:
+            return observation
+        manifest = self.workspace.create_manifest(**manifest_args)
+        self.workspace.link_manifest(observation.observation_id, manifest.frame_set_id)
+        return self.workspace.get_observation(observation.observation_id) or observation
 
 
 def _expand_foreach_step(step: Mapping[str, Any], slots: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -149,6 +178,130 @@ def _format_value(value: Any, context: Mapping[str, Any]) -> Any:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return [_format_value(child, context) for child in value]
     return value
+
+
+def _visual_manifest_args(
+    *,
+    tool_name: str,
+    arguments: Mapping[str, Any],
+    raw_output: Mapping[str, Any],
+    observation: Observation,
+) -> dict[str, Any] | None:
+    video_path = str(arguments.get("video_path") or raw_output.get("video_path") or "")
+    if not video_path:
+        return None
+
+    region = _first_region(raw_output)
+    time_range = _time_range(raw_output)
+    segment_id = _optional_str(arguments.get("segment_id") or region.get("segment_id"))
+    if tool_name == "global_gist":
+        segment_id = None
+        start_sec = 0.0
+        end_sec = _float_or_none(arguments.get("duration_sec"))
+        if end_sec is None and time_range is not None:
+            end_sec = time_range[1]
+    else:
+        start_sec = _float_or_none(arguments.get("start_sec"))
+        end_sec = _float_or_none(arguments.get("end_sec"))
+        if start_sec is None:
+            start_sec = _float_or_none(region.get("start_sec"))
+        if end_sec is None:
+            end_sec = _float_or_none(region.get("end_sec"))
+        if (start_sec is None or end_sec is None) and time_range is not None:
+            start_sec = time_range[0] if start_sec is None else start_sec
+            end_sec = time_range[1] if end_sec is None else end_sec
+    if start_sec is None or end_sec is None:
+        return None
+
+    requested = arguments.get("nframes") if "nframes" in arguments else None
+    requested_nframes = None if requested is None or requested == "" else int(requested)
+    target_nframes, budget_reason = resolve_nframes(requested_nframes)
+    actual_nframes = _first_int(
+        raw_output.get("nframes"),
+        region.get("nframes"),
+        _nested_raw_output(raw_output).get("nframes"),
+        default=target_nframes,
+    )
+    sampling_policy = "fps" if _float_or_none(arguments.get("fps") or region.get("fps")) else "uniform"
+    return {
+        "video_path": video_path,
+        "segment_id": segment_id,
+        "start_sec": float(start_sec),
+        "end_sec": float(end_sec),
+        "target_nframes": int(target_nframes),
+        "nframes": int(actual_nframes),
+        "sampling_policy": sampling_policy,
+        "frame_times_sec": _uniform_frame_times(float(start_sec), float(end_sec), int(actual_nframes)),
+        "frame_times_approximate": True,
+        "created_by_tool": tool_name,
+        "observation_id": observation.observation_id,
+        "budget_reason": budget_reason,
+        "materialized_paths": _materialized_paths(observation.input_artifacts),
+    }
+
+
+def _first_region(raw_output: Mapping[str, Any]) -> Mapping[str, Any]:
+    regions = raw_output.get("regions")
+    if isinstance(regions, Sequence) and not isinstance(regions, (str, bytes)):
+        for region in regions:
+            if isinstance(region, Mapping):
+                return region
+    return {}
+
+
+def _time_range(raw_output: Mapping[str, Any]) -> tuple[float, float] | None:
+    for value in (raw_output.get("time_range"), _nested_raw_output(raw_output).get("time_range")):
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) >= 2:
+            start = _float_or_none(value[0])
+            end = _float_or_none(value[1])
+            if start is not None and end is not None:
+                return (start, end)
+    return None
+
+
+def _nested_raw_output(raw_output: Mapping[str, Any]) -> Mapping[str, Any]:
+    nested = raw_output.get("raw_output")
+    return nested if isinstance(nested, Mapping) else {}
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_int(*values: Any, default: int) -> int:
+    for value in values:
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return int(default)
+
+
+def _uniform_frame_times(start_sec: float, end_sec: float, nframes: int) -> list[float]:
+    if nframes <= 0:
+        return []
+    if nframes == 1:
+        return [float(start_sec)]
+    step = (float(end_sec) - float(start_sec)) / float(nframes - 1)
+    return [float(start_sec) + step * index for index in range(nframes)]
+
+
+def _materialized_paths(input_artifacts: Sequence[str]) -> list[str]:
+    return [str(artifact) for artifact in input_artifacts if artifact and "#t=" not in str(artifact)]
 
 
 def _format_template(template: str, context: Mapping[str, Any]) -> str:

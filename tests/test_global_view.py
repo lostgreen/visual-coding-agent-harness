@@ -34,7 +34,7 @@ class GlobalViewToolTest(unittest.TestCase):
 
         self.assertEqual(backend.requests[0].task, "global_gist")
         self.assertEqual(backend.requests[0].media_path, "/videos/long.mp4")
-        self.assertEqual(backend.requests[0].metadata["nframes"], 64)
+        self.assertEqual(backend.requests[0].metadata["nframes"], 128)
         self.assertEqual(result["raw_output"]["supported_option"], "D")
         self.assertEqual(result["raw_output"]["grounding_quality"], "global_sparse")
         self.assertEqual(result["regions"][0]["start_sec"], 0.0)
