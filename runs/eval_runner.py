@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -500,6 +500,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expensive-tool-budget", type=int, default=6)
     parser.add_argument("--verifier-tool-budget", type=int, default=2)
     parser.add_argument(
+        "--hard-skill-runtime",
+        action="store_true",
+        help="Use deterministic skill runtime for supported routes before falling back to planner loop.",
+    )
+    parser.add_argument(
         "--free-explore",
         action="store_true",
         help="Disable per-class and reserved-final policy budgets; keep only emergency safety caps.",
@@ -530,6 +535,8 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             verifier_tool_budget=args.verifier_tool_budget,
         )
     )
+    if args.hard_skill_runtime:
+        budget = replace(budget, hard_skill_runtime=True)
     return EvalConfig(
         run_root=args.run_root,
         workspace_root=workspace_root,

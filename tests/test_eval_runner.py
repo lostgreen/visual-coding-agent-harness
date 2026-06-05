@@ -156,6 +156,7 @@ class EvalRunnerTest(unittest.TestCase):
                 "--run-root",
                 "/tmp/vcah-free",
                 "--free-explore",
+                "--hard-skill-runtime",
                 "--free-max-rounds",
                 "24",
                 "--free-max-tool-calls-per-round",
@@ -171,6 +172,7 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.budget.max_rounds, 24)
         self.assertEqual(config.budget.max_tool_calls_per_round, 4)
         self.assertFalse(config.budget.reserve_final_round)
+        self.assertTrue(config.budget.hard_skill_runtime)
 
     def test_run_loop_exports_longvideoagent_trajectory(self):
         from runs import eval_runner
