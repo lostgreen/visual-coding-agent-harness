@@ -108,6 +108,65 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertIsInstance(captured["scene_index"], SceneIndex)
             self.assertEqual(captured["scene_index"].segments[0].source, "fixed_window_empty")
 
+    def test_summary_payload_aggregates_route_violations_from_workspace_traces(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="route_trace")
+            workspace.write_trace_event("route_violation", {"reason": "blocked tool"})
+            workspace.write_trace_event("route_violation", {"reason": "blocked final"})
+
+            summary = eval_runner._summary_payload(
+                run_id="eval",
+                case_ids=["case_001"],
+                config_payload={},
+                results=[
+                    {
+                        "question_id": "case_001",
+                        "strategies": {"agent_v2": {"status": "need_more_evidence", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"agent_v2": str(workspace.root)}},
+                    }
+                ],
+            )
+
+            self.assertEqual(summary["route_violations"], 2)
+
+    def test_summary_payload_aggregates_hard_skill_followup_metrics(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            success_workspace = EvidenceWorkspace.create(Path(tmp), run_id="followup_success")
+            success_workspace.write_trace_event("hard_skill_runtime", {"skill": "temporal_ordering@v1"})
+            success_workspace.write_trace_event("tool_use", {"tool": "ground_question", "arguments": {"query": "first gap"}})
+            success_workspace.write_trace_event("tool_use", {"tool": "ground_question", "arguments": {"query": "second gap"}})
+            success_workspace.write_trace_event("iterative_final", {"source": "hard_skill_runtime"})
+
+            handoff_workspace = EvidenceWorkspace.create(Path(tmp), run_id="followup_handoff")
+            handoff_workspace.write_trace_event("hard_skill_runtime", {"skill": "temporal_ordering@v1"})
+            handoff_workspace.write_trace_event("tool_use", {"tool": "ground_question", "arguments": {"query": "remaining gap"}})
+            handoff_workspace.write_trace_event("hard_skill_followup_handoff", {"rounds": 1})
+
+            summary = eval_runner._summary_payload(
+                run_id="eval",
+                case_ids=["case_001", "case_002"],
+                config_payload={},
+                results=[
+                    {
+                        "question_id": "case_001",
+                        "strategies": {"agent_v2": {"status": "final", "correct": True}},
+                        "raw_artifacts": {"workspaces": {"agent_v2": str(success_workspace.root)}},
+                    },
+                    {
+                        "question_id": "case_002",
+                        "strategies": {"agent_v2": {"status": "max_rounds_reached", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"agent_v2": str(handoff_workspace.root)}},
+                    },
+                ],
+            )
+
+            self.assertEqual(summary["avg_followups_per_case"], 1.5)
+            self.assertEqual(summary["followup_success_rate"], 0.5)
+
     def test_agent_v2_uses_subtitle_index(self):
         from runs import eval_runner
 

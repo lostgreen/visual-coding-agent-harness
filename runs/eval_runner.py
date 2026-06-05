@@ -454,6 +454,7 @@ def _summary_payload(
         compliance, histogram = compute_nframes_metrics(workspaces)
         run_summary.tool_nframes_compliance = compliance
         run_summary.nframes_histogram = histogram
+        _populate_trace_summary_metrics(run_summary, workspaces)
     payload = run_summary.to_dict()
     payload["config"] = dict(config_payload)
     payload["cases"] = results
@@ -482,6 +483,75 @@ def _populate_run_summary_metrics(summary: RunSummary, results: Sequence[Mapping
         )
         / total
     )
+
+
+def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[EvidenceWorkspace]) -> None:
+    route_violations = 0
+    followup_attempts: list[int] = []
+    followup_successes = 0
+
+    for workspace in workspaces:
+        events = _load_trace_events(workspace)
+        route_violations += sum(1 for event in events if _event_type(event) == "route_violation")
+        attempts, success = _hard_skill_followup_trace_metrics(events)
+        followup_attempts.append(attempts)
+        if success:
+            followup_successes += 1
+
+    summary.route_violations = route_violations
+    if followup_attempts:
+        summary.avg_followups_per_case = sum(followup_attempts) / len(followup_attempts)
+        attempted_cases = sum(1 for attempts in followup_attempts if attempts > 0)
+        summary.followup_success_rate = (followup_successes / attempted_cases) if attempted_cases else 0.0
+
+
+def _hard_skill_followup_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[int, bool]:
+    in_hard_skill = False
+    attempts = 0
+    success = False
+    for event in events:
+        event_type = _event_type(event)
+        payload = _event_payload(event)
+        if event_type == "hard_skill_runtime":
+            in_hard_skill = True
+            continue
+        if event_type == "tool_use" and in_hard_skill and str(payload.get("tool", "")) == "ground_question":
+            attempts += 1
+            continue
+        if event_type == "iterative_final" and str(payload.get("source", "")) == "hard_skill_runtime":
+            success = True
+            in_hard_skill = False
+            continue
+        if event_type == "hard_skill_followup_handoff":
+            in_hard_skill = False
+    return attempts, success
+
+
+def _load_trace_events(workspace: EvidenceWorkspace) -> list[dict[str, Any]]:
+    trace_path = workspace.root / "trace.jsonl"
+    if not trace_path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    with trace_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                events.append(payload)
+    return events
+
+
+def _event_type(event: Mapping[str, Any]) -> str:
+    return str(event.get("type") or event.get("event") or "")
+
+
+def _event_payload(event: Mapping[str, Any]) -> Mapping[str, Any]:
+    payload = event.get("payload", {})
+    return payload if isinstance(payload, Mapping) else {}
 
 
 def _case_strategies(case: Mapping[str, Any]) -> Mapping[str, Any]:
