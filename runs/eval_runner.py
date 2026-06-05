@@ -15,6 +15,7 @@ from visual_coding_agent_harness.agents.iterative_agent import AgentBudget
 from visual_coding_agent_harness.backends.base import BackendRequest
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
+from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
@@ -234,6 +235,22 @@ def run_loop(
         extract_clips=extract_clips,
     )
     seconds = time.perf_counter() - start
+    workspace = EvidenceWorkspace(root=workspace_root / "runs" / run_id)
+    reward_tags = _reward_tags_for_result(workspace=workspace, status=result.status, citations=result.citations)
+    trajectory_payload = workspace.export_longvideoagent_trajectory(
+        question=question,
+        video_path=video_path,
+        final={
+            "answer": result.answer,
+            "status": result.status,
+            "citations": list(result.citations),
+            "confidence": result.confidence,
+        },
+        verifier_result={"status": result.status},
+        reward_tags=reward_tags,
+    )
+    trajectory_path = workspace.root / "artifacts" / "trajectories" / "longvideoagent_trajectory.json"
+    planner_io_dir = workspace.root / "artifacts" / "planner_io"
     tools = []
     segments = []
     for round_item in result.rounds:
@@ -252,11 +269,16 @@ def run_loop(
         "tools": tools,
         "segments": segments,
         "seconds": round(seconds, 3),
+        "trajectory_path": str(trajectory_path),
+        "trajectory_action_count": len(trajectory_payload.get("actions", [])),
+        "planner_io_dir": str(planner_io_dir),
+        "planner_prompt_count": len(list(planner_io_dir.glob("*_prompt.txt"))) if planner_io_dir.exists() else 0,
+        "reward_tags": reward_tags,
     }
 
 
 def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
-    return {
+    summary = {
         "choice": raw.get("choice", ""),
         "correct": raw.get("choice", "") == gt,
         "seconds": raw.get("seconds"),
@@ -267,6 +289,27 @@ def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
         "citation_count": len(raw.get("citations", [])),
         "answer_excerpt": compact_text(str(raw.get("answer", "")), limit=240),
     }
+    for key in ["trajectory_path", "trajectory_action_count", "planner_io_dir", "planner_prompt_count", "reward_tags"]:
+        if key in raw:
+            summary[key] = raw[key]
+    return summary
+
+
+def _reward_tags_for_result(*, workspace: EvidenceWorkspace, status: str, citations: Sequence[str]) -> list[str]:
+    tags = []
+    if status == "final":
+        tags.append("final")
+    elif status:
+        tags.append(str(status))
+    if citations:
+        tags.append("has_citations")
+    else:
+        tags.append("missing_citations")
+    if workspace.has_non_navigation_visual_citation(citations):
+        tags.append("non_navigation_visual_citation")
+    else:
+        tags.append("no_non_navigation_visual_citation")
+    return tags
 
 
 def load_rows_by_id(parquet_path: Path, cases: Sequence[str]) -> dict[str, Any]:

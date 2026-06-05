@@ -3,8 +3,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from visual_coding_agent_harness.agents.iterative_agent import AgentBudget
-from visual_coding_agent_harness.video_index import SceneIndex
+from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeRound, IterativeRunResult
+from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
+from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 class EvalRunnerTest(unittest.TestCase):
@@ -170,6 +171,74 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.budget.max_rounds, 24)
         self.assertEqual(config.budget.max_tool_calls_per_round, 4)
         self.assertFalse(config.budget.reserve_final_round)
+
+    def test_run_loop_exports_longvideoagent_trajectory(self):
+        from runs import eval_runner
+
+        def fake_run_iterative_smoke(**kwargs):
+            workspace = EvidenceWorkspace.create(base_dir=kwargs["base_dir"], run_id=kwargs["run_id"])
+            workspace.write_trace_event(
+                "tool_use",
+                {"step": 1, "tool": "vision_read", "arguments": {"segment_id": "seg_0001"}},
+            )
+            observation = workspace.write_observation(
+                tool_name="vision_read",
+                claim="The localized window shows a red car.",
+                confidence=0.9,
+                regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
+                raw_output={
+                    "grounding_quality": "visually_confirmed",
+                    "candidate_option_relations": [{"option": "B", "relation": "support", "strength": 0.9}],
+                },
+            )
+            workspace.write_ledger_entry(observation)
+            workspace.write_trace_event(
+                "tool_result",
+                {"step": 1, "tool": "vision_read", "observation_id": observation.observation_id},
+            )
+            return IterativeRunResult(
+                question=kwargs["question"],
+                video_path=kwargs["media_path"],
+                answer="B. red car",
+                status="final",
+                citations=[observation.observation_id],
+                confidence=0.9,
+                rounds=[
+                    IterativeRound(
+                        round_number=1,
+                        status="final",
+                        planner_text="",
+                        program=[{"tool": "vision_read", "args": {"segment_id": "seg_0001"}}],
+                        observation_ids=[observation.observation_id],
+                    )
+                ],
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "workspaces"
+            scene_index = SceneIndex(
+                video_path="/videos/demo.mp4",
+                duration_sec=12.0,
+                segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
+            )
+            with patch.object(eval_runner, "run_iterative_smoke", side_effect=fake_run_iterative_smoke):
+                raw = eval_runner.run_loop(
+                    backend=object(),
+                    video_path="/videos/demo.mp4",
+                    question="Which object is visible?\nA. blue car\nB. red car",
+                    duration_sec=12.0,
+                    run_id="case_agent_v2",
+                    scene_index=scene_index,
+                    workspace_root=workspace_root,
+                    budget=AgentBudget(),
+                    extract_clips=False,
+                )
+
+            trajectory_path = Path(raw["trajectory_path"])
+            self.assertTrue(trajectory_path.exists())
+            self.assertEqual(raw["planner_prompt_count"], 0)
+            self.assertIn("non_navigation_visual_citation", raw["reward_tags"])
+            self.assertIn("final", raw["reward_tags"])
 
 
 if __name__ == "__main__":
