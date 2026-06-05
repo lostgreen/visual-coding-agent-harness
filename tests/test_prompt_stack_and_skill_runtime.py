@@ -230,6 +230,155 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("hard_skill_runtime", trace)
 
+    def test_hard_skill_runtime_continues_followup_chunks_before_abstaining(self):
+        backend = RecordingBackend()
+        registry = ToolRegistry()
+
+        @tool(name="ground_question", description="Ground a query to candidate windows.")
+        def ground_question(query: str, top_k: int = 3):
+            return {
+                "claim": f"grounded {query}",
+                "confidence": 0.9,
+                "candidates": [
+                    {
+                        "segment_id": "seg_0001",
+                        "start_sec": 0.0,
+                        "end_sec": 12.0,
+                        "reason": "caption match",
+                        "modality": "caption",
+                        "confidence": 0.9,
+                    }
+                ],
+                "regions": [{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
+            }
+
+        @tool(name="vision_read", description="Read localized facts.")
+        def vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = ""):
+            return {
+                "claim": f"The localized window mentions {ask_for}.",
+                "confidence": 0.7,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+                "event_label": event_label or ask_for,
+            }
+
+        registry.register(ground_question)
+        registry.register(vision_read)
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=12.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="hard_skill_followup_chunks")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=2, max_tool_calls_per_round=2, hard_skill_runtime=True, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question=(
+                    "Question: What is the correct order?\n"
+                    "Options:\n"
+                    'A. "The rape of Persephone", "Apollo and Daphne", "David" and '
+                    '"Aeneas, Anchises, and Ascanius fleeing Troy".\n'
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "need_more_evidence")
+            self.assertEqual(len(result.rounds), 2)
+            self.assertEqual(
+                [step["tool"] for round_item in result.rounds for step in round_item.program],
+                [
+                    "ground_question",
+                    "vision_read",
+                    "ground_question",
+                    "vision_read",
+                    "ground_question",
+                    "vision_read",
+                    "ground_question",
+                    "vision_read",
+                ],
+            )
+
+    def test_hard_skill_need_more_hands_off_to_main_replanning_loop(self):
+        backend = RecordingBackend(
+            [
+                '{"status": "final", "answer": "D. enough after follow-up", "citations": ["obs_0002"], "confidence": 0.7}'
+            ]
+        )
+        registry = ToolRegistry()
+
+        @tool(name="ground_question", description="Ground a query to candidate windows.")
+        def ground_question(query: str, top_k: int = 3):
+            return {
+                "claim": f"grounded {query}",
+                "confidence": 0.9,
+                "candidates": [
+                    {
+                        "segment_id": "seg_0001",
+                        "start_sec": 0.0,
+                        "end_sec": 12.0,
+                        "reason": "caption match",
+                        "modality": "caption",
+                        "confidence": 0.9,
+                    }
+                ],
+                "regions": [{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
+            }
+
+        @tool(name="vision_read", description="Read localized facts.")
+        def vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = ""):
+            return {
+                "claim": f"The localized window mentions {ask_for}.",
+                "confidence": 0.7,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+                "event_label": event_label or ask_for,
+            }
+
+        registry.register(ground_question)
+        registry.register(vision_read)
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=12.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="hard_skill_handoff")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=3, max_tool_calls_per_round=2, hard_skill_runtime=True, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question=(
+                    "Question: What is the correct order?\n"
+                    "Options:\n"
+                    'A. "The rape of Persephone", "Apollo and Daphne", "David" and '
+                    '"Aeneas, Anchises, and Ascanius fleeing Troy".\n'
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "D. enough after follow-up")
+            self.assertEqual(len(result.rounds), 3)
+            self.assertEqual(result.rounds[-1].status, "final")
+            self.assertEqual([request.task for request in backend.requests if request.task == "replan"], ["replan"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("hard_skill_followup_handoff", trace)
+
     def test_planner_final_with_navigation_only_citation_is_blocked(self):
         backend = RecordingBackend(
             [

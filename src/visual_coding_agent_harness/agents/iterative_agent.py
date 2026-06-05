@@ -13,6 +13,7 @@ from ..registry import ToolError, ToolRegistry
 from ..video_index import SceneIndex, VideoSegment
 from ..workspace import EvidenceWorkspace
 from .answer_agent import AnswerAgent
+from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
 from .prompt_stack import compose_replanning_prompt_blocks, render_prompt_blocks
 from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
 from .skills.predicates import (
@@ -153,21 +154,39 @@ class IterativeVisualAgent:
             global_result = self._try_global_gist_route(question=question, video_path=video_path)
             if global_result is not None:
                 return global_result
-        if self.budget.hard_skill_runtime:
-            skill_result = self._try_hard_skill_route(question=question, video_path=video_path)
-            if skill_result is not None:
-                return skill_result
 
         rounds: list[IterativeRound] = []
         citations: list[str] = []
-        inspected_segment_ids: set[str] = set()
-        tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
-        has_inspect_with_candidate_options = False
+        if self.budget.hard_skill_runtime:
+            skill_result = self._try_hard_skill_route(question=question, video_path=video_path)
+            if skill_result is not None:
+                if skill_result.status == "final" or len(skill_result.rounds) >= self.budget.max_rounds:
+                    return skill_result
+                rounds.extend(skill_result.rounds)
+                citations.extend(str(citation) for citation in skill_result.citations)
+                self.workspace.write_trace_event(
+                    "hard_skill_followup_handoff",
+                    {
+                        "status": skill_result.status,
+                        "rounds": len(skill_result.rounds),
+                        "citations": list(skill_result.citations),
+                    },
+                )
+
+        inspected_segment_ids: set[str] = {
+            str(segment_id)
+            for round_item in rounds
+            for segment_id in _segment_ids_from_program(round_item.program)
+        }
+        tool_class_counts = _tool_class_counts_for_rounds(rounds)
+        has_inspect_with_candidate_options = any(
+            _program_has_inspect_with_candidate_options(round_item.program) for round_item in rounds
+        )
         answer_feedback: list[str] = []
         repeated_program_key = ""
         repeated_program_count = 0
 
-        for round_number in range(1, self.budget.max_rounds + 1):
+        for round_number in range(len(rounds) + 1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
             final_round_reserved = self.budget.reserve_final_round and round_number == self.budget.max_rounds
             planner_prompt = _replanning_prompt(
@@ -897,145 +916,220 @@ class IterativeVisualAgent:
             },
         )
 
-        program: list[dict[str, Any]] = []
-        observation_ids: list[str] = []
+        rounds: list[IterativeRound] = []
+        all_observation_ids: list[str] = []
         interpreter = ProgramInterpreter(registry=self.registry, workspace=self.workspace)
-
-        for index, target_fact in enumerate(target_facts[: max(1, self.budget.max_tool_calls_per_round)], start=1):
-            ground_program = [
-                {
-                    "tool": "ground_question",
-                    "args": {"query": target_fact, "top_k": 3},
-                    "assign": f"ground_{index}",
-                }
-            ]
-            ground_result = interpreter.run(ground_program)
-            program.extend(ground_program)
-            observation_ids.extend(str(observation_id) for observation_id in ground_result.observation_ids)
-            if not ground_result.observation_ids:
-                continue
-            candidates = self.workspace.grounding_candidates(str(ground_result.observation_ids[-1]), max_candidates=1)
-            if not candidates:
-                continue
-            candidate = candidates[0]
-            vision_program = [
-                {
-                    "tool": "vision_read",
-                    "args": {
-                        "video_path": video_path,
-                        "segment_id": str(candidate["segment_id"]),
-                        "start_sec": float(candidate["start_sec"]),
-                        "end_sec": float(candidate["end_sec"]),
-                        "ask_for": target_fact,
-                        "event_label": target_fact,
-                    },
-                    "assign": f"fact_{index}",
-                }
-            ]
-            vision_result = interpreter.run(vision_program)
-            program.extend(vision_program)
-            observation_ids.extend(str(observation_id) for observation_id in vision_result.observation_ids)
-
-        if not observation_ids:
-            return None
-
-        table = self._answer_evidence_table(question)
-        answer_result = AnswerAgent(self.backend).run(
-            question=question,
-            evidence_text=self._read_ledger(),
-            evidence_table=table,
-        )
-        if answer_result.status == "final" and answer_result.candidate_option_relations:
-            self.workspace.annotate_candidate_option_relations(
-                observation_ids=answer_result.citations,
-                relations=answer_result.candidate_option_relations,
-                assigned_by="answer_agent",
+        scheduler = FollowupScheduler(
+            FollowupBudget(
+                global_max_followups=max(1, self.budget.max_rounds * self.budget.max_tool_calls_per_round)
             )
-            table = self._answer_evidence_table(question)
-        selected_option = _answer_option_letter(answer_result.answer)
-        gate_reason = _hard_skill_gate_reason(
-            skill_name=skill.name,
-            question=question,
-            table=table,
-            selected_option=selected_option,
-            citations=answer_result.citations,
         )
-        if answer_result.status != "final" or gate_reason:
-            failure_tag = gate_reason or "answer_agent_need_more_evidence"
+        scheduler.enqueue(
+            [
+                FollowupTarget(
+                    target_id=f"fu_{self.workspace.run_id}_{index:04d}",
+                    query=target_fact,
+                    event_label=target_fact,
+                    route=_followup_route_for_skill(skill.name),
+                    reason="hard skill target fact still needs visual grounding",
+                    priority=index,
+                    attempt_count=0,
+                    parent_missing_evidence_id=f"target_fact_{index:04d}",
+                )
+                for index, target_fact in enumerate(target_facts, start=1)
+            ]
+        )
+        last_answer_result = None
+        last_failure_tag = "answer_agent_need_more_evidence"
+
+        for round_number in range(1, self.budget.max_rounds + 1):
+            targets = _next_followup_chunk(
+                scheduler=scheduler,
+                chunk_size=max(1, self.budget.max_tool_calls_per_round),
+            )
+            if not targets:
+                break
+
+            program: list[dict[str, Any]] = []
+            round_observation_ids: list[str] = []
+            for target in targets:
+                new_observation_ids = self._run_hard_skill_followup_target(
+                    interpreter=interpreter,
+                    target=target,
+                    video_path=video_path,
+                    assign_suffix=len(all_observation_ids) + len(round_observation_ids) + 1,
+                )
+                program.extend(new_observation_ids["program"])
+                produced_ids = [str(observation_id) for observation_id in new_observation_ids["observation_ids"]]
+                round_observation_ids.extend(produced_ids)
+                scheduler.record_attempt(target, set(produced_ids))
+                scheduler.completed.append(target)
+
+            all_observation_ids.extend(round_observation_ids)
+            if not round_observation_ids:
+                rounds.append(
+                    IterativeRound(
+                        round_number=round_number,
+                        status="need_more_evidence",
+                        planner_text="",
+                        rationale="hard skill follow-up produced no observations",
+                        program=program,
+                        observation_ids=round_observation_ids,
+                    )
+                )
+                continue
+
+            table = self._answer_evidence_table(question)
+            answer_result = AnswerAgent(self.backend).run(
+                question=question,
+                evidence_text=self._read_ledger(),
+                evidence_table=table,
+            )
+            last_answer_result = answer_result
+            if answer_result.status == "final" and answer_result.candidate_option_relations:
+                self.workspace.annotate_candidate_option_relations(
+                    observation_ids=answer_result.citations,
+                    relations=answer_result.candidate_option_relations,
+                    assigned_by="answer_agent",
+                )
+                table = self._answer_evidence_table(question)
+            selected_option = _answer_option_letter(answer_result.answer)
+            gate_reason = _hard_skill_gate_reason(
+                skill_name=skill.name,
+                question=question,
+                table=table,
+                selected_option=selected_option,
+                citations=answer_result.citations,
+            )
+            if answer_result.status == "final" and not gate_reason:
+                self.workspace.write_trace_event(
+                    "iterative_answer_agent",
+                    {
+                        "round": round_number,
+                        "source": "hard_skill_runtime",
+                        "status": answer_result.status,
+                        "answer": answer_result.answer,
+                        "citations": list(answer_result.citations),
+                        "missing_evidence": list(answer_result.missing_evidence),
+                    },
+                )
+                self.workspace.write_trace_event(
+                    "iterative_final",
+                    {
+                        "round": round_number,
+                        "answer": answer_result.answer,
+                        "citations": list(answer_result.citations),
+                        "source": "hard_skill_runtime",
+                    },
+                )
+                return IterativeRunResult(
+                    question=question,
+                    video_path=video_path,
+                    answer=answer_result.answer,
+                    status="final",
+                    citations=list(answer_result.citations),
+                    confidence=answer_result.confidence,
+                    rounds=[
+                        *rounds,
+                        IterativeRound(
+                            round_number=round_number,
+                            status="final",
+                            planner_text=answer_result.raw_text,
+                            rationale=answer_result.rationale,
+                            program=program,
+                            observation_ids=round_observation_ids,
+                        ),
+                    ],
+                )
+
+            last_failure_tag = gate_reason or "answer_agent_need_more_evidence"
             self.workspace.write_trace_event(
                 "iterative_answer_agent",
                 {
-                    "round": 1,
+                    "round": round_number,
                     "source": "hard_skill_runtime",
                     "status": "need_more_evidence",
                     "answer": answer_result.answer,
                     "citations": list(answer_result.citations),
                     "missing_evidence": list(answer_result.missing_evidence),
-                    "failure_tag": failure_tag,
+                    "failure_tag": last_failure_tag,
                 },
             )
             self.workspace.write_reflection_memory(
                 route=route,
-                failure_tag=failure_tag,
-                rule=_reflection_rule_for_failure(failure_tag),
+                failure_tag=last_failure_tag,
+                rule=_reflection_rule_for_failure(last_failure_tag),
             )
-            return IterativeRunResult(
-                question=question,
-                video_path=video_path,
-                answer="need_more_evidence",
-                status="need_more_evidence",
-                citations=list(answer_result.citations),
-                confidence=0.0,
-                rounds=[
-                    IterativeRound(
-                        round_number=1,
-                        status="need_more_evidence",
-                        planner_text=answer_result.raw_text,
-                        rationale=answer_result.rationale or failure_tag,
-                        program=program,
-                        observation_ids=observation_ids,
-                    )
-                ],
+            rounds.append(
+                IterativeRound(
+                    round_number=round_number,
+                    status="need_more_evidence",
+                    planner_text=answer_result.raw_text,
+                    rationale=answer_result.rationale or last_failure_tag,
+                    program=program,
+                    observation_ids=round_observation_ids,
+                )
             )
 
-        self.workspace.write_trace_event(
-            "iterative_answer_agent",
-            {
-                "round": 1,
-                "source": "hard_skill_runtime",
-                "status": answer_result.status,
-                "answer": answer_result.answer,
-                "citations": list(answer_result.citations),
-                "missing_evidence": list(answer_result.missing_evidence),
-            },
-        )
-        self.workspace.write_trace_event(
-            "iterative_final",
-            {
-                "round": 1,
-                "answer": answer_result.answer,
-                "citations": list(answer_result.citations),
-                "source": "hard_skill_runtime",
-            },
-        )
+        if not all_observation_ids:
+            return None
+
         return IterativeRunResult(
             question=question,
             video_path=video_path,
-            answer=answer_result.answer,
-            status="final",
-            citations=list(answer_result.citations),
-            confidence=answer_result.confidence,
-            rounds=[
-                IterativeRound(
-                    round_number=1,
-                    status="final",
-                    planner_text=answer_result.raw_text,
-                    rationale=answer_result.rationale,
-                    program=program,
-                    observation_ids=observation_ids,
-                )
-            ],
+            answer="need_more_evidence",
+            status="need_more_evidence",
+            citations=list(last_answer_result.citations) if last_answer_result is not None else [],
+            confidence=0.0,
+            rounds=rounds,
         )
+
+    def _run_hard_skill_followup_target(
+        self,
+        *,
+        interpreter: ProgramInterpreter,
+        target: FollowupTarget,
+        video_path: str,
+        assign_suffix: int,
+    ) -> dict[str, Any]:
+        program: list[dict[str, Any]] = []
+        observation_ids: list[str] = []
+        ground_program = [
+            {
+                "tool": "ground_question",
+                "args": {"query": target.query, "top_k": 3},
+                "assign": f"ground_{assign_suffix}",
+            }
+        ]
+        ground_result = interpreter.run(ground_program)
+        program.extend(ground_program)
+        observation_ids.extend(str(observation_id) for observation_id in ground_result.observation_ids)
+        if not ground_result.observation_ids:
+            return {"program": program, "observation_ids": observation_ids}
+
+        candidates = self.workspace.grounding_candidates(str(ground_result.observation_ids[-1]), max_candidates=1)
+        if not candidates:
+            return {"program": program, "observation_ids": observation_ids}
+
+        candidate = candidates[0]
+        vision_program = [
+            {
+                "tool": "vision_read",
+                "args": {
+                    "video_path": video_path,
+                    "segment_id": str(candidate["segment_id"]),
+                    "start_sec": float(candidate["start_sec"]),
+                    "end_sec": float(candidate["end_sec"]),
+                    "ask_for": target.query,
+                    "event_label": target.event_label or target.query,
+                },
+                "assign": f"fact_{assign_suffix}",
+            }
+        ]
+        vision_result = interpreter.run(vision_program)
+        program.extend(vision_program)
+        observation_ids.extend(str(observation_id) for observation_id in vision_result.observation_ids)
+        return {"program": program, "observation_ids": observation_ids}
 
 
 def _replanning_prompt(
@@ -1100,6 +1194,38 @@ def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[
         if isinstance(args, Mapping) and args.get("segment_id"):
             segment_ids.append(str(args["segment_id"]))
     return segment_ids
+
+
+def _tool_class_counts_for_rounds(rounds: Sequence[IterativeRound]) -> dict[str, int]:
+    counts = {"cheap": 0, "expensive": 0, "verifier": 0}
+    for round_item in rounds:
+        for step in round_item.program:
+            tool_class = _TOOL_CLASSES.get(str(step.get("tool", "")))
+            if tool_class in counts:
+                counts[tool_class] += 1
+    return counts
+
+
+def _followup_route_for_skill(skill_name: str) -> FollowupRoute:
+    if skill_name == "temporal_ordering":
+        return "temporal_order"
+    if skill_name == "gist_qa":
+        return "gist_global"
+    return "needle_local"
+
+
+def _next_followup_chunk(*, scheduler: FollowupScheduler, chunk_size: int) -> list[FollowupTarget]:
+    targets: list[FollowupTarget] = []
+    for _ in range(max(1, chunk_size)):
+        target = scheduler.next()
+        if target is None:
+            break
+        try:
+            scheduler.queue.remove(target)
+        except ValueError:
+            pass
+        targets.append(target)
+    return targets
 
 
 def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, Any]]) -> bool:
