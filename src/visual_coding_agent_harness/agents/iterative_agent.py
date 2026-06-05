@@ -13,12 +13,28 @@ from ..registry import ToolError, ToolRegistry
 from ..video_index import SceneIndex, VideoSegment
 from ..workspace import EvidenceWorkspace
 from .answer_agent import AnswerAgent
+from .prompt_stack import compose_replanning_prompt_blocks, render_prompt_blocks
 from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
+from .skills.predicates import (
+    no_decisive_weak_grounding,
+    no_unaddressed_conflict,
+    selected_option_has_structured_support,
+    temporal_order_consistent,
+)
+from .skills.specs import select_skill
 
 
 _SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read"}
 _GLOBAL_VIEW_TOOLS = {"global_gist"}
-_CHEAP_TOOLS = {"video_ls", "search_segments", "read_segment", "expand_window", "zoom", "summarize_ledger_evidence"}
+_CHEAP_TOOLS = {
+    "video_ls",
+    "search_segments",
+    "ground_question",
+    "read_segment",
+    "expand_window",
+    "zoom",
+    "summarize_ledger_evidence",
+}
 _EXPENSIVE_TOOLS = {
     "global_gist",
     "inspect_segment",
@@ -50,6 +66,11 @@ class AgentBudget:
     verifier_tool_budget: int = 2
     answer_probe_rounds_before_final: int = 0
     free_exploration: bool = False
+    persist_planner_io: bool = True
+    planner_io_max_chars: int = 200_000
+    max_repeated_programs: int = 3
+    hard_skill_runtime: bool = False
+    reflection_memory_max_items: int = 5
 
     @classmethod
     def free_explore(cls, *, max_rounds: int = 24, max_tool_calls_per_round: int = 4) -> "AgentBudget":
@@ -132,6 +153,10 @@ class IterativeVisualAgent:
             global_result = self._try_global_gist_route(question=question, video_path=video_path)
             if global_result is not None:
                 return global_result
+        if self.budget.hard_skill_runtime:
+            skill_result = self._try_hard_skill_route(question=question, video_path=video_path)
+            if skill_result is not None:
+                return skill_result
 
         rounds: list[IterativeRound] = []
         citations: list[str] = []
@@ -139,10 +164,24 @@ class IterativeVisualAgent:
         tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
         has_inspect_with_candidate_options = False
         answer_feedback: list[str] = []
+        repeated_program_key = ""
+        repeated_program_count = 0
 
         for round_number in range(1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
             final_round_reserved = self.budget.reserve_final_round and round_number == self.budget.max_rounds
+            planner_prompt = _replanning_prompt(
+                question=question,
+                scene_index=self.scene_index,
+                ledger_text=ledger_text,
+                round_number=round_number,
+                budget=self.budget,
+                inspected_segment_ids=sorted(inspected_segment_ids),
+                tool_class_counts=tool_class_counts,
+                final_round_reserved=final_round_reserved,
+                answer_feedback=answer_feedback,
+                reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
+            )
             self.workspace.write_trace_event(
                 "iterative_round_start",
                 {"round": round_number, "question": question, "evidence_count": len(citations)},
@@ -150,17 +189,7 @@ class IterativeVisualAgent:
             planner_response = self.backend.generate(
                 BackendRequest(
                     task="replan",
-                    prompt=_replanning_prompt(
-                        question=question,
-                        scene_index=self.scene_index,
-                        ledger_text=ledger_text,
-                        round_number=round_number,
-                        budget=self.budget,
-                        inspected_segment_ids=sorted(inspected_segment_ids),
-                        tool_class_counts=tool_class_counts,
-                        final_round_reserved=final_round_reserved,
-                        answer_feedback=answer_feedback,
-                    ),
+                    prompt=planner_prompt,
                     media_path=video_path if self.budget.planner_receives_media else None,
                     media_type="video" if self.budget.planner_receives_media else None,
                     max_new_tokens=768,
@@ -170,6 +199,12 @@ class IterativeVisualAgent:
                         "planner_input_mode": "video" if self.budget.planner_receives_media else "text-only",
                     },
                 )
+            )
+            self._persist_planner_io(
+                round_number=round_number,
+                prompt=planner_prompt,
+                response=planner_response.text,
+                planner_input_mode="video" if self.budget.planner_receives_media else "text-only",
             )
             try:
                 action = _parse_replan_action(planner_response.text)
@@ -181,6 +216,11 @@ class IterativeVisualAgent:
                         "error": f"{type(exc).__name__}: {str(exc)[:240]}",
                         "response_excerpt": _compact_planner_response(planner_response.text),
                     },
+                )
+                self.workspace.write_reflection_memory(
+                    route=classify_question_route(question),
+                    failure_tag="planner_json_parse_error",
+                    rule="return valid JSON matching the continue/final response contract before using tools",
                 )
                 action = {
                     "status": "continue",
@@ -198,6 +238,9 @@ class IterativeVisualAgent:
                 blocked_reason = _blocked_final_reason(
                     question=question,
                     has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                    workspace=self.workspace,
+                    answer=str(action.get("answer", "")),
+                    citations=[str(item) for item in action.get("citations", [])],
                 )
                 if blocked_reason:
                     self.workspace.write_trace_event(
@@ -208,6 +251,11 @@ class IterativeVisualAgent:
                             "answer": str(action.get("answer", "")),
                             "citations": [str(item) for item in action.get("citations", [])],
                         },
+                    )
+                    self.workspace.write_reflection_memory(
+                        route=classify_question_route(question),
+                        failure_tag=blocked_reason,
+                        rule=_reflection_rule_for_failure(blocked_reason),
                     )
                     planned_program = []
                     if not final_round_reserved:
@@ -299,6 +347,37 @@ class IterativeVisualAgent:
                         confidence=answer_result.confidence,
                         rounds=rounds,
                     )
+            program_key = _program_signature(program)
+            if program_key == repeated_program_key:
+                repeated_program_count += 1
+            else:
+                repeated_program_key = program_key
+                repeated_program_count = 1
+            if (
+                self.budget.max_repeated_programs > 0
+                and repeated_program_count > self.budget.max_repeated_programs
+            ):
+                self.workspace.write_trace_event(
+                    "iterative_no_progress_guard",
+                    {
+                        "round": round_number,
+                        "reason": "repeated_program",
+                        "repeat_count": repeated_program_count,
+                        "max_repeated_programs": self.budget.max_repeated_programs,
+                        "program_signature": program_key,
+                    },
+                )
+                plural = "round" if len(rounds) == 1 else "rounds"
+                partial_answer = _partial_answer_from_ledger(self._read_ledger())
+                return IterativeRunResult(
+                    question=question,
+                    video_path=video_path,
+                    answer=partial_answer
+                    or f"Stopped after {len(rounds)} exploration {plural} because the planner repeated the same program.",
+                    status="max_rounds_reached",
+                    citations=citations,
+                    rounds=rounds,
+                )
             self.workspace.write_trace_event(
                 "iterative_plan",
                 {"round": round_number, "rationale": rationale, "program": program},
@@ -520,24 +599,33 @@ class IterativeVisualAgent:
 
         if not normalized and not final_round_reserved:
             fallback_segment_id = self._resolve_next_segment_id("", reserved_segment_ids)
-            if fallback_segment_id is not None and _tool_budget_available(
+            fallback_tool_name = self._fallback_visual_tool_name()
+            if fallback_segment_id is not None and fallback_tool_name is not None and _tool_budget_available(
                 budget=self.budget,
-                tool_name="caption_segment",
+                tool_name=fallback_tool_name,
                 tool_class_counts=tool_class_counts,
                 pending_tool_class_counts=pending_tool_class_counts,
             ):
                 segment = self.scene_index.get(fallback_segment_id)
+                fallback_args: dict[str, Any] = {
+                    "video_path": video_path,
+                    "segment_id": segment.segment_id,
+                    "start_sec": segment.start_sec,
+                    "end_sec": segment.end_sec,
+                    "nframes": self.budget.default_nframes,
+                }
+                if fallback_tool_name == "vision_read":
+                    fallback_args["ask_for"] = question
+                    fallback_args["event_label"] = question
+                else:
+                    fallback_args["question"] = question
+                candidate_options = extract_candidate_options(question)
+                if candidate_options and fallback_tool_name == "inspect_segment":
+                    fallback_args["candidate_options"] = list(candidate_options)
                 normalized.append(
                     {
-                        "tool": "caption_segment",
-                        "args": {
-                            "video_path": video_path,
-                            "segment_id": segment.segment_id,
-                            "start_sec": segment.start_sec,
-                            "end_sec": segment.end_sec,
-                            "question": question,
-                            "nframes": self.budget.default_nframes,
-                        },
+                        "tool": fallback_tool_name,
+                        "args": fallback_args,
                         "assign": f"auto_{segment.segment_id}",
                     }
                 )
@@ -552,11 +640,20 @@ class IterativeVisualAgent:
         fallback_segment_id = self._resolve_next_segment_id("", inspected_segment_ids)
         if fallback_segment_id is None:
             return []
+        tool_name = self._fallback_visual_tool_name()
+        if tool_name is None:
+            return []
         args: dict[str, Any] = {"segment_id": fallback_segment_id, "question": question}
         candidate_options = extract_candidate_options(question)
-        if candidate_options:
+        if candidate_options and tool_name == "inspect_segment":
             args["candidate_options"] = list(candidate_options)
-        return [{"tool": "inspect_segment", "args": args, "assign": f"required_{fallback_segment_id}"}]
+        return [{"tool": tool_name, "args": args, "assign": f"required_{fallback_segment_id}"}]
+
+    def _fallback_visual_tool_name(self) -> str | None:
+        for tool_name in ["inspect_segment", "vision_read", "caption_segment", "qa_segment"]:
+            if self._has_tool(tool_name):
+                return tool_name
+        return None
 
     def _resolve_next_segment_id(self, requested_segment_id: str, reserved_segment_ids: set[str]) -> Optional[str]:
         if requested_segment_id and requested_segment_id not in reserved_segment_ids:
@@ -589,6 +686,20 @@ class IterativeVisualAgent:
         )
         if dynamic_segment is not None:
             return dynamic_segment
+        observed_segment = self.workspace.observed_segment_window(requested_segment_id)
+        if observed_segment is not None:
+            start_sec, end_sec = _normalize_dynamic_window(
+                start_sec=float(observed_segment["start_sec"]),
+                end_sec=float(observed_segment["end_sec"]),
+                duration_sec=self.scene_index.duration_sec,
+                label=f"for observed {requested_segment_id}",
+            )
+            return VideoSegment(
+                segment_id=requested_segment_id,
+                start_sec=start_sec,
+                end_sec=end_sec,
+                source=str(observed_segment.get("source") or "observed_tool_segment"),
+            )
         if "start_sec" not in args or "end_sec" not in args:
             self.scene_index.get(requested_segment_id)
         start_sec, end_sec = _normalize_dynamic_window(
@@ -634,6 +745,38 @@ class IterativeVisualAgent:
 
     def _read_ledger(self) -> str:
         return self.workspace.compact_ledger_text()
+
+    def _persist_planner_io(
+        self,
+        *,
+        round_number: int,
+        prompt: str,
+        response: str,
+        planner_input_mode: str,
+    ) -> None:
+        if not self.budget.persist_planner_io:
+            return
+        prefix = f"artifacts/planner_io/round_{round_number:04d}"
+        prompt_meta = self.workspace.write_text_artifact(
+            f"{prefix}_prompt.txt",
+            prompt,
+            max_chars=self.budget.planner_io_max_chars,
+        )
+        response_meta = self.workspace.write_text_artifact(
+            f"{prefix}_response.txt",
+            response,
+            max_chars=self.budget.planner_io_max_chars,
+        )
+        self.workspace.write_trace_event(
+            "planner_io",
+            {
+                "round": round_number,
+                "planner_input_mode": planner_input_mode,
+                "prompt": prompt_meta,
+                "response": response_meta,
+                "response_excerpt": _compact_planner_response(response),
+            },
+        )
 
     def _answer_evidence_table(self, question: str) -> Mapping[str, Any]:
         return self.workspace.evidence_table_v2(
@@ -712,6 +855,167 @@ class IterativeVisualAgent:
             ],
         )
 
+    def _try_hard_skill_route(self, *, question: str, video_path: str) -> IterativeRunResult | None:
+        skill = select_skill(question)
+        if skill.name not in {"grounded_factual_qa", "temporal_ordering"}:
+            return None
+        if not self._has_tool("ground_question") or not self._has_tool("vision_read"):
+            return None
+
+        route = classify_question_route(question)
+        target_facts = _skill_target_facts(question=question, skill_name=skill.name)
+        if not target_facts:
+            return None
+
+        self.workspace.write_trace_event(
+            "iterative_route",
+            {
+                "route": route,
+                "skill": f"{skill.name}@v{skill.version}",
+                "source": "hard_skill_runtime",
+            },
+        )
+        self.workspace.write_trace_event(
+            "hard_skill_runtime",
+            {
+                "skill": f"{skill.name}@v{skill.version}",
+                "target_facts": target_facts,
+            },
+        )
+
+        program: list[dict[str, Any]] = []
+        observation_ids: list[str] = []
+        interpreter = ProgramInterpreter(registry=self.registry, workspace=self.workspace)
+
+        for index, target_fact in enumerate(target_facts[: max(1, self.budget.max_tool_calls_per_round)], start=1):
+            ground_program = [
+                {
+                    "tool": "ground_question",
+                    "args": {"query": target_fact, "top_k": 3},
+                    "assign": f"ground_{index}",
+                }
+            ]
+            ground_result = interpreter.run(ground_program)
+            program.extend(ground_program)
+            observation_ids.extend(str(observation_id) for observation_id in ground_result.observation_ids)
+            if not ground_result.observation_ids:
+                continue
+            candidates = self.workspace.grounding_candidates(str(ground_result.observation_ids[-1]), max_candidates=1)
+            if not candidates:
+                continue
+            candidate = candidates[0]
+            vision_program = [
+                {
+                    "tool": "vision_read",
+                    "args": {
+                        "video_path": video_path,
+                        "segment_id": str(candidate["segment_id"]),
+                        "start_sec": float(candidate["start_sec"]),
+                        "end_sec": float(candidate["end_sec"]),
+                        "ask_for": target_fact,
+                        "event_label": target_fact,
+                    },
+                    "assign": f"fact_{index}",
+                }
+            ]
+            vision_result = interpreter.run(vision_program)
+            program.extend(vision_program)
+            observation_ids.extend(str(observation_id) for observation_id in vision_result.observation_ids)
+
+        if not observation_ids:
+            return None
+
+        table = self._answer_evidence_table(question)
+        answer_result = AnswerAgent(self.backend).run(
+            question=question,
+            evidence_text=self._read_ledger(),
+            evidence_table=table,
+        )
+        selected_option = _answer_option_letter(answer_result.answer)
+        gate_reason = _hard_skill_gate_reason(
+            skill_name=skill.name,
+            question=question,
+            table=table,
+            selected_option=selected_option,
+            citations=answer_result.citations,
+        )
+        if answer_result.status != "final" or gate_reason:
+            failure_tag = gate_reason or "answer_agent_need_more_evidence"
+            self.workspace.write_trace_event(
+                "iterative_answer_agent",
+                {
+                    "round": 1,
+                    "source": "hard_skill_runtime",
+                    "status": "need_more_evidence",
+                    "answer": answer_result.answer,
+                    "citations": list(answer_result.citations),
+                    "missing_evidence": list(answer_result.missing_evidence),
+                    "failure_tag": failure_tag,
+                },
+            )
+            self.workspace.write_reflection_memory(
+                route=route,
+                failure_tag=failure_tag,
+                rule=_reflection_rule_for_failure(failure_tag),
+            )
+            return IterativeRunResult(
+                question=question,
+                video_path=video_path,
+                answer="need_more_evidence",
+                status="need_more_evidence",
+                citations=list(answer_result.citations),
+                confidence=0.0,
+                rounds=[
+                    IterativeRound(
+                        round_number=1,
+                        status="need_more_evidence",
+                        planner_text=answer_result.raw_text,
+                        rationale=answer_result.rationale or failure_tag,
+                        program=program,
+                        observation_ids=observation_ids,
+                    )
+                ],
+            )
+
+        self.workspace.write_trace_event(
+            "iterative_answer_agent",
+            {
+                "round": 1,
+                "source": "hard_skill_runtime",
+                "status": answer_result.status,
+                "answer": answer_result.answer,
+                "citations": list(answer_result.citations),
+                "missing_evidence": list(answer_result.missing_evidence),
+            },
+        )
+        self.workspace.write_trace_event(
+            "iterative_final",
+            {
+                "round": 1,
+                "answer": answer_result.answer,
+                "citations": list(answer_result.citations),
+                "source": "hard_skill_runtime",
+            },
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer=answer_result.answer,
+            status="final",
+            citations=list(answer_result.citations),
+            confidence=answer_result.confidence,
+            rounds=[
+                IterativeRound(
+                    round_number=1,
+                    status="final",
+                    planner_text=answer_result.raw_text,
+                    rationale=answer_result.rationale,
+                    program=program,
+                    observation_ids=observation_ids,
+                )
+            ],
+        )
+
 
 def _replanning_prompt(
     *,
@@ -724,87 +1028,21 @@ def _replanning_prompt(
     tool_class_counts: Mapping[str, int] | None = None,
     final_round_reserved: bool = False,
     answer_feedback: Sequence[str] = (),
+    reflection_memory: Sequence[str] = (),
 ) -> str:
-    inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
-    uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
-    playbook = select_question_playbook(question)
-    counts = tool_class_counts or {}
-    remaining_budget_line = (
-        "free exploration mode; no per-class tool budget, only emergency round/tool-call caps"
-        if budget.free_exploration
-        else (
-            f"cheap={max(0, budget.cheap_tool_budget - int(counts.get('cheap', 0)))}, "
-            f"expensive={max(0, budget.expensive_tool_budget - int(counts.get('expensive', 0)))}, "
-            f"verifier={max(0, budget.verifier_tool_budget - int(counts.get('verifier', 0)))}"
-        )
+    blocks = compose_replanning_prompt_blocks(
+        question=question,
+        scene_index=scene_index,
+        ledger_text=ledger_text,
+        round_number=round_number,
+        budget=budget,
+        inspected_segment_ids=inspected_segment_ids,
+        tool_class_counts=tool_class_counts,
+        final_round_reserved=final_round_reserved,
+        answer_feedback=answer_feedback,
+        reflection_memory=reflection_memory,
     )
-    final_round_line = (
-        "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
-        if final_round_reserved
-        else ""
-    )
-    answer_feedback_line = (
-        "Answer Agent says these evidence gaps must be resolved before final: "
-        + "; ".join(str(item) for item in answer_feedback[:5])
-        + "\n"
-        if answer_feedback
-        else ""
-    )
-    return (
-        "You are an autonomous visual agent exploring a long video with tools.\n"
-        "Planner input mode: text-only. Use the scene index and evidence ledger; tools inspect pixels/video.\n"
-        "Use coarse-to-fine search: inspect promising segments, read the evidence ledger, then either continue or answer.\n"
-        f"{playbook.to_prompt()}\n"
-        "Available tools:\n"
-        "- video_ls(query: str = '', max_segments: int = 16, top_k: int = 5)\n"
-        "- search_segments(query: str, top_k: int = 5, modalities: list = [])\n"
-        "- read_segment(segment_id: str)\n"
-        "- expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0)\n"
-        "- zoom(segment_id: str, target_granularity_sec: float = 60.0)\n"
-        "- global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 64, max_pixels: int = 151200)\n"
-        "- caption_segments(segment_ids: list = [], question: str = 'Create a concise search caption for this segment.', nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0, max_segments: int = 3)\n"
-        "- ingest_segment_metadata(segment_id: str, low_fps_caption: str = '', asr_text: str = '', ocr_text: str = '', entities: list = [])\n"
-        "- summarize_ledger_evidence(max_claims: int = 5)\n"
-        "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
-        "- vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = '', nframes: int = 16, max_pixels: int = 151200, fps: float = 0.0)\n"
-        "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 16, max_pixels: int = 151200, fps: float = 0.0)\n"
-        "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0)\n"
-        "- qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0)\n"
-        "Return only JSON with one of these schemas:\n"
-        '{"status": "continue", "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
-        '{"status": "final", "answer": string, "citations": [observation_id], "confidence": number}\n'
-        "Rules:\n"
-        "- Use video_ls first for open-ended description tasks or when the relevant segment is unclear.\n"
-        "- For gist/global questions, use global_gist before local decomposition and cite it as the direct floor when sufficient.\n"
-        "- caption_segments is offline VideoMap cache building; avoid it in online reasoning unless the cache/indexes are empty.\n"
-        "- Use navigation output as a map, then delegate localized visual reading to vision_read or inspect_segment on one candidate segment.\n"
-        "- Use zoom when a coarse segment is relevant but too long; then call vision_read or inspect_segment with the returned child segment_id and start_sec/end_sec.\n"
-        "- Do not spend every round on navigation-only tools; gather visual evidence before finalizing.\n"
-        "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.\n"
-        "- Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.\n"
-        '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.\n'
-        "- Do not copy quoted option text into JSON string values; refer to option letters instead.\n"
-        "- Final answers require at least one non-navigation visual observation from vision_read, inspect_segment, caption_segment, or qa_segment; navigation-only evidence is insufficient.\n"
-        "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.\n"
-        f"- Request at most {budget.max_tool_calls_per_round} new tool call(s) this round.\n"
-        "- Cheap navigation tools and expensive VLM tools have separate budgets unless free exploration mode is active.\n"
-        "- In free exploration mode, prioritize answer quality: keep using tools until evidence is sufficient, then finalize with citations.\n"
-        f"- Remaining tool budgets: {remaining_budget_line}.\n"
-        f"{final_round_line}"
-        f"{answer_feedback_line}"
-        "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.\n"
-        "- Continue when evidence is missing, ambiguous, or too coarse.\n"
-        "- Use verify_ledger_answer before finalizing when answer support is uncertain.\n"
-        "- Final answers must cite observation ids from the ledger.\n"
-        f"Round: {round_number}/{budget.max_rounds}\n"
-        f"Question: {question}\n"
-        f"Already inspected segments: {inspected_line}\n"
-        f"Uninspected segment candidates: {uninspected_line}\n"
-        "Scene index:\n"
-        f"{scene_index.summary(max_segments=64)}\n"
-        "Evidence ledger:\n"
-        f"{ledger_text}"
-    )
+    return render_prompt_blocks(blocks)
 
 
 def _parse_replan_action(text: str) -> Mapping[str, Any]:
@@ -855,10 +1093,114 @@ def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, A
     return False
 
 
-def _blocked_final_reason(*, question: str, has_inspect_with_candidate_options: bool) -> str:
+def _blocked_final_reason(
+    *,
+    question: str,
+    has_inspect_with_candidate_options: bool,
+    workspace: EvidenceWorkspace,
+    answer: str,
+    citations: Sequence[str],
+) -> str:
     if extract_candidate_options(question) and not has_inspect_with_candidate_options:
         return "mcq_final_requires_local_visual_read"
+    if not workspace.has_non_navigation_visual_citation(citations):
+        return "final_requires_non_navigation_visual_evidence"
     return ""
+
+
+def _hard_skill_gate_reason(
+    *,
+    skill_name: str,
+    question: str,
+    table: Mapping[str, Any],
+    selected_option: str | None,
+    citations: Sequence[str],
+) -> str:
+    if extract_candidate_options(question) and not selected_option:
+        return "answer_agent_need_more_evidence"
+
+    support = selected_option_has_structured_support(table, selected_option=selected_option)
+    if not support.passed:
+        return support.name
+
+    weak = no_decisive_weak_grounding(table, selected_option=selected_option)
+    if not weak.passed:
+        return weak.name
+
+    conflict = no_unaddressed_conflict(table, selected_option=selected_option, cited_obs_ids=citations)
+    if not conflict.passed:
+        return conflict.name
+
+    if skill_name == "temporal_ordering":
+        temporal = temporal_order_consistent(table, selected_option=selected_option)
+        if not temporal.passed:
+            return "temporal_order_requires_confirmed_event_timestamps"
+    return ""
+
+
+def _reflection_rule_for_failure(failure_tag: str) -> str:
+    rules = {
+        "planner_json_parse_error": "return valid JSON matching the continue/final response contract before using tools",
+        "final_requires_non_navigation_visual_evidence": "cite a non-navigation visual observation before finalizing",
+        "mcq_final_requires_local_visual_read": "localize a candidate and call vision_read or inspect_segment before finalizing MCQ answers",
+        "answer_agent_need_more_evidence": "request targeted evidence when AnswerAgent abstains instead of forcing an option",
+        "selected_option_has_structured_support": "map options only from structured visual facts with candidate_option_relations",
+        "no_decisive_weak_grounding": "upgrade weak or inferred support to visually_confirmed evidence before finalizing",
+        "no_unaddressed_conflict": "resolve stronger conflicting option support before finalizing",
+        "temporal_order_requires_confirmed_event_timestamps": "confirm every event timestamp before comparing option sequence",
+    }
+    return rules.get(str(failure_tag), "request targeted evidence before finalizing")
+
+
+def _skill_target_facts(*, question: str, skill_name: str) -> list[str]:
+    if skill_name == "temporal_ordering":
+        events = _temporal_events_from_question(question)
+        if events:
+            return events
+    semantic = _semantic_question_text(question)
+    return [semantic] if semantic else []
+
+
+def _semantic_question_text(question: str) -> str:
+    lines = []
+    for line in question.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if re.match(r"^[A-H][.)]\s+\S+", stripped):
+            continue
+        if "answer with" in stripped.lower() and "option letter" in stripped.lower():
+            continue
+        lines.append(stripped)
+    return " ".join(lines).strip() or question.strip()
+
+
+def _temporal_events_from_question(question: str, *, max_events: int = 4) -> list[str]:
+    options = extract_candidate_options(question)
+    sources = options or [_semantic_question_text(question)]
+    events = []
+    seen = set()
+    for source in sources:
+        text = re.sub(r"^[A-H][.)]\s*", "", str(source).strip())
+        chunks = re.split(r"\bthen\b|\bbefore\b|\bafter\b|,|;|->|/|\|", text, flags=re.IGNORECASE)
+        for chunk in chunks:
+            event = re.sub(r"\b(first|last|earlier|later|right|immediately)\b", "", chunk, flags=re.IGNORECASE)
+            event = re.sub(r"\s+", " ", event).strip(" .:-")
+            if len(event) < 2:
+                continue
+            key = event.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            events.append(event)
+            if len(events) >= max_events:
+                return events
+    return events
+
+
+def _answer_option_letter(answer: str) -> str | None:
+    match = re.match(r"\s*([A-H])(?:[.)]\s*|\s+|$)", str(answer), flags=re.IGNORECASE)
+    return match.group(1).upper() if match else None
 
 
 def _should_run_answer_probe(
@@ -894,6 +1236,10 @@ def _update_tool_class_counts(tool_class_counts: dict[str, int], program: Sequen
     for step in program:
         tool_class = _tool_class(str(step.get("tool", "")))
         tool_class_counts[tool_class] = tool_class_counts.get(tool_class, 0) + 1
+
+
+def _program_signature(program: Sequence[Mapping[str, Any]]) -> str:
+    return json.dumps(list(program), ensure_ascii=True, sort_keys=True, default=str)
 
 
 def _tool_budget_available(

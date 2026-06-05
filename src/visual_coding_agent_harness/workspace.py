@@ -40,7 +40,7 @@ class EvidenceWorkspace:
         "qa_region",
         "qa_segment",
     }
-    NAVIGATION_TOOLS = {"video_ls", "search_segments", "read_segment", "expand_window", "zoom"}
+    NAVIGATION_TOOLS = {"video_ls", "search_segments", "ground_question", "read_segment", "expand_window", "zoom"}
     ANSWER_EVIDENCE_TOOLS = VISUAL_EVIDENCE_TOOLS | {
         "caption_image",
         "caption_region",
@@ -69,6 +69,7 @@ class EvidenceWorkspace:
 
         for filename in ["observations.jsonl", "trace.jsonl"]:
             (root / filename).touch(exist_ok=True)
+        (root / "reflection_memory.jsonl").touch(exist_ok=True)
 
         ledger = root / "ledger.md"
         if not ledger.exists():
@@ -111,13 +112,103 @@ class EvidenceWorkspace:
             },
         )
 
+    def write_reflection_memory(self, *, route: str, failure_tag: str, rule: str) -> None:
+        """Persist one compact Reflexion-style policy rule after a failure."""
+
+        clean_rule = " ".join(str(rule).split())
+        if not clean_rule:
+            return
+        payload = {
+            "created_at": _utc_now(),
+            "route": str(route),
+            "failure_tag": str(failure_tag),
+            "rule": clean_rule,
+        }
+        self._append_jsonl("reflection_memory.jsonl", payload)
+        self.write_trace_event("reflection_memory", payload)
+
+    def reflection_memory(self, *, route: str | None = None, max_items: int = 5) -> list[str]:
+        """Return newest compact policy rules, optionally scoped by route."""
+
+        path = self.root / "reflection_memory.jsonl"
+        if not path.exists() or max_items <= 0:
+            return []
+        rows = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, Mapping):
+                    continue
+                if route is not None and str(payload.get("route", "")) != str(route):
+                    continue
+                rows.append(payload)
+        compact = []
+        seen = set()
+        for payload in reversed(rows):
+            item = (
+                f"{payload.get('route', 'unknown')}: {payload.get('failure_tag', 'failure')} -> "
+                f"{payload.get('rule', '')}"
+            )
+            if item in seen:
+                continue
+            seen.add(item)
+            compact.append(item)
+            if len(compact) >= max_items:
+                break
+        return list(reversed(compact))
+
+    def write_text_artifact(
+        self,
+        relative_path: str | Path,
+        text: str,
+        *,
+        max_chars: int | None = None,
+    ) -> Mapping[str, Any]:
+        """Write verbose debug text as an artifact and return compact metadata."""
+
+        path = Path(relative_path)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError(f"Artifact path must stay inside the workspace: {relative_path}")
+        full_path = self.root / path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+
+        original_chars = len(text)
+        stored_text = text
+        truncated = False
+        if max_chars is not None and max_chars >= 0 and original_chars > max_chars:
+            stored_text = text[:max_chars]
+            stored_text += f"\n\n[truncated {original_chars - max_chars} chars]\n"
+            truncated = True
+
+        full_path.write_text(stored_text, encoding="utf-8")
+        return {
+            "path": path.as_posix(),
+            "chars": original_chars,
+            "stored_chars": len(stored_text),
+            "truncated": truncated,
+        }
+
     def write_ledger_entry(self, observation: Observation) -> None:
         artifacts = ", ".join(observation.input_artifacts) or "-"
         limitation = observation.limitations or "-"
+        claim = observation.claim
+        if _has_worker_option_vote(
+            tool_name=observation.tool,
+            raw_output=observation.raw_output,
+            claim=observation.claim,
+        ):
+            claim = _claim_without_legacy_worker_vote(observation.claim)
+            note = f"legacy local-worker option vote quarantined; fact_text: {claim}"
+            limitation = f"{limitation}; {note}" if limitation != "-" else note
         line = (
             f"- `{observation.observation_id}` | tool: `{observation.tool}` | "
             f"confidence: {observation.confidence:.2f} | artifacts: {artifacts} | "
-            f"claim: {observation.claim} | limitations: {limitation}\n"
+            f"claim: {claim} | limitations: {limitation}\n"
         )
         with (self.root / "ledger.md").open("a", encoding="utf-8") as handle:
             handle.write(line)
@@ -198,13 +289,18 @@ class EvidenceWorkspace:
                 tool_name=tool_name,
                 raw_output=raw_output,
                 claim=str(observation.get("claim", "")),
+                option_map=option_map,
             )
+            display_claim = str(observation.get("claim", ""))
+            if legacy_worker_vote:
+                display_claim = _claim_without_legacy_worker_vote(display_claim)
             option_source = (
                 raw_output.get("supported_option")
                 or raw_output.get("supported_option_letter")
                 or raw_output.get("answer_option")
                 or _first_item(raw_output.get("supported_options"))
                 or _supported_option_from_relations(raw_output.get("candidate_option_relations"), option_map=option_map)
+                or _bare_option_from_claim(str(observation.get("claim", "")), option_map=option_map)
                 or _supported_option_from_claim(str(observation.get("claim", "")))
             )
             if legacy_worker_vote and not include_legacy_worker_votes:
@@ -221,9 +317,9 @@ class EvidenceWorkspace:
                 supported_option=supported_option,
                 event_label=_observation_event_label(
                     raw_output=raw_output,
-                    claim=str(observation.get("claim", "")),
+                    claim=display_claim,
                 ),
-                claim=str(observation.get("claim", "")),
+                claim=display_claim,
                 confidence=float(observation.get("confidence", 0.0) or 0.0),
                 grounding_quality=_grounding_quality(
                     raw_output=raw_output,
@@ -276,17 +372,133 @@ class EvidenceWorkspace:
             "legacy_worker_vote_rows": legacy_count,
         }
 
+    def observed_segment_window(self, segment_id: str) -> Mapping[str, Any] | None:
+        """Return the latest observed time window for a segment id from tool outputs."""
+
+        found: Mapping[str, Any] | None = None
+        for observation in self._read_observation_dicts():
+            for candidate in _iter_segment_window_dicts(observation):
+                if str(candidate.get("segment_id", "")) != segment_id:
+                    continue
+                if candidate.get("start_sec") is None or candidate.get("end_sec") is None:
+                    continue
+                found = candidate
+        return found
+
+    def grounding_candidates(self, observation_id: str, *, max_candidates: int = 5) -> list[dict[str, Any]]:
+        """Return normalized grounding candidate windows from a grounding observation."""
+
+        for observation in self._read_observation_dicts():
+            if str(observation.get("observation_id", "")) != str(observation_id):
+                continue
+            raw_output = observation.get("raw_output", {})
+            candidates = []
+            if isinstance(raw_output, Mapping):
+                raw_candidates = raw_output.get("candidates", [])
+                if isinstance(raw_candidates, Sequence) and not isinstance(raw_candidates, (str, bytes)):
+                    candidates.extend(item for item in raw_candidates if isinstance(item, Mapping))
+            regions = observation.get("regions", [])
+            if isinstance(regions, Sequence) and not isinstance(regions, (str, bytes)):
+                candidates.extend(item for item in regions if isinstance(item, Mapping))
+            normalized = []
+            seen = set()
+            for candidate in candidates:
+                if candidate.get("segment_id") is None or candidate.get("start_sec") is None or candidate.get("end_sec") is None:
+                    continue
+                key = (str(candidate.get("segment_id")), float(candidate.get("start_sec")), float(candidate.get("end_sec")))
+                if key in seen:
+                    continue
+                seen.add(key)
+                normalized.append(
+                    {
+                        "segment_id": key[0],
+                        "start_sec": key[1],
+                        "end_sec": key[2],
+                        "reason": str(candidate.get("reason") or candidate.get("relevance_reason") or ""),
+                        "modality": str(candidate.get("modality") or candidate.get("channel") or ""),
+                        "confidence": float(candidate.get("confidence", candidate.get("score", 0.0)) or 0.0),
+                    }
+                )
+                if len(normalized) >= max_candidates:
+                    break
+            return normalized
+        return []
+
+    def has_non_navigation_visual_citation(self, citations: Sequence[str]) -> bool:
+        """Check whether cited observation ids include answer-facing visual evidence."""
+
+        cited = {str(item) for item in citations}
+        if not cited:
+            return False
+        for observation in self._read_observation_dicts():
+            if str(observation.get("observation_id", "")) not in cited:
+                continue
+            tool_name = str(observation.get("tool", ""))
+            if tool_name in self.VISUAL_EVIDENCE_TOOLS or tool_name in self.ANSWER_EVIDENCE_TOOLS:
+                if tool_name not in self.NAVIGATION_TOOLS:
+                    return True
+        return False
+
+    def export_longvideoagent_trajectory(
+        self,
+        *,
+        question: str,
+        video_path: str,
+        final: Mapping[str, Any] | None = None,
+        verifier_result: Mapping[str, Any] | None = None,
+        reward_tags: Sequence[str] = (),
+        output_path: str | Path = "artifacts/trajectories/longvideoagent_trajectory.json",
+    ) -> Mapping[str, Any]:
+        """Export a compact state-action-observation trajectory for GRPO-style training."""
+
+        trace_events = self._read_jsonl_dicts("trace.jsonl")
+        observations = self._read_observation_dicts()
+        observations_by_id = {
+            str(observation.get("observation_id", "")): observation
+            for observation in observations
+            if observation.get("observation_id")
+        }
+        actions = _trajectory_actions(trace_events=trace_events, observations_by_id=observations_by_id)
+        payload: dict[str, Any] = {
+            "schema_version": "LongVideoAgentTrajectoryV1",
+            "state": {
+                "question": question,
+                "video_path": video_path,
+                "workspace_root": self.root.as_posix(),
+                "observation_count": len(observations),
+            },
+            "actions": actions,
+            "observations": [_trajectory_observation(observation) for observation in observations],
+            "final": dict(final or {}),
+            "verifier_result": dict(verifier_result or {}),
+            "reward_tags": [str(tag) for tag in reward_tags],
+        }
+        self.write_text_artifact(
+            output_path,
+            json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True),
+        )
+        self.write_trace_event(
+            "trajectory_export",
+            {
+                "schema_version": payload["schema_version"],
+                "path": Path(output_path).as_posix(),
+                "action_count": len(actions),
+                "reward_tags": list(payload["reward_tags"]),
+            },
+        )
+        return payload
+
     def _append_jsonl(self, filename: str, payload: Mapping[str, Any]) -> None:
         with (self.root / filename).open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
             handle.write("\n")
 
-    def _read_observation_dicts(self) -> list[dict[str, Any]]:
-        observations_path = self.root / "observations.jsonl"
-        if not observations_path.exists():
+    def _read_jsonl_dicts(self, filename: str) -> list[dict[str, Any]]:
+        path = self.root / filename
+        if not path.exists():
             return []
-        observations = []
-        with observations_path.open("r", encoding="utf-8") as handle:
+        rows = []
+        with path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
                     continue
@@ -295,8 +507,11 @@ class EvidenceWorkspace:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(payload, dict):
-                    observations.append(payload)
-        return observations
+                    rows.append(payload)
+        return rows
+
+    def _read_observation_dicts(self) -> list[dict[str, Any]]:
+        return self._read_jsonl_dicts("observations.jsonl")
 
     def _next_observation_id(self) -> str:
         existing = 0
@@ -305,6 +520,82 @@ class EvidenceWorkspace:
             with observations.open("r", encoding="utf-8") as handle:
                 existing = sum(1 for line in handle if line.strip())
         return f"obs_{existing + 1:04d}"
+
+
+def _iter_segment_window_dicts(value: Any):
+    if isinstance(value, Mapping):
+        if "segment_id" in value and "start_sec" in value and "end_sec" in value:
+            yield value
+        for child in value.values():
+            yield from _iter_segment_window_dicts(child)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            yield from _iter_segment_window_dicts(item)
+
+
+def _trajectory_actions(
+    *,
+    trace_events: Sequence[Mapping[str, Any]],
+    observations_by_id: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    pending: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in trace_events:
+        event_type = str(event.get("type", ""))
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            payload = {}
+        if event_type == "tool_use":
+            step = str(payload.get("step", len(actions) + 1))
+            tool_name = str(payload.get("tool", ""))
+            arguments = payload.get("arguments", {})
+            action = {
+                "index": len(actions) + 1,
+                "type": "tool",
+                "step": int(payload.get("step", len(actions) + 1) or len(actions) + 1),
+                "tool": tool_name,
+                "arguments": dict(arguments) if isinstance(arguments, Mapping) else {},
+                "created_at": str(event.get("created_at", "")),
+            }
+            actions.append(action)
+            pending[(step, tool_name)] = action
+            continue
+        if event_type != "tool_result":
+            continue
+        step = str(payload.get("step", ""))
+        tool_name = str(payload.get("tool", ""))
+        action = pending.get((step, tool_name)) or _latest_unmatched_action(actions, tool_name=tool_name)
+        if action is None:
+            continue
+        observation_id = str(payload.get("observation_id", ""))
+        action["observation_id"] = observation_id
+        observation = observations_by_id.get(observation_id)
+        if observation is not None:
+            action["observation"] = _trajectory_observation(observation)
+    return actions
+
+
+def _latest_unmatched_action(actions: Sequence[dict[str, Any]], *, tool_name: str) -> dict[str, Any] | None:
+    for action in reversed(actions):
+        if action.get("observation_id"):
+            continue
+        if tool_name and action.get("tool") != tool_name:
+            continue
+        return action
+    return None
+
+
+def _trajectory_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "observation_id": str(observation.get("observation_id", "")),
+        "tool": str(observation.get("tool", "")),
+        "claim": str(observation.get("claim", "")),
+        "confidence": float(observation.get("confidence", 0.0) or 0.0),
+        "regions": list(observation.get("regions", []) or []),
+        "limitations": str(observation.get("limitations", "")),
+        "raw_output": dict(observation.get("raw_output", {}) or {}),
+    }
 
 
 def _parse_ledger_entries(ledger_text: str) -> list[Mapping[str, Any]]:
@@ -369,6 +660,43 @@ def _supported_option_from_claim(claim: str) -> str | None:
     return None
 
 
+def _bare_option_from_claim(
+    claim: str,
+    *,
+    option_map: Mapping[str, str] | None = None,
+) -> str | None:
+    match = re.match(r"^\s*([A-Za-z])[\.)]\s+\S", claim, flags=re.DOTALL)
+    if not match:
+        return None
+    letter = match.group(1).upper()
+    if option_map is not None:
+        return letter if not option_map or letter in option_map else None
+    return letter if letter in {"A", "B", "C", "D"} else None
+
+
+def _claim_without_legacy_worker_vote(claim: str) -> str:
+    text = str(claim).strip()
+    bare_match = re.match(r"^\s*[A-Za-z][\.)]\s+(.*)$", text, flags=re.DOTALL)
+    if bare_match:
+        return bare_match.group(1).strip()
+
+    fact_lines = []
+    vote_line = re.compile(
+        r"^\s*(?:supported\s+option|supported_option|supported\s+option\s+letter|"
+        r"supported_option_letter|answer_option|answer|option)\s*:?\s*(?:option\s*)?[A-Za-z]\b",
+        flags=re.IGNORECASE,
+    )
+    metadata_line = re.compile(r"^\s*confidence\s*:", flags=re.IGNORECASE)
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or vote_line.search(line) or metadata_line.search(line):
+            continue
+        line = re.sub(r"^\s*claim\s*:\s*", "", line, flags=re.IGNORECASE).strip()
+        if line:
+            fact_lines.append(line)
+    return " ".join(fact_lines).strip() or text
+
+
 def _supported_option_from_relations(value: Any, *, option_map: Mapping[str, str]) -> str | None:
     relations = _candidate_option_relations(value)
     support_relations = [
@@ -388,7 +716,13 @@ def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
     return [dict(item) for item in value if isinstance(item, Mapping)]
 
 
-def _has_worker_option_vote(*, tool_name: str, raw_output: Mapping[str, Any], claim: str) -> bool:
+def _has_worker_option_vote(
+    *,
+    tool_name: str,
+    raw_output: Mapping[str, Any],
+    claim: str,
+    option_map: Mapping[str, str] | None = None,
+) -> bool:
     if tool_name not in EvidenceWorkspace.LOCAL_WORKER_EVIDENCE_TOOLS:
         return False
     if _candidate_option_relations(raw_output.get("candidate_option_relations")):
@@ -396,7 +730,7 @@ def _has_worker_option_vote(*, tool_name: str, raw_output: Mapping[str, Any], cl
     vote_fields = ["supported_option", "supported_option_letter", "answer_option", "supported_options"]
     if any(raw_output.get(field) for field in vote_fields):
         return True
-    return _supported_option_from_claim(claim) is not None
+    return _bare_option_from_claim(claim, option_map=option_map) is not None or _supported_option_from_claim(claim) is not None
 
 
 def _first_item(value: Any) -> Any:

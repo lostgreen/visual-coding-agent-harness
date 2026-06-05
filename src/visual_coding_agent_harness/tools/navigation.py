@@ -63,6 +63,36 @@ def build_video_navigation_registry(video_map: VideoMap | VideoMapStore) -> Tool
             ),
         }
 
+    @tool(name="ground_question", description="Ground a question or event into candidate video windows without answering.")
+    def ground_question(query: str, top_k: int = 5, modalities: Sequence[str] = ()) -> Mapping[str, object]:
+        current = video_map_store.current
+        results = current.search(query=query, top_k=top_k, modalities=modalities)
+        if not results:
+            results = current.anchor_segments(max_segments=top_k)
+        candidates = [_grounding_candidate(result) for result in results]
+        ids = ", ".join(str(candidate["segment_id"]) for candidate in candidates) if candidates else "none"
+        return {
+            "claim": f"Grounding query '{query}' returned candidate windows: {ids}.",
+            "confidence": max([float(candidate["confidence"]) for candidate in candidates] or [0.0]),
+            "input_artifacts": [current.video_path],
+            "regions": candidates,
+            "candidates": candidates,
+            "recommended_next_tools": [
+                {
+                    "tool": "vision_read",
+                    "args": {
+                        "segment_id": candidate["segment_id"],
+                        "start_sec": candidate["start_sec"],
+                        "end_sec": candidate["end_sec"],
+                        "ask_for": query,
+                    },
+                    "reason": "Read typed visual facts from this grounded candidate window.",
+                }
+                for candidate in candidates
+            ],
+            "limitations": "Grounding only localizes candidates from indexes; it does not choose MCQ options or produce final answers.",
+        }
+
     @tool(name="read_segment", description="Read compact indexed metadata for one segment.")
     def read_segment(segment_id: str) -> Mapping[str, object]:
         current = video_map_store.current
@@ -140,6 +170,7 @@ def build_video_navigation_registry(video_map: VideoMap | VideoMapStore) -> Tool
 
     registry.register(video_ls)
     registry.register(search_segments)
+    registry.register(ground_question)
     registry.register(read_segment)
     registry.register(expand_window)
     registry.register(zoom)
@@ -182,6 +213,39 @@ def _modality_results(
         results = current.search(query=query, top_k=top_k, modalities=[channel])
         grouped[channel] = [result.to_dict() for result in results]
     return grouped
+
+
+def _grounding_candidate(result: object) -> Mapping[str, object]:
+    segment = getattr(result, "segment")
+    matches = getattr(result, "matches", []) or []
+    modalities = []
+    for match in matches:
+        if not isinstance(match, Mapping):
+            continue
+        modality = str(match.get("modality", "") or match.get("field", "")).strip()
+        if modality and modality not in modalities:
+            modalities.append(modality)
+    matched_fields = [str(field) for field in getattr(result, "matched_fields", []) or []]
+    reason = str(getattr(result, "relevance_reason", "") or "").strip()
+    if not reason:
+        reason = _relevance_reason(matched_fields)
+    return {
+        "segment_id": segment.segment_id,
+        "start_sec": float(segment.start_sec),
+        "end_sec": float(segment.end_sec),
+        "reason": reason,
+        "modality": ", ".join(modalities) or (matched_fields[0] if matched_fields else "timeline_anchor"),
+        "confidence": float(getattr(result, "score", 0.0) or 0.0),
+        "matched_fields": matched_fields,
+        "matches": [dict(match) for match in matches if isinstance(match, Mapping)],
+    }
+
+
+def _relevance_reason(matched_fields: Sequence[str]) -> str:
+    fields = [str(field) for field in matched_fields if str(field)]
+    if not fields:
+        return "fallback timeline anchor"
+    return "matched indexed field(s): " + ", ".join(fields)
 
 
 def _segment_claim(segment: VideoMapSegment) -> str:

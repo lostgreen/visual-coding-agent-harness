@@ -149,6 +149,53 @@ class HarnessTest(unittest.TestCase):
             self.assertEqual(table["groups"]["unassigned"][0]["obs_id"], "obs_0001")
             self.assertTrue(table["groups"]["unassigned"][0]["legacy_worker_vote"])
 
+    def test_local_worker_bare_option_answer_is_quarantined_from_ledger_and_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="bare_option_vote")
+            observation = workspace.write_observation(
+                tool_name="inspect_segment",
+                input_artifacts=["demo.mp4#t=0,90"],
+                claim="A. Because the object appears to be from the Ming Dynasty.",
+                confidence=0.74,
+                regions=[
+                    {
+                        "segment_id": "seg_0001",
+                        "start_sec": 0.0,
+                        "end_sec": 90.0,
+                        "candidate_options": [
+                            "A. Ming Dynasty significance.",
+                            "B. New railway nearby.",
+                            "C. Treasure inside.",
+                            "D. Highway realignment.",
+                        ],
+                    }
+                ],
+                limitations="Inspector used a physical segment clip.",
+                raw_output={},
+            )
+            workspace.write_ledger_entry(observation)
+
+            ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
+            self.assertIn("legacy local-worker option vote quarantined", ledger)
+            self.assertNotIn("claim: A. Because", ledger)
+            self.assertIn("fact_text: Because the object appears to be from the Ming Dynasty.", ledger)
+
+            table = workspace.evidence_table_v2(
+                question="Which reason motivated the archaeologist?",
+                options=[
+                    "A. Ming Dynasty significance.",
+                    "B. New railway nearby.",
+                    "C. Treasure inside.",
+                    "D. Highway realignment.",
+                ],
+            )
+
+            self.assertEqual(table["groups"]["A"], [])
+            self.assertEqual(table["legacy_worker_vote_rows"], 1)
+            self.assertEqual(table["groups"]["unassigned"][0]["obs_id"], "obs_0001")
+            self.assertTrue(table["groups"]["unassigned"][0]["legacy_worker_vote"])
+            self.assertEqual(table["groups"]["unassigned"][0]["claim"], "Because the object appears to be from the Ming Dynasty.")
+
     def test_evidence_table_can_replay_legacy_worker_votes_explicitly(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = EvidenceWorkspace.create(Path(tmp), run_id="legacy_claim_supported_option")

@@ -9,7 +9,7 @@ from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry
 from visual_coding_agent_harness.video_index import VideoSegment, SceneIndex, fixed_window_scene_index
-from visual_coding_agent_harness.video_map import VideoMap
+from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -658,6 +658,45 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(tool_args["end_sec"], 17.5)
             self.assertEqual(tool_args["nframes"], 8)
 
+    def test_iterative_agent_persists_planner_prompt_and_response_artifacts(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "rationale": "inspect once", "program": ['
+                    '{"tool": "caption_segment", "args": {"segment_id": "seg_0001", "question": "Inspect"}, "assign": "s1"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "done", "citations": ["obs_0001"]}',
+            ]
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=40.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=5.0, end_sec=17.5)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="planner_io")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            agent.run(question="Inspect the clip", video_path="/videos/demo.mp4")
+
+            prompt_path = workspace.root / "artifacts" / "planner_io" / "round_0001_prompt.txt"
+            response_path = workspace.root / "artifacts" / "planner_io" / "round_0001_response.txt"
+            self.assertTrue(prompt_path.exists())
+            self.assertTrue(response_path.exists())
+            self.assertIn("Question: Inspect the clip", prompt_path.read_text(encoding="utf-8"))
+            self.assertIn('"rationale": "inspect once"', response_path.read_text(encoding="utf-8"))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"planner_io"', trace)
+            self.assertIn("round_0001_prompt.txt", trace)
+            self.assertIn("round_0001_response.txt", trace)
+
     def test_iterative_agent_allows_zoom_child_segments_with_explicit_window(self):
         backend = ScriptedPlannerBackend(
             [
@@ -694,6 +733,93 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(tool_args["start_sec"], 30.0)
             self.assertEqual(tool_args["end_sec"], 45.0)
             self.assertEqual(result.rounds[0].program[0]["tool"], "qa_segment")
+
+    def test_iterative_agent_resolves_zoom_child_id_from_prior_zoom_observation(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "zoom", "args": {"segment_id": "seg_0001", "target_granularity_sec": 10.0}, "assign": "zoomed"}'
+                    "]}"
+                ),
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001_z02", "question": "Inspect child"}, "assign": "child"}'
+                    "]}"
+                ),
+            ]
+        )
+        store = VideoMapStore(
+            VideoMap(
+                video_path="/videos/demo.mp4",
+                duration_sec=30.0,
+                segments=[VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+            )
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="zoom_child_from_trace")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_exploration_registry(video_map=store, backend=backend, workspace=workspace),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=2, reserve_final_round=False),
+            )
+
+            result = agent.run(question="Which child is visible?", video_path="/videos/demo.mp4")
+
+            tool_args = result.rounds[1].program[0]["args"]
+            self.assertEqual(tool_args["segment_id"], "seg_0001_z02")
+            self.assertEqual(tool_args["start_sec"], 10.0)
+            self.assertEqual(tool_args["end_sec"], 20.0)
+
+    def test_iterative_agent_stops_repeated_identical_programs_as_no_progress(self):
+        repeated_program = (
+            '{"status": "continue", "rationale": "same map", "program": ['
+            '{"tool": "video_ls", "args": {"query": "same segment"}, "assign": "map"}'
+            "]}"
+        )
+        backend = ScriptedPlannerBackend([repeated_program] * 6)
+        registry = ToolRegistry()
+
+        @tool(name="video_ls", description="Return the same map.")
+        def video_ls(query: str = ""):
+            return {"claim": f"same candidate for {query}", "confidence": 1.0}
+
+        registry.register(video_ls)
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="no_progress")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=6,
+                    reserve_final_round=False,
+                    max_repeated_programs=2,
+                ),
+            )
+
+            result = agent.run(question="Find the same thing", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(len(result.rounds), 2)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_no_progress_guard", trace)
+            self.assertIn("repeated_program", trace)
 
     def test_iterative_agent_repairs_media_tool_missing_segment_id_from_time_window(self):
         backend = ScriptedPlannerBackend(
