@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeRound, IterativeRunResult
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
 
 
 class EvalRunnerTest(unittest.TestCase):
@@ -88,7 +88,10 @@ class EvalRunnerTest(unittest.TestCase):
                 )
 
             summary_path = run_root / "summary.json"
+            evidence_chains_path = run_root / "evidence_chains.jsonl"
             self.assertTrue(summary_path.exists())
+            self.assertTrue(evidence_chains_path.exists())
+            self.assertEqual(summary["evidence_chains_path"], str(evidence_chains_path))
             self.assertEqual(summary["run_id"], "eval")
             self.assertEqual(summary["case_ids"], ["605-1"])
             self.assertEqual(summary["accuracy"], 1.0)
@@ -166,6 +169,71 @@ class EvalRunnerTest(unittest.TestCase):
 
             self.assertEqual(summary["avg_followups_per_case"], 1.5)
             self.assertEqual(summary["followup_success_rate"], 0.5)
+
+    def test_summary_payload_computes_evidence_provenance_completeness(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            complete_workspace = EvidenceWorkspace.create(Path(tmp), run_id="complete_chain")
+            root = EvidenceRecord(
+                evidence_id=complete_workspace.next_evidence_id("distilled"),
+                stage="distilled",
+                parent_id=None,
+                tool="vision_read",
+                observation_id="obs_0001",
+                frame_set_id=None,
+                content={"claim": "red car"},
+                grounding_quality="visually_confirmed",
+                confidence=0.9,
+                created_at=1.0,
+            )
+            ledger = EvidenceRecord(
+                evidence_id=complete_workspace.next_evidence_id("ledger"),
+                stage="ledger",
+                parent_id=root.evidence_id,
+                tool="vision_read",
+                observation_id="obs_0001",
+                frame_set_id=None,
+                content={"claim": "red car"},
+                grounding_quality="visually_confirmed",
+                confidence=0.9,
+                created_at=1.0,
+            )
+            mapped = EvidenceRecord(
+                evidence_id=complete_workspace.next_evidence_id("mapped"),
+                stage="mapped",
+                parent_id=ledger.evidence_id,
+                tool="vision_read",
+                observation_id="obs_0001",
+                frame_set_id=None,
+                content={"candidate_option_relation": {"option": "B", "relation": "support"}},
+                grounding_quality="visually_confirmed",
+                confidence=0.9,
+                created_at=1.0,
+            )
+            for record in [root, ledger, mapped]:
+                complete_workspace.write_evidence(record)
+            empty_workspace = EvidenceWorkspace.create(Path(tmp), run_id="empty_chain")
+
+            summary = eval_runner._summary_payload(
+                run_id="eval",
+                case_ids=["case_001", "case_002"],
+                config_payload={},
+                results=[
+                    {
+                        "question_id": "case_001",
+                        "strategies": {"agent_v2": {"status": "final", "correct": True}},
+                        "raw_artifacts": {"workspaces": {"agent_v2": str(complete_workspace.root)}},
+                    },
+                    {
+                        "question_id": "case_002",
+                        "strategies": {"agent_v2": {"status": "need_more_evidence", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"agent_v2": str(empty_workspace.root)}},
+                    },
+                ],
+            )
+
+            self.assertEqual(summary["evidence_provenance_completeness"], 0.5)
 
     def test_agent_v2_uses_subtitle_index(self):
         from runs import eval_runner
@@ -281,7 +349,20 @@ class EvalRunnerTest(unittest.TestCase):
                     "candidate_option_relations": [{"option": "B", "relation": "support", "strength": 0.9}],
                 },
             )
-            workspace.write_ledger_entry(observation)
+            distilled = EvidenceRecord(
+                evidence_id=workspace.next_evidence_id("distilled"),
+                stage="distilled",
+                parent_id=None,
+                tool="vision_read",
+                observation_id=observation.observation_id,
+                frame_set_id=None,
+                content={"claim": observation.claim},
+                grounding_quality="visually_confirmed",
+                confidence=0.9,
+                created_at=1.0,
+            )
+            workspace.write_evidence(distilled)
+            workspace.write_ledger_entry(observation, parent_records=[distilled])
             workspace.write_trace_event(
                 "tool_result",
                 {"step": 1, "tool": "vision_read", "observation_id": observation.observation_id},
@@ -326,6 +407,9 @@ class EvalRunnerTest(unittest.TestCase):
 
             trajectory_path = Path(raw["trajectory_path"])
             self.assertTrue(trajectory_path.exists())
+            evidence_chains_path = Path(raw["evidence_chains_path"])
+            self.assertTrue(evidence_chains_path.exists())
+            self.assertEqual(raw["evidence_chain_count"], 1)
             self.assertEqual(raw["planner_prompt_count"], 0)
             self.assertIn("non_navigation_visual_citation", raw["reward_tags"])
             self.assertIn("final", raw["reward_tags"])

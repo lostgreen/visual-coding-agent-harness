@@ -848,6 +848,66 @@ class EvidenceWorkspace:
                     return True
         return False
 
+    def evidence_chain_summaries(
+        self,
+        *,
+        observation_ids: Sequence[str] = (),
+        selected_option: str | None = None,
+        max_chains: int | None = 100,
+    ) -> list[dict[str, Any]]:
+        chains = []
+        for mapped_record in self.mapped_evidence_records(
+            observation_ids=observation_ids,
+            selected_option=selected_option,
+        ):
+            chain = self.evidence_chain(mapped_record.evidence_id)
+            stages = [str(record.stage) for record in chain]
+            if not _complete_evidence_chain(stages):
+                continue
+            chains.append(
+                {
+                    "leaf_evidence_id": mapped_record.evidence_id,
+                    "observation_id": mapped_record.observation_id,
+                    "frame_set_id": mapped_record.frame_set_id,
+                    "stages": stages,
+                    "records": [_compact_evidence_record(record) for record in chain],
+                }
+            )
+            if max_chains is not None and len(chains) >= max_chains:
+                break
+        return chains
+
+    def export_evidence_chains(
+        self,
+        *,
+        output_path: str | Path = "artifacts/evidence_chains/evidence_chains.json",
+        max_chains: int = 100,
+    ) -> Mapping[str, Any]:
+        chains = self.evidence_chain_summaries(max_chains=max_chains)
+        total_mapped = len(self.mapped_evidence_records())
+        payload: dict[str, Any] = {
+            "schema_version": "EvidenceChainsV1",
+            "workspace_root": self.root.as_posix(),
+            "chain_count": len(chains),
+            "total_mapped_evidence": total_mapped,
+            "truncated": total_mapped > len(chains),
+            "chains": chains,
+        }
+        self.write_text_artifact(
+            output_path,
+            json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True),
+        )
+        self.write_trace_event(
+            "evidence_chains_export",
+            {
+                "schema_version": payload["schema_version"],
+                "path": Path(output_path).as_posix(),
+                "chain_count": len(chains),
+                "truncated": bool(payload["truncated"]),
+            },
+        )
+        return payload
+
     def export_longvideoagent_trajectory(
         self,
         *,
@@ -1044,6 +1104,45 @@ def _trajectory_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
         "limitations": str(observation.get("limitations", "")),
         "raw_output": dict(observation.get("raw_output", {}) or {}),
     }
+
+
+def _complete_evidence_chain(stages: Sequence[str]) -> bool:
+    return "distilled" in stages and "ledger" in stages and "mapped" in stages
+
+
+def _compact_evidence_record(record: EvidenceRecord) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "evidence_id": record.evidence_id,
+        "stage": record.stage,
+        "parent_id": record.parent_id,
+        "tool": record.tool,
+        "observation_id": record.observation_id,
+        "frame_set_id": record.frame_set_id,
+        "grounding_quality": record.grounding_quality,
+        "confidence": record.confidence,
+    }
+    claim = record.content.get("claim")
+    if claim:
+        payload["claim"] = _compact_text(str(claim), limit=240)
+    relation = record.content.get("candidate_option_relation")
+    if isinstance(relation, Mapping):
+        payload["candidate_option_relation"] = _compact_relation(relation)
+    return payload
+
+
+def _compact_relation(relation: Mapping[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in ["option", "relation", "strength", "observation_id", "parent_evidence_id", "assigned_by"]:
+        if relation.get(key) is not None:
+            compact[key] = relation[key]
+    if relation.get("rationale"):
+        compact["rationale"] = _compact_text(str(relation["rationale"]), limit=160)
+    return compact
+
+
+def _compact_text(text: str, *, limit: int) -> str:
+    compact = " ".join(str(text).split())
+    return compact[:limit] + ("..." if len(compact) > limit else "")
 
 
 def _ledger_claim(observation: Observation, *, parent_record: EvidenceRecord | None) -> str:

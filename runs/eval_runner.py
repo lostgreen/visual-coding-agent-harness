@@ -254,7 +254,9 @@ def run_loop(
         verifier_result={"status": result.status},
         reward_tags=reward_tags,
     )
+    evidence_chains_payload = workspace.export_evidence_chains()
     trajectory_path = workspace.root / "artifacts" / "trajectories" / "longvideoagent_trajectory.json"
+    evidence_chains_path = workspace.root / "artifacts" / "evidence_chains" / "evidence_chains.json"
     planner_io_dir = workspace.root / "artifacts" / "planner_io"
     tools = []
     segments = []
@@ -276,6 +278,8 @@ def run_loop(
         "seconds": round(seconds, 3),
         "trajectory_path": str(trajectory_path),
         "trajectory_action_count": len(trajectory_payload.get("actions", [])),
+        "evidence_chains_path": str(evidence_chains_path),
+        "evidence_chain_count": int(evidence_chains_payload.get("chain_count", 0) or 0),
         "planner_io_dir": str(planner_io_dir),
         "planner_prompt_count": len(list(planner_io_dir.glob("*_prompt.txt"))) if planner_io_dir.exists() else 0,
         "reward_tags": reward_tags,
@@ -294,7 +298,15 @@ def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
         "citation_count": len(raw.get("citations", [])),
         "answer_excerpt": compact_text(str(raw.get("answer", "")), limit=240),
     }
-    for key in ["trajectory_path", "trajectory_action_count", "planner_io_dir", "planner_prompt_count", "reward_tags"]:
+    for key in [
+        "trajectory_path",
+        "trajectory_action_count",
+        "evidence_chains_path",
+        "evidence_chain_count",
+        "planner_io_dir",
+        "planner_prompt_count",
+        "reward_tags",
+    ]:
         if key in raw:
             summary[key] = raw[key]
     return summary
@@ -425,6 +437,8 @@ def run_eval_cases(
             config_payload=config_payload,
             results=results,
         )
+        evidence_chains_path = _write_run_evidence_chains(config.run_root, results)
+        summary["evidence_chains_path"] = str(evidence_chains_path)
         summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
         compact = {"question_id": qid, "gt": gt, "strategies": case.get("strategies", {})}
         print("CASE_DONE " + json.dumps(compact, ensure_ascii=True, sort_keys=True), flush=True)
@@ -454,11 +468,53 @@ def _summary_payload(
         compliance, histogram = compute_nframes_metrics(workspaces)
         run_summary.tool_nframes_compliance = compliance
         run_summary.nframes_histogram = histogram
+        run_summary.evidence_provenance_completeness = _evidence_provenance_completeness(workspaces)
         _populate_trace_summary_metrics(run_summary, workspaces)
     payload = run_summary.to_dict()
     payload["config"] = dict(config_payload)
     payload["cases"] = results
     return payload
+
+
+def _write_run_evidence_chains(run_root: Path, results: Sequence[Mapping[str, Any]]) -> Path:
+    path = run_root / "evidence_chains.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for case in results:
+        raw_artifacts = case.get("raw_artifacts", {})
+        if not isinstance(raw_artifacts, Mapping):
+            continue
+        workspace_paths = raw_artifacts.get("workspaces", {})
+        if not isinstance(workspace_paths, Mapping):
+            continue
+        strategies = _case_strategies(case)
+        for strategy, workspace_path in workspace_paths.items():
+            workspace_root = Path(str(workspace_path))
+            if not workspace_root.exists():
+                continue
+            strategy_summary = strategies.get(str(strategy), {})
+            if not isinstance(strategy_summary, Mapping):
+                strategy_summary = {}
+            chains = EvidenceWorkspace(root=workspace_root).evidence_chain_summaries(max_chains=100)
+            rows.append(
+                {
+                    "case_id": str(case.get("question_id", "")),
+                    "strategy": str(strategy),
+                    "final_decision": str(strategy_summary.get("status", "")),
+                    "selected_option": str(strategy_summary.get("choice", "")),
+                    "workspace": workspace_root.as_posix(),
+                    "chain_count": len(chains),
+                    "chains": [
+                        [str(record.get("evidence_id", "")) for record in chain.get("records", [])]
+                        for chain in chains
+                    ],
+                }
+            )
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True, sort_keys=True))
+            handle.write("\n")
+    return path
 
 
 def _populate_run_summary_metrics(summary: RunSummary, results: Sequence[Mapping[str, Any]]) -> None:
@@ -503,6 +559,13 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         summary.avg_followups_per_case = sum(followup_attempts) / len(followup_attempts)
         attempted_cases = sum(1 for attempts in followup_attempts if attempts > 0)
         summary.followup_success_rate = (followup_successes / attempted_cases) if attempted_cases else 0.0
+
+
+def _evidence_provenance_completeness(workspaces: Sequence[EvidenceWorkspace]) -> float:
+    if not workspaces:
+        return 0.0
+    complete = sum(1 for workspace in workspaces if workspace.evidence_chain_summaries(max_chains=1))
+    return complete / len(workspaces)
 
 
 def _hard_skill_followup_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[int, bool]:
