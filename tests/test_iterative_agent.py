@@ -1162,6 +1162,125 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("Partial evidence summary", result.answer)
             self.assertIn("aircraft history", result.answer)
 
+    def test_iterative_agent_returns_low_confidence_when_budget_exhausts_with_partial_support(self):
+        class LowConfidenceBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001", '
+                            '"question": "Inspect option evidence", '
+                            '"candidate_options": ["A. submarine", "B. aircraft museum"]}, "assign": "s1"}'
+                            "]}"
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "need_more_evidence", "rationale": "partial support only", '
+                            '"citations": [], '
+                            '"candidate_option_relations": ['
+                            '{"option": "B", "relation": "support", "strength": 0.8, '
+                            '"observation_id": "obs_0001", "grounding_quality": "visually_confirmed"}'
+                            '], "missing_evidence": ["need one more local view"], "confidence": 0.0}'
+                        )
+                    )
+                return BackendResponse(text="unexpected")
+
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=10.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=10.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="low_conf_budget")
+            agent = IterativeVisualAgent(
+                backend=LowConfidenceBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. submarine\nB. aircraft museum",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.citations, ["obs_0001"])
+            self.assertAlmostEqual(result.confidence, 0.56)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("budget_exhausted", trace)
+            self.assertIn("low_confidence_final", trace)
+
+    def test_iterative_agent_blocks_low_confidence_without_visual_citation(self):
+        class NoVisualLowConfidenceBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            '{"tool": "video_ls", "args": {"query": "aircraft"}, "assign": "map"}'
+                            "]}"
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "need_more_evidence", "rationale": "partial map-only support", '
+                            '"citations": [], '
+                            '"candidate_option_relations": ['
+                            '{"option": "B", "relation": "support", "strength": 0.8, '
+                            '"observation_id": "obs_0001", "grounding_quality": "visually_confirmed"}'
+                            '], "missing_evidence": ["need visual confirmation"], "confidence": 0.0}'
+                        )
+                    )
+                return BackendResponse(text="unexpected")
+
+        registry = ToolRegistry()
+
+        @tool(name="video_ls", description="Return a navigation-only map row.")
+        def video_ls(query: str = ""):
+            return {"claim": f"navigation candidate for {query}", "confidence": 1.0}
+
+        registry.register(video_ls)
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=10.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=10.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="low_conf_blocked")
+            agent = IterativeVisualAgent(
+                backend=NoVisualLowConfidenceBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. submarine\nB. aircraft museum",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("low_confidence_final_blocked", trace)
+
     def test_iterative_agent_reserves_final_round_from_new_visual_tools(self):
         backend = ScriptedPlannerBackend(
             [

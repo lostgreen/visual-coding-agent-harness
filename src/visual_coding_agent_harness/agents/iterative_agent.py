@@ -12,7 +12,7 @@ from ..interpreter import ProgramInterpreter
 from ..registry import ToolError, ToolRegistry
 from ..video_index import SceneIndex, VideoSegment
 from ..workspace import EvidenceWorkspace
-from .answer_agent import AnswerAgent
+from .answer_agent import AnswerAgent, AnswerAgentResult
 from .contracts import VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
@@ -377,6 +377,18 @@ class IterativeVisualAgent:
                         confidence=answer_result.confidence,
                         rounds=rounds,
                     )
+                low_confidence_result = self._try_low_confidence_final(
+                    answer_result=answer_result,
+                    question=question,
+                    video_path=video_path,
+                    rounds=rounds,
+                    round_number=round_number,
+                    source="reserved_final",
+                    program=[],
+                    observation_ids=[],
+                )
+                if low_confidence_result is not None:
+                    return low_confidence_result
             program_key = _program_signature(program)
             if program_key == repeated_program_key:
                 repeated_program_count += 1
@@ -469,6 +481,19 @@ class IterativeVisualAgent:
                         confidence=answer_result.confidence,
                         rounds=rounds,
                     )
+                if round_number >= self.budget.max_rounds:
+                    low_confidence_result = self._try_low_confidence_final(
+                        answer_result=answer_result,
+                        question=question,
+                        video_path=video_path,
+                        rounds=rounds,
+                        round_number=round_number,
+                        source="prefinal_probe_budget_exhausted",
+                        program=program,
+                        observation_ids=observation_ids,
+                    )
+                    if low_confidence_result is not None:
+                        return low_confidence_result
                 answer_feedback = list(answer_result.missing_evidence)
             rounds.append(
                 IterativeRound(
@@ -485,6 +510,33 @@ class IterativeVisualAgent:
             "iterative_budget_exhausted",
             {"max_rounds": self.budget.max_rounds, "citations": citations},
         )
+        if extract_candidate_options(question) and citations:
+            answer_result = AnswerAgent(self.backend).run(
+                question=question,
+                evidence_text=self._read_ledger(),
+                evidence_table=self._answer_evidence_table(question),
+            )
+            self.workspace.write_trace_event(
+                "iterative_answer_agent",
+                {
+                    "round": self.budget.max_rounds,
+                    "source": "budget_exhausted",
+                    "status": answer_result.status,
+                    "answer": answer_result.answer,
+                    "citations": list(answer_result.citations),
+                    "missing_evidence": list(answer_result.missing_evidence),
+                },
+            )
+            low_confidence_result = self._try_low_confidence_final(
+                answer_result=answer_result,
+                question=question,
+                video_path=video_path,
+                rounds=rounds,
+                round_number=self.budget.max_rounds,
+                source="budget_exhausted",
+            )
+            if low_confidence_result is not None:
+                return low_confidence_result
         plural = "round" if self.budget.max_rounds == 1 else "rounds"
         partial_answer = _partial_answer_from_ledger(self._read_ledger())
         return IterativeRunResult(
@@ -835,6 +887,65 @@ class IterativeVisualAgent:
             return False
         return True
 
+    def _try_low_confidence_final(
+        self,
+        *,
+        answer_result: AnswerAgentResult,
+        question: str,
+        video_path: str,
+        rounds: Sequence[IterativeRound],
+        round_number: int,
+        source: str,
+        program: Sequence[Mapping[str, Any]] = (),
+        observation_ids: Sequence[str] = (),
+    ) -> IterativeRunResult | None:
+        if answer_result.status != "need_more_evidence" or not answer_result.has_partial_support():
+            return None
+        low_confidence = answer_result.as_low_confidence_final()
+        if low_confidence.status != "low_confidence_final":
+            return None
+        if not self.workspace.has_non_navigation_visual_citation(low_confidence.citations):
+            self.workspace.write_trace_event(
+                "low_confidence_final_blocked",
+                {
+                    "round": round_number,
+                    "source": source,
+                    "reason": "final_requires_non_navigation_visual_evidence",
+                    "citations": list(low_confidence.citations),
+                },
+            )
+            return None
+        final_rounds = list(rounds)
+        final_rounds.append(
+            IterativeRound(
+                round_number=round_number,
+                status="low_confidence_final",
+                planner_text=low_confidence.raw_text,
+                rationale=low_confidence.rationale,
+                program=program,
+                observation_ids=observation_ids,
+            )
+        )
+        self.workspace.write_trace_event(
+            "iterative_final",
+            {
+                "round": round_number,
+                "answer": low_confidence.answer,
+                "citations": list(low_confidence.citations),
+                "source": source,
+                "status": "low_confidence_final",
+            },
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer=low_confidence.answer,
+            status="low_confidence_final",
+            citations=list(low_confidence.citations),
+            confidence=low_confidence.confidence,
+            rounds=final_rounds,
+        )
+
     def _try_global_gist_route(self, *, question: str, video_path: str) -> IterativeRunResult | None:
         program = [
             {
@@ -1086,6 +1197,19 @@ class IterativeVisualAgent:
                 failure_tag=last_failure_tag,
                 rule=_reflection_rule_for_failure(last_failure_tag),
             )
+            if round_number >= self.budget.max_rounds:
+                low_confidence_result = self._try_low_confidence_final(
+                    answer_result=answer_result,
+                    question=question,
+                    video_path=video_path,
+                    rounds=rounds,
+                    round_number=round_number,
+                    source="hard_skill_budget_exhausted",
+                    program=program,
+                    observation_ids=round_observation_ids,
+                )
+                if low_confidence_result is not None:
+                    return low_confidence_result
             rounds.append(
                 IterativeRound(
                     round_number=round_number,
