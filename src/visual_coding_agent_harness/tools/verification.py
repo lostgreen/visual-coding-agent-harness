@@ -9,6 +9,7 @@ from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
 from ..agents.skills.predicates import (
     direct_floor_holds,
+    grounding_quality_floor,
     no_decisive_weak_grounding,
     no_unaddressed_conflict,
     selected_option_has_structured_support,
@@ -232,6 +233,18 @@ def _option_conflict_gate(
         for reason in result.reasons:
             if reason not in reasons:
                 reasons.append(str(reason))
+    mapped_records = workspace.mapped_evidence_records(
+        observation_ids=required_citations,
+        selected_option=answer_option,
+    )
+    if mapped_records:
+        grounding_reason = grounding_quality_floor(
+            mapped_records,
+            workspace=workspace,
+            require_visual=True,
+        )
+        if grounding_reason and grounding_reason not in reasons:
+            reasons.append(grounding_reason)
 
     return {
         "reasons": reasons,

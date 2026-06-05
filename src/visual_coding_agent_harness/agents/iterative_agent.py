@@ -18,6 +18,7 @@ from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, Followup
 from .prompt_stack import compose_replanning_prompt_blocks, render_prompt_blocks
 from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
 from .skills.predicates import (
+    grounding_quality_floor,
     no_decisive_weak_grounding,
     no_unaddressed_conflict,
     selected_option_has_structured_support,
@@ -996,6 +997,7 @@ class IterativeVisualAgent:
                 table = self._answer_evidence_table(question)
             selected_option = _answer_option_letter(answer_result.answer)
             gate_reason = _hard_skill_gate_reason(
+                workspace=self.workspace,
                 skill_name=skill.name,
                 question=question,
                 table=table,
@@ -1258,6 +1260,7 @@ def _blocked_final_reason(
 
 def _hard_skill_gate_reason(
     *,
+    workspace: EvidenceWorkspace,
     skill_name: str,
     question: str,
     table: Mapping[str, Any],
@@ -1283,6 +1286,17 @@ def _hard_skill_gate_reason(
         temporal = temporal_order_consistent(table, selected_option=selected_option)
         if not temporal.passed:
             return "temporal_order_requires_confirmed_event_timestamps"
+
+    grounding_reason = grounding_quality_floor(
+        workspace.mapped_evidence_records(
+            observation_ids=citations,
+            selected_option=selected_option,
+        ),
+        workspace=workspace,
+        require_visual=skill_name != "gist_qa",
+    )
+    if grounding_reason:
+        return "grounding_quality_floor"
     return ""
 
 
@@ -1296,6 +1310,7 @@ def _reflection_rule_for_failure(failure_tag: str) -> str:
         "no_decisive_weak_grounding": "upgrade weak or inferred support to visually_confirmed evidence before finalizing",
         "no_unaddressed_conflict": "resolve stronger conflicting option support before finalizing",
         "temporal_order_requires_confirmed_event_timestamps": "confirm every event timestamp before comparing option sequence",
+        "grounding_quality_floor": "collect at least one visually_confirmed mapped evidence chain before finalizing",
     }
     return rules.get(str(failure_tag), "request targeted evidence before finalizing")
 

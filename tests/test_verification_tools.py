@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from visual_coding_agent_harness.tools.verification import build_verification_registry
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
 
 
 class VerificationToolsTest(unittest.TestCase):
@@ -73,6 +73,51 @@ class VerificationToolsTest(unittest.TestCase):
 
         self.assertIn("insufficient", result["claim"])
         self.assertEqual(result["regions"][0]["evidence_gate"]["missing_citations"], ["obs_0002"])
+
+    def test_verify_ledger_answer_rejects_mapped_support_below_grounding_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_grounding_floor")
+            observation = workspace.write_observation(
+                tool_name="caption_segment",
+                input_artifacts=["clip_a.mp4"],
+                claim="Visual row text supports option A.",
+                confidence=0.92,
+                raw_output={
+                    "candidate_option_relations": [
+                        {"option": "A", "relation": "support", "strength": 0.92, "assigned_by": "answer_agent"}
+                    ],
+                    "grounding_quality": "visually_confirmed",
+                },
+            )
+            distilled = EvidenceRecord(
+                evidence_id=workspace.next_evidence_id("distilled"),
+                stage="distilled",
+                parent_id=None,
+                tool="caption_segment",
+                observation_id=observation.observation_id,
+                frame_set_id=None,
+                content={"claim": observation.claim},
+                grounding_quality="inferred",
+                confidence=0.92,
+                created_at=1.0,
+            )
+            workspace.write_evidence(distilled)
+            workspace.write_ledger_entry(observation, parent_records=[distilled])
+            registry = build_verification_registry(workspace=workspace)
+
+            result = registry.execute(
+                "verify_ledger_answer",
+                {
+                    "answer": "A. option A",
+                    "candidate_options": ["A. option A", "B. option B"],
+                    "required_citations": [observation.observation_id],
+                    "min_score": 0.0,
+                },
+            )
+
+            gate = result["regions"][0]["evidence_gate"]
+            self.assertIn("insufficient", result["claim"])
+            self.assertTrue(any("no visually_confirmed" in reason for reason in gate["reasons"]))
 
     def test_verify_ledger_answer_rejects_uncited_strong_conflicting_option(self):
         with tempfile.TemporaryDirectory() as tmp:

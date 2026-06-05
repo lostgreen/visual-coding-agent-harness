@@ -420,6 +420,30 @@ class EvidenceWorkspace:
     def _load_evidence_records(self) -> list[EvidenceRecord]:
         return [EvidenceRecord.from_mapping(payload) for payload in self._read_jsonl_dicts("evidence.jsonl")]
 
+    def mapped_evidence_records(
+        self,
+        *,
+        observation_ids: Sequence[str] = (),
+        selected_option: str | None = None,
+    ) -> list[EvidenceRecord]:
+        cited = {str(item) for item in observation_ids if str(item)}
+        option = _relation_option_letter(selected_option)
+        records = []
+        for record in self._load_evidence_records():
+            if record.stage != "mapped":
+                continue
+            if cited and str(record.observation_id or "") not in cited:
+                continue
+            relation = record.content.get("candidate_option_relation", {})
+            if not isinstance(relation, Mapping):
+                continue
+            if option and _relation_option_letter(relation.get("option")) != option:
+                continue
+            if str(relation.get("relation", "")).strip().lower() not in {"support", "supports", "supported"}:
+                continue
+            records.append(record)
+        return records
+
     def evidence_chain(self, leaf_id: str) -> list[EvidenceRecord]:
         by_id = {
             str(payload.get("evidence_id", "")): EvidenceRecord.from_mapping(payload)
@@ -589,6 +613,13 @@ class EvidenceWorkspace:
                     f"artifacts: {artifacts} | claim: {claim} | limitations: {base_limitation}\n"
                 )
                 handle.write(line)
+        raw_relations = _candidate_option_relations(observation.raw_output.get("candidate_option_relations"))
+        if raw_relations:
+            self.annotate_candidate_option_relations(
+                observation_ids=[observation.observation_id],
+                relations=raw_relations,
+                assigned_by=observation.tool,
+            )
         return ledger_records
 
     def compact_ledger_text(
@@ -1197,6 +1228,14 @@ def _relation_parent_evidence_id(relation: Mapping[str, Any]) -> str:
         or relation.get("parent_id")
         or ""
     ).strip()
+
+
+def _relation_option_letter(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"\b(?:option\s*)?([A-Za-z])\b", text, flags=re.IGNORECASE)
+    return match.group(1).upper() if match else text[:1].upper()
 
 
 def _candidate_option_relation_present(

@@ -16,6 +16,7 @@ GROUNDING_WEIGHTS = {
 }
 WEAK_GROUNDING = {"inferred", "weak", "external_knowledge"}
 NAVIGATION_TOOLS = {"video_ls", "search_segments", "read_segment", "expand_window", "zoom"}
+VISUAL_GROUNDING = {"visually_confirmed"}
 
 
 @dataclass(frozen=True)
@@ -212,6 +213,23 @@ def direct_floor_holds(
             "floor_score": _row_score(floor),
         },
     )
+
+
+def grounding_quality_floor(
+    mapped_records: Sequence[Any],
+    *,
+    workspace: Any,
+    require_visual: bool = True,
+) -> str | None:
+    if not mapped_records:
+        return "no mapped evidence"
+    qualities = set()
+    for record in mapped_records:
+        chain = workspace.evidence_chain(record.evidence_id)
+        qualities.update(str(item.grounding_quality) for item in chain)
+    if require_visual and not qualities.intersection(VISUAL_GROUNDING):
+        return f"final support contains no visually_confirmed evidence (got {sorted(qualities)})"
+    return None
 
 
 def _rows(table: Mapping[str, Any]) -> list[Mapping[str, Any]]:

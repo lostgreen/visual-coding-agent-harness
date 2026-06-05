@@ -5,6 +5,7 @@ from pathlib import Path
 from visual_coding_agent_harness.agents.skills.predicates import (
     direct_floor_holds,
     every_event_has_confirmed_timestamp,
+    grounding_quality_floor,
     no_decisive_weak_grounding,
     selected_option_has_structured_support,
     temporal_order_consistent,
@@ -15,9 +16,10 @@ from visual_coding_agent_harness.agents.skills.specs import (
     select_skill,
 )
 from visual_coding_agent_harness.agents.distill import distill
+from visual_coding_agent_harness.agents.iterative_agent import _hard_skill_gate_reason
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.registry import ToolRegistry, tool
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
 
 
 class V4FoundationTest(unittest.TestCase):
@@ -195,6 +197,78 @@ class V4FoundationTest(unittest.TestCase):
         self.assertFalse(direct_floor_holds(table, selected_option="A").passed)
         self.assertTrue(direct_floor_holds(table, selected_option="D").passed)
 
+    def test_grounded_factual_requires_visual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="grounding_floor")
+            mapped = _write_evidence_chain(
+                workspace,
+                option="A",
+                grounding_quality="global_sparse",
+                tool="global_gist",
+            )
+
+            reason = grounding_quality_floor([mapped], workspace=workspace, require_visual=True)
+
+            self.assertIsNotNone(reason)
+            self.assertIn("no visually_confirmed", reason or "")
+
+    def test_gist_qa_allows_global_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="grounding_floor")
+            mapped = _write_evidence_chain(
+                workspace,
+                option="A",
+                grounding_quality="global_sparse",
+                tool="global_gist",
+            )
+
+            self.assertIsNone(grounding_quality_floor([mapped], workspace=workspace, require_visual=False))
+
+    def test_visual_plus_global_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="grounding_floor")
+            global_mapped = _write_evidence_chain(
+                workspace,
+                option="A",
+                grounding_quality="global_sparse",
+                tool="global_gist",
+            )
+            visual_mapped = _write_evidence_chain(
+                workspace,
+                option="A",
+                grounding_quality="visually_confirmed",
+                tool="vision_read",
+            )
+
+            self.assertIsNone(
+                grounding_quality_floor([global_mapped, visual_mapped], workspace=workspace, require_visual=True)
+            )
+
+    def test_hard_skill_gate_uses_mapped_grounding_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="grounding_floor")
+            _write_evidence_chain(
+                workspace,
+                option="A",
+                grounding_quality="global_sparse",
+                tool="global_gist",
+            )
+            table = workspace.evidence_table_v2(
+                question="Which option is shown?",
+                options=["A. global synopsis", "B. local fact"],
+            )
+
+            reason = _hard_skill_gate_reason(
+                skill_name="grounded_factual",
+                question="Which option is shown?\nA. global synopsis\nB. local fact",
+                table=table,
+                selected_option="A",
+                citations=["obs_0001"],
+                workspace=workspace,
+            )
+
+            self.assertEqual(reason, "grounding_quality_floor")
+
     def test_interpreter_foreach_fills_slots_and_collects_assignments(self):
         registry = ToolRegistry()
 
@@ -257,6 +331,57 @@ class V4FoundationTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("sufficiency_stop", trace)
             self.assertNotIn("should not run", trace)
+
+
+def _write_evidence_chain(
+    workspace: EvidenceWorkspace,
+    *,
+    option: str,
+    grounding_quality: str,
+    tool: str,
+) -> EvidenceRecord:
+    observation = workspace.write_observation(
+        tool_name=tool,
+        claim=f"{option} is supported by {grounding_quality}.",
+        confidence=0.86,
+        raw_output={
+            "grounding_quality": grounding_quality,
+            "candidate_option_relations": [{"option": option, "relation": "support", "strength": 0.86}],
+        },
+    )
+    distilled = EvidenceRecord(
+        evidence_id=workspace.next_evidence_id("distilled"),
+        stage="distilled",
+        parent_id=None,
+        tool=tool,
+        observation_id=observation.observation_id,
+        frame_set_id=None,
+        content={"claim": observation.claim},
+        grounding_quality=grounding_quality,  # type: ignore[arg-type]
+        confidence=0.86,
+        created_at=1.0,
+    )
+    workspace.write_evidence(distilled)
+    ledger = workspace.write_ledger_entry(observation, parent_records=[distilled])[0]
+    changed = workspace.annotate_candidate_option_relations(
+        observation_ids=[observation.observation_id],
+        relations=[
+            {
+                "option": option,
+                "relation": "support",
+                "strength": 0.86,
+                "observation_id": observation.observation_id,
+                "parent_evidence_id": ledger.evidence_id,
+            }
+        ],
+    )
+    assert changed == 1
+    mapped = workspace.mapped_evidence_records(
+        observation_ids=[observation.observation_id],
+        selected_option=option,
+    )
+    assert mapped
+    return mapped[-1]
 
 
 if __name__ == "__main__":
