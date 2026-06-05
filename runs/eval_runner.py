@@ -17,6 +17,8 @@ from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
+from runs.summary_schema import RunSummary, validate as validate_run_summary
+
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
 MODEL_PATH = "/m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct"
@@ -336,16 +338,19 @@ def run_eval_cases(
     config.workspace_root.mkdir(parents=True, exist_ok=True)
     summary_path = config.run_root / "summary.json"
     results = []
-    summary = {
-        "config": {
-            "cases": list(config.cases),
-            "strategies": list(config.strategies),
-            "window_sec": config.window_sec,
-            "budget": asdict(config.budget),
-            "model_path": config.model_path,
-        },
-        "cases": results,
+    config_payload = {
+        "cases": list(config.cases),
+        "strategies": list(config.strategies),
+        "window_sec": config.window_sec,
+        "budget": asdict(config.budget),
+        "model_path": config.model_path,
     }
+    summary = _summary_payload(
+        run_id=config.run_root.name,
+        case_ids=config.cases,
+        config_payload=config_payload,
+        results=results,
+    )
     print(
         "START videomme_eval "
         + json.dumps({"cases": list(config.cases), "strategies": list(config.strategies)}, sort_keys=True),
@@ -411,11 +416,113 @@ def run_eval_cases(
                     "error": type(exc).__name__ + ": " + str(exc)[:500],
                 }
         results.append(case)
+        summary = _summary_payload(
+            run_id=config.run_root.name,
+            case_ids=config.cases,
+            config_payload=config_payload,
+            results=results,
+        )
         summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
         compact = {"question_id": qid, "gt": gt, "strategies": case.get("strategies", {})}
         print("CASE_DONE " + json.dumps(compact, ensure_ascii=True, sort_keys=True), flush=True)
+    violations = validate_run_summary(RunSummary.from_dict(summary))
+    if violations:
+        (config.run_root / "summary_violations.json").write_text(
+            json.dumps({"violations": violations}, ensure_ascii=True, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        raise SystemExit(2)
     print("DONE summary=" + str(summary_path), flush=True)
     return summary
+
+
+def _summary_payload(
+    *,
+    run_id: str,
+    case_ids: Sequence[str],
+    config_payload: Mapping[str, Any],
+    results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    run_summary = RunSummary.with_defaults(run_id, list(case_ids))
+    run_summary.per_case = results
+    _populate_run_summary_metrics(run_summary, results)
+    workspaces = _workspaces_from_results(results)
+    if workspaces:
+        compliance, histogram = compute_nframes_metrics(workspaces)
+        run_summary.tool_nframes_compliance = compliance
+        run_summary.nframes_histogram = histogram
+    payload = run_summary.to_dict()
+    payload["config"] = dict(config_payload)
+    payload["cases"] = results
+    return payload
+
+
+def _populate_run_summary_metrics(summary: RunSummary, results: Sequence[Mapping[str, Any]]) -> None:
+    strategy_results = [
+        strategy
+        for case in results
+        for strategy in _case_strategies(case).values()
+    ]
+    if not strategy_results:
+        return
+    total = len(strategy_results)
+    summary.accuracy = sum(1 for item in strategy_results if bool(item.get("correct"))) / total
+    summary.final_rate = sum(1 for item in strategy_results if item.get("status") == "final") / total
+    summary.need_more_evidence_rate = (
+        sum(1 for item in strategy_results if item.get("status") == "need_more_evidence") / total
+    )
+    summary.unsupported_final_rate = (
+        sum(
+            1
+            for item in strategy_results
+            if item.get("status") == "final" and int(item.get("citation_count", 0) or 0) == 0
+        )
+        / total
+    )
+
+
+def _case_strategies(case: Mapping[str, Any]) -> Mapping[str, Any]:
+    strategies = case.get("strategies", {})
+    return strategies if isinstance(strategies, Mapping) else {}
+
+
+def compute_nframes_metrics(
+    workspace: EvidenceWorkspace | Sequence[EvidenceWorkspace],
+) -> tuple[float, dict[str, dict[int, int]]]:
+    workspaces = [workspace] if isinstance(workspace, EvidenceWorkspace) else list(workspace)
+    manifests = [manifest for item in workspaces for manifest in item.load_all_manifests()]
+    if not manifests:
+        return 1.0, {}
+
+    hits = sum(1 for manifest in manifests if manifest.nframes == manifest.target_nframes)
+    histogram: dict[str, dict[int, int]] = {}
+    for manifest in manifests:
+        tool_histogram = histogram.setdefault(manifest.created_by_tool, {})
+        tool_histogram[manifest.nframes] = tool_histogram.get(manifest.nframes, 0) + 1
+    return hits / len(manifests), _sorted_histogram(histogram)
+
+
+def _workspaces_from_results(results: Sequence[Mapping[str, Any]]) -> list[EvidenceWorkspace]:
+    workspaces = []
+    for case in results:
+        raw_artifacts = case.get("raw_artifacts", {})
+        if not isinstance(raw_artifacts, Mapping):
+            continue
+        workspace_paths = raw_artifacts.get("workspaces", {})
+        if not isinstance(workspace_paths, Mapping):
+            continue
+        for path in workspace_paths.values():
+            workspace_root = Path(str(path))
+            if workspace_root.exists():
+                workspaces.append(EvidenceWorkspace(root=workspace_root))
+    return workspaces
+
+
+def _sorted_histogram(histogram: Mapping[str, Mapping[int, int]]) -> dict[str, dict[int, int]]:
+    return {
+        tool: {frames: counts[frames] for frames in sorted(counts)}
+        for tool, counts in sorted(histogram.items())
+    }
 
 
 def run_strategy(

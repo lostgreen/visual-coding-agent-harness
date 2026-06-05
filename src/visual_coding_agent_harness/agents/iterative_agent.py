@@ -21,7 +21,7 @@ from .skills.predicates import (
     selected_option_has_structured_support,
     temporal_order_consistent,
 )
-from .skills.specs import select_skill
+from .skills.specs import SkillSpec, select_skill
 
 
 _SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read"}
@@ -483,6 +483,8 @@ class IterativeVisualAgent:
         normalized = []
         reserved_segment_ids = set(inspected_segment_ids)
         pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
+        active_skill = select_skill(question) if self.budget.hard_skill_runtime else None
+        blocked_route_violation = False
         for step in program:
             if not isinstance(step, Mapping):
                 raise ValueError("Planner program steps must be objects")
@@ -493,6 +495,18 @@ class IterativeVisualAgent:
 
             tool_name = str(step["tool"])
             args = dict(step.get("args", {}))
+            violation = _route_violation(tool_name=tool_name, active_skill=active_skill, free_exploration=self.budget.free_exploration)
+            if violation is not None:
+                blocked_route_violation = True
+                self.workspace.write_trace_event(
+                    "route_violation",
+                    {
+                        "tool": tool_name,
+                        "error": violation,
+                        "skill": active_skill.name if active_skill is not None else "",
+                    },
+                )
+                continue
             if final_round_reserved and tool_name not in _VERIFIER_TOOLS:
                 self.workspace.write_trace_event(
                     "exploration_policy_adjustment",
@@ -597,7 +611,7 @@ class IterativeVisualAgent:
             normalized.append(normalized_step)
             pending_tool_class_counts[_tool_class(tool_name)] += 1
 
-        if not normalized and not final_round_reserved:
+        if not normalized and not final_round_reserved and not blocked_route_violation:
             fallback_segment_id = self._resolve_next_segment_id("", reserved_segment_ids)
             fallback_tool_name = self._fallback_visual_tool_name()
             if fallback_segment_id is not None and fallback_tool_name is not None and _tool_budget_available(
@@ -1398,6 +1412,14 @@ def _tool_budget_limit(*, budget: AgentBudget, tool_class: str) -> int:
 
 def _tool_class(tool_name: str) -> str:
     return _TOOL_CLASSES.get(tool_name, "cheap")
+
+
+def _route_violation(*, tool_name: str, active_skill: SkillSpec | None, free_exploration: bool) -> str | None:
+    if free_exploration or active_skill is None or not active_skill.allowed_actions:
+        return None
+    if tool_name in active_skill.allowed_actions:
+        return None
+    return f"action '{tool_name}' not in skill '{active_skill.name}' whitelist"
 
 
 def _segment_has_index_text(segment: Any) -> bool:

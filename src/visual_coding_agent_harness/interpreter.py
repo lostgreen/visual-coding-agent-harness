@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from string import Formatter
 from typing import Any, Callable, Dict, Mapping, Sequence
 
+from .agents.distill import distill
 from .registry import ToolRegistry
 from .workspace import EvidenceWorkspace
 
@@ -108,6 +109,8 @@ class ProgramInterpreter:
                 "observation_id": observation.observation_id,
             },
         )
+        for evidence_record in distill(observation, self.workspace):
+            self.workspace.write_evidence(evidence_record)
         self.workspace.write_ledger_entry(observation)
 
         if "assign" in step:

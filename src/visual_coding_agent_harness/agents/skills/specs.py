@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from string import Formatter
-from typing import Any, Mapping, Sequence
+from typing import Any, FrozenSet, Mapping, Sequence
 
 from ..question_policy import classify_question_route
 
@@ -37,6 +37,7 @@ class SkillSpec:
     recovery: Mapping[str, Any] = field(default_factory=dict)
     exemplars: Sequence[str] = field(default_factory=tuple)
     self_check: Sequence[str] = field(default_factory=tuple)
+    allowed_actions: FrozenSet[str] = field(default_factory=frozenset)
 
     def prompt_context(self) -> str:
         lines = [f"Skill: {self.name}@v{self.version}", "Procedure:"]
@@ -106,6 +107,7 @@ def builtin_skill_registry() -> SkillRegistry:
                     "Q: what is the video mainly about -> global sparse view -> answer from typed evidence",
                 ),
                 self_check=("decision.option != null", "decision.citations include g"),
+                allowed_actions=frozenset({"global_gist"}),
             ),
             SkillSpec(
                 name="grounded_factual_qa",
@@ -142,6 +144,9 @@ def builtin_skill_registry() -> SkillRegistry:
                 ),
                 recovery={"insufficient": {"action": "need_more_evidence", "target": "distinguishing fact window"}},
                 self_check=("decision.citations all visually_confirmed",),
+                allowed_actions=frozenset(
+                    {"ground_question", "vision_read", "zoom", "video_ls", "search_segments"}
+                ),
             ),
             SkillSpec(
                 name="temporal_ordering",
@@ -191,6 +196,9 @@ def builtin_skill_registry() -> SkillRegistry:
                     "ground each named event -> confirm timestamps -> sort -> compare to option sequences",
                 ),
                 self_check=("decision.option != null", "decision.citations all confirmed"),
+                allowed_actions=frozenset(
+                    {"ground_question", "vision_read", "zoom", "video_ls", "search_segments"}
+                ),
             ),
         ]
     )

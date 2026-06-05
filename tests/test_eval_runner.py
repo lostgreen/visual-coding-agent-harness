@@ -68,6 +68,14 @@ class EvalRunnerTest(unittest.TestCase):
 
             summary_path = run_root / "summary.json"
             self.assertTrue(summary_path.exists())
+            self.assertEqual(summary["run_id"], "eval")
+            self.assertEqual(summary["case_ids"], ["605-1"])
+            self.assertEqual(summary["accuracy"], 1.0)
+            self.assertEqual(summary["final_rate"], 1.0)
+            self.assertEqual(summary["unsupported_final_rate"], 0.0)
+            self.assertEqual(summary["legacy_worker_vote_rows"], 0)
+            self.assertEqual(summary["route_violations"], 0)
+            self.assertEqual(summary["per_case"], summary["cases"])
             case = summary["cases"][0]
             self.assertEqual(case["question_id"], "605-1")
             self.assertEqual(case["strategies"]["empty_index_loop"]["choice"], "B")

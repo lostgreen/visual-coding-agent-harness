@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .agents.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
 from .schemas import EvidenceRowV2
 
 
@@ -23,6 +25,119 @@ class Observation:
     limitations: str = ""
     raw_output: Mapping[str, Any] = field(default_factory=dict)
     created_at: str = ""
+    frame_set_id: str | None = None
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "Observation":
+        return cls(
+            observation_id=str(payload.get("observation_id", "")),
+            tool=str(payload.get("tool", "")),
+            claim=str(payload.get("claim", "")),
+            confidence=float(payload.get("confidence", 0.0) or 0.0),
+            input_artifacts=list(payload.get("input_artifacts", [])),
+            regions=list(payload.get("regions", [])),
+            limitations=str(payload.get("limitations", "")),
+            raw_output=dict(payload.get("raw_output", {}) or {}),
+            created_at=str(payload.get("created_at", "")),
+            frame_set_id=(None if payload.get("frame_set_id") is None else str(payload.get("frame_set_id"))),
+        )
+
+
+@dataclass(frozen=True)
+class FrameSetManifest:
+    frame_set_id: str
+    video_path: str
+    segment_id: str | None
+    start_sec: float
+    end_sec: float
+    nframes: int
+    target_nframes: int
+    sampling_policy: SamplingPolicy
+    frame_times_sec: list[float]
+    frame_times_approximate: bool
+    created_by_tool: str
+    observation_id: str
+    budget_reason: BudgetReason
+    contract_version: str
+    materialized_paths: list[str]
+    created_at: float
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "FrameSetManifest":
+        return cls(
+            frame_set_id=str(payload.get("frame_set_id", "")),
+            video_path=str(payload.get("video_path", "")),
+            segment_id=(None if payload.get("segment_id") is None else str(payload.get("segment_id"))),
+            start_sec=float(payload.get("start_sec", 0.0) or 0.0),
+            end_sec=float(payload.get("end_sec", 0.0) or 0.0),
+            nframes=int(payload.get("nframes", 0) or 0),
+            target_nframes=int(payload.get("target_nframes", 0) or 0),
+            sampling_policy=str(payload.get("sampling_policy", "uniform")),  # type: ignore[arg-type]
+            frame_times_sec=[float(item) for item in payload.get("frame_times_sec", [])],
+            frame_times_approximate=bool(payload.get("frame_times_approximate", False)),
+            created_by_tool=str(payload.get("created_by_tool", "")),
+            observation_id=str(payload.get("observation_id", "")),
+            budget_reason=str(payload.get("budget_reason", "default_contract")),  # type: ignore[arg-type]
+            contract_version=str(payload.get("contract_version", CONTRACT_VERSION)),
+            materialized_paths=[str(item) for item in payload.get("materialized_paths", [])],
+            created_at=float(payload.get("created_at", 0.0) or 0.0),
+        )
+
+
+@dataclass
+class EvidenceRecord:
+    evidence_id: str
+    stage: EvidenceStage
+    parent_id: str | None
+    tool: str
+    observation_id: str | None
+    frame_set_id: str | None
+    content: dict[str, Any]
+    grounding_quality: GroundingQuality
+    confidence: float
+    created_at: float
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "EvidenceRecord":
+        return cls(
+            evidence_id=str(payload.get("evidence_id", "")),
+            stage=str(payload.get("stage", "raw")),  # type: ignore[arg-type]
+            parent_id=(None if payload.get("parent_id") is None else str(payload.get("parent_id"))),
+            tool=str(payload.get("tool", "")),
+            observation_id=(None if payload.get("observation_id") is None else str(payload.get("observation_id"))),
+            frame_set_id=(None if payload.get("frame_set_id") is None else str(payload.get("frame_set_id"))),
+            content=dict(payload.get("content", {}) or {}),
+            grounding_quality=str(payload.get("grounding_quality", "navigation_only")),  # type: ignore[arg-type]
+            confidence=float(payload.get("confidence", 0.0) or 0.0),
+            created_at=float(payload.get("created_at", 0.0) or 0.0),
+        )
+
+
+@dataclass
+class MapUpdateProposal:
+    proposal_id: str
+    target_segment_id: str
+    update_type: str
+    payload: dict[str, Any]
+    source_evidence_id: str
+    source_frame_set_id: str
+    confidence: float
+    proposed_at: float
+    committed_at: float | None = None
+
+    @classmethod
+    def from_mapping(cls, payload: Mapping[str, Any]) -> "MapUpdateProposal":
+        return cls(
+            proposal_id=str(payload.get("proposal_id", "")),
+            target_segment_id=str(payload.get("target_segment_id", "")),
+            update_type=str(payload.get("update_type", "")),
+            payload=dict(payload.get("payload", {}) or {}),
+            source_evidence_id=str(payload.get("source_evidence_id", "")),
+            source_frame_set_id=str(payload.get("source_frame_set_id", "")),
+            confidence=float(payload.get("confidence", 0.0) or 0.0),
+            proposed_at=float(payload.get("proposed_at", 0.0) or 0.0),
+            committed_at=(None if payload.get("committed_at") is None else float(payload.get("committed_at"))),
+        )
 
 
 class EvidenceWorkspace:
@@ -64,11 +179,13 @@ class EvidenceWorkspace:
             root / "artifacts" / "clips",
             root / "artifacts" / "crops",
             root / "artifacts" / "masks",
+            root / "frame_sets",
         ]:
             child.mkdir(parents=True, exist_ok=True)
 
-        for filename in ["observations.jsonl", "trace.jsonl"]:
+        for filename in ["observations.jsonl", "trace.jsonl", "evidence.jsonl", "map_proposals.jsonl"]:
             (root / filename).touch(exist_ok=True)
+        (root / "frame_sets" / "manifests.jsonl").touch(exist_ok=True)
         (root / "reflection_memory.jsonl").touch(exist_ok=True)
 
         ledger = root / "ledger.md"
@@ -87,6 +204,7 @@ class EvidenceWorkspace:
         regions: Sequence[Mapping[str, Any]] = (),
         limitations: str = "",
         raw_output: Mapping[str, Any] | None = None,
+        frame_set_id: str | None = None,
     ) -> Observation:
         observation = Observation(
             observation_id=self._next_observation_id(),
@@ -98,6 +216,7 @@ class EvidenceWorkspace:
             limitations=limitations,
             raw_output=dict(raw_output or {}),
             created_at=_utc_now(),
+            frame_set_id=frame_set_id,
         )
         self._append_jsonl("observations.jsonl", asdict(observation))
         return observation
@@ -169,6 +288,117 @@ class EvidenceWorkspace:
                 "payload": dict(payload),
             },
         )
+
+    @property
+    def run_id(self) -> str:
+        return self.root.name
+
+    def create_manifest(
+        self,
+        *,
+        video_path: str,
+        segment_id: str | None,
+        start_sec: float,
+        end_sec: float,
+        target_nframes: int,
+        nframes: int,
+        sampling_policy: SamplingPolicy,
+        frame_times_sec: Sequence[float],
+        frame_times_approximate: bool,
+        created_by_tool: str,
+        observation_id: str,
+        budget_reason: BudgetReason,
+        materialized_paths: Sequence[str] | None = None,
+    ) -> FrameSetManifest:
+        manifest = FrameSetManifest(
+            frame_set_id=f"fs_{self.run_id}_{self._next_manifest_seq():05d}",
+            video_path=str(video_path),
+            segment_id=segment_id,
+            start_sec=float(start_sec),
+            end_sec=float(end_sec),
+            nframes=int(nframes),
+            target_nframes=int(target_nframes),
+            sampling_policy=sampling_policy,
+            frame_times_sec=[float(item) for item in frame_times_sec],
+            frame_times_approximate=bool(frame_times_approximate),
+            created_by_tool=str(created_by_tool),
+            observation_id=str(observation_id),
+            budget_reason=budget_reason,
+            contract_version=CONTRACT_VERSION,
+            materialized_paths=[str(item) for item in materialized_paths or []],
+            created_at=time.time(),
+        )
+        self._append_jsonl("frame_sets/manifests.jsonl", asdict(manifest))
+        return manifest
+
+    def get_manifest(self, frame_set_id: str) -> FrameSetManifest | None:
+        for payload in self._read_jsonl_dicts("frame_sets/manifests.jsonl"):
+            if str(payload.get("frame_set_id", "")) == str(frame_set_id):
+                return FrameSetManifest.from_mapping(payload)
+        return None
+
+    def load_all_manifests(self) -> list[FrameSetManifest]:
+        return [
+            FrameSetManifest.from_mapping(payload)
+            for payload in self._read_jsonl_dicts("frame_sets/manifests.jsonl")
+        ]
+
+    def link_manifest(self, observation_id: str, frame_set_id: str) -> None:
+        payload = {
+            "observation_id": str(observation_id),
+            "frame_set_id": str(frame_set_id),
+            "created_at": _utc_now(),
+        }
+        self._append_jsonl("frame_sets/observation_links.jsonl", payload)
+        self.write_trace_event("observation_manifest_link", payload)
+
+    def get_observation(self, obs_id: str) -> Observation | None:
+        for payload in self._read_observation_dicts():
+            if str(payload.get("observation_id", "")) == str(obs_id):
+                return Observation.from_mapping(payload)
+        return None
+
+    def next_evidence_id(self, stage: str, sequence_offset: int = 0) -> str:
+        return f"ev_{stage}_{self.run_id}_{self._next_evidence_seq() + sequence_offset:05d}"
+
+    def write_evidence(self, record: EvidenceRecord) -> None:
+        self._append_jsonl("evidence.jsonl", asdict(record))
+
+    def load_evidence(self, evidence_id: str) -> EvidenceRecord | None:
+        for payload in self._read_jsonl_dicts("evidence.jsonl"):
+            if str(payload.get("evidence_id", "")) == str(evidence_id):
+                return EvidenceRecord.from_mapping(payload)
+        return None
+
+    def evidence_chain(self, leaf_id: str) -> list[EvidenceRecord]:
+        by_id = {
+            str(payload.get("evidence_id", "")): EvidenceRecord.from_mapping(payload)
+            for payload in self._read_jsonl_dicts("evidence.jsonl")
+            if payload.get("evidence_id")
+        }
+        chain = []
+        current = by_id.get(str(leaf_id))
+        seen = set()
+        while current is not None and current.evidence_id not in seen:
+            seen.add(current.evidence_id)
+            chain.append(current)
+            if current.parent_id is None:
+                break
+            current = by_id.get(current.parent_id)
+        return list(reversed(chain))
+
+    def next_proposal_id(self) -> str:
+        return f"mp_{self.run_id}_{self._next_proposal_seq():05d}"
+
+    def write_proposal(self, proposal: MapUpdateProposal) -> None:
+        self._append_jsonl("map_proposals.jsonl", asdict(proposal))
+
+    def load_pending_proposals(self) -> list[MapUpdateProposal]:
+        return [
+            MapUpdateProposal.from_mapping(payload)
+            for payload in self._read_jsonl_dicts("map_proposals.jsonl")
+            if payload.get("committed_at") is None
+        ]
 
     def write_reflection_memory(self, *, route: str, failure_tag: str, rule: str) -> None:
         """Persist one compact Reflexion-style policy rule after a failure."""
@@ -547,12 +777,16 @@ class EvidenceWorkspace:
         return payload
 
     def _append_jsonl(self, filename: str, payload: Mapping[str, Any]) -> None:
-        with (self.root / filename).open("a", encoding="utf-8") as handle:
+        path = self.root / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
             handle.write("\n")
 
     def _write_jsonl(self, filename: str, payloads: Sequence[Mapping[str, Any]]) -> None:
-        with (self.root / filename).open("w", encoding="utf-8") as handle:
+        path = self.root / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
             for payload in payloads:
                 handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
                 handle.write("\n")
@@ -575,7 +809,18 @@ class EvidenceWorkspace:
         return rows
 
     def _read_observation_dicts(self) -> list[dict[str, Any]]:
-        return self._read_jsonl_dicts("observations.jsonl")
+        observations = self._read_jsonl_dicts("observations.jsonl")
+        links = self._observation_manifest_links()
+        if not links:
+            return observations
+        merged = []
+        for observation in observations:
+            observation_id = str(observation.get("observation_id", ""))
+            if observation_id in links:
+                observation = dict(observation)
+                observation["frame_set_id"] = links[observation_id]
+            merged.append(observation)
+        return merged
 
     def _next_observation_id(self) -> str:
         existing = 0
@@ -584,6 +829,24 @@ class EvidenceWorkspace:
             with observations.open("r", encoding="utf-8") as handle:
                 existing = sum(1 for line in handle if line.strip())
         return f"obs_{existing + 1:04d}"
+
+    def _next_manifest_seq(self) -> int:
+        return len(self._read_jsonl_dicts("frame_sets/manifests.jsonl")) + 1
+
+    def _next_evidence_seq(self) -> int:
+        return len(self._read_jsonl_dicts("evidence.jsonl")) + 1
+
+    def _next_proposal_seq(self) -> int:
+        return len(self._read_jsonl_dicts("map_proposals.jsonl")) + 1
+
+    def _observation_manifest_links(self) -> dict[str, str]:
+        links: dict[str, str] = {}
+        for payload in self._read_jsonl_dicts("frame_sets/observation_links.jsonl"):
+            observation_id = str(payload.get("observation_id", ""))
+            frame_set_id = str(payload.get("frame_set_id", ""))
+            if observation_id and frame_set_id:
+                links[observation_id] = frame_set_id
+        return links
 
 
 def _iter_segment_window_dicts(value: Any):
