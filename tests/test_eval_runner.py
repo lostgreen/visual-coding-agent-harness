@@ -626,6 +626,33 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(payload["schema_version"], "TrainingTrajectoryV1")
             self.assertEqual(payload["ground_truth"], "B")
 
+    def test_training_trajectory_export_path_exists_for_relative_run_root(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "workspaces"
+            workspace = _make_training_workspace(workspace_root, "case_agent_v2")
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                trajectory_path = eval_runner._export_training_trajectory(
+                    workspace_path=workspace.root,
+                    run_root=Path("eval"),
+                    case_id="605-1",
+                    strategy="agent_v2",
+                    question="What is shown?",
+                    options=["A. one", "B. two"],
+                    gt="B",
+                    strategy_summary={"choice": "B", "status": "final", "correct": True},
+                )
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertIsNotNone(trajectory_path)
+            assert trajectory_path is not None
+            self.assertTrue(trajectory_path.is_absolute())
+            self.assertTrue(trajectory_path.exists())
+
 
 def _make_training_workspace(base_dir: Path, run_id: str) -> EvidenceWorkspace:
     workspace = EvidenceWorkspace.create(base_dir, run_id=run_id)

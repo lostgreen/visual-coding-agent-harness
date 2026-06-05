@@ -515,7 +515,7 @@ def _export_training_trajectory(
     if not workspace_path.exists():
         return None
     selected = str(strategy_summary.get("choice") or "") or None
-    trajectory_path = run_root / "trajectories" / f"{case_id}_{strategy}.json"
+    trajectory_path = (run_root / "trajectories" / f"{case_id}_{strategy}.json").resolve()
     TrainingTrajectory.from_workspace(
         EvidenceWorkspace(root=workspace_path),
         case_id=case_id,
