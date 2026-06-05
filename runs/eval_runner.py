@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget
+from visual_coding_agent_harness.agents.context_budget import parse_budget_ratios
 from visual_coding_agent_harness.backends.base import BackendRequest
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
@@ -545,6 +546,8 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
     route_violations = 0
     followup_attempts: list[int] = []
     followup_successes = 0
+    context_overflows = 0
+    context_turn_token_totals: list[int] = []
 
     for workspace in workspaces:
         events = _load_trace_events(workspace)
@@ -553,8 +556,14 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         followup_attempts.append(attempts)
         if success:
             followup_successes += 1
+        overflows, token_totals = _context_budget_trace_metrics(events)
+        context_overflows += overflows
+        context_turn_token_totals.extend(token_totals)
 
     summary.route_violations = route_violations
+    summary.context_budget_overflow_count = context_overflows
+    if context_turn_token_totals:
+        summary.avg_tokens_per_turn = int(sum(context_turn_token_totals) / len(context_turn_token_totals))
     if followup_attempts:
         summary.avg_followups_per_case = sum(followup_attempts) / len(followup_attempts)
         attempted_cases = sum(1 for attempts in followup_attempts if attempts > 0)
@@ -588,6 +597,22 @@ def _hard_skill_followup_trace_metrics(events: Sequence[Mapping[str, Any]]) -> t
         if event_type == "hard_skill_followup_handoff":
             in_hard_skill = False
     return attempts, success
+
+
+def _context_budget_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[int, list[int]]:
+    overflows = 0
+    token_totals: list[int] = []
+    for event in events:
+        if _event_type(event) != "context_budget_report":
+            continue
+        payload = _event_payload(event)
+        if bool(payload.get("overflow")):
+            overflows += 1
+        used = payload.get("used_tokens_per_slot", {})
+        if not isinstance(used, Mapping):
+            continue
+        token_totals.append(sum(int(value or 0) for value in used.values()))
+    return overflows, token_totals
 
 
 def _load_trace_events(workspace: EvidenceWorkspace) -> list[dict[str, Any]]:
@@ -737,6 +762,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tool-calls-per-round", type=int, default=2)
     parser.add_argument("--default-nframes", type=int, default=SEGMENT_NFRAMES)
     parser.add_argument("--high-fps-nframes", type=int, default=32)
+    parser.add_argument("--context-budget-tokens", type=int, default=12000)
+    parser.add_argument(
+        "--budget-ratios",
+        default=None,
+        help="Comma-separated slot ratios, e.g. task:0.1,navigation:0.15,evidence:0.5,feedback:0.25",
+    )
     parser.add_argument("--planner-receives-media", action="store_true")
     parser.add_argument("--no-reserve-final-round", action="store_true")
     parser.add_argument("--cheap-tool-budget", type=int, default=16)
@@ -760,6 +791,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def config_from_args(args: argparse.Namespace) -> EvalConfig:
     workspace_root = args.workspace_root or (args.run_root / "workspaces")
+    context_budget_ratios = parse_budget_ratios(args.budget_ratios) if args.budget_ratios else None
     budget = (
         AgentBudget.free_explore(
             max_rounds=args.free_max_rounds,
@@ -771,6 +803,8 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             max_tool_calls_per_round=args.max_tool_calls_per_round,
             default_nframes=args.default_nframes,
             high_fps_nframes=args.high_fps_nframes,
+            context_budget_tokens=args.context_budget_tokens,
+            context_budget_ratios=context_budget_ratios,
             planner_receives_media=args.planner_receives_media,
             reserve_final_round=not args.no_reserve_final_round,
             cheap_tool_budget=args.cheap_tool_budget,

@@ -10,9 +10,11 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _skill_target_facts,
 )
 from visual_coding_agent_harness.agents.prompt_stack import (
+    build_replanning_prompt,
     compose_replanning_prompt_blocks,
     render_prompt_blocks,
 )
+from visual_coding_agent_harness.agents.context_budget import default_context_budget_allocator
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
@@ -73,6 +75,27 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("Skill: temporal_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
         self.assertIn("Final answers require at least one non-navigation visual observation", prompt)
+
+    def test_slot_prompt_contains_all_four_sections_and_budget_report(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        allocator = default_context_budget_allocator(total_budget_tokens=400)
+
+        prompt, report = build_replanning_prompt(
+            question="What is visible?",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\nobs_0001 | red car",
+            round_number=1,
+            budget=AgentBudget(max_rounds=3),
+            allocator=allocator,
+            answer_feedback=["confirm red car"],
+        )
+
+        self.assertLess(prompt.index("## Task"), prompt.index("## Navigation"))
+        self.assertLess(prompt.index("## Navigation"), prompt.index("## Evidence"))
+        self.assertLess(prompt.index("## Evidence"), prompt.index("## Feedback"))
+        self.assertIn("obs_0001 | red car", prompt)
+        self.assertEqual(report.turn_index, 0)
+        self.assertIn("task", report.used_tokens_per_slot)
 
     def test_ground_question_returns_candidate_windows_without_option_vote(self):
         video_map = VideoMap(
@@ -436,6 +459,28 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
             self.assertIn("# Reflection Memory", backend.requests[1].prompt)
             self.assertIn("planner_json_parse_error", backend.requests[1].prompt)
             self.assertIn("return valid JSON", backend.requests[1].prompt)
+
+    def test_context_budget_report_is_persisted_in_trace(self):
+        backend = RecordingBackend(
+            ['{"status": "final", "answer": "A. enough", "citations": ["obs_0001"], "confidence": 0.8}']
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=20.0, window_sec=20.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="context_budget_trace")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=_caption_only_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False, context_budget_tokens=400),
+            )
+
+            agent.run(question="What is visible?", video_path="/videos/demo.mp4")
+
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("context_budget_report", trace)
+            self.assertIn('"turn_index": 0', trace)
 
     def test_exports_longvideoagent_ready_trajectory_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:

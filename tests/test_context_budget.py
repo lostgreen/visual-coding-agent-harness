@@ -1,6 +1,10 @@
 from visual_coding_agent_harness.agents.context_budget import (
     CompactStrategy,
     ContextBudgetAllocator,
+    EvidenceTieredCompact,
+    FeedbackLatestOnlyCompact,
+    NavLatestWinsCompact,
+    parse_budget_ratios,
 )
 
 
@@ -90,3 +94,71 @@ def test_overflow_flag_when_strategy_insufficient():
         }
     ]
     assert report.overflow is True
+
+
+def test_nav_latest_wins_keeps_newest_block():
+    allocator = ContextBudgetAllocator(
+        total_budget_tokens=1,
+        slot_ratios={"navigation": 1.0},
+        token_counter=len,
+    )
+    allocator.register_strategy("navigation", NavLatestWinsCompact())
+
+    allocated, report = allocator.allocate({"navigation": "old block\n\nnew block"})
+
+    assert allocated["navigation"] == "new block"
+    assert report.compact_events[0]["strategy"] == "nav_latest_wins"
+
+
+def test_evidence_tiered_keeps_relevant_row():
+    allocator = ContextBudgetAllocator(
+        total_budget_tokens=60,
+        slot_ratios={"evidence": 1.0},
+        token_counter=len,
+    )
+    allocator.register_strategy("evidence", EvidenceTieredCompact())
+    content = "\n".join(
+        [
+            "| obs_0001 | blue cup | old unrelated detail |",
+            "| obs_0002 | red car appears | relevant visual detail |",
+        ]
+    )
+
+    allocated, report = allocator.allocate(
+        {"evidence": content},
+        ctx={"active_followup_target_query": "red car"},
+    )
+
+    assert "red car" in allocated["evidence"]
+    assert report.compact_events[0]["strategy"] == "evidence_tiered"
+
+
+def test_feedback_latest_only_compacts_history():
+    allocator = ContextBudgetAllocator(
+        total_budget_tokens=48,
+        slot_ratios={"feedback": 1.0},
+        token_counter=len,
+    )
+    allocator.register_strategy("feedback", FeedbackLatestOnlyCompact())
+
+    allocated, _report = allocator.allocate(
+        {"feedback": "first missing evidence paragraph\n\nlatest precise gap"},
+    )
+
+    assert "attempt 1: missing" in allocated["feedback"]
+    assert "latest precise gap" in allocated["feedback"]
+
+
+def test_parse_budget_ratios_validates_full_distribution():
+    ratios = parse_budget_ratios("task:0.1,navigation:0.15,evidence:0.5,feedback:0.25")
+
+    assert ratios == {"task": 0.1, "navigation": 0.15, "evidence": 0.5, "feedback": 0.25}
+
+
+def test_parse_budget_ratios_rejects_bad_sum():
+    try:
+        parse_budget_ratios("task:0.1,navigation:0.1,evidence:0.1,feedback:0.1")
+    except ValueError as exc:
+        assert "sum to 1.0" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")

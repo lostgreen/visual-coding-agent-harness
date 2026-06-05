@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from ..video_index import SceneIndex
+from .context_budget import ContextBudgetAllocator, ContextBudgetReport, SlotName
 from .question_policy import select_question_playbook
 from .skills.specs import select_skill
 
@@ -22,6 +23,107 @@ class PromptBlock:
 
 def render_prompt_blocks(blocks: Sequence[PromptBlock]) -> str:
     return "\n".join(block.render() for block in blocks).strip()
+
+
+def build_replanning_prompt(
+    *,
+    question: str,
+    scene_index: SceneIndex,
+    ledger_text: str,
+    round_number: int,
+    budget: Any,
+    allocator: ContextBudgetAllocator,
+    inspected_segment_ids: Sequence[str] = (),
+    tool_class_counts: Mapping[str, int] | None = None,
+    final_round_reserved: bool = False,
+    answer_feedback: Sequence[str] = (),
+    reflection_memory: Sequence[str] = (),
+) -> tuple[str, ContextBudgetReport]:
+    slots = compose_replanning_prompt_slots(
+        question=question,
+        scene_index=scene_index,
+        ledger_text=ledger_text,
+        round_number=round_number,
+        budget=budget,
+        inspected_segment_ids=inspected_segment_ids,
+        tool_class_counts=tool_class_counts,
+        final_round_reserved=final_round_reserved,
+        answer_feedback=answer_feedback,
+        reflection_memory=reflection_memory,
+    )
+    allocated, report = allocator.allocate(
+        slots,
+        ctx={
+            "round": round_number,
+            "active_followup_target_query": str(answer_feedback[0]) if answer_feedback else "",
+        },
+    )
+    return _join_slots(allocated), report
+
+
+def compose_replanning_prompt_slots(
+    *,
+    question: str,
+    scene_index: SceneIndex,
+    ledger_text: str,
+    round_number: int,
+    budget: Any,
+    inspected_segment_ids: Sequence[str] = (),
+    tool_class_counts: Mapping[str, int] | None = None,
+    final_round_reserved: bool = False,
+    answer_feedback: Sequence[str] = (),
+    reflection_memory: Sequence[str] = (),
+) -> dict[SlotName, str]:
+    playbook = select_question_playbook(question)
+    skill = select_skill(question, route=playbook.route)
+    task_blocks = [
+        PromptBlock(
+            name="base_identity",
+            title="Base Identity",
+            body=(
+                "You are an autonomous visual agent exploring a long video with tools.\n"
+                "Planner input mode: text-only. Use the scene index and evidence ledger; tools inspect pixels/video.\n"
+                "Use a short ReAct shell: pick the next action, observe tool output, then decide whether evidence is sufficient.\n"
+                "Allowed ReAct actions: ground_question, vision_read, answer_agent, verify.\n"
+                "Do not include step-by-step private reasoning in the JSON response."
+            ),
+        ),
+        PromptBlock(name="route_playbook", title="Route Playbook", body=playbook.to_prompt()),
+        PromptBlock(
+            name="active_skill",
+            title="Active Skill",
+            body=(
+                f"{skill.prompt_context()}\n"
+                "Treat this skill as the current workflow contract. Use planner freedom only to fill missing slots, "
+                "recover from failed grounding, or request targeted evidence."
+            ),
+        ),
+        PromptBlock(name="tool_schema", title="Tool Schema", body=_tool_schema_block()),
+        PromptBlock(name="final_gate", title="Final Gate", body=_final_gate_block(final_round_reserved=final_round_reserved)),
+        PromptBlock(
+            name="response_contract",
+            title="Response Contract",
+            body=(
+                "Return only JSON with one of these schemas:\n"
+                '{"status": "continue", "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
+                '{"status": "final", "answer": string, "citations": [observation_id], "confidence": number}'
+            ),
+        ),
+    ]
+    return {
+        "task": render_prompt_blocks(task_blocks),
+        "navigation": _navigation_snapshot_block(
+            question=question,
+            scene_index=scene_index,
+            round_number=round_number,
+            budget=budget,
+            inspected_segment_ids=inspected_segment_ids,
+            tool_class_counts=tool_class_counts,
+            final_round_reserved=final_round_reserved,
+        ),
+        "evidence": "# Evidence Snapshot\nEvidence ledger:\n" + (ledger_text or "(none)"),
+        "feedback": _feedback_slot(answer_feedback=answer_feedback, reflection_memory=reflection_memory),
+    }
 
 
 def compose_replanning_prompt_blocks(
@@ -144,6 +246,85 @@ def _tool_schema_block() -> str:
         "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
     )
+
+
+def _join_slots(slots: Mapping[SlotName, str]) -> str:
+    titles = {
+        "task": "Task",
+        "navigation": "Navigation",
+        "evidence": "Evidence",
+        "feedback": "Feedback",
+    }
+    return "\n\n".join(
+        f"## {titles[name]}\n{slots.get(name, '').strip()}"
+        for name in ["task", "navigation", "evidence", "feedback"]
+    ).strip()
+
+
+def _navigation_snapshot_block(
+    *,
+    question: str,
+    scene_index: SceneIndex,
+    round_number: int,
+    budget: Any,
+    inspected_segment_ids: Sequence[str],
+    tool_class_counts: Mapping[str, int] | None,
+    final_round_reserved: bool,
+) -> str:
+    inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
+    uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
+    counts = tool_class_counts or {}
+    remaining_budget_line = (
+        "free exploration mode; no per-class tool budget, only emergency round/tool-call caps"
+        if getattr(budget, "free_exploration", False)
+        else (
+            f"cheap={max(0, int(getattr(budget, 'cheap_tool_budget', 0)) - int(counts.get('cheap', 0)))}, "
+            f"expensive={max(0, int(getattr(budget, 'expensive_tool_budget', 0)) - int(counts.get('expensive', 0)))}, "
+            f"verifier={max(0, int(getattr(budget, 'verifier_tool_budget', 0)) - int(counts.get('verifier', 0)))}"
+        )
+    )
+    final_round_line = (
+        "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
+        if final_round_reserved
+        else ""
+    )
+    return (
+        f"Round: {round_number}/{getattr(budget, 'max_rounds', '?')}\n"
+        f"Question: {question}\n"
+        f"Already inspected segments: {inspected_line}\n"
+        f"Uninspected segment candidates: {uninspected_line}\n"
+        f"Request at most {getattr(budget, 'max_tool_calls_per_round', 1)} new tool call(s) this round.\n"
+        "Cheap navigation tools and expensive VLM tools have separate budgets unless free exploration mode is active.\n"
+        "In free exploration mode, prioritize answer quality: keep using tools until evidence is sufficient, then finalize with citations.\n"
+        f"Remaining tool budgets: {remaining_budget_line}.\n"
+        f"{final_round_line}"
+        "Scene index:\n"
+        f"{scene_index.summary(max_segments=64)}"
+    )
+
+
+def _feedback_slot(*, answer_feedback: Sequence[str], reflection_memory: Sequence[str]) -> str:
+    blocks = []
+    if answer_feedback:
+        blocks.append(
+            PromptBlock(
+                name="answer_feedback",
+                title="Answer Feedback",
+                body=(
+                    "Answer Agent says these evidence gaps must be resolved before final: "
+                    + "; ".join(str(item) for item in answer_feedback[:5])
+                ),
+            ).render()
+        )
+    if reflection_memory:
+        blocks.append(
+            PromptBlock(
+                name="reflection_memory",
+                title="Reflection Memory",
+                body="\n".join(f"- {item}" for item in reflection_memory[:5]),
+            ).render()
+        )
+    return "\n".join(blocks).strip() or "(none)"
 
 
 def _evidence_snapshot_block(

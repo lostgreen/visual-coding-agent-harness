@@ -170,6 +170,44 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(summary["avg_followups_per_case"], 1.5)
             self.assertEqual(summary["followup_success_rate"], 0.5)
 
+    def test_summary_payload_aggregates_context_budget_metrics(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="context_budget")
+            workspace.write_trace_event(
+                "context_budget_report",
+                {
+                    "used_tokens_per_slot": {"task": 10, "navigation": 20, "evidence": 30, "feedback": 5},
+                    "overflow": False,
+                    "turn_index": 0,
+                },
+            )
+            workspace.write_trace_event(
+                "context_budget_report",
+                {
+                    "used_tokens_per_slot": {"task": 12, "navigation": 20, "evidence": 40, "feedback": 8},
+                    "overflow": True,
+                    "turn_index": 1,
+                },
+            )
+
+            summary = eval_runner._summary_payload(
+                run_id="eval",
+                case_ids=["case_001"],
+                config_payload={},
+                results=[
+                    {
+                        "question_id": "case_001",
+                        "strategies": {"agent_v2": {"status": "need_more_evidence", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"agent_v2": str(workspace.root)}},
+                    }
+                ],
+            )
+
+            self.assertEqual(summary["context_budget_overflow_count"], 1)
+            self.assertEqual(summary["avg_tokens_per_turn"], 72)
+
     def test_summary_payload_computes_evidence_provenance_completeness(self):
         from runs import eval_runner
 
@@ -329,6 +367,49 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.budget.max_tool_calls_per_round, 4)
         self.assertFalse(config.budget.reserve_final_round)
         self.assertTrue(config.budget.hard_skill_runtime)
+
+    def test_context_budget_cli_flags_build_agent_config(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--strategy",
+                "agent_v2",
+                "--cases",
+                "611-2",
+                "--run-root",
+                "/tmp/vcah-context",
+                "--context-budget-tokens",
+                "9000",
+                "--budget-ratios",
+                "task:0.2,navigation:0.2,evidence:0.4,feedback:0.2",
+            ]
+        )
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.budget.context_budget_tokens, 9000)
+        self.assertEqual(
+            config.budget.context_budget_ratios,
+            {"task": 0.2, "navigation": 0.2, "evidence": 0.4, "feedback": 0.2},
+        )
+
+    def test_context_budget_cli_rejects_bad_ratio_sum(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--run-root",
+                "/tmp/vcah-context",
+                "--budget-ratios",
+                "task:0.1,navigation:0.1,evidence:0.1,feedback:0.1",
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "sum to 1.0"):
+            eval_runner.config_from_args(args)
 
     def test_run_loop_exports_longvideoagent_trajectory(self):
         from runs import eval_runner

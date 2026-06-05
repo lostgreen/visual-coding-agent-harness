@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
@@ -14,8 +14,9 @@ from ..video_index import SceneIndex, VideoSegment
 from ..workspace import EvidenceWorkspace
 from .answer_agent import AnswerAgent
 from .contracts import VISUAL_EVIDENCE_NFRAMES
+from .context_budget import default_context_budget_allocator
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
-from .prompt_stack import compose_replanning_prompt_blocks, render_prompt_blocks
+from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
 from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
 from .skills.predicates import (
     grounding_quality_floor,
@@ -71,6 +72,8 @@ class AgentBudget:
     free_exploration: bool = False
     persist_planner_io: bool = True
     planner_io_max_chars: int = 200_000
+    context_budget_tokens: int = 12000
+    context_budget_ratios: Mapping[str, float] | None = None
     max_repeated_programs: int = 3
     hard_skill_runtime: bool = False
     reflection_memory_max_items: int = 5
@@ -150,6 +153,10 @@ class IterativeVisualAgent:
         self.workspace = workspace
         self.scene_index = scene_index
         self.budget = budget or AgentBudget()
+        self.context_allocator = default_context_budget_allocator(
+            total_budget_tokens=self.budget.context_budget_tokens,
+            slot_ratios=dict(self.budget.context_budget_ratios) if self.budget.context_budget_ratios else None,
+        )
 
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
         if classify_question_route(question) == "gist_global" and self._has_tool("global_gist"):
@@ -191,18 +198,20 @@ class IterativeVisualAgent:
         for round_number in range(len(rounds) + 1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
             final_round_reserved = self.budget.reserve_final_round and round_number == self.budget.max_rounds
-            planner_prompt = _replanning_prompt(
+            planner_prompt, context_report = build_replanning_prompt(
                 question=question,
                 scene_index=self.scene_index,
                 ledger_text=ledger_text,
                 round_number=round_number,
                 budget=self.budget,
+                allocator=self.context_allocator,
                 inspected_segment_ids=sorted(inspected_segment_ids),
                 tool_class_counts=tool_class_counts,
                 final_round_reserved=final_round_reserved,
                 answer_feedback=answer_feedback,
                 reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
             )
+            self.workspace.write_trace_event("context_budget_report", asdict(context_report))
             self.workspace.write_trace_event(
                 "iterative_round_start",
                 {"round": round_number, "question": question, "evidence_count": len(citations)},
