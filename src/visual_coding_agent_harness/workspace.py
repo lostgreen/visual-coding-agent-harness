@@ -143,7 +143,14 @@ class MapUpdateProposal:
 class EvidenceWorkspace:
     """Persist artifacts, observations, trace events, and an answer-facing ledger."""
 
-    VISUAL_EVIDENCE_TOOLS = {"global_gist", "caption_segment", "qa_segment", "inspect_segment", "vision_read"}
+    VISUAL_EVIDENCE_TOOLS = {
+        "global_gist",
+        "query_context",
+        "caption_segment",
+        "qa_segment",
+        "inspect_segment",
+        "vision_read",
+    }
     LOCAL_WORKER_EVIDENCE_TOOLS = {
         "caption_image",
         "caption_region",
@@ -155,8 +162,17 @@ class EvidenceWorkspace:
         "qa_region",
         "qa_segment",
     }
-    NAVIGATION_TOOLS = {"video_ls", "search_segments", "ground_question", "read_segment", "expand_window", "zoom"}
-    ANSWER_EVIDENCE_TOOLS = VISUAL_EVIDENCE_TOOLS | {
+    NAVIGATION_TOOLS = {
+        "video_ls",
+        "search_segments",
+        "ground_question",
+        "read_segment",
+        "expand_window",
+        "zoom",
+        "commit_map_proposals",
+    }
+    CONTEXT_ONLY_TOOLS = {"query_context"}
+    ANSWER_EVIDENCE_TOOLS = (VISUAL_EVIDENCE_TOOLS - CONTEXT_ONLY_TOOLS) | {
         "caption_image",
         "caption_region",
         "ocr_region",
@@ -245,6 +261,8 @@ class EvidenceWorkspace:
         for observation in rows:
             observation_id = str(observation.get("observation_id", ""))
             if observation_id not in target_ids:
+                continue
+            if str(observation.get("tool", "")) in self.CONTEXT_ONLY_TOOLS:
                 continue
             raw_output = observation.get("raw_output", {})
             if not isinstance(raw_output, Mapping):
@@ -474,6 +492,41 @@ class EvidenceWorkspace:
             if payload.get("committed_at") is None
         ]
 
+    def mark_proposal_committed(self, proposal_id: str, *, committed_at: float | None = None) -> MapUpdateProposal | None:
+        proposals = [MapUpdateProposal.from_mapping(payload) for payload in self._read_jsonl_dicts("map_proposals.jsonl")]
+        if not proposals:
+            return None
+        resolved_at = time.time() if committed_at is None else float(committed_at)
+        committed: MapUpdateProposal | None = None
+        rewritten = []
+        for proposal in proposals:
+            if proposal.proposal_id == proposal_id:
+                proposal = MapUpdateProposal(
+                    proposal_id=proposal.proposal_id,
+                    target_segment_id=proposal.target_segment_id,
+                    update_type=proposal.update_type,
+                    payload=dict(proposal.payload),
+                    source_evidence_id=proposal.source_evidence_id,
+                    source_frame_set_id=proposal.source_frame_set_id,
+                    confidence=proposal.confidence,
+                    proposed_at=proposal.proposed_at,
+                    committed_at=proposal.committed_at if proposal.committed_at is not None else resolved_at,
+                )
+                committed = proposal
+            rewritten.append(asdict(proposal))
+        self._write_jsonl("map_proposals.jsonl", rewritten)
+        if committed is not None:
+            self.write_trace_event(
+                "map_proposal_committed",
+                {
+                    "proposal_id": committed.proposal_id,
+                    "target_segment_id": committed.target_segment_id,
+                    "update_type": committed.update_type,
+                    "committed_at": committed.committed_at,
+                },
+            )
+        return committed
+
     def write_reflection_memory(self, *, route: str, failure_tag: str, rule: str) -> None:
         """Persist one compact Reflexion-style policy rule after a failure."""
 
@@ -639,17 +692,32 @@ class EvidenceWorkspace:
             return raw_ledger
 
         visual_entries = [
-            entry for entry in entries if str(entry.get("tool", "")) in self.VISUAL_EVIDENCE_TOOLS
+            entry for entry in entries if str(entry.get("tool", "")) in self.ANSWER_EVIDENCE_TOOLS
         ][-max_visual_evidence:]
+        context_entries = [
+            entry for entry in entries if str(entry.get("tool", "")) in self.CONTEXT_ONLY_TOOLS
+        ][-max_working_observations:]
         navigation_entries = [
             entry for entry in entries if str(entry.get("tool", "")) in self.NAVIGATION_TOOLS
         ]
-        working_entries = entries[-max_working_observations:] if max_working_observations > 0 else []
+        working_entries = (
+            [
+                entry for entry in entries if str(entry.get("tool", "")) not in self.CONTEXT_ONLY_TOOLS
+            ][-max_working_observations:]
+            if max_working_observations > 0
+            else []
+        )
 
         sections = ["# Compact Evidence Context", ""]
         sections.append("## Long-Term Visual Evidence")
         if visual_entries:
             sections.extend(_format_compact_entry(entry) for entry in visual_entries)
+        else:
+            sections.append("(none)")
+
+        sections.extend(["", "## Context-Only Visual Hints (Not Answer Support)"])
+        if context_entries:
+            sections.extend(_format_context_only_entry(entry) for entry in context_entries)
         else:
             sections.append("(none)")
 
@@ -843,9 +911,8 @@ class EvidenceWorkspace:
             if str(observation.get("observation_id", "")) not in cited:
                 continue
             tool_name = str(observation.get("tool", ""))
-            if tool_name in self.VISUAL_EVIDENCE_TOOLS or tool_name in self.ANSWER_EVIDENCE_TOOLS:
-                if tool_name not in self.NAVIGATION_TOOLS:
-                    return True
+            if tool_name in self.ANSWER_EVIDENCE_TOOLS and tool_name not in self.NAVIGATION_TOOLS:
+                return True
         return False
 
     def evidence_chain_summaries(
@@ -1510,7 +1577,14 @@ def _observation_event_label(*, raw_output: Mapping[str, Any], claim: str) -> st
 
 def _grounding_quality(*, raw_output: Mapping[str, Any], limitations: str) -> str:
     explicit = str(raw_output.get("grounding_quality", "")).strip().lower()
-    if explicit in {"global_sparse", "visually_confirmed", "inferred", "external_knowledge", "weak"}:
+    if explicit in {
+        "global_sparse",
+        "visually_confirmed",
+        "query_global_context",
+        "inferred",
+        "external_knowledge",
+        "weak",
+    }:
         return explicit
 
     text = limitations.lower()
@@ -1566,6 +1640,14 @@ def _format_compact_entry(entry: Mapping[str, Any]) -> str:
     return (
         f"- `{entry['observation_id']}` | tool: `{entry.get('tool', 'unknown')}`{confidence} | "
         f"claim: {entry.get('claim', '')} | limitations: {limitations}"
+    )
+
+
+def _format_context_only_entry(entry: Mapping[str, Any]) -> str:
+    limitations = entry.get("limitations") or "-"
+    return (
+        f"- `{entry['observation_id']}` | tool: `{entry.get('tool', 'unknown')}` | "
+        f"context hint only; not answer support | claim: {entry.get('claim', '')} | limitations: {limitations}"
     )
 
 

@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Mapping, Sequence
 from .agents.contracts import resolve_nframes
 from .agents.distill import distill
 from .registry import ToolRegistry
-from .workspace import EvidenceWorkspace, Observation
+from .workspace import EvidenceRecord, EvidenceWorkspace, MapUpdateProposal, Observation
 
 
 @dataclass(frozen=True)
@@ -119,6 +119,7 @@ class ProgramInterpreter:
         distilled_records = distill(observation, self.workspace)
         for evidence_record in distilled_records:
             self.workspace.write_evidence(evidence_record)
+        self._write_map_proposals(observation=observation, parent_records=distilled_records)
         self.workspace.write_ledger_entry(observation, parent_records=distilled_records)
 
         if "assign" in step:
@@ -146,6 +147,41 @@ class ProgramInterpreter:
         manifest = self.workspace.create_manifest(**manifest_args)
         self.workspace.link_manifest(observation.observation_id, manifest.frame_set_id)
         return self.workspace.get_observation(observation.observation_id) or observation
+
+    def _write_map_proposals(self, *, observation: Observation, parent_records: Sequence[EvidenceRecord]) -> None:
+        if observation.tool not in {"query_context", "vision_read", "inspect_segment", "caption_segment", "qa_segment"}:
+            return
+        source = parent_records[0] if parent_records else None
+        if source is None or not source.frame_set_id:
+            return
+        for region in _proposal_regions(observation):
+            segment_id = _optional_str(region.get("segment_id"))
+            if not segment_id:
+                continue
+            payload = _proposal_payload(observation=observation, region=region)
+            if not payload:
+                continue
+            proposal = MapUpdateProposal(
+                proposal_id=self.workspace.next_proposal_id(),
+                target_segment_id=segment_id,
+                update_type="context_update",
+                payload=payload,
+                source_evidence_id=source.evidence_id,
+                source_frame_set_id=source.frame_set_id,
+                confidence=float(observation.confidence),
+                proposed_at=_now_seconds(),
+            )
+            self.workspace.write_proposal(proposal)
+            self.workspace.write_trace_event(
+                "map_proposal_created",
+                {
+                    "proposal_id": proposal.proposal_id,
+                    "target_segment_id": proposal.target_segment_id,
+                    "source_evidence_id": proposal.source_evidence_id,
+                    "source_frame_set_id": proposal.source_frame_set_id,
+                    "tool": observation.tool,
+                },
+            )
 
 
 def _expand_foreach_step(step: Mapping[str, Any], slots: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -195,7 +231,7 @@ def _visual_manifest_args(
     region = _first_region(raw_output)
     time_range = _time_range(raw_output)
     segment_id = _optional_str(arguments.get("segment_id") or region.get("segment_id"))
-    if tool_name == "global_gist":
+    if tool_name in {"global_gist", "query_context"}:
         segment_id = None
         start_sec = 0.0
         end_sec = _float_or_none(arguments.get("duration_sec"))
@@ -239,6 +275,31 @@ def _visual_manifest_args(
         "budget_reason": budget_reason,
         "materialized_paths": _materialized_paths(observation.input_artifacts),
     }
+
+
+def _proposal_regions(observation: Observation) -> list[Mapping[str, Any]]:
+    return [region for region in observation.regions if isinstance(region, Mapping)]
+
+
+def _proposal_payload(*, observation: Observation, region: Mapping[str, Any]) -> dict[str, Any]:
+    claim = " ".join(str(observation.claim).split())
+    if not claim:
+        return {}
+    payload: dict[str, Any] = {
+        "low_fps_caption": claim,
+        "source_tool": observation.tool,
+    }
+    start_sec = _float_or_none(region.get("start_sec"))
+    end_sec = _float_or_none(region.get("end_sec"))
+    if start_sec is not None and end_sec is not None:
+        payload["time_range"] = [start_sec, end_sec]
+    return payload
+
+
+def _now_seconds() -> float:
+    import time
+
+    return time.time()
 
 
 def _first_region(raw_output: Mapping[str, Any]) -> Mapping[str, Any]:

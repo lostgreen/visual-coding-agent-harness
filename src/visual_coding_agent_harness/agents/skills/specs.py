@@ -107,7 +107,7 @@ def builtin_skill_registry() -> SkillRegistry:
                     "Q: what is the video mainly about -> global sparse view -> answer from typed evidence",
                 ),
                 self_check=("decision.option != null", "decision.citations include g"),
-                allowed_actions=frozenset({"global_gist"}),
+                allowed_actions=frozenset({"global_gist", "query_context"}),
             ),
             SkillSpec(
                 name="grounded_factual_qa",
@@ -145,7 +145,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 recovery={"insufficient": {"action": "need_more_evidence", "target": "distinguishing fact window"}},
                 self_check=("decision.citations all visually_confirmed",),
                 allowed_actions=frozenset(
-                    {"ground_question", "vision_read", "zoom", "video_ls", "search_segments"}
+                    {"ground_question", "query_context", "vision_read", "zoom", "video_ls", "search_segments"}
                 ),
             ),
             SkillSpec(
@@ -197,7 +197,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 ),
                 self_check=("decision.option != null", "decision.citations all confirmed"),
                 allowed_actions=frozenset(
-                    {"ground_question", "vision_read", "zoom", "video_ls", "search_segments"}
+                    {"ground_question", "query_context", "vision_read", "zoom", "video_ls", "search_segments"}
                 ),
             ),
         ]

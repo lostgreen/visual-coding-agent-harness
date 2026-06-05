@@ -7,9 +7,14 @@ from typing import Mapping, Sequence
 
 from ..registry import ToolRegistry, tool
 from ..video_map import VideoMap, VideoMapSegment, VideoMapStore
+from ..workspace import EvidenceWorkspace, MapUpdateProposal
 
 
-def build_video_navigation_registry(video_map: VideoMap | VideoMapStore) -> ToolRegistry:
+def build_video_navigation_registry(
+    video_map: VideoMap | VideoMapStore,
+    *,
+    workspace: EvidenceWorkspace | None = None,
+) -> ToolRegistry:
     registry = ToolRegistry()
     video_map_store = video_map if isinstance(video_map, VideoMapStore) else VideoMapStore(video_map)
 
@@ -171,13 +176,87 @@ def build_video_navigation_registry(video_map: VideoMap | VideoMapStore) -> Tool
             ],
         }
 
+    @tool(name="commit_map_proposals", description="Apply pending map update proposals to the mutable VideoMap.")
+    def commit_map_proposals(limit: int = 8, min_confidence: float = 0.0) -> Mapping[str, object]:
+        if workspace is None:
+            raise ValueError("commit_map_proposals requires an EvidenceWorkspace")
+        pending = workspace.load_pending_proposals()
+        applied = []
+        skipped = []
+        for proposal in pending[: max(0, int(limit))]:
+            if proposal.confidence < float(min_confidence):
+                skipped.append({"proposal_id": proposal.proposal_id, "reason": "below_min_confidence"})
+                continue
+            try:
+                updated = _apply_map_update_proposal(video_map_store=video_map_store, proposal=proposal)
+            except ValueError as exc:
+                skipped.append({"proposal_id": proposal.proposal_id, "reason": str(exc)})
+                continue
+            committed = workspace.mark_proposal_committed(proposal.proposal_id)
+            applied.append(
+                {
+                    "proposal_id": proposal.proposal_id,
+                    "segment_id": updated.segment_id,
+                    "update_type": proposal.update_type,
+                    "committed_at": committed.committed_at if committed else None,
+                }
+            )
+        return {
+            "claim": f"Committed {len(applied)} map proposal(s); skipped {len(skipped)}.",
+            "confidence": 1.0,
+            "input_artifacts": [],
+            "regions": [{"applied": applied, "skipped": skipped}],
+            "applied": applied,
+            "skipped": skipped,
+            "limitations": "Applies audited proposal payloads only; no model inference is performed.",
+        }
+
     registry.register(video_ls)
     registry.register(search_segments)
     registry.register(ground_question)
     registry.register(read_segment)
     registry.register(expand_window)
     registry.register(zoom)
+    registry.register(commit_map_proposals)
     return registry
+
+
+def _apply_map_update_proposal(*, video_map_store: VideoMapStore, proposal: MapUpdateProposal) -> VideoMapSegment:
+    payload = dict(proposal.payload)
+    allowed = {
+        "low_fps_caption": payload.get("low_fps_caption"),
+        "asr_text": payload.get("asr_text"),
+        "ocr_text": payload.get("ocr_text"),
+        "entities": payload.get("entities"),
+        "keyframe_paths": payload.get("keyframe_paths"),
+        "embedding_refs": payload.get("embedding_refs"),
+    }
+    if all(value in (None, "", []) for value in allowed.values()):
+        raise ValueError("proposal has no supported map update fields")
+    return video_map_store.update_segment(
+        proposal.target_segment_id,
+        low_fps_caption=_optional_text(allowed["low_fps_caption"]),
+        asr_text=_optional_text(allowed["asr_text"]),
+        ocr_text=_optional_text(allowed["ocr_text"]),
+        entities=_optional_text_list(allowed["entities"]),
+        keyframe_paths=_optional_text_list(allowed["keyframe_paths"]),
+        embedding_refs=_optional_text_list(allowed["embedding_refs"]),
+    )
+
+
+def _optional_text(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _optional_text_list(value: object) -> list[str] | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [str(item) for item in value if str(item)]
+    text = str(value).strip()
+    return [text] if text else None
 
 
 def _current_video_map(video_map: VideoMap | VideoMapStore) -> VideoMap:

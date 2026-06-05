@@ -85,6 +85,8 @@ def _grounding_quality(observation: Observation) -> str:
         return explicit
     if observation.tool in {"vision_read", "inspect_segment", "caption_segment", "qa_segment"}:
         return "visually_confirmed"
+    if observation.tool == "query_context":
+        return "query_global_context"
     if observation.tool == "global_gist":
         return "global_sparse"
     return "navigation_only"
