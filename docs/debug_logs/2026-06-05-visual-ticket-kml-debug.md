@@ -21,6 +21,12 @@ Implement the first foundation slice from `visual-coding-agent-harness-ticket-pl
 - Foundation commit: `dbff182 Add visual evidence foundation contracts`.
 - Direct-script import fix: `3bc95d1 Support direct eval runner script imports`.
 - Follow-up loop fix: `42bd30d Continue hard-skill followups before abstaining`.
+- Visual manifest producer slice: `de596ec [TASK-007-010] write visual tool frame manifests`.
+- Trace summary metrics slice: `f6a122e [TASK-002-024] aggregate trace summary metrics`.
+- Evidence chain linkage slice: `db1e0ec [TASK-015-016] chain ledger and mapped evidence`.
+- Mapped grounding floor slice: `99be1ed [TASK-017] enforce mapped grounding floor`.
+- Evidence chain export slice: `266380a [TASK-018] export evidence chains`.
+- Current local branch is ahead of GitHub/KML by these newer DAG commits until the next sync.
 - KML branch was synced with:
   - `git fetch origin codex/visual-harness-ticket-plan`
   - `git checkout -B codex/visual-harness-ticket-plan FETCH_HEAD`
@@ -32,16 +38,19 @@ Implement the first foundation slice from `visual-coding-agent-harness-ticket-pl
 - Visual evidence constants and `resolve_nframes` contract.
 - `FrameSetManifest` storage and Observation-to-manifest side-index links.
 - `EvidenceRecord` and `MapUpdateProposal` append-only storage.
+- Ledger-stage and mapped-stage `EvidenceRecord` parent chains.
+- Compact `evidence_chains` workspace artifact plus run-level `evidence_chains.jsonl`.
 - Follow-up target normalization and scheduler.
 - Context budget allocator.
 - Initial hard-skill route validator.
 - Interpreter-side distill hook from observations to evidence records.
 - Initial `tool_nframes_compliance` metric.
+- Trace-derived `route_violations`, `avg_followups_per_case`, and `followup_success_rate` summary metrics.
 
 ## Verification
 
 - Local full test command: `PYTHONPATH=src python -m pytest -q`.
-- Local result after follow-up loop fix: `170 passed`.
+- Local result after DAG continuation through `TASK-018`: `190 passed`.
 - Focused local regression check:
   - `PYTHONPATH=src python -m pytest tests/test_prompt_stack_and_skill_runtime.py -k 'hard_skill_runtime_continues_followup_chunks or hard_skill_need_more_hands_off or hard_grounded_skill_runtime' -q`
   - Result: `3 passed`.
@@ -148,9 +157,9 @@ Current diagnosis:
 - Root cause of `611-2`/`612-1` pre-fix `need_more_evidence`: `_try_hard_skill_route()` consumed only the first hard-skill chunk and returned `need_more_evidence` directly instead of handing control back to the iterative planner.
 - Commit `42bd30d` fixes the early-exit path for hard-skill runtime: hard-skill targets are chunked through `FollowupScheduler`; if AnswerAgent still abstains and round budget remains, control is handed to the main replanning loop via `hard_skill_followup_handoff`.
 - Post-fix, `611-2` and `612-1` no longer terminate as immediate `need_more_evidence`; they perform follow-up evidence collection and main planner turns, then stop at `max_rounds_reached` because no final answer is supported within budget.
-- The useful gate signal is strong: `unsupported_final_rate=0`, `legacy_worker_vote_rows=0`, and `route_violations=0`.
-- `nframes_histogram` is currently empty because the tool-to-manifest integration tickets are not implemented yet; the compliance metric correctly defaults to `1.0` when no manifests exist.
-- `avg_followups_per_case` is still not meaningful for this new hard-skill follow-up path; `TASK-024` needs to count scheduler-driven follow-up attempts and handoff outcomes.
+- The useful pre-DAG-continuation gate signal was strong: `unsupported_final_rate=0`, `legacy_worker_vote_rows=0`, and `route_violations=0`.
+- Stale before `de596ec`: `nframes_histogram` was empty because tool-to-manifest integration had not been implemented yet. A post-sync KML smoke run is needed to validate the new manifest producers.
+- Stale before `f6a122e`: `avg_followups_per_case` did not yet reflect the hard-skill follow-up path. Local code now aggregates follow-up attempts and success rate from trace events; KML needs a post-sync rerun.
 
 ## 2026-06-05 Ticket Plan Delta Audit
 
@@ -158,38 +167,38 @@ Source plan reviewed: `/Users/lostgreen/Downloads/visual-coding-agent-harness-ti
 
 Status counts against the original 38 TASKs:
 
-- Done: 9
-- Partial: 13
-- Not started: 16
+- Done: 19
+- Partial: 9
+- Not started: 10
 
 Task-level progress:
 
 | Task | Plan item | Current status | Delta / remaining work |
 | --- | --- | --- | --- |
 | `TASK-001` | `RunSummary` schema and serialization | Done | Schema exists in `runs/summary_schema.py`; `eval_runner.py` writes schema fields, keeps legacy `cases`, validates, and writes `summary_violations.json` on failure. |
-| `TASK-002` | route x action validator | Partial | Hard-skill planner normalization has allowed-action gating and route violation trace events, but validation is not yet a central interpreter/tool-registry contract and summary does not aggregate real route violation counts from traces. |
+| `TASK-002` | route x action validator | Partial | Hard-skill planner normalization has allowed-action gating and route violation trace events; summary now aggregates `route_violation` from traces. Remaining gap: validation is not yet a central interpreter/tool-registry contract across all routes. |
 | `TASK-003` | quarantine legacy worker vote | Done | Current v4 code quarantines legacy worker option votes in evidence tables, and the KML subset reports `legacy_worker_vote_rows=0`. This was mostly existing v4 behavior, not new foundation work. |
 | `TASK-004` | CI smoke runs | Partial | Local and KML manual smoke/full pytest runs are recorded; no CI workflow/smoke gate was added in this branch. |
 | `TASK-005` | `agents/contracts.py` | Done | Contract constants and `resolve_nframes` are implemented with tests. |
 | `TASK-006` | `FrameSetManifest` storage | Done | Manifest dataclass plus append/read helpers and directory creation are implemented. |
-| `TASK-007` | `global_gist` manifest integration | Not started | Tool still does not create `FrameSetManifest` or attach `frame_set_id`; KML `nframes_histogram` is empty. |
-| `TASK-008` | `vision_read` manifest integration | Not started | Same gap as `TASK-007`. |
-| `TASK-009` | `inspect_segment` manifest integration | Not started | Same gap as `TASK-007`. |
-| `TASK-010` | segment caption/QA contract integration | Not started | Segment caption/QA tools are not wired to the contract/manifest producer path. |
-| `TASK-011` | Observation `frame_set_id` | Partial | Observation carries `frame_set_id` and side-index links can resolve it, but visual tools do not yet reserve/write observations with real manifest IDs. |
-| `TASK-012` | `tool_nframes_compliance` metric | Partial | Metric exists and validates no-manifest runs as `1.0`; acceptance requires real smoke-run manifest compliance >= 0.95 after `TASK-007`-`010`. |
+| `TASK-007` | `global_gist` manifest integration | Done | Interpreter now attaches `FrameSetManifest` records for `global_gist`; default nframes contract is 128. |
+| `TASK-008` | `vision_read` manifest integration | Done | `vision_read` observations now attach manifests and respect `resolve_nframes`. |
+| `TASK-009` | `inspect_segment` manifest integration | Done | `inspect_segment` observations now attach manifests and respect `resolve_nframes`. |
+| `TASK-010` | segment caption/QA contract integration | Done | `caption_segment` and `qa_segment` now use the 128-frame contract and manifest producer path. |
+| `TASK-011` | Observation `frame_set_id` | Done | Visual observations are reloaded after manifest linking so downstream distill/ledger evidence sees `frame_set_id`. |
+| `TASK-012` | `tool_nframes_compliance` metric | Partial | Metric and manifest histogram are wired; acceptance still needs a post-sync KML smoke run with non-empty manifest coverage and compliance >= 0.95. |
 | `TASK-013` | `EvidenceRecord` storage | Done | Dataclass, IDs, append/read, and chain lookup are implemented with tests. |
 | `TASK-014` | interpreter distillation hook | Partial | Interpreter writes distilled evidence records for tool observations; per-tool distillation semantics and all observation-producing paths still need completion. |
-| `TASK-015` | ledger entries with `parent_id` | Not started | Ledger-stage EvidenceRecord parity and parent links are not implemented. |
-| `TASK-016` | AnswerAgent `mapped_evidence` | Partial | Existing v4 can annotate candidate option relations on observations; plan-specific mapped `EvidenceRecord` lifecycle records are not implemented. |
-| `TASK-017` | verifier `grounding_quality_floor` gate | Partial | KML subset has `unsupported_final_rate=0`, but this is not yet enforced by a dedicated verifier floor over mapped evidence records. |
-| `TASK-018` | `evidence_chains.jsonl` export | Partial | Workspace can compute an in-memory evidence chain; no `evidence_chains.jsonl` export or completeness metric is implemented. |
+| `TASK-015` | ledger entries with `parent_id` | Done | `ledger` stage records are written alongside `ledger.md` rows and parent to distilled evidence; split facts produce one ledger record per distilled fact. |
+| `TASK-016` | AnswerAgent `mapped_evidence` | Done | Candidate-option relations persist as `mapped` EvidenceRecords parented to ledger/distilled evidence; orphan parent references are dropped and counted. |
+| `TASK-017` | verifier `grounding_quality_floor` gate | Done | Hard-skill final gate and `verify_ledger_answer` enforce mapped-chain visual grounding; `gist_qa` can allow global-only support. |
+| `TASK-018` | `evidence_chains.jsonl` export | Done | Workspace exports compact evidence chain artifacts, eval run writes root `evidence_chains.jsonl`, and summary computes `evidence_provenance_completeness`. |
 | `TASK-019` | `FollowupTarget` / `FollowupBudget` | Done | Data structures and normalization are implemented with tests. |
 | `TASK-020` | `FollowupScheduler` | Done | Queue, retry, global budget, and saturation behavior are implemented with tests. |
 | `TASK-021` | main loop followup integration | Partial | Hard-skill runtime now schedules target-fact follow-up chunks and hands unresolved cases back to the iterative planner; generic follow-up integration for all `need_more_evidence` sources and metrics remains incomplete. |
 | `TASK-022` | per-route followup strategies | Partial | Minimal hard-skill route mapping exists (`temporal_ordering` -> `temporal_order`, default -> `needle_local`) and executes `ground_question -> vision_read`; full temporal/needle/gist strategies across all tools/routes remain incomplete. |
 | `TASK-023` | `low_confidence_final` path | Not started | No low-confidence final status path or evidence-chain integration. |
-| `TASK-024` | followup metrics | Not started | Summary fields still default to zero for the new hard-skill scheduler path; `avg_followups_per_case` did not reflect the `611-2`/`612-1` follow-up attempts. |
+| `TASK-024` | followup metrics | Done | Summary now aggregates hard-skill `ground_question` follow-up attempts and success rate from trace events. |
 | `TASK-025` | `ContextSlot` / allocator | Done | Context budget primitives and tests exist. |
 | `TASK-026` | slot-based `prompt_stack` refactor | Partial | Existing prompt stack remains active, but it is not driven by the new allocator and trace lacks `context_budget_report`. |
 | `TASK-027` | per-slot compact strategies | Not started | No production compact strategies are wired to prompt slots. |
@@ -207,10 +216,10 @@ Task-level progress:
 
 Epic-level gap summary:
 
-- EPIC 1 is partially complete: schema and quarantine behavior are usable; route validation and CI gate need stronger integration.
-- EPIC 2 storage is ready, but real visual tools do not yet produce manifests; this is the biggest blocker for frame evidence compliance.
-- EPIC 3 storage is ready and distillation is started; mapped evidence, verifier floor, ledger parent links, and exported evidence chains remain.
-- EPIC 4 has scheduler/data structures and a hard-skill follow-up handoff into the main loop; generic follow-up metrics and all-route strategies are still incomplete.
+- EPIC 1 is partially complete: schema, quarantine behavior, and trace metric aggregation are usable; route validation and CI gate need stronger integration.
+- EPIC 2 producer code is now implemented locally; KML smoke validation is the remaining blocker for frame evidence compliance.
+- EPIC 3 linkage is now implemented locally through ledger, mapped evidence, grounding floor, and compact chain export.
+- EPIC 4 has scheduler/data structures, a hard-skill follow-up handoff into the main loop, and trace-derived follow-up metrics; generic all-route strategies remain incomplete.
 - EPIC 5 only has allocator primitives; prompt stack refactor and compaction are not connected.
 - EPIC 6 and EPIC 7 have only `MapUpdateProposal` storage from EPIC 7; query-context and proposal producers are not started.
 - EPIC 8 has existing trajectory export but not the planned schema/audit pipeline.
@@ -227,8 +236,7 @@ Epic-level gap summary:
 
 ## Next Actions
 
-1. Finish EPIC 2 tool producers first: `TASK-007` through `TASK-010`, then validate `TASK-011`/`TASK-012` on a KML smoke run with non-empty `nframes_histogram`.
-2. Finish EPIC 3 linkage: `TASK-015`, `TASK-016`, `TASK-017`, and `TASK-018`, so final gating uses mapped evidence chains rather than only summary defaults.
-3. Finish EPIC 4 beyond the hard-skill fix: complete generic follow-up integration, route-specific strategies, and `TASK-024` metrics so summary fields reflect scheduler attempts and handoff outcomes.
-4. Integrate EPIC 5 context budgeting into `prompt_stack` only after evidence/follow-up paths are stable.
-5. Defer EPIC 6-9 expansion until the three anchor cases show real manifest coverage and evidence-chain completeness.
+1. Sync the local DAG commits to GitHub/KML, then run KML full pytest and a compact VideoMME subset smoke to validate manifest coverage, evidence-chain completeness, and updated follow-up metrics.
+2. Inspect only compact KML artifacts: `summary.json` metrics, `nframes_histogram`, `evidence_provenance_completeness`, and root `evidence_chains.jsonl` row counts.
+3. Continue remaining partial/not-start DAG after KML validation: generic all-route follow-up strategies (`TASK-021`/`022`), low-confidence final (`TASK-023`), context-slot prompt integration (`TASK-026`-`028`), query-context/map proposal producers (`TASK-029`/`031`/`032`), and training/reporting tasks (`TASK-033`-`038`).
+4. Keep EPIC 5+ expansion behind the three anchor cases showing real manifest coverage and evidence-chain completeness.
