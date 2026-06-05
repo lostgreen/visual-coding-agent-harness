@@ -322,6 +322,42 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("candidate_options", prompt)
             self.assertIn("verify option consistency", prompt)
 
+    def test_iterative_agent_prompt_includes_workspace_evidence_status_summary(self):
+        backend = ScriptedPlannerBackend(
+            ['{"status": "final", "answer": "B", "citations": ["obs_0001"], "confidence": 0.7}']
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="evidence_status_prompt")
+            workspace.write_observation(
+                tool_name="vision_read",
+                claim="The clip shows a red aircraft.",
+                confidence=0.82,
+                input_artifacts=["/videos/demo.mp4"],
+                regions=[{"segment_id": "seg_0001", "start_sec": 1.0, "end_sec": 2.0}],
+                raw_output={
+                    "grounding_quality": "visually_confirmed",
+                    "candidate_option_relations": [{"option": "B", "relation": "support", "strength": 0.82}],
+                },
+            )
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            agent.run(
+                question="Which option is visible?\nA. blue car\nB. red aircraft",
+                video_path="/videos/demo.mp4",
+            )
+
+            prompt = backend.requests[0].prompt
+            self.assertIn("Evidence status summary:", prompt)
+            self.assertIn("option_coverage: 1/2", prompt)
+            self.assertIn("B: strong=1 weak=0 visual=yes", prompt)
+
     def test_gist_global_mcq_requires_two_global_gist_passes_before_accepting(self):
         backend = ScriptedPlannerBackend([])
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=1896.0, window_sec=300.0)

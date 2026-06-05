@@ -99,6 +99,36 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertEqual(report.turn_index, 0)
         self.assertIn("task", report.used_tokens_per_slot)
 
+    def test_slot_prompt_includes_structured_evidence_status_summary(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        allocator = default_context_budget_allocator(total_budget_tokens=800)
+
+        prompt, _report = build_replanning_prompt(
+            question="Which option is visible?\nA. blue car\nB. red aircraft",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\nobs_0001 | red aircraft",
+            round_number=2,
+            budget=AgentBudget(max_rounds=4),
+            allocator=allocator,
+            evidence_status_summary={
+                "option_coverage": "1/2",
+                "coverage_pct": 0.5,
+                "duplicate_observations": 1,
+                "total_evidence_rows": 2,
+                "option_status": {
+                    "A": {"strong_evidence_count": 0, "weak_evidence_count": 0, "has_visual_citation": False},
+                    "B": {"strong_evidence_count": 2, "weak_evidence_count": 0, "has_visual_citation": True},
+                },
+                "hypothesis_gaps": ["entered upper class"],
+            },
+        )
+
+        self.assertIn("Evidence status summary:", prompt)
+        self.assertIn("option_coverage: 1/2", prompt)
+        self.assertIn("duplicate_observations: 1", prompt)
+        self.assertIn("B: strong=2 weak=0 visual=yes", prompt)
+        self.assertIn("hypothesis_gaps: entered upper class", prompt)
+
     def test_ground_question_returns_candidate_windows_without_option_vote(self):
         video_map = VideoMap(
             video_path="/videos/demo.mp4",

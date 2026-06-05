@@ -217,6 +217,10 @@ class IterativeVisualAgent:
         for round_number in range(len(rounds) + 1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
             final_round_reserved = self.budget.reserve_final_round and round_number == self.budget.max_rounds
+            evidence_status_summary = self.workspace.evidence_status_summary(
+                question=question,
+                options=extract_candidate_options(question),
+            )
             planner_prompt, context_report = build_replanning_prompt(
                 question=question,
                 scene_index=self.scene_index,
@@ -231,6 +235,7 @@ class IterativeVisualAgent:
                 normalization_notes=last_round_normalization_notes,
                 hypothesis_text=self.workspace.read_hypothesis_text(),
                 reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
+                evidence_status_summary=evidence_status_summary,
             )
             self.workspace.write_trace_event("context_budget_report", asdict(context_report))
             self.workspace.write_trace_event(

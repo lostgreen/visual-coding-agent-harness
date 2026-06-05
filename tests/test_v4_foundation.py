@@ -305,6 +305,56 @@ class V4FoundationTest(unittest.TestCase):
             self.assertIn('"query": "red object"', trace)
             self.assertIn('"query": "blue object"', trace)
 
+    def test_interpreter_feeds_grounding_candidates_into_next_foreach(self):
+        registry = ToolRegistry()
+
+        @tool(name="ground_question", description="Ground an event query.")
+        def ground_question(query: str, top_k: int = 2):
+            return {
+                "claim": f"found windows for {query}",
+                "confidence": 0.8,
+                "candidates": [
+                    {"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 5.0},
+                    {"segment_id": "seg_0002", "start_sec": 5.0, "end_sec": 10.0},
+                ][:top_k],
+            }
+
+        @tool(name="vision_read", description="Read one grounded candidate.")
+        def vision_read(window: dict, ask_for: str):
+            return {
+                "claim": f"{window['segment_id']} confirms {ask_for}",
+                "confidence": 0.86,
+                "regions": [window],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(ground_question)
+        registry.register(vision_read)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="dynamic_candidates")
+            interpreter = ProgramInterpreter(registry=registry, workspace=workspace)
+
+            result = interpreter.run(
+                [
+                    {"tool": "ground_question", "args": {"query": "red aircraft", "top_k": 2}, "assign": "cand"},
+                    {
+                        "tool": "vision_read",
+                        "foreach": "candidates",
+                        "args": {"window": "{candidate}", "ask_for": "red aircraft"},
+                        "assign": "fact[{candidate}]",
+                    },
+                ]
+            )
+
+            self.assertEqual(result.observation_ids, ["obs_0001", "obs_0002", "obs_0003"])
+            self.assertEqual(result.assignments["cand"], "obs_0001")
+            ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
+            self.assertIn("seg_0001 confirms red aircraft", ledger)
+            self.assertIn("seg_0002 confirms red aircraft", ledger)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("foreach_slot_update", trace)
+
     def test_interpreter_can_stop_when_sufficiency_is_met(self):
         registry = ToolRegistry()
 

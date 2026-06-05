@@ -1122,6 +1122,67 @@ class EvidenceWorkspace:
             "legacy_worker_vote_rows": legacy_count,
         }
 
+    def evidence_status_summary(
+        self,
+        *,
+        question: str,
+        options: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Return compact known/missing evidence state for planner prompts."""
+
+        table = self.evidence_table_v2(question=question, options=options)
+        groups = table.get("groups", {})
+        if not isinstance(groups, Mapping):
+            groups = {}
+
+        option_status: dict[str, dict[str, Any]] = {}
+        for option, raw_rows in groups.items():
+            option_key = str(option)
+            if option_key == "unassigned":
+                continue
+            rows = list(raw_rows) if isinstance(raw_rows, Sequence) and not isinstance(raw_rows, (str, bytes)) else []
+            strong = [
+                row
+                for row in rows
+                if isinstance(row, Mapping) and str(row.get("grounding_quality", "")) in {"visually_confirmed", "global_sparse"}
+            ]
+            weak = [
+                row
+                for row in rows
+                if isinstance(row, Mapping) and str(row.get("grounding_quality", "")) in {"inferred", "weak", "external_knowledge"}
+            ]
+            option_status[option_key] = {
+                "strong_evidence_count": len(strong),
+                "weak_evidence_count": len(weak),
+                "has_visual_citation": any(
+                    isinstance(row, Mapping)
+                    and str(row.get("tool", "")) in self.ANSWER_EVIDENCE_TOOLS
+                    and str(row.get("tool", "")) not in self.NAVIGATION_TOOLS
+                    for row in rows
+                ),
+            }
+
+        total_options = len(option_status)
+        covered = sum(1 for status in option_status.values() if int(status["strong_evidence_count"]) > 0)
+        rows = table.get("rows", [])
+        evidence_rows = list(rows) if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)) else []
+        claims = [
+            str(row.get("claim", "")).strip()
+            for row in evidence_rows
+            if isinstance(row, Mapping) and str(row.get("claim", "")).strip()
+        ]
+        duplicate_observations = len(claims) - len(set(claims))
+        coverage_pct = round(covered / total_options, 3) if total_options else 0.0
+
+        return {
+            "option_coverage": f"{covered}/{total_options}",
+            "coverage_pct": coverage_pct,
+            "option_status": option_status,
+            "duplicate_observations": duplicate_observations,
+            "total_evidence_rows": len(evidence_rows),
+            "hypothesis_gaps": self.unsatisfied_hypothesis_slots(),
+        }
+
     def observed_segment_window(self, segment_id: str) -> Mapping[str, Any] | None:
         """Return the latest observed time window for a segment id from tool outputs."""
 

@@ -40,6 +40,7 @@ def build_replanning_prompt(
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
+    evidence_status_summary: Mapping[str, Any] | None = None,
 ) -> tuple[str, ContextBudgetReport]:
     slots = compose_replanning_prompt_slots(
         question=question,
@@ -54,6 +55,7 @@ def build_replanning_prompt(
         normalization_notes=normalization_notes,
         hypothesis_text=hypothesis_text,
         reflection_memory=reflection_memory,
+        evidence_status_summary=evidence_status_summary,
     )
     allocated, report = allocator.allocate(
         slots,
@@ -79,6 +81,7 @@ def compose_replanning_prompt_slots(
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
+    evidence_status_summary: Mapping[str, Any] | None = None,
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
     skill = select_skill(question, route=playbook.route)
@@ -116,6 +119,11 @@ def compose_replanning_prompt_slots(
             ),
         ),
     ]
+    evidence_status_text = _evidence_status_summary_text(evidence_status_summary)
+    evidence_body = "# Evidence Snapshot\n"
+    if evidence_status_text:
+        evidence_body += evidence_status_text + "\n"
+    evidence_body += "Evidence ledger:\n" + (ledger_text or "(none)")
     return {
         "task": render_prompt_blocks(task_blocks),
         "navigation": _navigation_snapshot_block(
@@ -128,7 +136,7 @@ def compose_replanning_prompt_slots(
             final_round_reserved=final_round_reserved,
         ),
         "hypothesis": _hypothesis_slot(hypothesis_text),
-        "evidence": "# Evidence Snapshot\nEvidence ledger:\n" + (ledger_text or "(none)"),
+        "evidence": evidence_body,
         "feedback": _feedback_slot(
             answer_feedback=answer_feedback,
             normalization_notes=normalization_notes,
@@ -151,6 +159,7 @@ def compose_replanning_prompt_blocks(
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
+    evidence_status_summary: Mapping[str, Any] | None = None,
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
     skill = select_skill(question, route=playbook.route)
@@ -197,6 +206,7 @@ def compose_replanning_prompt_blocks(
                 inspected_segment_ids=inspected_segment_ids,
                 tool_class_counts=tool_class_counts,
                 final_round_reserved=final_round_reserved,
+                evidence_status_summary=evidence_status_summary,
             ),
         ),
         PromptBlock(
@@ -296,6 +306,32 @@ def _join_slots(slots: Mapping[SlotName, str]) -> str:
 
 def _hypothesis_slot(hypothesis_text: str) -> str:
     return (hypothesis_text or "# Hypothesis\n\n(no slots yet)").strip()
+
+
+def _evidence_status_summary_text(summary: Mapping[str, Any] | None) -> str:
+    if not summary:
+        return ""
+    lines = ["Evidence status summary:"]
+    for key in ["option_coverage", "coverage_pct", "duplicate_observations", "total_evidence_rows"]:
+        if key in summary:
+            lines.append(f"{key}: {summary.get(key)}")
+    option_status = summary.get("option_status", {})
+    if isinstance(option_status, Mapping) and option_status:
+        lines.append("options:")
+        for option in sorted(str(key) for key in option_status):
+            raw_status = option_status.get(option, {})
+            status = raw_status if isinstance(raw_status, Mapping) else {}
+            visual = "yes" if bool(status.get("has_visual_citation")) else "no"
+            lines.append(
+                f"- {option}: strong={int(status.get('strong_evidence_count', 0) or 0)} "
+                f"weak={int(status.get('weak_evidence_count', 0) or 0)} visual={visual}"
+            )
+    gaps = summary.get("hypothesis_gaps", [])
+    if isinstance(gaps, Sequence) and not isinstance(gaps, (str, bytes)) and gaps:
+        lines.append("hypothesis_gaps: " + ", ".join(str(item) for item in gaps[:8]))
+    else:
+        lines.append("hypothesis_gaps: (none)")
+    return "\n".join(lines)
 
 
 def _navigation_snapshot_block(
@@ -418,6 +454,7 @@ def _evidence_snapshot_block(
     inspected_segment_ids: Sequence[str],
     tool_class_counts: Mapping[str, int] | None,
     final_round_reserved: bool,
+    evidence_status_summary: Mapping[str, Any] | None = None,
 ) -> str:
     inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
     uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
@@ -436,6 +473,8 @@ def _evidence_snapshot_block(
         if final_round_reserved
         else ""
     )
+    evidence_status_text = _evidence_status_summary_text(evidence_status_summary)
+    status_block = f"{evidence_status_text}\n" if evidence_status_text else ""
     return (
         f"Round: {round_number}/{getattr(budget, 'max_rounds', '?')}\n"
         f"Question: {question}\n"
@@ -448,6 +487,7 @@ def _evidence_snapshot_block(
         f"{final_round_line}"
         "Scene index:\n"
         f"{scene_index.summary(max_segments=64)}\n"
+        f"{status_block}"
         "Evidence ledger:\n"
         f"{ledger_text}"
     )

@@ -53,6 +53,17 @@ class ProgramInterpreter:
                     assignments=assignments,
                 )
                 observation_ids.append(observation_id)
+                slot_updates = _dynamic_slot_updates_from_observation(self.workspace.get_observation(observation_id))
+                if slot_updates:
+                    slot_values.update(slot_updates)
+                    self.workspace.write_trace_event(
+                        "foreach_slot_update",
+                        {
+                            "step": index,
+                            "observation_id": observation_id,
+                            "slots": {key: len(value) for key, value in slot_updates.items()},
+                        },
+                    )
                 if sufficiency_predicate is None:
                     continue
                 if sufficiency_predicate(self.workspace, assignments):
@@ -381,10 +392,44 @@ def _materialized_paths(input_artifacts: Sequence[str]) -> list[str]:
     return [str(artifact) for artifact in input_artifacts if artifact and "#t=" not in str(artifact)]
 
 
-def _format_template(template: str, context: Mapping[str, Any]) -> str:
+def _dynamic_slot_updates_from_observation(observation: Observation | None) -> dict[str, list[Any]]:
+    if observation is None:
+        return {}
+    raw_output = observation.raw_output
+    if not isinstance(raw_output, Mapping):
+        return {}
+
+    updates: dict[str, list[Any]] = {}
+    candidates = _collection_slot_values(raw_output.get("candidates"))
+    if not candidates:
+        candidates = _collection_slot_values(raw_output.get("regions"))
+    if candidates:
+        updates["candidates"] = candidates
+
+    segments = _collection_slot_values(raw_output.get("segments"))
+    if segments:
+        updates["segments"] = segments
+    return updates
+
+
+def _collection_slot_values(value: Any) -> list[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    values = []
+    for item in value:
+        if isinstance(item, Mapping):
+            values.append(dict(item))
+        elif item is not None:
+            values.append(item)
+    return values
+
+
+def _format_template(template: str, context: Mapping[str, Any]) -> Any:
     needed = [field_name for _, field_name, _, _ in Formatter().parse(template) if field_name]
     if not needed:
         return template
+    if template == "{" + needed[0] + "}" and len(needed) == 1:
+        return context.get(needed[0], template)
     values = {name: context.get(name, "{" + name + "}") for name in needed}
     return template.format(**values)
 
