@@ -3,7 +3,12 @@ import json
 import unittest
 from pathlib import Path
 
-from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
+from visual_coding_agent_harness.agents.iterative_agent import (
+    AgentBudget,
+    IterativeVisualAgent,
+    _semantic_question_text,
+    _skill_target_facts,
+)
 from visual_coding_agent_harness.agents.prompt_stack import (
     compose_replanning_prompt_blocks,
     render_prompt_blocks,
@@ -94,6 +99,58 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertNotIn("answer_option", result)
         self.assertNotIn("final_answer", result)
 
+    def test_ground_question_normalizes_stopword_heavy_queries_before_search(self):
+        video_map = VideoMap(
+            video_path="/videos/demo.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0, low_fps_caption="the and of"),
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=30.0,
+                    end_sec=60.0,
+                    low_fps_caption="The Rape of Persephone appears in the sculpture discussion.",
+                ),
+            ],
+        )
+        registry = build_video_navigation_registry(video_map)
+
+        result = registry.execute("ground_question", {"query": '"The rape of Persephone" and the of', "top_k": 1})
+
+        self.assertEqual(result["normalized_query"], "rape Persephone")
+        self.assertEqual(result["candidates"][0]["segment_id"], "seg_0002")
+
+    def test_skill_target_facts_strip_wrappers_and_compile_option_facts(self):
+        wrapped = (
+            "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+            "Question: How was his life journey according to the video?\n"
+            "Options:\n"
+            "A. Borned with humble background and lived in seclusion in a farmhouse.\n"
+            "B. Borned with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+        )
+        temporal = (
+            "Question: What is the correct order?\n"
+            "Options:\n"
+            'A. "The rape of Persephone", "Apollo and Daphne", "David" and '
+            '"Aeneas, Anchises, and Ascanius fleeing Troy".\n'
+        )
+
+        self.assertEqual(_semantic_question_text(wrapped), "How was his life journey according to the video?")
+        targets = _skill_target_facts(question=wrapped, skill_name="grounded_factual_qa")
+        self.assertIn("Borned with humble background", targets)
+        self.assertIn("entered the upper class", targets)
+        self.assertIn("lived in seclusion in a farmhouse", targets)
+        self.assertTrue(all("VideoMME" not in target for target in targets))
+        self.assertEqual(
+            _skill_target_facts(question=temporal, skill_name="temporal_ordering"),
+            [
+                "The rape of Persephone",
+                "Apollo and Daphne",
+                "David",
+                "Aeneas, Anchises, and Ascanius fleeing Troy",
+            ],
+        )
+
     def test_hard_grounded_skill_runtime_runs_ground_then_vision_then_answer(self):
         backend = RecordingBackend()
         registry = ToolRegistry()
@@ -165,7 +222,10 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
 
             self.assertEqual(result.status, "final")
             self.assertEqual(result.answer, "B. red car")
-            self.assertEqual([step["tool"] for step in result.rounds[0].program], ["ground_question", "vision_read"])
+            self.assertEqual(
+                [step["tool"] for step in result.rounds[0].program],
+                ["ground_question", "vision_read", "ground_question", "vision_read"],
+            )
             self.assertEqual([request.task for request in backend.requests], [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("hard_skill_runtime", trace)

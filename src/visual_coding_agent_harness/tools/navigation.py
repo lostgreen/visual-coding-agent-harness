@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Mapping, Sequence
 
 from ..registry import ToolRegistry, tool
@@ -66,7 +67,8 @@ def build_video_navigation_registry(video_map: VideoMap | VideoMapStore) -> Tool
     @tool(name="ground_question", description="Ground a question or event into candidate video windows without answering.")
     def ground_question(query: str, top_k: int = 5, modalities: Sequence[str] = ()) -> Mapping[str, object]:
         current = video_map_store.current
-        results = current.search(query=query, top_k=top_k, modalities=modalities)
+        normalized_query = _normalize_grounding_query(query)
+        results = current.search(query=normalized_query, top_k=top_k, modalities=modalities) if normalized_query else []
         if not results:
             results = current.anchor_segments(max_segments=top_k)
         candidates = [_grounding_candidate(result) for result in results]
@@ -77,6 +79,7 @@ def build_video_navigation_registry(video_map: VideoMap | VideoMapStore) -> Tool
             "input_artifacts": [current.video_path],
             "regions": candidates,
             "candidates": candidates,
+            "normalized_query": normalized_query,
             "recommended_next_tools": [
                 {
                     "tool": "vision_read",
@@ -197,6 +200,81 @@ def _available_indexes(segments: Sequence[VideoMapSegment]) -> Sequence[str]:
         if any(predicate(segment) for segment in segments):
             indexes.append(name)
     return indexes
+
+
+_GROUNDING_STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "with",
+    "without",
+    "for",
+    "from",
+    "by",
+    "as",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "this",
+    "that",
+    "these",
+    "those",
+    "his",
+    "her",
+    "their",
+    "its",
+    "how",
+    "what",
+    "which",
+    "where",
+    "who",
+    "when",
+    "why",
+    "video",
+    "question",
+    "questions",
+    "option",
+    "options",
+    "answer",
+    "letter",
+    "exactly",
+    "one",
+    "short",
+    "reason",
+    "outside",
+    "knowledge",
+    "unless",
+    "directly",
+    "supported",
+    "evidence",
+    "according",
+    "use",
+    "not",
+    "multiple",
+    "choice",
+    "first",
+}
+
+
+def _normalize_grounding_query(query: str) -> str:
+    text = re.sub(r"^\s*[A-H][.)]\s*", "", str(query)).strip()
+    tokens = []
+    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", text):
+        lowered = token.lower().strip("'")
+        if len(lowered) < 3 or lowered in _GROUNDING_STOPWORDS:
+            continue
+        tokens.append(token)
+    return " ".join(tokens)
 
 
 def _modality_results(

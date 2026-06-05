@@ -931,6 +931,13 @@ class IterativeVisualAgent:
             evidence_text=self._read_ledger(),
             evidence_table=table,
         )
+        if answer_result.status == "final" and answer_result.candidate_option_relations:
+            self.workspace.annotate_candidate_option_relations(
+                observation_ids=answer_result.citations,
+                relations=answer_result.candidate_option_relations,
+                assigned_by="answer_agent",
+            )
+            table = self._answer_evidence_table(question)
         selected_option = _answer_option_letter(answer_result.answer)
         gate_reason = _hard_skill_gate_reason(
             skill_name=skill.name,
@@ -1153,15 +1160,23 @@ def _reflection_rule_for_failure(failure_tag: str) -> str:
 
 
 def _skill_target_facts(*, question: str, skill_name: str) -> list[str]:
+    options = extract_candidate_options(question)
     if skill_name == "temporal_ordering":
         events = _temporal_events_from_question(question)
         if events:
             return events
+    option_targets = _option_fact_targets(options)
+    if option_targets:
+        return option_targets
     semantic = _semantic_question_text(question)
     return [semantic] if semantic else []
 
 
 def _semantic_question_text(question: str) -> str:
+    match = re.search(r"\bQuestion:\s*(.*?)(?:\n\s*Options:|\Z)", question, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        return " ".join(match.group(1).split()).strip()
+
     lines = []
     for line in question.splitlines():
         stripped = line.strip()
@@ -1169,7 +1184,12 @@ def _semantic_question_text(question: str) -> str:
             continue
         if re.match(r"^[A-H][.)]\s+\S+", stripped):
             continue
+        lowered = stripped.lower()
+        if lowered.startswith("videomme multiple-choice question"):
+            continue
         if "answer with" in stripped.lower() and "option letter" in stripped.lower():
+            continue
+        if "do not use outside knowledge" in lowered:
             continue
         lines.append(stripped)
     return " ".join(lines).strip() or question.strip()
@@ -1177,6 +1197,10 @@ def _semantic_question_text(question: str) -> str:
 
 def _temporal_events_from_question(question: str, *, max_events: int = 4) -> list[str]:
     options = extract_candidate_options(question)
+    quoted_targets = _quoted_option_targets(options, max_targets=max_events)
+    if quoted_targets:
+        return quoted_targets
+
     sources = options or [_semantic_question_text(question)]
     events = []
     seen = set()
@@ -1196,6 +1220,113 @@ def _temporal_events_from_question(question: str, *, max_events: int = 4) -> lis
             if len(events) >= max_events:
                 return events
     return events
+
+
+_TARGET_STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "with",
+    "without",
+    "for",
+    "from",
+    "by",
+    "as",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "then",
+    "before",
+    "after",
+    "first",
+    "last",
+    "option",
+    "answer",
+}
+
+
+def _option_fact_targets(options: Sequence[str], *, max_targets: int = 6) -> list[str]:
+    quoted_targets = _quoted_option_targets(options, max_targets=max_targets)
+    if quoted_targets:
+        return quoted_targets
+
+    targets: list[str] = []
+    seen: set[str] = set()
+    for option in options:
+        text = _strip_option_prefix(str(option))
+        for chunk in _split_option_fact_text(text):
+            target = _clean_target_fact(chunk)
+            if not _informative_target_fact(target):
+                continue
+            key = _target_fact_key(target)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            targets.append(target)
+            if len(targets) >= max_targets:
+                return targets
+    return targets
+
+
+def _quoted_option_targets(options: Sequence[str], *, max_targets: int) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for option in options:
+        for match in re.finditer(r"[\"“]([^\"”]+)[\"”]", str(option)):
+            target = _clean_target_fact(match.group(1))
+            if not _informative_target_fact(target):
+                continue
+            key = _target_fact_key(target)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            targets.append(target)
+            if len(targets) >= max_targets:
+                return targets
+    return targets
+
+
+def _strip_option_prefix(text: str) -> str:
+    return re.sub(r"^\s*[A-H][.)]\s*", "", text).strip()
+
+
+def _split_option_fact_text(text: str) -> list[str]:
+    primary_parts = re.split(r"\b(?:and then|then|before|after)\b|[,;]|->|/|\|", text, flags=re.IGNORECASE)
+    parts: list[str] = []
+    action_splitter = re.compile(
+        r"\band\s+(?=(?:lived|entered|went|moved|became|was|were|is|are|appeared|appears|shown|shows|born|borned)\b)",
+        flags=re.IGNORECASE,
+    )
+    for part in primary_parts:
+        parts.extend(action_splitter.split(part))
+    return parts
+
+
+def _clean_target_fact(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text)).strip(" .:-\"'“”")
+    cleaned = re.sub(r"\b(first|last|earlier|later|right|immediately)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .:-\"'“”")
+    return cleaned
+
+
+def _informative_target_fact(text: str) -> bool:
+    tokens = [token for token in re.findall(r"[A-Za-z0-9]+", text.lower()) if token not in _TARGET_STOPWORDS]
+    return len(tokens) >= 1 and any(len(token) >= 3 for token in tokens)
+
+
+def _target_fact_key(text: str) -> str:
+    tokens = [token for token in re.findall(r"[A-Za-z0-9]+", text.lower()) if token not in _TARGET_STOPWORDS]
+    return " ".join(tokens)
 
 
 def _answer_option_letter(answer: str) -> str | None:

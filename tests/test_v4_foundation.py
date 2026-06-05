@@ -75,6 +75,41 @@ class V4FoundationTest(unittest.TestCase):
             self.assertNotIn("supported_option_letter", table["groups"]["B"][0])
             self.assertFalse(table["groups"]["B"][0]["legacy_worker_vote"])
 
+    def test_answer_agent_relations_can_annotate_existing_visual_observations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="answer_relation_annotation")
+            observation = workspace.write_observation(
+                tool_name="vision_read",
+                input_artifacts=["clip_red.mp4"],
+                claim="The localized window shows a red object.",
+                confidence=0.87,
+                regions=[{"start_sec": 20.0, "end_sec": 22.0}],
+                raw_output={
+                    "event_label": "red object",
+                    "grounding_quality": "visually_confirmed",
+                },
+            )
+
+            changed = workspace.annotate_candidate_option_relations(
+                observation_ids=[observation.observation_id],
+                relations=[
+                    {
+                        "option": "B",
+                        "relation": "support",
+                        "strength": 0.87,
+                        "observation_id": observation.observation_id,
+                    }
+                ],
+            )
+            table = workspace.evidence_table_v2(
+                question="Which option is shown?",
+                options=["A. blue object", "B. red object"],
+            )
+
+            self.assertEqual(changed, 1)
+            self.assertEqual(table["groups"]["B"][0]["obs_id"], observation.observation_id)
+            self.assertEqual(table["groups"]["B"][0]["candidate_option_relations"][0]["assigned_by"], "answer_agent")
+
     def test_predicates_check_structured_temporal_support(self):
         table = {
             "options": ["A. red object then blue object", "B. blue object then red object"],

@@ -16,6 +16,7 @@ class AnswerAgentResult:
     answer: str = ""
     rationale: str = ""
     citations: Sequence[str] = field(default_factory=list)
+    candidate_option_relations: Sequence[Mapping[str, Any]] = field(default_factory=list)
     missing_evidence: Sequence[str] = field(default_factory=list)
     confidence: float = 0.0
     conflict: Mapping[str, Any] = field(default_factory=dict)
@@ -124,10 +125,14 @@ def _answer_prompt(*, question: str, evidence_text: str) -> str:
         "Use only the evidence table below. Do not use raw video or outside knowledge.\n"
         "Return only JSON with this schema:\n"
         '{"answer": string, "rationale": string, "citations": [observation_id], '
+        '"candidate_option_relations": [{"option": "A", "relation": "support|contradict|neutral", '
+        '"strength": number, "observation_id": "obs_0001", "rationale": string}], '
         '"missing_evidence": [string], "confidence": number}\n'
         "Rules:\n"
         "- Multiple-choice answers must start with exactly one option letter.\n"
         "- Cite at least one visual/ASR/OCR/QA observation id from the evidence.\n"
+        "- Map facts to options only in candidate_option_relations; VisionAgent/local-worker text is not an option vote.\n"
+        "- Every support relation must name the observation_id that directly supports it.\n"
         '- If evidence is insufficient, set answer to "need_more_evidence" and explain missing_evidence.\n'
         "- Do not cite navigation-only evidence as sole support.\n"
         f"Question:\n{question}\n\n"
@@ -147,6 +152,7 @@ def _parse_answer_response(text: str) -> AnswerAgentResult:
 
     answer = str(payload.get("answer", "")).strip()
     citations = [str(item) for item in payload.get("citations", [])]
+    candidate_option_relations = _candidate_option_relations(payload.get("candidate_option_relations"))
     missing_evidence = [str(item) for item in payload.get("missing_evidence", [])]
     status = "need_more_evidence" if answer.lower() == "need_more_evidence" or not citations else "final"
     return AnswerAgentResult(
@@ -154,6 +160,7 @@ def _parse_answer_response(text: str) -> AnswerAgentResult:
         answer=answer,
         rationale=str(payload.get("rationale", "")),
         citations=citations,
+        candidate_option_relations=candidate_option_relations,
         missing_evidence=missing_evidence,
         confidence=float(payload.get("confidence", 0.0) or 0.0),
         raw_text=text,
@@ -233,6 +240,29 @@ def _final_from_global_floor(
         confidence=min(1.0, score),
         conflict=conflict,
     )
+
+
+def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    relations: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        relation = dict(item)
+        option = str(relation.get("option", "")).strip()
+        if not option:
+            continue
+        relation["option"] = option[:1].upper() if option[:1].isalpha() else option
+        relation["relation"] = str(relation.get("relation", "support") or "support").strip().lower()
+        try:
+            relation["strength"] = float(relation.get("strength", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            relation["strength"] = 0.0
+        if relation["strength"] <= 0.0:
+            relation["strength"] = 0.5
+        relations.append(relation)
+    return relations
 
 
 def _has_option_support(table: Mapping[str, Any]) -> bool:

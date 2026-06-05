@@ -1,9 +1,37 @@
 import unittest
 
-from visual_coding_agent_harness.agents.answer_agent import arbitrate_evidence_table
+from visual_coding_agent_harness.agents.answer_agent import AnswerAgent, arbitrate_evidence_table
+from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+
+
+class StaticBackend(VisionLanguageBackend):
+    def __init__(self, text: str):
+        self.text = text
+        self.requests = []
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        return BackendResponse(text=self.text)
 
 
 class AnswerAgentArbitrationTest(unittest.TestCase):
+    def test_answer_agent_parses_candidate_option_relations(self):
+        backend = StaticBackend(
+            '{"answer": "B. red car", "rationale": "obs_0002 supports B", '
+            '"citations": ["obs_0002"], '
+            '"candidate_option_relations": [{"option": "b", "relation": "support", '
+            '"strength": 0.82, "observation_id": "obs_0002"}], '
+            '"missing_evidence": [], "confidence": 0.82}'
+        )
+        agent = AnswerAgent(backend)
+
+        result = agent.run(question="Which object?\nA. blue car\nB. red car", evidence_text="- obs_0002 red car")
+
+        self.assertEqual(result.status, "final")
+        self.assertEqual(result.candidate_option_relations[0]["option"], "B")
+        self.assertEqual(result.candidate_option_relations[0]["observation_id"], "obs_0002")
+        self.assertIn("candidate_option_relations", backend.requests[0].prompt)
+
     def test_arbitration_prefers_visually_grounded_support_over_weak_caption(self):
         table = {
             "options": ["A. first order", "D. fourth order"],

@@ -102,6 +102,64 @@ class EvidenceWorkspace:
         self._append_jsonl("observations.jsonl", asdict(observation))
         return observation
 
+    def annotate_candidate_option_relations(
+        self,
+        *,
+        observation_ids: Sequence[str],
+        relations: Sequence[Mapping[str, Any]],
+        assigned_by: str = "answer_agent",
+    ) -> int:
+        """Attach AnswerAgent option mappings to cited visual observations."""
+
+        target_ids = [str(item) for item in observation_ids if str(item)]
+        normalized_relations = _candidate_option_relations(relations)
+        if not target_ids or not normalized_relations:
+            return 0
+
+        rows = self._read_observation_dicts()
+        changed = 0
+        for observation in rows:
+            observation_id = str(observation.get("observation_id", ""))
+            if observation_id not in target_ids:
+                continue
+            raw_output = observation.get("raw_output", {})
+            if not isinstance(raw_output, Mapping):
+                raw_output = {}
+            scoped_relations = _relations_for_observation(
+                normalized_relations,
+                observation_id=observation_id,
+                default_observation_id=target_ids[0],
+                assigned_by=assigned_by,
+            )
+            if not scoped_relations:
+                continue
+            merged = _merge_candidate_option_relations(
+                _candidate_option_relations(raw_output.get("candidate_option_relations")),
+                scoped_relations,
+            )
+            if merged == _candidate_option_relations(raw_output.get("candidate_option_relations")):
+                continue
+            updated_raw_output = dict(raw_output)
+            updated_raw_output["candidate_option_relations"] = merged
+            observation["raw_output"] = updated_raw_output
+            changed += 1
+
+        if changed:
+            self._write_jsonl("observations.jsonl", rows)
+            self.write_trace_event(
+                "answer_agent_relations_persisted",
+                {
+                    "observation_ids": target_ids,
+                    "relation_count": sum(
+                        _observation_relation_count(row)
+                        for row in rows
+                        if str(row.get("observation_id", "")) in target_ids
+                    ),
+                    "assigned_by": assigned_by,
+                },
+            )
+        return changed
+
     def write_trace_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
         self._append_jsonl(
             "trace.jsonl",
@@ -493,6 +551,12 @@ class EvidenceWorkspace:
             handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
             handle.write("\n")
 
+    def _write_jsonl(self, filename: str, payloads: Sequence[Mapping[str, Any]]) -> None:
+        with (self.root / filename).open("w", encoding="utf-8") as handle:
+            for payload in payloads:
+                handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+                handle.write("\n")
+
     def _read_jsonl_dicts(self, filename: str) -> list[dict[str, Any]]:
         path = self.root / filename
         if not path.exists():
@@ -714,6 +778,59 @@ def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _observation_relation_count(observation: Mapping[str, Any]) -> int:
+    raw_output = observation.get("raw_output", {})
+    if not isinstance(raw_output, Mapping):
+        return 0
+    return len(_candidate_option_relations(raw_output.get("candidate_option_relations")))
+
+
+def _relations_for_observation(
+    relations: Sequence[Mapping[str, Any]],
+    *,
+    observation_id: str,
+    default_observation_id: str,
+    assigned_by: str,
+) -> list[dict[str, Any]]:
+    scoped: list[dict[str, Any]] = []
+    for relation in relations:
+        relation_observation_id = str(
+            relation.get("observation_id") or relation.get("obs_id") or relation.get("citation") or ""
+        ).strip()
+        if relation_observation_id and relation_observation_id != observation_id:
+            continue
+        if not relation_observation_id and observation_id != default_observation_id:
+            continue
+        scoped_relation = dict(relation)
+        scoped_relation["observation_id"] = observation_id
+        scoped_relation["assigned_by"] = str(scoped_relation.get("assigned_by") or assigned_by)
+        scoped.append(scoped_relation)
+    return scoped
+
+
+def _merge_candidate_option_relations(
+    existing: Sequence[Mapping[str, Any]],
+    incoming: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen = set()
+    for relation in list(existing) + list(incoming):
+        if not isinstance(relation, Mapping):
+            continue
+        normalized = dict(relation)
+        key = (
+            str(normalized.get("option", "")).strip().upper(),
+            str(normalized.get("relation", "")).strip().lower(),
+            str(normalized.get("observation_id", "")).strip(),
+            str(normalized.get("assigned_by", "")).strip().lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(normalized)
+    return merged
 
 
 def _has_worker_option_vote(
