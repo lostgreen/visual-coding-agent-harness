@@ -6,6 +6,7 @@ import time
 from typing import Any, Mapping, Sequence
 
 from ..workspace import EvidenceRecord, EvidenceWorkspace, Observation
+from .output_quality import confidence_signal_from_text
 
 
 def distill(observation: Observation, workspace: EvidenceWorkspace) -> list[EvidenceRecord]:
@@ -28,6 +29,7 @@ def _default_distiller(observation: Observation, workspace: EvidenceWorkspace) -
             "claim": observation.claim,
             "regions": list(observation.regions),
             "limitations": observation.limitations,
+            "confidence_signal": _confidence_signal(observation),
         },
         grounding_quality=_grounding_quality(observation),
         confidence=observation.confidence,
@@ -51,8 +53,9 @@ def _fact_distiller(observation: Observation, workspace: EvidenceWorkspace) -> l
                     "claim": str(fact.get("claim", "")),
                     "regions": list(observation.regions),
                     "limitations": observation.limitations,
+                    "confidence_signal": _confidence_signal(observation, fact=fact),
                 },
-                grounding_quality=str(fact.get("grounding_quality") or _grounding_quality(observation)),  # type: ignore[arg-type]
+                grounding_quality=_fact_grounding_quality(observation, fact),  # type: ignore[arg-type]
                 confidence=float(fact.get("confidence", observation.confidence) or 0.0),
                 created_at=time.time(),
             )
@@ -80,6 +83,11 @@ def _facts_from_raw_output(raw_output: Mapping[str, Any]) -> list[dict[str, Any]
 
 
 def _grounding_quality(observation: Observation) -> str:
+    signal = _confidence_signal(observation)
+    if signal == "unsupported":
+        return "inferred"
+    if signal == "degenerate":
+        return "weak"
     explicit = str(observation.raw_output.get("grounding_quality", "")).strip()
     if explicit:
         return explicit
@@ -90,3 +98,26 @@ def _grounding_quality(observation: Observation) -> str:
     if observation.tool == "global_gist":
         return "global_sparse"
     return "navigation_only"
+
+
+def _fact_grounding_quality(observation: Observation, fact: Mapping[str, Any]) -> str:
+    signal = _confidence_signal(observation, fact=fact)
+    if signal == "unsupported":
+        return "inferred"
+    if signal == "degenerate":
+        return "weak"
+    explicit = str(fact.get("grounding_quality", "")).strip()
+    return explicit or _grounding_quality(observation)
+
+
+def _confidence_signal(observation: Observation, *, fact: Mapping[str, Any] | None = None) -> str:
+    for source in [
+        fact or {},
+        observation.raw_output,
+        {"confidence_signal": observation.confidence_signal},
+    ]:
+        signal = str(source.get("confidence_signal", "")).strip().lower()
+        if signal:
+            return signal
+    text = str((fact or {}).get("claim", "") or observation.claim)
+    return confidence_signal_from_text(text)

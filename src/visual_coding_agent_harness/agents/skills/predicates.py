@@ -321,6 +321,10 @@ def _is_global_floor_row(row: Mapping[str, Any]) -> bool:
 
 
 def _confirmed_timestamped_events(table: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    timeline = table.get("timeline")
+    if isinstance(timeline, Sequence) and not isinstance(timeline, (str, bytes)):
+        return _confirmed_timeline_events(timeline)
+
     observed = []
     for row in _rows(table):
         if str(row.get("grounding_quality", "")) != "visually_confirmed":
@@ -338,6 +342,31 @@ def _confirmed_timestamped_events(table: Mapping[str, Any]) -> list[Mapping[str,
                 "event": event,
                 "start_sec": start_sec,
                 "obs_id": str(row.get("obs_id", "")),
+            }
+        )
+    return sorted(observed, key=lambda item: (float(item["start_sec"]), str(item.get("obs_id", ""))))
+
+
+def _confirmed_timeline_events(timeline: Sequence[Any]) -> list[Mapping[str, Any]]:
+    observed = []
+    for row in timeline:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("confidence_signal", "")).strip().lower() != "confirmed":
+            continue
+        event = str(row.get("entity") or row.get("event_label") or "").strip()
+        observed_at_sec = row.get("observed_at_sec")
+        if not event or observed_at_sec is None:
+            continue
+        try:
+            start_sec = float(observed_at_sec)
+        except (TypeError, ValueError):
+            continue
+        observed.append(
+            {
+                "event": event,
+                "start_sec": start_sec,
+                "obs_id": str(row.get("obs_id") or row.get("observation_id") or ""),
             }
         )
     return sorted(observed, key=lambda item: (float(item["start_sec"]), str(item.get("obs_id", ""))))

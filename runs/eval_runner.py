@@ -612,6 +612,14 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
     followup_successes = 0
     context_overflows = 0
     context_turn_token_totals: list[int] = []
+    unsupported_citation_finals = 0
+    traced_finals = 0
+    mutex_conflicts = 0
+    timeline_scores: list[float] = []
+    degenerate_observations = 0
+    total_observations = 0
+    normalization_notes = 0
+    normalization_rounds = 0
 
     for workspace in workspaces:
         events = _load_trace_events(workspace)
@@ -623,6 +631,16 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         overflows, token_totals = _context_budget_trace_metrics(events)
         context_overflows += overflows
         context_turn_token_totals.extend(token_totals)
+        unsupported, finals = _unsupported_citation_trace_metrics(workspace, events)
+        unsupported_citation_finals += unsupported
+        traced_finals += finals
+        mutex_conflicts += _mutex_conflict_detection_count(events)
+        timeline_scores.extend(_timeline_completeness_scores(events))
+        degenerate_observations += _degenerate_observation_count(events)
+        total_observations += _observation_count(workspace)
+        notes, rounds = _normalization_note_trace_metrics(events)
+        normalization_notes += notes
+        normalization_rounds += rounds
 
     summary.route_violations = route_violations
     summary.context_budget_overflow_count = context_overflows
@@ -632,6 +650,15 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         summary.avg_followups_per_case = sum(followup_attempts) / len(followup_attempts)
         attempted_cases = sum(1 for attempts in followup_attempts if attempts > 0)
         summary.followup_success_rate = (followup_successes / attempted_cases) if attempted_cases else 0.0
+    if traced_finals:
+        summary.unsupported_citation_rate = unsupported_citation_finals / traced_finals
+    summary.mutex_conflict_detection_count = mutex_conflicts
+    if timeline_scores:
+        summary.timeline_completeness = sum(timeline_scores) / len(timeline_scores)
+    if total_observations:
+        summary.degenerate_observation_rate = degenerate_observations / total_observations
+    if normalization_rounds:
+        summary.normalization_notes_per_round = normalization_notes / normalization_rounds
 
 
 def _evidence_provenance_completeness(workspaces: Sequence[EvidenceWorkspace]) -> float:
@@ -662,10 +689,17 @@ def _hard_skill_followup_trace_metrics(events: Sequence[Mapping[str, Any]]) -> t
         if event_type == "hard_skill_runtime":
             in_hard_skill = True
             continue
-        if event_type == "tool_use" and in_hard_skill and str(payload.get("tool", "")) == "ground_question":
+        if event_type == "tool_use" and in_hard_skill and str(payload.get("tool", "")) in {
+            "ground_question",
+            "caption_segment",
+            "vision_read",
+        }:
             attempts += 1
             continue
-        if event_type == "iterative_final" and str(payload.get("source", "")) == "hard_skill_runtime":
+        if event_type == "iterative_final" and str(payload.get("source", "")) in {
+            "hard_skill_runtime",
+            "timeline_ordering",
+        }:
             success = True
             in_hard_skill = False
             continue
@@ -688,6 +722,170 @@ def _context_budget_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[
             continue
         token_totals.append(sum(int(value or 0) for value in used.values()))
     return overflows, token_totals
+
+
+def _unsupported_citation_trace_metrics(
+    workspace: EvidenceWorkspace,
+    events: Sequence[Mapping[str, Any]],
+) -> tuple[int, int]:
+    observations = {
+        str(row.get("observation_id", "")): row
+        for row in _load_observations(workspace)
+        if row.get("observation_id")
+    }
+    unsupported_finals = 0
+    finals = 0
+    for event in events:
+        if _event_type(event) != "iterative_final":
+            continue
+        finals += 1
+        payload = _event_payload(event)
+        citations = payload.get("citations", [])
+        if not isinstance(citations, Sequence) or isinstance(citations, (str, bytes)):
+            continue
+        if any(_observation_confidence_signal(observations.get(str(citation), {})) == "unsupported" for citation in citations):
+            unsupported_finals += 1
+    return unsupported_finals, finals
+
+
+def _mutex_conflict_detection_count(events: Sequence[Mapping[str, Any]]) -> int:
+    count = 0
+    for event in events:
+        event_type = _event_type(event)
+        payload = _event_payload(event)
+        if event_type == "iterative_answer_agent" and str(payload.get("status", "")) != "need_more_evidence":
+            continue
+        if event_type not in {"iterative_answer_agent", "iterative_final_blocked", "answer_agent_need_more_evidence"}:
+            continue
+        if "mutex_conflict" in _payload_text(payload).lower():
+            count += 1
+    return count
+
+
+def _timeline_completeness_scores(events: Sequence[Mapping[str, Any]]) -> list[float]:
+    scores: list[float] = []
+    for event in events:
+        event_type = _event_type(event)
+        payload = _event_payload(event)
+        if event_type == "iterative_timeline_temporal_decision":
+            explicit = _explicit_completeness_score(payload)
+            if explicit is not None:
+                scores.append(explicit)
+                continue
+            matched = payload.get("matched_events", [])
+            if isinstance(matched, Sequence) and not isinstance(matched, (str, bytes)) and matched:
+                scores.append(1.0)
+            continue
+        if event_type != "timeline_ordering_missing_entity":
+            continue
+        explicit = _explicit_completeness_score(payload)
+        if explicit is not None:
+            scores.append(explicit)
+            continue
+        targets = _string_list(payload.get("target_facts", []))
+        missing = set(_string_list(payload.get("missing_entities", [])))
+        if targets:
+            satisfied = sum(1 for target in targets if target not in missing)
+            scores.append(satisfied / len(targets))
+    return scores
+
+
+def _degenerate_observation_count(events: Sequence[Mapping[str, Any]]) -> int:
+    observation_ids = set()
+    anonymous_events = 0
+    for event in events:
+        if _event_type(event) != "tool_output_degenerate":
+            continue
+        payload = _event_payload(event)
+        observation_id = str(payload.get("observation_id", "")).strip()
+        if observation_id:
+            observation_ids.add(observation_id)
+        else:
+            anonymous_events += 1
+    return len(observation_ids) + anonymous_events
+
+
+def _normalization_note_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
+    notes = 0
+    rounds = 0
+    for event in events:
+        if _event_type(event) != "iterative_normalization_empty":
+            continue
+        payload = _event_payload(event)
+        note_payload = payload.get("notes", [])
+        if not isinstance(note_payload, Sequence) or isinstance(note_payload, (str, bytes)):
+            continue
+        rounds += 1
+        notes += len(note_payload)
+    return notes, rounds
+
+
+def _observation_count(workspace: EvidenceWorkspace) -> int:
+    return len(_load_observations(workspace))
+
+
+def _load_observations(workspace: EvidenceWorkspace) -> list[dict[str, Any]]:
+    path = workspace.root / "observations.jsonl"
+    if not path.exists():
+        return []
+    observations: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                observations.append(payload)
+    return observations
+
+
+def _observation_confidence_signal(observation: Mapping[str, Any]) -> str:
+    signal = str(observation.get("confidence_signal", "")).strip().lower()
+    if signal:
+        return signal
+    raw_output = observation.get("raw_output", {})
+    if isinstance(raw_output, Mapping):
+        return str(raw_output.get("confidence_signal", "")).strip().lower()
+    return ""
+
+
+def _explicit_completeness_score(payload: Mapping[str, Any]) -> float | None:
+    if "required_slots" not in payload and "satisfied_slots" not in payload:
+        return None
+    required = _numeric_slot_count(payload.get("required_slots"))
+    if required <= 0:
+        return None
+    satisfied = _numeric_slot_count(payload.get("satisfied_slots"))
+    return max(0.0, min(1.0, satisfied / required))
+
+
+def _numeric_slot_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return len(value)
+    return 0
+
+
+def _payload_text(payload: Any) -> str:
+    if isinstance(payload, Mapping):
+        return " ".join(_payload_text(value) for value in payload.values())
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        return " ".join(_payload_text(value) for value in payload)
+    return str(payload)
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [str(item) for item in value if str(item)]
 
 
 def _load_trace_events(workspace: EvidenceWorkspace) -> list[dict[str, Any]]:

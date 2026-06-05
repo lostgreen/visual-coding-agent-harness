@@ -62,6 +62,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
                 "active_skill",
                 "tool_schema",
                 "evidence_snapshot",
+                "hypothesis",
                 "answer_feedback",
                 "reflection_memory",
                 "final_gate",
@@ -71,8 +72,9 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertLess(prompt.index("# Base Identity"), prompt.index("# Route Playbook"))
         self.assertLess(prompt.index("# Route Playbook"), prompt.index("# Active Skill"))
         self.assertLess(prompt.index("# Active Skill"), prompt.index("# Tool Schema"))
+        self.assertLess(prompt.index("# Evidence Snapshot"), prompt.index("# Hypothesis"))
         self.assertIn("Allowed ReAct actions: ground_question, vision_read, answer_agent, verify", prompt)
-        self.assertIn("Skill: temporal_ordering@v1", prompt)
+        self.assertIn("Skill: timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
         self.assertIn("Final answers require at least one non-navigation visual observation", prompt)
 
@@ -165,7 +167,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("lived in seclusion in a farmhouse", targets)
         self.assertTrue(all("VideoMME" not in target for target in targets))
         self.assertEqual(
-            _skill_target_facts(question=temporal, skill_name="temporal_ordering"),
+            _skill_target_facts(question=temporal, skill_name="timeline_ordering"),
             [
                 "The rape of Persephone",
                 "Apollo and Daphne",
@@ -306,10 +308,12 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
 
             result = agent.run(
                 question=(
-                    "Question: What is the correct order?\n"
+                    "Question: Which artwork appears in the video?\n"
                     "Options:\n"
-                    'A. "The rape of Persephone", "Apollo and Daphne", "David" and '
-                    '"Aeneas, Anchises, and Ascanius fleeing Troy".\n'
+                    'A. "The rape of Persephone"\n'
+                    'B. "Apollo and Daphne"\n'
+                    'C. "David"\n'
+                    'D. "Aeneas, Anchises, and Ascanius fleeing Troy".\n'
                 ),
                 video_path="/videos/demo.mp4",
             )
@@ -387,10 +391,12 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
 
             result = agent.run(
                 question=(
-                    "Question: What is the correct order?\n"
+                    "Question: Which artwork appears in the video?\n"
                     "Options:\n"
-                    'A. "The rape of Persephone", "Apollo and Daphne", "David" and '
-                    '"Aeneas, Anchises, and Ascanius fleeing Troy".\n'
+                    'A. "The rape of Persephone"\n'
+                    'B. "Apollo and Daphne"\n'
+                    'C. "David"\n'
+                    'D. "Aeneas, Anchises, and Ascanius fleeing Troy".\n'
                 ),
                 video_path="/videos/demo.mp4",
             )

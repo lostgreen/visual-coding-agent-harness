@@ -97,6 +97,18 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
     """Pick or abstain from an MCQ answer using the complete option-grouped evidence table."""
 
     option_text = _option_text_map(table.get("options", []))
+    mutex_conflict = _strong_mutex_conflict(table)
+    if mutex_conflict is not None:
+        left, right, mutex_group_id = mutex_conflict
+        reason = f"mutex_conflict: {left.get('obs_id', '')} vs {right.get('obs_id', '')}"
+        return _need_more_evidence(
+            reason,
+            conflict={
+                "mutex_group_id": mutex_group_id,
+                "left": dict(left),
+                "right": dict(right),
+            },
+        )
     option_scores = _score_options(table)
     global_floor = _global_floor_support(table)
     ranked = sorted(
@@ -135,6 +147,16 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
             f"targeted follow-up needed: resolve close support between options {winner} and {runner_up}.",
             conflict=conflict,
         )
+    if runner_up and _options_overlap(option_text.get(winner, winner), option_text.get(runner_up, runner_up)):
+        if not _has_distinguishing_evidence(
+            winner_text=option_text.get(winner, winner),
+            runner_up_text=option_text.get(runner_up, runner_up),
+            rows=strong_winning_rows,
+        ):
+            return _need_more_evidence(
+                "disambiguate_overlapping_options",
+                conflict=conflict,
+            )
 
     citation_rows = strong_winning_rows[:2]
     citations = [str(row.get("obs_id", "")) for row in citation_rows if row.get("obs_id")]
@@ -244,6 +266,10 @@ def _global_floor_support(table: Mapping[str, Any]) -> tuple[str, Mapping[str, A
                 candidates.append((str(option), row, score))
     if not candidates:
         return None
+    if len(candidates) > 1:
+        options = {option for option, _row, _score in candidates}
+        if len(options) != 1:
+            return None
     candidates.sort(key=lambda item: (-item[2], str(item[1].get("obs_id", ""))))
     return candidates[0]
 
@@ -312,6 +338,30 @@ def _is_visual_support_relation(relation: Mapping[str, Any]) -> bool:
     return grounding in {"", "visually_confirmed"}
 
 
+def _strong_mutex_conflict(table: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any], str] | None:
+    by_mutex: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
+    groups = table.get("groups", {}) if isinstance(table.get("groups", {}), Mapping) else {}
+    for group_option, rows in groups.items():
+        if group_option == "unassigned" or not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping) or _is_weak_grounding(row):
+                continue
+            mutex_group_id = str(row.get("mutex_group_id", "")).strip()
+            if not mutex_group_id:
+                continue
+            option = str(row.get("supported_option") or group_option).strip().upper()[:1]
+            if not option:
+                continue
+            by_mutex.setdefault(mutex_group_id, []).append((option, row))
+    for mutex_group_id, option_rows in by_mutex.items():
+        for index, (left_option, left_row) in enumerate(option_rows):
+            for right_option, right_row in option_rows[index + 1 :]:
+                if left_option != right_option:
+                    return left_row, right_row, mutex_group_id
+    return None
+
+
 def _has_option_support(table: Mapping[str, Any]) -> bool:
     return any(option != "unassigned" and score > 0 for option, score in _score_options(table).items())
 
@@ -321,6 +371,70 @@ def _row_score(row: Mapping[str, Any]) -> float:
         str(row.get("grounding_quality", "weak")),
         0.2,
     )
+
+
+_OPTION_STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "with",
+    "without",
+    "for",
+    "from",
+    "by",
+    "as",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "why",
+    "how",
+    "what",
+    "which",
+    "option",
+}
+
+
+def _options_overlap(left: str, right: str, *, threshold: float = 0.6) -> bool:
+    left_tokens = _content_tokens(left)
+    right_tokens = _content_tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    overlap = len(left_tokens.intersection(right_tokens)) / max(1, min(len(left_tokens), len(right_tokens)))
+    return overlap >= threshold
+
+
+def _has_distinguishing_evidence(
+    *,
+    winner_text: str,
+    runner_up_text: str,
+    rows: Sequence[Mapping[str, Any]],
+) -> bool:
+    distinguishing = _content_tokens(winner_text) - _content_tokens(runner_up_text)
+    if not distinguishing:
+        return False
+    for row in rows:
+        claim_tokens = _content_tokens(str(row.get("claim", "")))
+        if distinguishing.intersection(claim_tokens):
+            return True
+    return False
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[A-Za-z0-9]+", str(text).lower())
+        if len(token) >= 3 and token not in _OPTION_STOPWORDS
+    }
 
 
 def _sorted_option_rows(table: Mapping[str, Any], option: str) -> list[Mapping[str, Any]]:

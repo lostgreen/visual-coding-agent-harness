@@ -6,13 +6,14 @@ import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 
-SlotName = Literal["task", "navigation", "evidence", "feedback"]
+SlotName = Literal["task", "navigation", "hypothesis", "evidence", "feedback"]
 
 DEFAULT_SLOT_RATIOS: Dict[SlotName, float] = {
     "task": 0.10,
     "navigation": 0.15,
-    "evidence": 0.50,
-    "feedback": 0.25,
+    "hypothesis": 0.15,
+    "evidence": 0.45,
+    "feedback": 0.15,
 }
 
 
@@ -180,6 +181,7 @@ def default_context_budget_allocator(
     allocator = ContextBudgetAllocator(total_budget_tokens=total_budget_tokens, slot_ratios=slot_ratios)
     allocator.register_strategy("task", TaskSlotCompact())
     allocator.register_strategy("navigation", NavLatestWinsCompact())
+    allocator.register_strategy("hypothesis", TaskSlotCompact())
     allocator.register_strategy("evidence", EvidenceTieredCompact())
     allocator.register_strategy("feedback", FeedbackLatestOnlyCompact())
     return allocator

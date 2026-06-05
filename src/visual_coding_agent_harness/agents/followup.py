@@ -15,6 +15,7 @@ class FollowupTarget:
     priority: int
     attempt_count: int
     parent_missing_evidence_id: str
+    mutex_group_id: str = ""
 
 
 @dataclass
@@ -47,6 +48,7 @@ def normalize_missing_evidence(raw: Dict, route: FollowupRoute, run_id: str, seq
         priority=raw.get("priority", 1),
         attempt_count=0,
         parent_missing_evidence_id=raw["id"],
+        mutex_group_id=str(raw.get("mutex_group_id", "")),
     )
 
 

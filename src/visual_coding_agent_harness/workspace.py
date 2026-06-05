@@ -23,6 +23,7 @@ class Observation:
     input_artifacts: Sequence[str] = field(default_factory=list)
     regions: Sequence[Mapping[str, Any]] = field(default_factory=list)
     limitations: str = ""
+    confidence_signal: str = ""
     raw_output: Mapping[str, Any] = field(default_factory=dict)
     created_at: str = ""
     frame_set_id: str | None = None
@@ -37,6 +38,7 @@ class Observation:
             input_artifacts=list(payload.get("input_artifacts", [])),
             regions=list(payload.get("regions", [])),
             limitations=str(payload.get("limitations", "")),
+            confidence_signal=str(payload.get("confidence_signal", "")),
             raw_output=dict(payload.get("raw_output", {}) or {}),
             created_at=str(payload.get("created_at", "")),
             frame_set_id=(None if payload.get("frame_set_id") is None else str(payload.get("frame_set_id"))),
@@ -170,6 +172,13 @@ class EvidenceWorkspace:
         "expand_window",
         "zoom",
         "commit_map_proposals",
+        "append_to_timeline",
+        "view_observation",
+        "grep_evidence",
+        "query_evidence_table",
+        "read_timeline_sorted",
+        "read_hypothesis",
+        "update_hypothesis_slot",
     }
     CONTEXT_ONLY_TOOLS = {"query_context"}
     ANSWER_EVIDENCE_TOOLS = (VISUAL_EVIDENCE_TOOLS - CONTEXT_ONLY_TOOLS) | {
@@ -199,7 +208,13 @@ class EvidenceWorkspace:
         ]:
             child.mkdir(parents=True, exist_ok=True)
 
-        for filename in ["observations.jsonl", "trace.jsonl", "evidence.jsonl", "map_proposals.jsonl"]:
+        for filename in [
+            "observations.jsonl",
+            "trace.jsonl",
+            "evidence.jsonl",
+            "evidence_table.jsonl",
+            "map_proposals.jsonl",
+        ]:
             (root / filename).touch(exist_ok=True)
         (root / "frame_sets" / "manifests.jsonl").touch(exist_ok=True)
         (root / "reflection_memory.jsonl").touch(exist_ok=True)
@@ -207,6 +222,14 @@ class EvidenceWorkspace:
         ledger = root / "ledger.md"
         if not ledger.exists():
             ledger.write_text("# Evidence Ledger\n\n", encoding="utf-8")
+
+        timeline = root / "timeline.md"
+        if not timeline.exists():
+            timeline.write_text("# Timeline\n\n", encoding="utf-8")
+
+        hypothesis = root / "hypothesis.md"
+        if not hypothesis.exists():
+            hypothesis.write_text("# Hypothesis\n\n", encoding="utf-8")
 
         return cls(root=root)
 
@@ -219,6 +242,7 @@ class EvidenceWorkspace:
         input_artifacts: Sequence[str] = (),
         regions: Sequence[Mapping[str, Any]] = (),
         limitations: str = "",
+        confidence_signal: str = "",
         raw_output: Mapping[str, Any] | None = None,
         frame_set_id: str | None = None,
     ) -> Observation:
@@ -230,6 +254,7 @@ class EvidenceWorkspace:
             input_artifacts=list(input_artifacts),
             regions=list(regions),
             limitations=limitations,
+            confidence_signal=confidence_signal or str((raw_output or {}).get("confidence_signal", "")),
             raw_output=dict(raw_output or {}),
             created_at=_utc_now(),
             frame_set_id=frame_set_id,
@@ -317,6 +342,7 @@ class EvidenceWorkspace:
 
         if changed:
             self._write_jsonl("observations.jsonl", rows)
+            self._rebuild_evidence_table_from_observations(rows)
             self.write_trace_event(
                 "answer_agent_relations_persisted",
                 {
@@ -428,6 +454,218 @@ class EvidenceWorkspace:
 
     def write_evidence(self, record: EvidenceRecord) -> None:
         self._append_jsonl("evidence.jsonl", asdict(record))
+
+    def append_to_timeline(
+        self,
+        *,
+        obs_id: str,
+        entity: str,
+        observed_at_sec: float | None = None,
+        window: Sequence[float] | None = None,
+        confidence_signal: str = "",
+        claim: str = "",
+    ) -> dict[str, Any]:
+        row = _normalize_timeline_row(
+            {
+                "obs_id": obs_id,
+                "entity": entity,
+                "observed_at_sec": observed_at_sec,
+                "window": window,
+                "confidence_signal": confidence_signal,
+                "claim": claim,
+            }
+        )
+        timeline_path = self.root / "timeline.md"
+        if not timeline_path.exists():
+            timeline_path.write_text("# Timeline\n\n", encoding="utf-8")
+        with timeline_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"- {json.dumps(row, ensure_ascii=True, sort_keys=True)}\n")
+        return row
+
+    def append_timeline_from_observation(self, observation: Observation) -> dict[str, Any] | None:
+        if observation.tool not in {"vision_read", "inspect_segment"}:
+            return None
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        entity = _observation_event_label(raw_output=raw_output, claim=observation.claim)
+        if not entity:
+            return None
+        observed_at_sec = _observed_at_sec(raw_output)
+        window = _observation_time_range(
+            {
+                "raw_output": raw_output,
+                "regions": observation.regions,
+            }
+        )
+        confidence_signal = _timeline_confidence_signal(
+            raw_output=raw_output,
+            observation_signal=observation.confidence_signal,
+            observed_at_sec=observed_at_sec,
+        )
+        return self.append_to_timeline(
+            obs_id=observation.observation_id,
+            entity=entity,
+            observed_at_sec=observed_at_sec,
+            window=window,
+            confidence_signal=confidence_signal,
+            claim=observation.claim,
+        )
+
+    def read_timeline_sorted(self) -> list[dict[str, Any]]:
+        timeline_path = self.root / "timeline.md"
+        if not timeline_path.exists():
+            return []
+        rows = []
+        with timeline_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line.startswith("- {"):
+                    continue
+                try:
+                    payload = json.loads(line[2:])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, Mapping):
+                    rows.append(_normalize_timeline_row(payload))
+        return sorted(rows, key=_timeline_sort_key)
+
+    def ensure_hypothesis(self, question: str = "") -> None:
+        path = self.root / "hypothesis.md"
+        if not path.exists():
+            path.write_text("# Hypothesis\n\n", encoding="utf-8")
+
+    def write_hypothesis(self, slots: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+        normalized = _normalize_hypothesis_slots(slots)
+        lines = ["# Hypothesis", ""]
+        for slot_name in sorted(normalized):
+            slot = normalized[slot_name]
+            evidence_obs_id = slot["evidence_obs_id"] or "-"
+            lines.append(f"- {slot_name} | status: {slot['status']} | evidence_obs_id: {evidence_obs_id}")
+        lines.append("")
+        (self.root / "hypothesis.md").write_text("\n".join(lines), encoding="utf-8")
+        return normalized
+
+    def read_hypothesis(self) -> dict[str, dict[str, str]]:
+        path = self.root / "hypothesis.md"
+        if not path.exists():
+            return {}
+        slots: dict[str, dict[str, str]] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("- "):
+                continue
+            parts = [part.strip() for part in stripped[2:].split("|")]
+            if not parts:
+                continue
+            slot_name = parts[0]
+            payload: dict[str, str] = {"status": "empty", "evidence_obs_id": ""}
+            for part in parts[1:]:
+                if ":" not in part:
+                    continue
+                key, value = part.split(":", 1)
+                payload[key.strip()] = "" if value.strip() == "-" else value.strip()
+            if slot_name:
+                slots[slot_name] = _normalize_hypothesis_slot(payload)
+        return slots
+
+    def read_hypothesis_text(self) -> str:
+        path = self.root / "hypothesis.md"
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8")
+
+    def update_hypothesis_slot(
+        self,
+        *,
+        slot_name: str,
+        status: str,
+        evidence_obs_id: str = "",
+    ) -> dict[str, str]:
+        slots = self.read_hypothesis()
+        slot_key = str(slot_name).strip()
+        if not slot_key:
+            raise ValueError("slot_name must be non-empty")
+        slots[slot_key] = _normalize_hypothesis_slot(
+            {
+                "status": status,
+                "evidence_obs_id": evidence_obs_id,
+            }
+        )
+        self.write_hypothesis(slots)
+        return slots[slot_key]
+
+    def unsatisfied_hypothesis_slots(self) -> list[str]:
+        slots = self.read_hypothesis()
+        return [
+            name
+            for name, slot in sorted(slots.items())
+            if str(slot.get("status", "")).strip().lower() != "satisfied"
+        ]
+
+    def write_evidence_row(self, row: Mapping[str, Any]) -> dict[str, Any]:
+        """Append one answer-facing evidence-table row to evidence_table.jsonl."""
+
+        payload = _normalize_evidence_row(
+            row,
+            evidence_id=str(row.get("evidence_id") or self._next_evidence_row_id()),
+        )
+        self._append_jsonl("evidence_table.jsonl", payload)
+        return payload
+
+    def evidence_table_row_count(self) -> int:
+        """Return the persisted answer-facing evidence table row count."""
+
+        return len(self._read_jsonl_dicts("evidence_table.jsonl"))
+
+    def read_evidence_table_v3(
+        self,
+        *,
+        question: str,
+        options: Sequence[str] = (),
+        include_legacy_worker_votes: bool = False,
+    ) -> dict[str, Any]:
+        """Return the persisted evidence-table artifact grouped for answer arbitration."""
+
+        option_map = _option_letter_map(options)
+        groups: dict[str, list[dict[str, Any]]] = {letter: [] for letter in option_map}
+        groups.setdefault("unassigned", [])
+        rows: list[dict[str, Any]] = []
+        for raw_row in self._read_jsonl_dicts("evidence_table.jsonl"):
+            row = _normalize_evidence_row(raw_row)
+            tool_name = str(row.get("tool", ""))
+            if tool_name in self.NAVIGATION_TOOLS:
+                continue
+            if self.ANSWER_EVIDENCE_TOOLS and tool_name not in self.ANSWER_EVIDENCE_TOOLS:
+                continue
+            if row.get("legacy_worker_vote") and not include_legacy_worker_votes:
+                row["supported_option"] = None
+            else:
+                option_source = (
+                    row.get("supported_option")
+                    or _supported_option_from_relations(row.get("candidate_option_relations"), option_map=option_map)
+                    or _bare_option_from_claim(str(row.get("claim", "")), option_map=option_map)
+                    or _supported_option_from_claim(str(row.get("claim", "")))
+                )
+                row["supported_option"] = _normalize_supported_option(option_source, option_map=option_map)
+            group_key = str(row.get("supported_option") or "unassigned")
+            groups.setdefault(group_key, [])
+            rows.append(row)
+            groups[group_key].append(row)
+
+        sorted_groups = {key: _sort_evidence_rows(value) for key, value in groups.items()}
+        sorted_rows = [
+            row
+            for key in sorted(sorted_groups, key=_option_sort_key)
+            for row in sorted_groups[key]
+        ]
+        return {
+            "schema_version": "EvidenceTableV3",
+            "source_artifact": "evidence_table.jsonl",
+            "question": question,
+            "options": list(options),
+            "groups": sorted_groups,
+            "rows": sorted_rows,
+            "timeline": self.read_timeline_sorted(),
+        }
 
     def load_evidence(self, evidence_id: str) -> EvidenceRecord | None:
         for payload in self._read_jsonl_dicts("evidence.jsonl"):
@@ -616,6 +854,7 @@ class EvidenceWorkspace:
     ) -> list[EvidenceRecord]:
         artifacts = ", ".join(observation.input_artifacts) or "-"
         base_limitation = observation.limitations or "-"
+        confidence_signal = observation.confidence_signal or str(observation.raw_output.get("confidence_signal", ""))
         if _has_worker_option_vote(
             tool_name=observation.tool,
             raw_output=observation.raw_output,
@@ -652,12 +891,23 @@ class EvidenceWorkspace:
                         "regions": _ledger_regions(observation, parent_record=parent_record),
                         "limitations": base_limitation,
                         "artifacts": list(observation.input_artifacts),
+                        "confidence_signal": confidence_signal,
                     },
                     grounding_quality=grounding_quality,  # type: ignore[arg-type]
                     confidence=parent_record.confidence if parent_record is not None else observation.confidence,
                     created_at=time.time(),
                 )
                 self.write_evidence(ledger_record)
+                if observation.tool in self.ANSWER_EVIDENCE_TOOLS:
+                    self.write_evidence_row(
+                        _evidence_row_from_observation(
+                            observation=observation,
+                            evidence_record=ledger_record,
+                            claim=claim,
+                            grounding_quality=grounding_quality,
+                            confidence=ledger_record.confidence,
+                        )
+                    )
                 ledger_records.append(ledger_record)
                 line = (
                     f"- `{observation.observation_id}` | ev: `{ledger_record.evidence_id}` | "
@@ -801,8 +1051,11 @@ class EvidenceWorkspace:
                 grounding_quality=_grounding_quality(
                     raw_output=raw_output,
                     limitations=str(observation.get("limitations", "")),
+                    confidence_signal=str(observation.get("confidence_signal", "")),
                 ),
                 candidate_option_relations=_candidate_option_relations(raw_output.get("candidate_option_relations")),
+                confidence_signal=str(observation.get("confidence_signal", "") or raw_output.get("confidence_signal", "")),
+                mutex_group_id=str(raw_output.get("mutex_group_id", "")),
                 legacy_worker_vote=legacy_worker_vote,
                 limitations=str(observation.get("limitations", "")),
                 artifact=_first_item(observation.get("input_artifacts")) or "",
@@ -821,6 +1074,7 @@ class EvidenceWorkspace:
             "options": list(options),
             "groups": sorted_groups,
             "rows": sorted_rows,
+            "timeline": self.read_timeline_sorted(),
         }
 
     def evidence_table_v2(
@@ -831,6 +1085,25 @@ class EvidenceWorkspace:
         include_legacy_worker_votes: bool = False,
     ) -> dict[str, Any]:
         """Return the v4 typed evidence table with explicit schema metadata."""
+
+        if self._read_jsonl_dicts("evidence_table.jsonl"):
+            table = self.read_evidence_table_v3(
+                question=question,
+                options=options,
+                include_legacy_worker_votes=include_legacy_worker_votes,
+            )
+            rows = table.get("rows", [])
+            legacy_count = 0
+            if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
+                legacy_count = sum(
+                    1 for row in rows if isinstance(row, Mapping) and bool(row.get("legacy_worker_vote"))
+                )
+            return {
+                **table,
+                "schema_version": "EvidenceTableV2",
+                "artifact_schema_version": table["schema_version"],
+                "legacy_worker_vote_rows": legacy_count,
+            }
 
         table = self.evidence_table(
             question=question,
@@ -1084,8 +1357,27 @@ class EvidenceWorkspace:
     def _next_evidence_seq(self) -> int:
         return len(self._read_jsonl_dicts("evidence.jsonl")) + 1
 
+    def _next_evidence_row_id(self) -> str:
+        return f"ev_table_{self.run_id}_{len(self._read_jsonl_dicts('evidence_table.jsonl')) + 1:05d}"
+
     def _next_proposal_seq(self) -> int:
         return len(self._read_jsonl_dicts("map_proposals.jsonl")) + 1
+
+    def _rebuild_evidence_table_from_observations(self, observations: Sequence[Mapping[str, Any]]) -> None:
+        rows = []
+        for observation in observations:
+            tool_name = str(observation.get("tool", ""))
+            if tool_name not in self.ANSWER_EVIDENCE_TOOLS:
+                continue
+            rows.append(
+                _normalize_evidence_row(
+                    _evidence_row_from_observation_mapping(
+                        observation=observation,
+                        evidence_id=f"ev_table_{self.run_id}_{len(rows) + 1:05d}",
+                    )
+                )
+            )
+        self._write_jsonl("evidence_table.jsonl", rows)
 
     def _observation_manifest_links(self) -> dict[str, str]:
         links: dict[str, str] = {}
@@ -1169,6 +1461,7 @@ def _trajectory_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
         "confidence": float(observation.get("confidence", 0.0) or 0.0),
         "regions": list(observation.get("regions", []) or []),
         "limitations": str(observation.get("limitations", "")),
+        "confidence_signal": str(observation.get("confidence_signal", "")),
         "raw_output": dict(observation.get("raw_output", {}) or {}),
     }
 
@@ -1231,7 +1524,11 @@ def _ledger_regions(observation: Observation, *, parent_record: EvidenceRecord |
 def _ledger_grounding_quality(observation: Observation, *, parent_record: EvidenceRecord | None) -> str:
     if parent_record is not None:
         return str(parent_record.grounding_quality)
-    return _grounding_quality(raw_output=observation.raw_output, limitations=observation.limitations)
+    return _grounding_quality(
+        raw_output=observation.raw_output,
+        limitations=observation.limitations,
+        confidence_signal=observation.confidence_signal,
+    )
 
 
 def _parse_ledger_entries(ledger_text: str) -> list[Mapping[str, Any]]:
@@ -1543,6 +1840,218 @@ def _first_item(value: Any) -> Any:
     return value
 
 
+def _normalize_evidence_row(row: Mapping[str, Any], *, evidence_id: str | None = None) -> dict[str, Any]:
+    time_range = _evidence_row_time_range(row)
+    t_start = time_range[0] if time_range is not None else _optional_float(row.get("t_start"))
+    t_end = time_range[1] if time_range is not None else _optional_float(row.get("t_end"))
+    payload = EvidenceRowV2(
+        evidence_id=str(evidence_id or row.get("evidence_id", "")),
+        obs_id=str(row.get("obs_id") or row.get("observation_id") or ""),
+        tool=str(row.get("tool", "")),
+        segment_id=str(row.get("segment_id", "")),
+        t_start=t_start,
+        t_end=t_end,
+        entity=str(row.get("entity") or row.get("event_label") or ""),
+        time_range=time_range,
+        supported_option=(None if row.get("supported_option") in (None, "") else str(row.get("supported_option"))),
+        event_label=str(row.get("event_label") or row.get("entity") or ""),
+        claim=str(row.get("claim", "")),
+        confidence=float(row.get("confidence", 0.0) or 0.0),
+        grounding_quality=str(row.get("grounding_quality") or "weak"),
+        candidate_option_relations=_candidate_option_relations(row.get("candidate_option_relations")),
+        confidence_signal=str(row.get("confidence_signal", "")),
+        mutex_group_id=str(row.get("mutex_group_id", "")),
+        legacy_worker_vote=bool(row.get("legacy_worker_vote", False)),
+        limitations=str(row.get("limitations", "")),
+        artifact=str(row.get("artifact", "")),
+    ).to_dict()
+    if payload["time_range"] is None and payload["t_start"] is not None and payload["t_end"] is not None:
+        payload["time_range"] = [payload["t_start"], payload["t_end"]]
+    return payload
+
+
+def _normalize_timeline_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    observed_at_sec = _optional_float(row.get("observed_at_sec"))
+    window = row.get("window")
+    normalized_window: list[float] | None = None
+    if isinstance(window, Sequence) and not isinstance(window, (str, bytes)) and len(window) >= 2:
+        normalized_window = [float(window[0]), float(window[1])]
+    payload = {
+        "obs_id": str(row.get("obs_id") or row.get("observation_id") or ""),
+        "entity": str(row.get("entity") or row.get("event_label") or ""),
+        "observed_at_sec": observed_at_sec,
+        "window": normalized_window,
+        "confidence_signal": str(row.get("confidence_signal", "")),
+        "claim": str(row.get("claim", "")),
+    }
+    if not payload["confidence_signal"]:
+        payload["confidence_signal"] = "confirmed" if observed_at_sec is not None else "window_only"
+    return payload
+
+
+def _normalize_hypothesis_slots(slots: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    normalized: dict[str, dict[str, str]] = {}
+    for raw_name, raw_slot in slots.items():
+        slot_name = str(raw_name).strip()
+        if not slot_name:
+            continue
+        if isinstance(raw_slot, Mapping):
+            normalized[slot_name] = _normalize_hypothesis_slot(raw_slot)
+        else:
+            normalized[slot_name] = _normalize_hypothesis_slot({"status": raw_slot})
+    return normalized
+
+
+def _normalize_hypothesis_slot(slot: Mapping[str, Any]) -> dict[str, str]:
+    status = str(slot.get("status", "empty")).strip().lower()
+    if status not in {"empty", "partial", "satisfied"}:
+        status = "empty"
+    return {
+        "status": status,
+        "evidence_obs_id": str(slot.get("evidence_obs_id", "")).strip(),
+    }
+
+
+def _timeline_sort_key(row: Mapping[str, Any]) -> tuple[float, str]:
+    observed_at_sec = row.get("observed_at_sec")
+    if observed_at_sec is not None:
+        return (float(observed_at_sec), str(row.get("obs_id", "")))
+    window = row.get("window")
+    if isinstance(window, Sequence) and not isinstance(window, (str, bytes)) and window:
+        return (float(window[0]), str(row.get("obs_id", "")))
+    return (float("inf"), str(row.get("obs_id", "")))
+
+
+def _observed_at_sec(raw_output: Mapping[str, Any]) -> float | None:
+    for key in ["observed_at_sec", "timestamp_sec", "time_sec", "t_sec", "timestamp"]:
+        value = raw_output.get(key)
+        if value is None or value == "":
+            continue
+        return float(value)
+    return None
+
+
+def _timeline_confidence_signal(
+    *,
+    raw_output: Mapping[str, Any],
+    observation_signal: str,
+    observed_at_sec: float | None,
+) -> str:
+    signal = str(observation_signal or raw_output.get("confidence_signal", "")).strip().lower()
+    if signal in {"unsupported", "degenerate"}:
+        return "unsupported"
+    grounding_quality = str(raw_output.get("grounding_quality", "")).strip().lower()
+    if grounding_quality in {"weak", "inferred", "external_knowledge"}:
+        return "unsupported"
+    return "confirmed" if observed_at_sec is not None else "window_only"
+
+
+def _evidence_row_from_observation(
+    *,
+    observation: Observation,
+    evidence_record: EvidenceRecord,
+    claim: str,
+    grounding_quality: str,
+    confidence: float,
+) -> dict[str, Any]:
+    raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+    row = _evidence_row_from_observation_mapping(
+        observation={
+            "observation_id": observation.observation_id,
+            "tool": observation.tool,
+            "claim": observation.claim,
+            "confidence": confidence,
+            "regions": observation.regions,
+            "limitations": observation.limitations,
+            "confidence_signal": observation.confidence_signal,
+            "raw_output": raw_output,
+            "input_artifacts": observation.input_artifacts,
+        },
+        evidence_id=evidence_record.evidence_id,
+    )
+    row["claim"] = claim
+    row["grounding_quality"] = grounding_quality
+    row["frame_set_id"] = evidence_record.frame_set_id or ""
+    return row
+
+
+def _evidence_row_from_observation_mapping(
+    *,
+    observation: Mapping[str, Any],
+    evidence_id: str,
+) -> dict[str, Any]:
+    raw_output = observation.get("raw_output", {})
+    if not isinstance(raw_output, Mapping):
+        raw_output = {}
+    display_claim = str(observation.get("claim", ""))
+    if _has_worker_option_vote(
+        tool_name=str(observation.get("tool", "")),
+        raw_output=raw_output,
+        claim=display_claim,
+    ):
+        display_claim = _claim_without_legacy_worker_vote(display_claim)
+    time_range = _observation_time_range(observation)
+    event_label = _observation_event_label(raw_output=raw_output, claim=display_claim)
+    row = {
+        "evidence_id": str(evidence_id),
+        "obs_id": str(observation.get("observation_id", "")),
+        "tool": str(observation.get("tool", "")),
+        "segment_id": str(raw_output.get("segment_id", "")),
+        "time_range": time_range,
+        "t_start": time_range[0] if time_range is not None else None,
+        "t_end": time_range[1] if time_range is not None else None,
+        "entity": event_label,
+        "event_label": event_label,
+        "claim": display_claim,
+        "confidence": float(observation.get("confidence", 0.0) or 0.0),
+        "grounding_quality": _grounding_quality(
+            raw_output=raw_output,
+            limitations=str(observation.get("limitations", "")),
+            confidence_signal=str(observation.get("confidence_signal", "")),
+        ),
+        "candidate_option_relations": _candidate_option_relations(raw_output.get("candidate_option_relations")),
+        "confidence_signal": str(observation.get("confidence_signal", "") or raw_output.get("confidence_signal", "")),
+        "mutex_group_id": str(raw_output.get("mutex_group_id", "")),
+        "legacy_worker_vote": _has_worker_option_vote(
+            tool_name=str(observation.get("tool", "")),
+            raw_output=raw_output,
+            claim=str(observation.get("claim", "")),
+        ),
+        "limitations": str(observation.get("limitations", "")),
+        "artifact": _first_item(observation.get("input_artifacts")) or "",
+    }
+    option_source = (
+        raw_output.get("supported_option")
+        or raw_output.get("supported_option_letter")
+        or raw_output.get("answer_option")
+        or _first_item(raw_output.get("supported_options"))
+    )
+    if option_source:
+        row["supported_option"] = str(option_source)
+    return row
+
+
+def _evidence_row_time_range(row: Mapping[str, Any]) -> list[float] | None:
+    time_range = row.get("time_range")
+    if isinstance(time_range, Sequence) and not isinstance(time_range, (str, bytes)) and len(time_range) >= 2:
+        return [float(time_range[0]), float(time_range[1])]
+    start = row.get("t_start")
+    end = row.get("t_end")
+    if start is None:
+        start = row.get("start_sec")
+    if end is None:
+        end = row.get("end_sec")
+    if start is not None and end is not None:
+        return [float(start), float(end)]
+    return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
 def _observation_time_range(observation: Mapping[str, Any]) -> list[float] | None:
     raw_output = observation.get("raw_output", {})
     if isinstance(raw_output, Mapping):
@@ -1575,7 +2084,12 @@ def _observation_event_label(*, raw_output: Mapping[str, Any], claim: str) -> st
     return match.group(1).strip() if match else ""
 
 
-def _grounding_quality(*, raw_output: Mapping[str, Any], limitations: str) -> str:
+def _grounding_quality(*, raw_output: Mapping[str, Any], limitations: str, confidence_signal: str = "") -> str:
+    signal = str(confidence_signal or raw_output.get("confidence_signal", "")).strip().lower()
+    if signal == "unsupported":
+        return "inferred"
+    if signal == "degenerate":
+        return "weak"
     explicit = str(raw_output.get("grounding_quality", "")).strip().lower()
     if explicit in {
         "global_sparse",

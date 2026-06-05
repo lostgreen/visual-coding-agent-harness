@@ -93,6 +93,13 @@ def _case_strategy_report(
         "walltime_vs_direct": _ratio(seconds, direct_seconds),
         "workspace": str(workspace_path) if workspace_path is not None else "",
         "error": str(raw.get("error", "")),
+        "unsupported_citation_final": bool(trace["unsupported_citation_final"]),
+        "mutex_conflict_detection_count": int(trace["mutex_conflict_detection_count"]),
+        "timeline_completeness": trace["timeline_completeness"],
+        "degenerate_observation_count": int(trace["degenerate_observation_count"]),
+        "observation_count": int(trace["observation_count"]),
+        "normalization_note_count": int(trace["normalization_note_count"]),
+        "normalization_round_count": int(trace["normalization_round_count"]),
         **arbitration,
     }
 
@@ -106,6 +113,14 @@ def _strategy_report(cases: Sequence[Mapping[str, Any]], strategy: str) -> dict[
     conflict = sum(1 for row in rows if row["has_conflict"])
     final_with_conflict = sum(1 for row in rows if row["final_with_conflict"])
     unsupported_final = sum(1 for row in rows if row["unsupported_final"])
+    traced_final_rows = [row for row in rows if row["final"]]
+    unsupported_citation = sum(1 for row in traced_final_rows if row["unsupported_citation_final"])
+    mutex_conflicts = sum(int(row["mutex_conflict_detection_count"]) for row in rows)
+    timeline_scores = [float(row["timeline_completeness"]) for row in rows if row["timeline_completeness"] is not None]
+    degenerate_observations = sum(int(row["degenerate_observation_count"]) for row in rows)
+    observations = sum(int(row["observation_count"]) for row in rows)
+    normalization_notes = sum(int(row["normalization_note_count"]) for row in rows)
+    normalization_rounds = sum(int(row["normalization_round_count"]) for row in rows)
     legacy_worker_vote_rows = sum(int(row["legacy_worker_vote_rows"]) for row in rows)
     consistency_rows = [row for row in rows if row["option_support_consistency"] is not None]
     consistent = sum(1 for row in consistency_rows if row["option_support_consistency"])
@@ -121,6 +136,13 @@ def _strategy_report(cases: Sequence[Mapping[str, Any]], strategy: str) -> dict[
         "conflict_rate": conflict / total if total else 0.0,
         "final_with_conflict_rate": final_with_conflict / total if total else 0.0,
         "unsupported_final_rate": unsupported_final / total if total else 0.0,
+        "unsupported_citation_rate": unsupported_citation / len(traced_final_rows) if traced_final_rows else 0.0,
+        "mutex_conflict_detection_count": mutex_conflicts,
+        "timeline_completeness": sum(timeline_scores) / len(timeline_scores) if timeline_scores else 0.0,
+        "degenerate_observation_rate": degenerate_observations / observations if observations else 0.0,
+        "normalization_notes_per_round": (
+            normalization_notes / normalization_rounds if normalization_rounds else 0.0
+        ),
         "legacy_worker_vote_rows": legacy_worker_vote_rows,
         "option_support_consistency_rate": consistent / len(consistency_rows) if consistency_rows else 0.0,
         "avg_seconds": round(sum(seconds) / len(seconds), 3) if seconds else None,
@@ -143,15 +165,40 @@ def _direct_regressions(*, cases: Sequence[Mapping[str, Any]], strategy: str) ->
     return regressions
 
 
-def _trace_summary(workspace_path: Path | None) -> dict[str, list[str]]:
+def _trace_summary(workspace_path: Path | None) -> dict[str, Any]:
+    default = {
+        "tool_sequence": [],
+        "unique_inspected_segments": [],
+        "final_citations": [],
+        "unsupported_citation_final": False,
+        "mutex_conflict_detection_count": 0,
+        "timeline_completeness": None,
+        "degenerate_observation_count": 0,
+        "observation_count": 0,
+        "normalization_note_count": 0,
+        "normalization_round_count": 0,
+    }
     if workspace_path is None:
-        return {"tool_sequence": [], "unique_inspected_segments": [], "final_citations": []}
+        return default
     trace_path = workspace_path / "trace.jsonl"
     if not trace_path.exists():
-        return {"tool_sequence": [], "unique_inspected_segments": [], "final_citations": []}
+        return default
+    observations = _load_observations(workspace_path)
+    observations_by_id = {
+        str(row.get("observation_id", "")): row
+        for row in observations
+        if row.get("observation_id")
+    }
     tools = []
     inspected_segments = []
     final_citations = []
+    unsupported_citation_final = False
+    mutex_conflict_detection_count = 0
+    timeline_scores = []
+    degenerate_observation_ids = set()
+    anonymous_degenerate_events = 0
+    normalization_note_count = 0
+    normalization_round_count = 0
     with trace_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -164,6 +211,47 @@ def _trace_summary(workspace_path: Path | None) -> dict[str, list[str]]:
             payload = event.get("payload", {}) if isinstance(event.get("payload", {}), Mapping) else {}
             if event_type == "iterative_final":
                 final_citations = [str(item) for item in payload.get("citations", [])]
+                if any(
+                    _observation_confidence_signal(observations_by_id.get(citation, {})) == "unsupported"
+                    for citation in final_citations
+                ):
+                    unsupported_citation_final = True
+                continue
+            if event_type == "iterative_answer_agent" and str(payload.get("status", "")) == "need_more_evidence":
+                if "mutex_conflict" in _payload_text(payload).lower():
+                    mutex_conflict_detection_count += 1
+            elif event_type in {"iterative_final_blocked", "answer_agent_need_more_evidence"}:
+                if "mutex_conflict" in _payload_text(payload).lower():
+                    mutex_conflict_detection_count += 1
+            if event_type == "iterative_timeline_temporal_decision":
+                explicit = _explicit_completeness_score(payload)
+                if explicit is not None:
+                    timeline_scores.append(explicit)
+                elif payload.get("matched_events"):
+                    timeline_scores.append(1.0)
+                continue
+            if event_type == "timeline_ordering_missing_entity":
+                explicit = _explicit_completeness_score(payload)
+                if explicit is not None:
+                    timeline_scores.append(explicit)
+                else:
+                    targets = _string_list(payload.get("target_facts", []))
+                    missing = set(_string_list(payload.get("missing_entities", [])))
+                    if targets:
+                        timeline_scores.append(sum(1 for target in targets if target not in missing) / len(targets))
+                continue
+            if event_type == "tool_output_degenerate":
+                observation_id = str(payload.get("observation_id", "")).strip()
+                if observation_id:
+                    degenerate_observation_ids.add(observation_id)
+                else:
+                    anonymous_degenerate_events += 1
+                continue
+            if event_type == "iterative_normalization_empty":
+                notes = payload.get("notes", [])
+                if isinstance(notes, Sequence) and not isinstance(notes, (str, bytes)):
+                    normalization_round_count += 1
+                    normalization_note_count += len(notes)
                 continue
             if event_type != "tool_use":
                 continue
@@ -178,6 +266,13 @@ def _trace_summary(workspace_path: Path | None) -> dict[str, list[str]]:
         "tool_sequence": tools,
         "unique_inspected_segments": _unique(inspected_segments),
         "final_citations": final_citations,
+        "unsupported_citation_final": unsupported_citation_final,
+        "mutex_conflict_detection_count": mutex_conflict_detection_count,
+        "timeline_completeness": sum(timeline_scores) / len(timeline_scores) if timeline_scores else None,
+        "degenerate_observation_count": len(degenerate_observation_ids) + anonymous_degenerate_events,
+        "observation_count": len(observations),
+        "normalization_note_count": normalization_note_count,
+        "normalization_round_count": normalization_round_count,
     }
 
 
@@ -348,6 +443,70 @@ def _has_uncited_well_grounded_conflict(
     return False
 
 
+def _load_observations(workspace_path: Path) -> list[dict[str, Any]]:
+    path = workspace_path / "observations.jsonl"
+    if not path.exists():
+        return []
+    observations = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                observations.append(payload)
+    return observations
+
+
+def _observation_confidence_signal(observation: Mapping[str, Any]) -> str:
+    signal = str(observation.get("confidence_signal", "")).strip().lower()
+    if signal:
+        return signal
+    raw_output = observation.get("raw_output", {})
+    if isinstance(raw_output, Mapping):
+        return str(raw_output.get("confidence_signal", "")).strip().lower()
+    return ""
+
+
+def _explicit_completeness_score(payload: Mapping[str, Any]) -> float | None:
+    if "required_slots" not in payload and "satisfied_slots" not in payload:
+        return None
+    required = _numeric_slot_count(payload.get("required_slots"))
+    if required <= 0:
+        return None
+    satisfied = _numeric_slot_count(payload.get("satisfied_slots"))
+    return max(0.0, min(1.0, satisfied / required))
+
+
+def _numeric_slot_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return len(value)
+    return 0
+
+
+def _payload_text(payload: Any) -> str:
+    if isinstance(payload, Mapping):
+        return " ".join(_payload_text(value) for value in payload.values())
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        return " ".join(_payload_text(value) for value in payload)
+    return str(payload)
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [str(item) for item in value if str(item)]
+
+
 def _seconds(raw: Mapping[str, Any]) -> float | None:
     value = raw.get("seconds")
     if value is None:
@@ -376,8 +535,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "# VideoMME Metrics",
         "",
-        "| Strategy | Accuracy | Direct Regressions | Legacy Worker Votes | Final Rate | Incomplete Rate | Avg Sec | Avg vs Direct |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Strategy | Accuracy | Direct Regressions | Legacy Worker Votes | Final Rate | Incomplete Rate | Unsupported Citations | Mutex Conflicts | Timeline Completeness | Degenerate Obs | Norm Notes/Round | Avg Sec | Avg vs Direct |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for strategy, metrics in report["strategies"].items():
         lines.append(
@@ -389,10 +548,15 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                         str(metrics["direct_regressions"]),
                         str(metrics["legacy_worker_vote_rows"]),
                         _pct(metrics["final_rate"]),
-                    _pct(metrics["incomplete_rate"]),
-                    _fmt(metrics["avg_seconds"]),
-                    _fmt(metrics["avg_walltime_vs_direct"]),
-                ]
+                        _pct(metrics["incomplete_rate"]),
+                        _pct(metrics["unsupported_citation_rate"]),
+                        str(metrics["mutex_conflict_detection_count"]),
+                        _pct(metrics["timeline_completeness"]),
+                        _pct(metrics["degenerate_observation_rate"]),
+                        _fmt(metrics["normalization_notes_per_round"]),
+                        _fmt(metrics["avg_seconds"]),
+                        _fmt(metrics["avg_walltime_vs_direct"]),
+                    ]
             )
             + " |"
         )

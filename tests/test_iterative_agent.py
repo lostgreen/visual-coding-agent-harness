@@ -106,6 +106,7 @@ def build_global_route_test_registry() -> ToolRegistry:
         duration_sec: float,
         nframes: int = 64,
         max_pixels: int = 151200,
+        sample_offset_sec: float = 0.0,
     ):
         return {
             "claim": "Supported option: D. The sparse whole-video view shows an aviation documentary.",
@@ -117,6 +118,7 @@ def build_global_route_test_registry() -> ToolRegistry:
                     "end_sec": duration_sec,
                     "nframes": nframes,
                     "max_pixels": max_pixels,
+                    "sample_offset_sec": sample_offset_sec,
                 }
             ],
             "limitations": "Sparse full-video sampling.",
@@ -320,7 +322,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("candidate_options", prompt)
             self.assertIn("verify option consistency", prompt)
 
-    def test_gist_global_mcq_routes_through_global_gist_before_planning(self):
+    def test_gist_global_mcq_requires_two_global_gist_passes_before_accepting(self):
         backend = ScriptedPlannerBackend([])
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=1896.0, window_sec=300.0)
 
@@ -348,7 +350,71 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.answer, "D. an aviation documentary")
             self.assertEqual(result.citations, ["obs_0001"])
             self.assertEqual(backend.requests, [])
-            self.assertEqual(result.rounds[0].program[0]["tool"], "global_gist")
+            self.assertEqual([step["tool"] for step in result.rounds[0].program], ["global_gist", "global_gist"])
+            self.assertEqual(result.rounds[0].observation_ids, ["obs_0001", "obs_0002"])
+
+    def test_normalization_failure_surfaces_in_next_prompt(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "rationale": "inspect first", '
+                    '"program": [{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "What is visible?"}, "assign": "first"}]}'
+                ),
+                (
+                    '{"status": "continue", "rationale": "repeat first", '
+                    '"program": [{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "What is visible?"}, "assign": "repeat"}]}'
+                ),
+                '{"status": "final", "answer": "The video shows aircraft history.", "citations": ["obs_0001"], "confidence": 0.7}',
+            ]
+        )
+        registry = ToolRegistry()
+
+        @tool(name="vision_read", description="Read localized facts.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 8,
+        ):
+            return {
+                "claim": f"{segment_id} shows aircraft history.",
+                "confidence": 0.75,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+                "event_label": event_label or ask_for,
+            }
+
+        registry.register(vision_read)
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=120.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=60.0),
+                VideoSegment(segment_id="seg_0002", start_sec=60.0, end_sec=120.0),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="normalization_feedback")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=3, reserve_final_round=False),
+            )
+
+            agent.run(question="What is visible?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(len(backend.requests), 3)
+            self.assertIn("Last Round Adjustments", backend.requests[2].prompt)
+            self.assertIn("avoid_repeated_segment", backend.requests[2].prompt)
+            self.assertIn("seg_0001", backend.requests[2].prompt)
+            self.assertIn("seg_0002", backend.requests[2].prompt)
 
     def test_iterative_agent_prompt_tells_planner_to_use_option_letters_in_json(self):
         backend = ScriptedPlannerBackend(
@@ -1542,6 +1608,278 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("prefinal_probe", trace)
             self.assertIn("reserved_final", trace)
+
+    def test_temporal_ordering_uses_timeline_for_unique_option(self):
+        registry = ToolRegistry()
+
+        @tool(name="caption_segment", description="Caption coarse temporal windows.")
+        def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str = "", nframes: int = 8):
+            if start_sec < 20.0:
+                claim = "The light turns on in this early segment."
+            elif start_sec >= 40.0:
+                claim = "The door opens in this late segment."
+            else:
+                claim = "No target event appears here."
+            return {
+                "claim": claim,
+                "confidence": 0.82,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+            }
+
+        @tool(name="vision_read", description="Read temporal event timestamp.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+        ):
+            observed = 40.5 if "door" in ask_for.lower() else 10.5
+            return {
+                "claim": f"{event_label} is observed at {observed:.1f} seconds.",
+                "confidence": 0.94,
+                "event_label": event_label,
+                "observed_at_sec": observed,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(caption_segment)
+        registry.register(vision_read)
+
+        class NeedMoreBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "need_more_evidence", "rationale": "timeline should decide before this", '
+                            '"citations": [], "missing_evidence": ["more evidence"], "confidence": 0.0}'
+                        )
+                    )
+                return BackendResponse(text='{"status": "final", "answer": "fallback", "citations": []}')
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=10.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="timeline_temporal")
+            agent = IterativeVisualAgent(
+                backend=NeedMoreBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=4, hard_skill_runtime=True),
+            )
+
+            result = agent.run(
+                question=(
+                    "Which order is shown?\n"
+                    "A. door opens then light turns on\n"
+                    "B. light turns on then door opens"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.citations, ["obs_0007", "obs_0008"])
+
+    def test_timeline_ordering_uses_caption_pass_before_focused_reads(self):
+        registry = ToolRegistry()
+        calls = []
+
+        @tool(name="caption_segment", description="Caption coarse temporal windows.")
+        def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str = "", nframes: int = 8):
+            calls.append(("caption_segment", segment_id, question))
+            claim_by_segment = {
+                "seg_0001": "The light turns on in this early segment.",
+                "seg_0002": "The door opens in this later segment.",
+                "seg_0003": "A closing title appears.",
+            }
+            return {
+                "claim": claim_by_segment[segment_id],
+                "confidence": 0.82,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+            }
+
+        @tool(name="vision_read", description="Read precise first timestamp.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+        ):
+            calls.append(("vision_read", segment_id, ask_for))
+            observed = 11.0 if "light" in ask_for.lower() else 35.0
+            return {
+                "claim": f"{event_label} is first visible at {observed:.1f} seconds.",
+                "confidence": 0.94,
+                "event_label": event_label,
+                "observed_at_sec": observed,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(caption_segment)
+        registry.register(vision_read)
+
+        class NeedMoreBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "missing_evidence": ["timeline should decide"], "citations": []}')
+                return BackendResponse(text='{"status": "final", "answer": "fallback", "citations": []}')
+
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=45.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=15.0),
+                VideoSegment(segment_id="seg_0002", start_sec=15.0, end_sec=30.0),
+                VideoSegment(segment_id="seg_0003", start_sec=30.0, end_sec=45.0),
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="timeline_caption_pass")
+            agent = IterativeVisualAgent(
+                backend=NeedMoreBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=8, hard_skill_runtime=True),
+            )
+
+            result = agent.run(
+                question=(
+                    "Which order is shown?\n"
+                    "A. door opens then light turns on\n"
+                    "B. light turns on then door opens"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(
+                [step["tool"] for step in result.rounds[0].program],
+                ["caption_segment", "caption_segment", "caption_segment", "vision_read", "vision_read"],
+            )
+            self.assertNotIn("ground_question", [call[0] for call in calls])
+            self.assertEqual([call[1] for call in calls if call[0] == "vision_read"], ["seg_0001", "seg_0002"])
+
+    def test_timeline_ordering_missing_entity_returns_need_more_evidence(self):
+        registry = ToolRegistry()
+
+        @tool(name="caption_segment", description="Caption coarse temporal windows.")
+        def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str = "", nframes: int = 8):
+            return {
+                "claim": "Only the light turns on here.",
+                "confidence": 0.8,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+            }
+
+        @tool(name="vision_read", description="Read precise first timestamp.")
+        def vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = ""):
+            return {
+                "claim": f"{event_label} is first visible at 10.0 seconds.",
+                "confidence": 0.9,
+                "event_label": event_label,
+                "observed_at_sec": 10.0,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(caption_segment)
+        registry.register(vision_read)
+
+        class AbstainBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                return BackendResponse(text='{"answer": "need_more_evidence", "missing_evidence": ["door opens"], "citations": []}')
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=20.0, window_sec=10.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="timeline_missing")
+            agent = IterativeVisualAgent(
+                backend=AbstainBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=8, hard_skill_runtime=True, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question=(
+                    "Which order is shown?\n"
+                    "A. door opens then light turns on\n"
+                    "B. light turns on then door opens"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "need_more_evidence")
+            self.assertIn("door opens", result.answer)
+
+    def test_no_evidence_growth_forces_low_confidence(self):
+        planner_responses = [
+            '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "first pass"}, "assign": "map1"}]}',
+            '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "second pass"}, "assign": "map2"}]}',
+            '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "third pass"}, "assign": "map3"}]}',
+        ]
+
+        class PartialSupportBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "need_more_evidence", "citations": ["obs_0001"], '
+                            '"candidate_option_relations": ['
+                            '{"option": "A", "relation": "support", "strength": 0.6, "observation_id": "obs_0001"}'
+                            '], "missing_evidence": ["need a confirming read"], "confidence": 0.2}'
+                        )
+                    )
+                return super().generate(request)
+
+        registry = ToolRegistry()
+
+        @tool(name="video_ls", description="Cheap navigation that adds no answer evidence.")
+        def video_ls(query: str = ""):
+            return {"claim": f"navigation only: {query}", "confidence": 1.0}
+
+        registry.register(video_ls)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=20.0, window_sec=20.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="no_evidence_growth")
+            observation = workspace.write_observation(
+                tool_name="vision_read",
+                claim="A red object is visible.",
+                confidence=0.8,
+                input_artifacts=["/videos/demo.mp4"],
+                regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 5.0}],
+                raw_output={"grounding_quality": "visually_confirmed"},
+            )
+            workspace.write_ledger_entry(observation)
+            agent = IterativeVisualAgent(
+                backend=PartialSupportBackend(planner_responses),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=5,
+                    reserve_final_round=False,
+                    max_repeated_programs=0,
+                    answer_probe_rounds_before_final=0,
+                ),
+            )
+
+            result = agent.run(question="Which option is visible?\nA. red object\nB. blue object", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.answer, "A")
+            self.assertEqual(len(result.rounds), 2)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("evidence_table_no_growth", trace)
 
     def test_segment_vlm_tools_share_backend_and_pass_temporal_metadata(self):
         class SegmentToolBackend(VisionLanguageBackend):

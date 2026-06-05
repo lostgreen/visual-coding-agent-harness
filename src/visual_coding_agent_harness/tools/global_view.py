@@ -24,12 +24,17 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
         duration_sec: float,
         nframes: int | None = None,
         max_pixels: int = DEFAULT_MAX_PIXELS,
+        sample_offset_sec: float = 0.0,
     ) -> Mapping[str, object]:
         resolved_nframes, _ = resolve_nframes(nframes)
         response = backend.generate(
             BackendRequest(
                 task="global_gist",
-                prompt=_global_gist_prompt(question=question, duration_sec=duration_sec),
+                prompt=_global_gist_prompt(
+                    question=question,
+                    duration_sec=duration_sec,
+                    sample_offset_sec=sample_offset_sec,
+                ),
                 media_path=video_path,
                 media_type="video",
                 max_new_tokens=256,
@@ -37,6 +42,7 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
                     "nframes": int(resolved_nframes),
                     "max_pixels": int(max_pixels),
                     "duration_sec": float(duration_sec),
+                    "sample_offset_sec": float(sample_offset_sec),
                     "question": question,
                 },
             )
@@ -49,6 +55,7 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
             "time_range": [0.0, float(duration_sec)],
             "nframes": int(resolved_nframes),
             "max_pixels": int(max_pixels),
+            "sample_offset_sec": float(sample_offset_sec),
             "raw_backend": dict(response.raw),
         }
         return {
@@ -62,6 +69,7 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
                     "end_sec": float(duration_sec),
                     "nframes": int(resolved_nframes),
                     "max_pixels": int(max_pixels),
+                    "sample_offset_sec": float(sample_offset_sec),
                     "grounding_quality": "global_sparse",
                 }
             ],
@@ -74,13 +82,14 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
     return registry
 
 
-def _global_gist_prompt(*, question: str, duration_sec: float) -> str:
+def _global_gist_prompt(*, question: str, duration_sec: float, sample_offset_sec: float = 0.0) -> str:
     return (
         "Answer from a sparse full-video view before any local decomposition.\n"
         "Use the sampled whole-video context as a direct baseline floor.\n"
         "Start multiple-choice answers with exactly one option letter when options are provided.\n"
         "Mention uncertainty if the sparse global view is insufficient for fine local details.\n"
         f"Video duration: {float(duration_sec):.1f} seconds.\n"
+        f"Sampling offset: {float(sample_offset_sec):.3f} seconds.\n"
         f"Question:\n{question}"
     )
 

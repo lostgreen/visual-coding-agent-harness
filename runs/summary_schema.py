@@ -38,6 +38,13 @@ class RunSummary:
     context_budget_overflow_count: int
     avg_tokens_per_turn: int
 
+    # phase D diagnostics
+    unsupported_citation_rate: float
+    mutex_conflict_detection_count: int
+    timeline_completeness: float
+    degenerate_observation_rate: float
+    normalization_notes_per_round: float
+
     # diagnostics
     route_violations: int
     nframes_histogram: dict[str, dict[int, int]] = field(default_factory=dict)
@@ -68,6 +75,11 @@ class RunSummary:
             saturation_termination_rate=0.0,
             context_budget_overflow_count=0,
             avg_tokens_per_turn=0,
+            unsupported_citation_rate=0.0,
+            mutex_conflict_detection_count=0,
+            timeline_completeness=0.0,
+            degenerate_observation_rate=0.0,
+            normalization_notes_per_round=0.0,
             route_violations=0,
             nframes_histogram={},
             map_reflux_commit_count=0,
@@ -85,13 +97,20 @@ class RunSummary:
         values = {key: value for key, value in payload.items() if key in allowed}
         if "nframes_histogram" in values:
             values["nframes_histogram"] = _normalize_histogram(values["nframes_histogram"])
-        return cls(**values)
+        defaults = cls.with_defaults(
+            str(values.get("run_id", "")),
+            values.get("case_ids", []) if isinstance(values.get("case_ids", []), list) else [],
+        ).to_dict()
+        defaults.update(values)
+        return cls(**defaults)
 
 
 def validate(summary: RunSummary) -> list[str]:
     errors = []
     if summary.unsupported_final_rate > 0.0:
         errors.append("unsupported_final_rate must be <= 0.0")
+    if summary.unsupported_citation_rate > 0.0:
+        errors.append("unsupported_citation_rate must be <= 0.0")
     if summary.legacy_worker_vote_rows != 0:
         errors.append("legacy_worker_vote_rows must be 0")
     if summary.route_violations != 0:

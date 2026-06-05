@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Mapping, Sequence
 
 from .agents.contracts import resolve_nframes
 from .agents.distill import distill
+from .agents.output_quality import DEGENERATE_CONFIDENCE_SIGNAL, is_degenerate
 from .registry import ToolRegistry
 from .workspace import EvidenceRecord, EvidenceWorkspace, MapUpdateProposal, Observation
 
@@ -92,7 +93,19 @@ class ProgramInterpreter:
             {"step": step_index, "tool": tool_name, "arguments": arguments},
         )
 
-        raw_output = self.registry.execute(tool_name, arguments)
+        raw_output = dict(self.registry.execute(tool_name, arguments))
+        is_bad_output, fingerprint = is_degenerate(str(raw_output.get("claim", "")))
+        if is_bad_output:
+            raw_output["confidence_signal"] = DEGENERATE_CONFIDENCE_SIGNAL
+            raw_output["grounding_quality"] = "weak"
+            self.workspace.write_trace_event(
+                "tool_output_degenerate",
+                {
+                    "step": step_index,
+                    "tool": tool_name,
+                    "fingerprint": fingerprint,
+                },
+            )
         observation = self.workspace.write_observation(
             tool_name=tool_name,
             input_artifacts=raw_output.get("input_artifacts", []),
@@ -100,6 +113,7 @@ class ProgramInterpreter:
             confidence=float(raw_output.get("confidence", 0.0)),
             regions=raw_output.get("regions", []),
             limitations=str(raw_output.get("limitations", "")),
+            confidence_signal=str(raw_output.get("confidence_signal", "")),
             raw_output=raw_output,
         )
         observation = self._attach_visual_manifest(
@@ -121,6 +135,7 @@ class ProgramInterpreter:
             self.workspace.write_evidence(evidence_record)
         self._write_map_proposals(observation=observation, parent_records=distilled_records)
         self.workspace.write_ledger_entry(observation, parent_records=distilled_records)
+        self.workspace.append_timeline_from_observation(observation)
 
         if "assign" in step:
             assignments[str(step["assign"])] = observation.observation_id

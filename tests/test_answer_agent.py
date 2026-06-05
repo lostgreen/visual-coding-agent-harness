@@ -156,6 +156,71 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.answer, "D. whole-video synopsis")
         self.assertEqual(result.citations, ["obs_0001"])
 
+    def test_mutex_conflict_blocks_final(self):
+        table = {
+            "options": ["B. humble background", "D. upper class background"],
+            "groups": {
+                "B": [
+                    {
+                        "obs_id": "obs_0002",
+                        "claim": "The person is presented as humble.",
+                        "confidence": 0.82,
+                        "grounding_quality": "visually_confirmed",
+                        "supported_option": "B",
+                        "mutex_group_id": "life_background",
+                    }
+                ],
+                "D": [
+                    {
+                        "obs_id": "obs_0008",
+                        "claim": "The person is presented as upper class.",
+                        "confidence": 0.84,
+                        "grounding_quality": "visually_confirmed",
+                        "supported_option": "D",
+                        "mutex_group_id": "life_background",
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table)
+
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertIn("mutex_conflict", result.missing_evidence[0])
+
+    def test_overlapping_options_require_distinguishing_fact(self):
+        table = {
+            "options": [
+                "B. Why the Austro-Hungarian Empire was divided",
+                "D. How the Austro-Hungarian Empire rises and falls",
+            ],
+            "groups": {
+                "B": [
+                    {
+                        "obs_id": "obs_0004",
+                        "tool": "inspect_segment",
+                        "claim": "The video discusses the Austro-Hungarian Empire.",
+                        "confidence": 0.54,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+                "D": [
+                    {
+                        "obs_id": "obs_0001",
+                        "tool": "inspect_segment",
+                        "claim": "The sparse view discusses the Austro-Hungarian Empire.",
+                        "confidence": 0.82,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table)
+
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertEqual(result.missing_evidence, ["disambiguate_overlapping_options"])
+
     def test_low_conf_picks_most_supported_option(self):
         backend = StaticBackend(
             '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '

@@ -37,6 +37,8 @@ def build_replanning_prompt(
     tool_class_counts: Mapping[str, int] | None = None,
     final_round_reserved: bool = False,
     answer_feedback: Sequence[str] = (),
+    normalization_notes: Sequence[Any] = (),
+    hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
 ) -> tuple[str, ContextBudgetReport]:
     slots = compose_replanning_prompt_slots(
@@ -49,6 +51,8 @@ def build_replanning_prompt(
         tool_class_counts=tool_class_counts,
         final_round_reserved=final_round_reserved,
         answer_feedback=answer_feedback,
+        normalization_notes=normalization_notes,
+        hypothesis_text=hypothesis_text,
         reflection_memory=reflection_memory,
     )
     allocated, report = allocator.allocate(
@@ -72,6 +76,8 @@ def compose_replanning_prompt_slots(
     tool_class_counts: Mapping[str, int] | None = None,
     final_round_reserved: bool = False,
     answer_feedback: Sequence[str] = (),
+    normalization_notes: Sequence[Any] = (),
+    hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
@@ -121,8 +127,13 @@ def compose_replanning_prompt_slots(
             tool_class_counts=tool_class_counts,
             final_round_reserved=final_round_reserved,
         ),
+        "hypothesis": _hypothesis_slot(hypothesis_text),
         "evidence": "# Evidence Snapshot\nEvidence ledger:\n" + (ledger_text or "(none)"),
-        "feedback": _feedback_slot(answer_feedback=answer_feedback, reflection_memory=reflection_memory),
+        "feedback": _feedback_slot(
+            answer_feedback=answer_feedback,
+            normalization_notes=normalization_notes,
+            reflection_memory=reflection_memory,
+        ),
     }
 
 
@@ -137,6 +148,8 @@ def compose_replanning_prompt_blocks(
     tool_class_counts: Mapping[str, int] | None = None,
     final_round_reserved: bool = False,
     answer_feedback: Sequence[str] = (),
+    normalization_notes: Sequence[Any] = (),
+    hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
@@ -186,7 +199,20 @@ def compose_replanning_prompt_blocks(
                 final_round_reserved=final_round_reserved,
             ),
         ),
+        PromptBlock(
+            name="hypothesis",
+            title="Hypothesis",
+            body=_hypothesis_slot(hypothesis_text),
+        ),
     ]
+    if normalization_notes:
+        blocks.append(
+            PromptBlock(
+                name="normalization_notes",
+                title="Last Round Adjustments",
+                body=_normalization_notes_body(normalization_notes),
+            )
+        )
     if answer_feedback:
         blocks.append(
             PromptBlock(
@@ -236,11 +262,17 @@ def _tool_schema_block() -> str:
         "- read_segment(segment_id: str)\n"
         "- expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0)\n"
         "- zoom(segment_id: str, target_granularity_sec: float = 60.0)\n"
-        "- global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200)\n"
+        "- global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)\n"
         "- caption_segments(segment_ids: list = [], question: str = 'Create a concise search caption for this segment.', nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0, max_segments: int = 3)\n"
         "- ingest_segment_metadata(segment_id: str, low_fps_caption: str = '', asr_text: str = '', ocr_text: str = '', entities: list = [])\n"
         "- summarize_ledger_evidence(max_claims: int = 5)\n"
         "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
+        "- view_observation(obs_id: str, line_range: tuple | None = None)\n"
+        "- grep_evidence(pattern: str, in_field: str = 'claim')\n"
+        "- query_evidence_table(filter: dict)\n"
+        "- read_timeline_sorted()\n"
+        "- read_hypothesis()\n"
+        "- update_hypothesis_slot(slot_name: str, status: str, evidence_obs_id: str = '')\n"
         "- vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = '', nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
@@ -252,13 +284,18 @@ def _join_slots(slots: Mapping[SlotName, str]) -> str:
     titles = {
         "task": "Task",
         "navigation": "Navigation",
+        "hypothesis": "Hypothesis",
         "evidence": "Evidence",
         "feedback": "Feedback",
     }
     return "\n\n".join(
         f"## {titles[name]}\n{slots.get(name, '').strip()}"
-        for name in ["task", "navigation", "evidence", "feedback"]
+        for name in ["task", "navigation", "hypothesis", "evidence", "feedback"]
     ).strip()
+
+
+def _hypothesis_slot(hypothesis_text: str) -> str:
+    return (hypothesis_text or "# Hypothesis\n\n(no slots yet)").strip()
 
 
 def _navigation_snapshot_block(
@@ -303,8 +340,21 @@ def _navigation_snapshot_block(
     )
 
 
-def _feedback_slot(*, answer_feedback: Sequence[str], reflection_memory: Sequence[str]) -> str:
+def _feedback_slot(
+    *,
+    answer_feedback: Sequence[str],
+    normalization_notes: Sequence[Any],
+    reflection_memory: Sequence[str],
+) -> str:
     blocks = []
+    if normalization_notes:
+        blocks.append(
+            PromptBlock(
+                name="normalization_notes",
+                title="Last Round Adjustments",
+                body=_normalization_notes_body(normalization_notes),
+            ).render()
+        )
     if answer_feedback:
         blocks.append(
             PromptBlock(
@@ -325,6 +375,37 @@ def _feedback_slot(*, answer_feedback: Sequence[str], reflection_memory: Sequenc
             ).render()
         )
     return "\n".join(blocks).strip() or "(none)"
+
+
+def _normalization_notes_body(notes: Sequence[Any]) -> str:
+    lines = ["Your previous program was modified by the harness:"]
+    for note in list(notes)[:8]:
+        reason = _note_attr(note, "reason")
+        tool = _note_attr(note, "tool")
+        original = _note_mapping(note, "original")
+        resolved = _note_mapping(note, "resolved")
+        original_tool = str(original.get("tool") or tool)
+        resolved_tool = str(resolved.get("tool") or original_tool)
+        original_segment = str(original.get("segment_id") or "")
+        resolved_segment = str(resolved.get("segment_id") or "")
+        left = " ".join(item for item in [original_tool, original_segment] if item).strip() or tool
+        if resolved:
+            right = " ".join(item for item in [resolved_tool, resolved_segment] if item).strip() or resolved_tool
+            lines.append(f"- {left} -> {right} (reason: {reason})")
+        else:
+            lines.append(f"- {left} step dropped (reason: {reason})")
+    return "\n".join(lines)
+
+
+def _note_attr(note: Any, name: str) -> str:
+    if isinstance(note, Mapping):
+        return str(note.get(name, ""))
+    return str(getattr(note, name, ""))
+
+
+def _note_mapping(note: Any, name: str) -> Mapping[str, Any]:
+    value = note.get(name, {}) if isinstance(note, Mapping) else getattr(note, name, {})
+    return value if isinstance(value, Mapping) else {}
 
 
 def _evidence_snapshot_block(

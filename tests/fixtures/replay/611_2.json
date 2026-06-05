@@ -1,0 +1,37 @@
+{
+  "case_id": "611-2",
+  "gt": "D",
+  "duration_sec": 60.0,
+  "question": "Which order is shown?\nA. door opens then light turns on\nB. door opens then light turns on\nC. door opens then light turns on\nD. light turns on then door opens",
+  "options": [
+    "A. door opens then light turns on",
+    "B. door opens then light turns on",
+    "C. door opens then light turns on",
+    "D. light turns on then door opens"
+  ],
+  "backend_responses": [],
+  "segments": [
+    {"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 20.0},
+    {"segment_id": "seg_0002", "start_sec": 20.0, "end_sec": 40.0},
+    {"segment_id": "seg_0003", "start_sec": 40.0, "end_sec": 60.0}
+  ],
+  "tools": {
+    "caption_segment": {
+      "seg_0001": "The light turns on in the early room scene.",
+      "seg_0002": "No target temporal event is visible in this middle segment.",
+      "seg_0003": "The door opens in the later room scene."
+    },
+    "vision_read": {
+      "light turns on": {
+        "claim": "light turns on is first visible at 8.0 seconds.",
+        "observed_at_sec": 8.0,
+        "confidence": 0.94
+      },
+      "door opens": {
+        "claim": "door opens is first visible at 45.0 seconds.",
+        "observed_at_sec": 45.0,
+        "confidence": 0.94
+      }
+    }
+  }
+}

@@ -39,12 +39,12 @@ class V4FoundationTest(unittest.TestCase):
         )
         prompt_context = skill.prompt_context()
 
-        self.assertEqual(skill.name, "gist_qa")
+        self.assertEqual(skill.name, "main_idea")
         self.assertEqual(program[0]["tool"], "global_gist")
         self.assertEqual(program[0]["args"]["video_path"], "demo.mp4")
         self.assertEqual(program[0]["args"]["duration_sec"], 30.0)
         self.assertIn("global_gist", prompt_context)
-        self.assertNotIn("temporal_ordering", prompt_context)
+        self.assertNotIn("timeline_ordering", prompt_context)
 
     def test_evidence_table_v2_includes_vision_read_rows_without_worker_votes(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,0 +1,29 @@
+{
+  "case_id": "605-1",
+  "gt": "D",
+  "duration_sec": 120.0,
+  "question": "Question: What is the video mainly about?\nA. A cooking contest\nB. A city traffic update\nC. A sports highlight reel\nD. The rise and fall of an ancient empire",
+  "options": [
+    "A. A cooking contest",
+    "B. A city traffic update",
+    "C. A sports highlight reel",
+    "D. The rise and fall of an ancient empire"
+  ],
+  "backend_responses": [],
+  "tools": {
+    "global_gist": {
+      "0": {
+        "claim": "Supported option: D. The sparse whole-video view follows the rise and fall of an ancient empire, with rulers, battles, monuments, and ruins.",
+        "confidence": 0.78,
+        "supported_option": "D",
+        "grounding_quality": "global_sparse"
+      },
+      "1": {
+        "claim": "Supported option: D. A second sparse pass again shows the rise and fall of an ancient empire through battles, monuments, rulers, and ruins.",
+        "confidence": 0.8,
+        "supported_option": "D",
+        "grounding_quality": "global_sparse"
+      }
+    }
+  }
+}

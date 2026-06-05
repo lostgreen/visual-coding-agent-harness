@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from visual_coding_agent_harness.agents.answer_agent import arbitrate_evidence_table
 from visual_coding_agent_harness.agents.distill import distill
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.registry import ToolRegistry, tool
@@ -34,6 +35,66 @@ def test_vision_read_distiller_splits_facts(tmp_path: Path):
 
     assert [record.content["claim"] for record in records] == ["red car appears", "blue car appears"]
     assert all(record.observation_id == observation.observation_id for record in records)
+
+
+def test_unsupported_claim_downgrades_grounding(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "distill_run")
+    observation = workspace.write_observation(
+        tool_name="vision_read",
+        claim="Limitation: no direct evidence is visible for this fact.",
+        confidence=0.9,
+        raw_output={
+            "confidence_signal": "unsupported",
+            "grounding_quality": "visually_confirmed",
+            "facts": [
+                {
+                    "fact": "Limitation: no direct evidence is visible for this fact.",
+                    "grounding_quality": "visually_confirmed",
+                    "confidence": 0.9,
+                }
+            ],
+        },
+    )
+
+    records = distill(observation, workspace)
+
+    assert len(records) == 1
+    assert records[0].grounding_quality == "inferred"
+    assert records[0].content["confidence_signal"] == "unsupported"
+
+
+def test_repetition_loop_observation_is_weak(tmp_path: Path):
+    registry = ToolRegistry()
+    repeated = "The Ecstasy of Saint Teresa " * 8
+
+    @tool(name="vision_read", description="Read a repeated fact.")
+    def vision_read():
+        return {
+            "claim": repeated,
+            "confidence": 0.9,
+            "grounding_quality": "visually_confirmed",
+            "supported_option": "D",
+            "candidate_option_relations": [
+                {"option": "D", "relation": "support", "strength": 0.9},
+            ],
+        }
+
+    registry.register(vision_read)
+    workspace = EvidenceWorkspace.create(tmp_path, "distill_run")
+
+    ProgramInterpreter(registry=registry, workspace=workspace).run([{"tool": "vision_read"}])
+
+    table = workspace.evidence_table_v2(
+        question="Which artwork is shown?\nA. David\nD. The Ecstasy of Saint Teresa",
+        options=["A. David", "D. The Ecstasy of Saint Teresa"],
+    )
+    row = table["groups"]["D"][0]
+    result = arbitrate_evidence_table(table)
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert row["grounding_quality"] == "weak"
+    assert result.status == "need_more_evidence"
+    assert "tool_output_degenerate" in trace
 
 
 def test_interpreter_writes_distilled_record_links_to_observation(tmp_path: Path):

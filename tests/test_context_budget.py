@@ -150,14 +150,14 @@ def test_feedback_latest_only_compacts_history():
 
 
 def test_parse_budget_ratios_validates_full_distribution():
-    ratios = parse_budget_ratios("task:0.1,navigation:0.15,evidence:0.5,feedback:0.25")
+    ratios = parse_budget_ratios("task:0.1,navigation:0.15,hypothesis:0.15,evidence:0.45,feedback:0.15")
 
-    assert ratios == {"task": 0.1, "navigation": 0.15, "evidence": 0.5, "feedback": 0.25}
+    assert ratios == {"task": 0.1, "navigation": 0.15, "hypothesis": 0.15, "evidence": 0.45, "feedback": 0.15}
 
 
 def test_parse_budget_ratios_rejects_bad_sum():
     try:
-        parse_budget_ratios("task:0.1,navigation:0.1,evidence:0.1,feedback:0.1")
+        parse_budget_ratios("task:0.1,navigation:0.1,hypothesis:0.1,evidence:0.1,feedback:0.1")
     except ValueError as exc:
         assert "sum to 1.0" in str(exc)
     else:

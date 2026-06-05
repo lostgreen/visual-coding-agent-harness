@@ -144,14 +144,14 @@ class EvalRunnerTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             success_workspace = EvidenceWorkspace.create(Path(tmp), run_id="followup_success")
-            success_workspace.write_trace_event("hard_skill_runtime", {"skill": "temporal_ordering@v1"})
-            success_workspace.write_trace_event("tool_use", {"tool": "ground_question", "arguments": {"query": "first gap"}})
-            success_workspace.write_trace_event("tool_use", {"tool": "ground_question", "arguments": {"query": "second gap"}})
+            success_workspace.write_trace_event("hard_skill_runtime", {"skill": "timeline_ordering@v1"})
+            success_workspace.write_trace_event("tool_use", {"tool": "caption_segment", "arguments": {"question": "first gap"}})
+            success_workspace.write_trace_event("tool_use", {"tool": "vision_read", "arguments": {"ask_for": "second gap"}})
             success_workspace.write_trace_event("iterative_final", {"source": "hard_skill_runtime"})
 
             handoff_workspace = EvidenceWorkspace.create(Path(tmp), run_id="followup_handoff")
-            handoff_workspace.write_trace_event("hard_skill_runtime", {"skill": "temporal_ordering@v1"})
-            handoff_workspace.write_trace_event("tool_use", {"tool": "ground_question", "arguments": {"query": "remaining gap"}})
+            handoff_workspace.write_trace_event("hard_skill_runtime", {"skill": "timeline_ordering@v1"})
+            handoff_workspace.write_trace_event("tool_use", {"tool": "vision_read", "arguments": {"ask_for": "remaining gap"}})
             handoff_workspace.write_trace_event("hard_skill_followup_handoff", {"rounds": 1})
 
             summary = eval_runner._summary_payload(
@@ -414,7 +414,7 @@ class EvalRunnerTest(unittest.TestCase):
                 "--context-budget-tokens",
                 "9000",
                 "--budget-ratios",
-                "task:0.2,navigation:0.2,evidence:0.4,feedback:0.2",
+                "task:0.2,navigation:0.2,hypothesis:0.1,evidence:0.3,feedback:0.2",
             ]
         )
 
@@ -423,7 +423,7 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.budget.context_budget_tokens, 9000)
         self.assertEqual(
             config.budget.context_budget_ratios,
-            {"task": 0.2, "navigation": 0.2, "evidence": 0.4, "feedback": 0.2},
+            {"task": 0.2, "navigation": 0.2, "hypothesis": 0.1, "evidence": 0.3, "feedback": 0.2},
         )
 
     def test_context_budget_cli_rejects_bad_ratio_sum(self):
@@ -435,7 +435,7 @@ class EvalRunnerTest(unittest.TestCase):
                 "--run-root",
                 "/tmp/vcah-context",
                 "--budget-ratios",
-                "task:0.1,navigation:0.1,evidence:0.1,feedback:0.1",
+                "task:0.1,navigation:0.1,hypothesis:0.1,evidence:0.1,feedback:0.1",
             ]
         )
 

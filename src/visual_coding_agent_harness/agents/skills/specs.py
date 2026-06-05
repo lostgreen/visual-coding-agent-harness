@@ -75,7 +75,7 @@ def builtin_skill_registry() -> SkillRegistry:
     return SkillRegistry(
         [
             SkillSpec(
-                name="gist_qa",
+                name="main_idea",
                 version=1,
                 trigger=SkillTrigger(
                     route="gist_global",
@@ -84,14 +84,26 @@ def builtin_skill_registry() -> SkillRegistry:
                 input_slots=("question", "options", "video_id", "duration_sec"),
                 procedure=(
                     SkillStep(
-                        step="global",
+                        step="global_seed_0",
                         op="global_gist",
                         args={
                             "video_path": "{video_id}",
                             "question": "{question}",
                             "duration_sec": "{duration_sec}",
+                            "seed": 0,
                         },
-                        assign="g",
+                        assign="g1",
+                    ),
+                    SkillStep(
+                        step="global_seed_1",
+                        op="global_gist",
+                        args={
+                            "video_path": "{video_id}",
+                            "question": "{question}",
+                            "duration_sec": "{duration_sec}",
+                            "seed": 1,
+                        },
+                        assign="g2",
                     ),
                     SkillStep(
                         step="decide",
@@ -100,14 +112,56 @@ def builtin_skill_registry() -> SkillRegistry:
                         assign="decision",
                     ),
                 ),
-                sufficiency=("gist_supports_single_option",),
-                verifier_checks=("selected_option_has_structured_support", "direct_floor_holds"),
+                sufficiency=("two_global_gists_agree", "option_coverage_margin_gt_0_15"),
+                verifier_checks=("selected_option_has_structured_support", "main_idea_coverage_floor_holds"),
                 recovery={"ambiguous": {"action": "escalate", "skill": "grounded_factual_qa"}},
                 exemplars=(
-                    "Q: what is the video mainly about -> global sparse view -> answer from typed evidence",
+                    "Q: what is the video mainly about -> two sparse global views -> coverage margin -> answer",
                 ),
-                self_check=("decision.option != null", "decision.citations include g"),
+                self_check=("g1.option == g2.option", "decision.citations include global evidence"),
                 allowed_actions=frozenset({"global_gist", "query_context"}),
+            ),
+            SkillSpec(
+                name="mutex_fact_qa",
+                version=1,
+                trigger=SkillTrigger(route="needle_local", markers=("option", "neither", "true")),
+                input_slots=("question", "options", "video_id", "option_x_text", "option_y_text", "mutex_windows"),
+                procedure=(
+                    SkillStep(
+                        step="locate_mutex_window",
+                        op="ground_question",
+                        args={"query": "{option_x_text} OR {option_y_text}"},
+                        assign="mutex_windows",
+                        on_fail="widen_query",
+                    ),
+                    SkillStep(
+                        step="read_mutex_once",
+                        op="vision_read",
+                        foreach="mutex_windows",
+                        args={
+                            "window": "{candidate}",
+                            "ask_for": (
+                                "In this window, is option X (`{option_x_text}`) true, "
+                                "OR option Y (`{option_y_text}`) true, OR NEITHER true? "
+                                "Cite only visible frames. If no visible evidence supports either, return NEITHER."
+                            ),
+                        },
+                        assign="mutex_fact[{candidate}]",
+                    ),
+                    SkillStep(
+                        step="decide",
+                        op="answer_agent",
+                        args={"evidence": "evidence_table_v2()", "route": "needle_local"},
+                        assign="decision",
+                    ),
+                ),
+                sufficiency=("single_window_mutex_read_supports_one_option_or_neither",),
+                verifier_checks=("selected_option_has_structured_support", "no_unaddressed_conflict"),
+                recovery={"insufficient": {"action": "need_more_evidence", "target": "mutex distinguishing window"}},
+                self_check=("one vision_read per mutex window",),
+                allowed_actions=frozenset(
+                    {"ground_question", "query_context", "vision_read", "zoom", "video_ls", "search_segments"}
+                ),
             ),
             SkillSpec(
                 name="grounded_factual_qa",
@@ -149,7 +203,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 ),
             ),
             SkillSpec(
-                name="temporal_ordering",
+                name="timeline_ordering",
                 version=1,
                 trigger=SkillTrigger(
                     route="temporal_order",
@@ -158,23 +212,23 @@ def builtin_skill_registry() -> SkillRegistry:
                 input_slots=("question", "options", "video_id", "events"),
                 procedure=(
                     SkillStep(
-                        step="ground_each_event",
-                        op="ground_question",
-                        foreach="events",
-                        args={"query": "{event}"},
-                        assign="cand[{event}]",
-                        on_fail="widen_query",
+                        step="caption_coarse_segments",
+                        op="caption_segment",
+                        foreach="segments",
+                        args={"question": "Find mentions of target temporal entities."},
+                        assign="caption[{segment}]",
                     ),
                     SkillStep(
-                        step="confirm_each_event",
+                        step="read_first_timestamp",
                         op="vision_read",
                         foreach="events",
                         args={
-                            "window": "cand[{event}].top",
-                            "ask_for": "presence and timestamp of: {event}",
+                            "window": "caption_match[{event}]",
+                            "ask_for": "At what timestamp (precise, in seconds) does '{event}' first appear?",
                         },
                         assign="fact[{event}]",
                     ),
+                    SkillStep(step="assemble", op="read_timeline_sorted", assign="timeline"),
                     SkillStep(
                         step="decide",
                         op="answer_agent",
@@ -193,11 +247,11 @@ def builtin_skill_registry() -> SkillRegistry:
                     "conflict": {"action": "need_more_evidence", "target": "conflicting event timestamps"},
                 },
                 exemplars=(
-                    "ground each named event -> confirm timestamps -> sort -> compare to option sequences",
+                    "caption coarse segments -> read first timestamps -> sort timeline -> compare to option sequences",
                 ),
                 self_check=("decision.option != null", "decision.citations all confirmed"),
                 allowed_actions=frozenset(
-                    {"ground_question", "query_context", "vision_read", "zoom", "video_ls", "search_segments"}
+                    {"caption_segment", "query_context", "vision_read", "read_timeline_sorted", "video_ls", "search_segments"}
                 ),
             ),
         ]

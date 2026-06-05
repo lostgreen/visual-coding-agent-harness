@@ -1,0 +1,35 @@
+{
+  "case_id": "612-1",
+  "gt": "B",
+  "duration_sec": 40.0,
+  "question": "Which option is true in the video?\nA. red cube is lifted\nB. blue box is opened\nC. yellow card is shown\nD. green door is closed",
+  "options": [
+    "A. red cube is lifted",
+    "B. blue box is opened",
+    "C. yellow card is shown",
+    "D. green door is closed"
+  ],
+  "backend_responses": [],
+  "segments": [
+    {"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 20.0},
+    {"segment_id": "seg_0002", "start_sec": 20.0, "end_sec": 40.0}
+  ],
+  "tools": {
+    "ground_question": {
+      "red cube is lifted": {"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 20.0},
+      "blue box is opened": {"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 20.0}
+    },
+    "vision_read": {
+      "red cube is lifted": {
+        "claim": "Supported option: A. The red cube is lifted in the shared window.",
+        "supported_option": "A",
+        "confidence": 0.9
+      },
+      "blue box is opened": {
+        "claim": "Supported option: B. The blue box is opened in the same shared window.",
+        "supported_option": "B",
+        "confidence": 0.9
+      }
+    }
+  }
+}

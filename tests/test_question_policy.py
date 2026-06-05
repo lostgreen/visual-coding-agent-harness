@@ -16,7 +16,7 @@ class QuestionPolicyTest(unittest.TestCase):
     def test_selects_temporal_ordering_playbook_from_question(self):
         playbook = select_question_playbook("What happens before the person opens the door?")
 
-        self.assertEqual(playbook.name, "temporal_ordering")
+        self.assertEqual(playbook.name, "timeline_ordering")
         self.assertIn("timestamped", " ".join(playbook.sufficiency_rules))
 
     def test_classifies_synopsis_mcq_as_global_gist_route(self):

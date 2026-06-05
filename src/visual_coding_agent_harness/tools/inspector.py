@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Mapping, Optional, Sequence
 
 from ..agents.contracts import resolve_nframes
+from ..agents.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
@@ -59,7 +61,23 @@ def build_segment_inspector_registry(
         nframes: int | None = None,
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
+        mutex_group_id: str = "",
+        mutex_option_x: str = "",
+        mutex_option_x_text: str = "",
+        mutex_option_y: str = "",
+        mutex_option_y_text: str = "",
     ) -> Mapping[str, object]:
+        mutex_prompt = ""
+        if mutex_option_x_text and mutex_option_y_text:
+            mutex_prompt = _mutex_read_prompt(
+                segment_id=segment_id,
+                start_sec=float(start_sec),
+                end_sec=float(end_sec),
+                option_x=mutex_option_x or "X",
+                option_x_text=mutex_option_x_text,
+                option_y=mutex_option_y or "Y",
+                option_y_text=mutex_option_y_text,
+            )
         result = dict(
             _run_inspector(
                 backend=backend,
@@ -77,26 +95,50 @@ def build_segment_inspector_registry(
                 clip_extractor=clip_extractor,
                 task_name="vision_read",
                 prompt_style="vision_read",
+                prompt_override=mutex_prompt,
             )
         )
         resolved_event = event_label or ask_for
         time_range = [float(start_sec), float(end_sec)]
+        confidence_signal = str(result.get("confidence_signal", ""))
+        grounding_quality = str(result.get("grounding_quality") or "visually_confirmed")
+        polarity = "unknown" if confidence_signal == "unsupported" else "present"
         result.update(
             {
                 "facts": [
                     {
                         "fact": str(result.get("claim", "")),
                         "event_label": resolved_event,
-                        "polarity": "present",
+                        "polarity": polarity,
                         "time_range": time_range,
-                        "grounding_quality": "visually_confirmed",
+                        "grounding_quality": grounding_quality,
                     }
                 ],
                 "event_label": resolved_event,
                 "time_range": time_range,
-                "grounding_quality": "visually_confirmed",
+                "grounding_quality": grounding_quality,
             }
         )
+        if confidence_signal:
+            result["confidence_signal"] = confidence_signal
+        if mutex_group_id:
+            result["mutex_group_id"] = str(mutex_group_id)
+        if mutex_prompt:
+            supported_option = _mutex_supported_option(
+                str(result.get("claim", "")),
+                option_x=mutex_option_x or "X",
+                option_y=mutex_option_y or "Y",
+            )
+            result["supported_option"] = supported_option
+            if supported_option:
+                result["candidate_option_relations"] = [
+                    {
+                        "option": supported_option,
+                        "relation": "support",
+                        "strength": float(result.get("confidence", 0.0) or 0.0),
+                        "assigned_by": "vision_read_mutex",
+                    }
+                ]
         return result
 
     registry.register(inspect_segment)
@@ -121,6 +163,7 @@ def _run_inspector(
     clip_extractor: Optional[ClipExtractor],
     task_name: str = "inspect_segment",
     prompt_style: str = "inspect_segment",
+    prompt_override: str = "",
 ) -> Mapping[str, object]:
     resolved_nframes, _ = resolve_nframes(nframes)
     metadata = {
@@ -166,7 +209,8 @@ def _run_inspector(
     response = backend.generate(
         BackendRequest(
             task=task_name,
-            prompt=(
+            prompt=prompt_override
+            or (
                 _vision_read_prompt(
                     segment_id=segment_id,
                     start_sec=float(start_sec),
@@ -188,14 +232,22 @@ def _run_inspector(
             metadata=metadata,
         )
     )
-    return {
-        "claim": response.text.strip(),
+    claim = response.text.strip()
+    confidence_signal = confidence_signal_from_text(claim)
+    grounding_quality = "inferred" if confidence_signal == "unsupported" else ""
+    result: dict[str, object] = {
+        "claim": claim,
         "confidence": 0.74,
         "input_artifacts": input_artifacts,
         "regions": [metadata],
         "limitations": limitations,
         "raw_backend": dict(response.raw),
     }
+    if confidence_signal:
+        result["confidence_signal"] = confidence_signal
+    if grounding_quality:
+        result["grounding_quality"] = grounding_quality
+    return result
 
 
 def _inspector_prompt(
@@ -236,3 +288,35 @@ def _vision_read_prompt(
         f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]\n"
         f"Ask for: {ask_for}"
     )
+
+
+def _mutex_read_prompt(
+    *,
+    segment_id: str,
+    start_sec: float,
+    end_sec: float,
+    option_x: str,
+    option_x_text: str,
+    option_y: str,
+    option_y_text: str,
+) -> str:
+    return (
+        "You are a v4 VisionAgent reading one localized long-video window.\n"
+        f"In this window, is option {option_x} (`{option_x_text}`) true, "
+        f"OR option {option_y} (`{option_y_text}`) true, OR NEITHER true?\n"
+        "Cite only visible frames. If no visible evidence supports either, return NEITHER.\n"
+        "Return one label first: the option letter, or NEITHER, followed by a short visual justification.\n"
+        "Do not use outside video context or external knowledge.\n"
+        f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]"
+    )
+
+
+def _mutex_supported_option(claim: str, *, option_x: str, option_y: str) -> str:
+    text = str(claim).strip()
+    if re.search(r"\bneither\b", text, flags=re.IGNORECASE):
+        return ""
+    for option in (option_x, option_y):
+        normalized = str(option).strip().upper()[:1]
+        if normalized and re.match(rf"\s*(?:option\s+)?{re.escape(normalized)}\b", text, flags=re.IGNORECASE):
+            return normalized
+    return ""

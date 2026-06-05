@@ -275,8 +275,14 @@ def _temporal_order_gate(
         return default
 
     table = workspace.evidence_table_v2(question=question, options=candidate_options)
-    rows = table.get("rows", []) if isinstance(table.get("rows", []), Sequence) else []
-    observed_events = _observed_events(rows)
+    timeline_rows = workspace.read_timeline_sorted()
+    if timeline_rows:
+        observed_events = _observed_timeline_events(timeline_rows)
+        predicate_table: Mapping[str, Any] = {**table, "timeline": timeline_rows}
+    else:
+        rows = table.get("rows", []) if isinstance(table.get("rows", []), Sequence) else []
+        observed_events = _observed_events(rows)
+        predicate_table = table
     if len(observed_events) < 2:
         return default
 
@@ -292,7 +298,7 @@ def _temporal_order_gate(
     verdict = "Support" if matched_times == sorted(matched_times) else "Contradict"
     reasons = ["temporal order contradicts evidence"] if verdict == "Contradict" else []
     predicate_result = temporal_order_consistent(
-        table,
+        predicate_table,
         selected_option=_answer_option(answer),
         expected_events=expected_events,
     )
@@ -407,6 +413,25 @@ def _observed_events(rows: Sequence[Any]) -> list[Mapping[str, Any]]:
                 "obs_id": str(row.get("obs_id", "")),
             }
         )
+    return sorted(observed, key=lambda item: (float(item["start_sec"]), str(item.get("obs_id", ""))))
+
+
+def _observed_timeline_events(rows: Sequence[Any]) -> list[Mapping[str, Any]]:
+    observed = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("confidence_signal", "")).strip().lower() != "confirmed":
+            continue
+        event = str(row.get("entity") or row.get("event_label") or "").strip()
+        observed_at_sec = row.get("observed_at_sec")
+        if not event or observed_at_sec is None:
+            continue
+        try:
+            start_sec = float(observed_at_sec)
+        except (TypeError, ValueError):
+            continue
+        observed.append({"event": event, "start_sec": start_sec, "obs_id": str(row.get("obs_id", ""))})
     return sorted(observed, key=lambda item: (float(item["start_sec"]), str(item.get("obs_id", ""))))
 
 

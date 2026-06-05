@@ -41,11 +41,11 @@ def select_question_playbook(question: str) -> QuestionPlaybook:
 
     if route == "temporal_order":
         return QuestionPlaybook(
-            name="temporal_ordering",
+            name="timeline_ordering",
             route=route,
             instructions=[
-                "Use search/video_ls to find candidate moments, then zoom if windows are too coarse.",
-                "Inspect at least the relevant earlier and later windows when order matters.",
+                "Use coarse captions to locate candidate event segments before focused timestamp reads.",
+                "Inspect at least the relevant earlier and later event windows when order matters.",
                 "Use candidate options only as fact-finding hints; local workers must not choose an option.",
             ],
             sufficiency_rules=[

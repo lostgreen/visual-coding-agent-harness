@@ -56,10 +56,17 @@ class EvidenceRowV2:
     claim: str
     confidence: float
     grounding_quality: str
+    evidence_id: str = ""
+    segment_id: str = ""
+    t_start: float | None = None
+    t_end: float | None = None
+    entity: str = ""
     supported_option: str | None = None
     time_range: Sequence[float] | None = None
     event_label: str = ""
     candidate_option_relations: Sequence[Mapping[str, Any]] = field(default_factory=list)
+    confidence_signal: str = ""
+    mutex_group_id: str = ""
     legacy_worker_vote: bool = False
     limitations: str = ""
     artifact: str = ""
