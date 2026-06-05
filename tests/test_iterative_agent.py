@@ -1820,6 +1820,61 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "need_more_evidence")
             self.assertIn("door opens", result.answer)
 
+    def test_timeline_ordering_ignores_negative_caption_echoes(self):
+        registry = ToolRegistry()
+        calls = []
+
+        @tool(name="caption_segment", description="Caption coarse temporal windows.")
+        def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str = "", nframes: int = 8):
+            calls.append(("caption_segment", segment_id))
+            return {
+                "claim": "The video does not contain any visible evidence of door opens or light turns on.",
+                "confidence": 0.8,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+            }
+
+        @tool(name="vision_read", description="Read precise first timestamp.")
+        def vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = ""):
+            calls.append(("vision_read", segment_id))
+            return {
+                "claim": "No direct evidence is visible.",
+                "confidence": 0.2,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "confidence_signal": "unsupported",
+            }
+
+        registry.register(caption_segment)
+        registry.register(vision_read)
+
+        class AbstainBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                return BackendResponse(text='{"answer": "need_more_evidence", "missing_evidence": ["missing timestamps"], "citations": []}')
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=20.0, window_sec=10.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="timeline_negative_echo")
+            agent = IterativeVisualAgent(
+                backend=AbstainBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=8, hard_skill_runtime=True, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question=(
+                    "Which order is shown?\n"
+                    "A. door opens then light turns on\n"
+                    "B. light turns on then door opens"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "need_more_evidence")
+            self.assertEqual([call[0] for call in calls].count("vision_read"), 0)
+            self.assertIn("door opens", result.answer)
+            self.assertIn("timeline_ordering_missing_entity", (workspace.root / "trace.jsonl").read_text(encoding="utf-8"))
+
     def test_no_evidence_growth_forces_low_confidence(self):
         planner_responses = [
             '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "first pass"}, "assign": "map1"}]}',

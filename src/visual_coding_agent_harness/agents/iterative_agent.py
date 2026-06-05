@@ -16,6 +16,7 @@ from .answer_agent import AnswerAgent, AnswerAgentResult
 from .contracts import VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
+from .output_quality import is_unsupported_claim
 from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
 from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
 from .skills.predicates import (
@@ -2225,7 +2226,10 @@ def _best_caption_row_for_entity(entity: str, rows: Sequence[Mapping[str, Any]])
         return None
     best: tuple[float, float, Mapping[str, Any]] | None = None
     for row in rows:
-        row_tokens = set(_target_fact_key(str(row.get("claim", ""))).split())
+        claim = str(row.get("claim", ""))
+        if is_unsupported_claim(claim):
+            continue
+        row_tokens = set(_target_fact_key(claim).split())
         if not row_tokens:
             continue
         if entity_tokens.issubset(row_tokens):
