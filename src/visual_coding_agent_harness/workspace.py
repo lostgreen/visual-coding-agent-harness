@@ -236,7 +236,12 @@ class EvidenceWorkspace:
             return 0
 
         rows = self._read_observation_dicts()
+        evidence_records = self._load_evidence_records()
+        evidence_by_id = {record.evidence_id: record for record in evidence_records}
+        ledger_by_observation = _ledger_records_by_observation(evidence_records)
         changed = 0
+        mapped_count = 0
+        orphan_count = 0
         for observation in rows:
             observation_id = str(observation.get("observation_id", ""))
             if observation_id not in target_ids:
@@ -252,16 +257,45 @@ class EvidenceWorkspace:
             )
             if not scoped_relations:
                 continue
+            scoped_with_parents: list[tuple[dict[str, Any], EvidenceRecord]] = []
+            for relation in scoped_relations:
+                parent_record = _mapped_relation_parent(
+                    relation,
+                    observation_id=observation_id,
+                    evidence_by_id=evidence_by_id,
+                    ledger_by_observation=ledger_by_observation,
+                )
+                if parent_record is None:
+                    orphan_count += 1
+                    continue
+                relation_with_parent = dict(relation)
+                relation_with_parent["parent_evidence_id"] = parent_record.evidence_id
+                scoped_with_parents.append((relation_with_parent, parent_record))
+            if not scoped_with_parents:
+                continue
+            existing_relations = _candidate_option_relations(raw_output.get("candidate_option_relations"))
             merged = _merge_candidate_option_relations(
-                _candidate_option_relations(raw_output.get("candidate_option_relations")),
-                scoped_relations,
+                existing_relations,
+                [relation for relation, _parent_record in scoped_with_parents],
             )
-            if merged == _candidate_option_relations(raw_output.get("candidate_option_relations")):
+            if merged == existing_relations:
                 continue
             updated_raw_output = dict(raw_output)
             updated_raw_output["candidate_option_relations"] = merged
             observation["raw_output"] = updated_raw_output
             changed += 1
+            for relation, parent_record in scoped_with_parents:
+                if _candidate_option_relation_present(existing_relations, relation):
+                    continue
+                self.write_evidence(
+                    _mapped_evidence_record(
+                        workspace=self,
+                        observation=observation,
+                        relation=relation,
+                        parent_record=parent_record,
+                    )
+                )
+                mapped_count += 1
 
         if changed:
             self._write_jsonl("observations.jsonl", rows)
@@ -275,6 +309,19 @@ class EvidenceWorkspace:
                         if str(row.get("observation_id", "")) in target_ids
                     ),
                     "assigned_by": assigned_by,
+                    "mapped_evidence_count": mapped_count,
+                    "mapped_evidence_orphan_count": orphan_count,
+                },
+            )
+        elif orphan_count:
+            self.write_trace_event(
+                "answer_agent_relations_persisted",
+                {
+                    "observation_ids": target_ids,
+                    "relation_count": 0,
+                    "assigned_by": assigned_by,
+                    "mapped_evidence_count": 0,
+                    "mapped_evidence_orphan_count": orphan_count,
                 },
             )
         return changed
@@ -369,6 +416,9 @@ class EvidenceWorkspace:
             if str(payload.get("evidence_id", "")) == str(evidence_id):
                 return EvidenceRecord.from_mapping(payload)
         return None
+
+    def _load_evidence_records(self) -> list[EvidenceRecord]:
+        return [EvidenceRecord.from_mapping(payload) for payload in self._read_jsonl_dicts("evidence.jsonl")]
 
     def evidence_chain(self, leaf_id: str) -> list[EvidenceRecord]:
         by_id = {
@@ -481,25 +531,65 @@ class EvidenceWorkspace:
             "truncated": truncated,
         }
 
-    def write_ledger_entry(self, observation: Observation) -> None:
+    def write_ledger_entry(
+        self,
+        observation: Observation,
+        *,
+        parent_records: Sequence[EvidenceRecord] = (),
+    ) -> list[EvidenceRecord]:
         artifacts = ", ".join(observation.input_artifacts) or "-"
-        limitation = observation.limitations or "-"
-        claim = observation.claim
+        base_limitation = observation.limitations or "-"
         if _has_worker_option_vote(
             tool_name=observation.tool,
             raw_output=observation.raw_output,
             claim=observation.claim,
         ):
-            claim = _claim_without_legacy_worker_vote(observation.claim)
-            note = f"legacy local-worker option vote quarantined; fact_text: {claim}"
-            limitation = f"{limitation}; {note}" if limitation != "-" else note
-        line = (
-            f"- `{observation.observation_id}` | tool: `{observation.tool}` | "
-            f"confidence: {observation.confidence:.2f} | artifacts: {artifacts} | "
-            f"claim: {claim} | limitations: {limitation}\n"
-        )
+            sanitized_claim = _claim_without_legacy_worker_vote(observation.claim)
+            note = f"legacy local-worker option vote quarantined; fact_text: {sanitized_claim}"
+            base_limitation = f"{base_limitation}; {note}" if base_limitation != "-" else note
+
+        ledger_records: list[EvidenceRecord] = []
+        parents: list[EvidenceRecord | None] = list(parent_records) or [None]
         with (self.root / "ledger.md").open("a", encoding="utf-8") as handle:
-            handle.write(line)
+            for parent_record in parents:
+                claim = _ledger_claim(observation, parent_record=parent_record)
+                if _has_worker_option_vote(
+                    tool_name=observation.tool,
+                    raw_output=observation.raw_output,
+                    claim=observation.claim,
+                ):
+                    claim = _claim_without_legacy_worker_vote(claim)
+                grounding_quality = _ledger_grounding_quality(observation, parent_record=parent_record)
+                frame_set_id = (
+                    parent_record.frame_set_id if parent_record is not None and parent_record.frame_set_id else observation.frame_set_id
+                )
+                ledger_record = EvidenceRecord(
+                    evidence_id=self.next_evidence_id("ledger"),
+                    stage="ledger",
+                    parent_id=parent_record.evidence_id if parent_record is not None else None,
+                    tool=observation.tool,
+                    observation_id=observation.observation_id,
+                    frame_set_id=frame_set_id,
+                    content={
+                        "claim": claim,
+                        "regions": _ledger_regions(observation, parent_record=parent_record),
+                        "limitations": base_limitation,
+                        "artifacts": list(observation.input_artifacts),
+                    },
+                    grounding_quality=grounding_quality,  # type: ignore[arg-type]
+                    confidence=parent_record.confidence if parent_record is not None else observation.confidence,
+                    created_at=time.time(),
+                )
+                self.write_evidence(ledger_record)
+                ledger_records.append(ledger_record)
+                line = (
+                    f"- `{observation.observation_id}` | ev: `{ledger_record.evidence_id}` | "
+                    f"fs: `{frame_set_id or '-'}` | gq: `{grounding_quality}` | "
+                    f"tool: `{observation.tool}` | confidence: {ledger_record.confidence:.2f} | "
+                    f"artifacts: {artifacts} | claim: {claim} | limitations: {base_limitation}\n"
+                )
+                handle.write(line)
+        return ledger_records
 
     def compact_ledger_text(
         self,
@@ -925,6 +1015,28 @@ def _trajectory_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ledger_claim(observation: Observation, *, parent_record: EvidenceRecord | None) -> str:
+    if parent_record is None:
+        return observation.claim
+    claim = parent_record.content.get("claim")
+    return str(claim if claim is not None else observation.claim)
+
+
+def _ledger_regions(observation: Observation, *, parent_record: EvidenceRecord | None) -> list[Any]:
+    if parent_record is None:
+        return list(observation.regions)
+    regions = parent_record.content.get("regions")
+    if isinstance(regions, Sequence) and not isinstance(regions, (str, bytes)):
+        return list(regions)
+    return list(observation.regions)
+
+
+def _ledger_grounding_quality(observation: Observation, *, parent_record: EvidenceRecord | None) -> str:
+    if parent_record is not None:
+        return str(parent_record.grounding_quality)
+    return _grounding_quality(raw_output=observation.raw_output, limitations=observation.limitations)
+
+
 def _parse_ledger_entries(ledger_text: str) -> list[Mapping[str, Any]]:
     entries = []
     for line in ledger_text.splitlines():
@@ -1050,6 +1162,95 @@ def _observation_relation_count(observation: Mapping[str, Any]) -> int:
     return len(_candidate_option_relations(raw_output.get("candidate_option_relations")))
 
 
+def _ledger_records_by_observation(records: Sequence[EvidenceRecord]) -> dict[str, list[EvidenceRecord]]:
+    by_observation: dict[str, list[EvidenceRecord]] = {}
+    for record in records:
+        if record.stage != "ledger" or not record.observation_id:
+            continue
+        by_observation.setdefault(record.observation_id, []).append(record)
+    return by_observation
+
+
+def _mapped_relation_parent(
+    relation: Mapping[str, Any],
+    *,
+    observation_id: str,
+    evidence_by_id: Mapping[str, EvidenceRecord],
+    ledger_by_observation: Mapping[str, Sequence[EvidenceRecord]],
+) -> EvidenceRecord | None:
+    parent_id = _relation_parent_evidence_id(relation)
+    if parent_id:
+        parent_record = evidence_by_id.get(parent_id)
+        if parent_record is None or parent_record.stage not in {"ledger", "distilled"}:
+            return None
+        if parent_record.observation_id and parent_record.observation_id != observation_id:
+            return None
+        return parent_record
+    ledger_records = ledger_by_observation.get(observation_id, [])
+    return ledger_records[-1] if ledger_records else None
+
+
+def _relation_parent_evidence_id(relation: Mapping[str, Any]) -> str:
+    return str(
+        relation.get("parent_evidence_id")
+        or relation.get("ledger_evidence_id")
+        or relation.get("parent_id")
+        or ""
+    ).strip()
+
+
+def _candidate_option_relation_present(
+    existing: Sequence[Mapping[str, Any]],
+    candidate: Mapping[str, Any],
+) -> bool:
+    candidate_key = _candidate_option_relation_exact_key(candidate)
+    return any(_candidate_option_relation_exact_key(relation) == candidate_key for relation in existing)
+
+
+def _candidate_option_relation_exact_key(relation: Mapping[str, Any]) -> tuple[str, str, str, str, str]:
+    return (
+        str(relation.get("option", "")).strip().upper(),
+        str(relation.get("relation", "")).strip().lower(),
+        str(relation.get("observation_id", "")).strip(),
+        str(relation.get("assigned_by", "")).strip().lower(),
+        _relation_parent_evidence_id(relation),
+    )
+
+
+def _mapped_evidence_record(
+    *,
+    workspace: EvidenceWorkspace,
+    observation: Mapping[str, Any],
+    relation: Mapping[str, Any],
+    parent_record: EvidenceRecord,
+) -> EvidenceRecord:
+    confidence = _relation_confidence(relation, default=parent_record.confidence)
+    return EvidenceRecord(
+        evidence_id=workspace.next_evidence_id("mapped"),
+        stage="mapped",
+        parent_id=parent_record.evidence_id,
+        tool=str(observation.get("tool") or parent_record.tool),
+        observation_id=str(observation.get("observation_id") or parent_record.observation_id or ""),
+        frame_set_id=parent_record.frame_set_id,
+        content={
+            "candidate_option_relation": dict(relation),
+            "parent_stage": parent_record.stage,
+            "source_claim": str(observation.get("claim", "")),
+        },
+        grounding_quality=str(parent_record.grounding_quality),  # type: ignore[arg-type]
+        confidence=confidence,
+        created_at=time.time(),
+    )
+
+
+def _relation_confidence(relation: Mapping[str, Any], *, default: float) -> float:
+    value = relation.get("strength", relation.get("confidence", default))
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _relations_for_observation(
     relations: Sequence[Mapping[str, Any]],
     *,
@@ -1090,10 +1291,28 @@ def _merge_candidate_option_relations(
             str(normalized.get("assigned_by", "")).strip().lower(),
         )
         if key in seen:
+            for merged_relation in merged:
+                merged_key = (
+                    str(merged_relation.get("option", "")).strip().upper(),
+                    str(merged_relation.get("relation", "")).strip().lower(),
+                    str(merged_relation.get("observation_id", "")).strip(),
+                    str(merged_relation.get("assigned_by", "")).strip().lower(),
+                )
+                if merged_key == key:
+                    _merge_missing_relation_fields(merged_relation, normalized)
+                    break
             continue
         seen.add(key)
         merged.append(normalized)
     return merged
+
+
+def _merge_missing_relation_fields(target: dict[str, Any], incoming: Mapping[str, Any]) -> None:
+    for key, value in incoming.items():
+        if value in (None, "", []):
+            continue
+        if target.get(key) in (None, "", []):
+            target[key] = value
 
 
 def _has_worker_option_vote(

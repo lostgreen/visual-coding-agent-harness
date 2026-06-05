@@ -14,6 +14,7 @@ from visual_coding_agent_harness.agents.skills.specs import (
     compile_skill_program,
     select_skill,
 )
+from visual_coding_agent_harness.agents.distill import distill
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -89,6 +90,10 @@ class V4FoundationTest(unittest.TestCase):
                     "grounding_quality": "visually_confirmed",
                 },
             )
+            distilled_records = distill(observation, workspace)
+            for record in distilled_records:
+                workspace.write_evidence(record)
+            workspace.write_ledger_entry(observation, parent_records=distilled_records)
 
             changed = workspace.annotate_candidate_option_relations(
                 observation_ids=[observation.observation_id],

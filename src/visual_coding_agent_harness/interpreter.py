@@ -116,9 +116,10 @@ class ProgramInterpreter:
                 "observation_id": observation.observation_id,
             },
         )
-        for evidence_record in distill(observation, self.workspace):
+        distilled_records = distill(observation, self.workspace)
+        for evidence_record in distilled_records:
             self.workspace.write_evidence(evidence_record)
-        self.workspace.write_ledger_entry(observation)
+        self.workspace.write_ledger_entry(observation, parent_records=distilled_records)
 
         if "assign" in step:
             assignments[str(step["assign"])] = observation.observation_id
