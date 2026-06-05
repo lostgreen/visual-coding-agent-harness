@@ -156,6 +156,37 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.answer, "D. whole-video synopsis")
         self.assertEqual(result.citations, ["obs_0001"])
 
+    def test_low_conf_picks_most_supported_option(self):
+        backend = StaticBackend(
+            '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '
+            '"candidate_option_relations": ['
+            '{"option": "A", "relation": "support", "strength": 0.5, "observation_id": "obs_0001", "grounding_quality": "visually_confirmed"},'
+            '{"option": "B", "relation": "support", "strength": 0.8, "observation_id": "obs_0002", "grounding_quality": "visually_confirmed"},'
+            '{"option": "B", "relation": "support", "strength": 0.7, "observation_id": "obs_0003", "grounding_quality": "visually_confirmed"}'
+            '], "missing_evidence": ["need one more window"], "confidence": 0.0}'
+        )
+        result = AnswerAgent(backend).run(question="Which option?", evidence_text="- partial evidence")
+
+        low_conf = result.as_low_confidence_final()
+
+        self.assertTrue(result.has_partial_support())
+        self.assertEqual(low_conf.status, "low_confidence_final")
+        self.assertEqual(low_conf.answer, "B")
+        self.assertEqual(low_conf.citations, ["obs_0002", "obs_0003"])
+        self.assertAlmostEqual(low_conf.confidence, 0.525)
+
+    def test_low_conf_requires_at_least_one_visual(self):
+        backend = StaticBackend(
+            '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '
+            '"candidate_option_relations": [{"option": "A", "relation": "support", '
+            '"strength": 0.7, "observation_id": "obs_0001", "grounding_quality": "inferred"}], '
+            '"missing_evidence": ["visual confirmation"], "confidence": 0.0}'
+        )
+        result = AnswerAgent(backend).run(question="Which option?", evidence_text="- weak evidence")
+
+        self.assertFalse(result.has_partial_support())
+        self.assertEqual(result.as_low_confidence_final().status, "need_more_evidence")
+
 
 if __name__ == "__main__":
     unittest.main()

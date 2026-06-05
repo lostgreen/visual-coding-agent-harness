@@ -171,6 +171,32 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(summary["avg_followups_per_case"], 1.5)
             self.assertEqual(summary["followup_success_rate"], 0.5)
 
+    def test_summary_payload_prefers_explicit_followup_attempt_metrics(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="followup_explicit")
+            workspace.write_trace_event("followup_attempt", {"target_id": "fu_1"})
+            workspace.write_trace_event("followup_attempt", {"target_id": "fu_2"})
+            workspace.write_trace_event("iterative_answer_agent", {"status": "low_confidence_final"})
+
+            summary = eval_runner._summary_payload(
+                run_id="eval",
+                case_ids=["case_001"],
+                config_payload={},
+                results=[
+                    {
+                        "question_id": "case_001",
+                        "strategies": {"agent_v2": {"status": "low_confidence_final", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"agent_v2": str(workspace.root)}},
+                    }
+                ],
+            )
+
+            self.assertEqual(summary["avg_followups_per_case"], 2.0)
+            self.assertEqual(summary["followup_success_rate"], 1.0)
+            self.assertEqual(summary["low_confidence_final_rate"], 1.0)
+
     def test_summary_payload_aggregates_context_budget_metrics(self):
         from runs import eval_runner
 

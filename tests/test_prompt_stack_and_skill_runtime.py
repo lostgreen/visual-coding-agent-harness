@@ -252,6 +252,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
             self.assertEqual([request.task for request in backend.requests], [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("hard_skill_runtime", trace)
+            self.assertIn("followup_attempt", trace)
 
     def test_hard_skill_runtime_continues_followup_chunks_before_abstaining(self):
         backend = RecordingBackend()

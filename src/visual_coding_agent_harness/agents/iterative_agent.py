@@ -973,7 +973,21 @@ class IterativeVisualAgent:
                 program.extend(new_observation_ids["program"])
                 produced_ids = [str(observation_id) for observation_id in new_observation_ids["observation_ids"]]
                 round_observation_ids.extend(produced_ids)
-                scheduler.record_attempt(target, set(produced_ids))
+                new_frame_sets = set(produced_ids)
+                scheduler.record_attempt(target, new_frame_sets)
+                self.workspace.write_trace_event(
+                    "followup_attempt",
+                    {
+                        "round": round_number,
+                        "target_id": target.target_id,
+                        "route": target.route,
+                        "query": target.query,
+                        "event_label": target.event_label,
+                        "attempt_count": target.attempt_count,
+                        "new_evidence_count": len(produced_ids),
+                        "observation_ids": produced_ids,
+                    },
+                )
                 scheduler.completed.append(target)
 
             all_observation_ids.extend(round_observation_ids)

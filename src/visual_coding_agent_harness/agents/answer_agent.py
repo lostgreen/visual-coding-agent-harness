@@ -22,6 +22,41 @@ class AnswerAgentResult:
     conflict: Mapping[str, Any] = field(default_factory=dict)
     raw_text: str = ""
 
+    def has_partial_support(self) -> bool:
+        return any(_is_visual_support_relation(relation) for relation in self.candidate_option_relations)
+
+    def as_low_confidence_final(self) -> "AnswerAgentResult":
+        supports = [relation for relation in self.candidate_option_relations if _is_visual_support_relation(relation)]
+        if not supports:
+            return self
+        counts: dict[str, list[float]] = {}
+        for relation in supports:
+            option = str(relation.get("option", "")).strip().upper()[:1]
+            if not option:
+                continue
+            counts.setdefault(option, []).append(float(relation.get("strength", relation.get("confidence", 0.0)) or 0.0))
+        if not counts:
+            return self
+        option, strengths = sorted(counts.items(), key=lambda item: (-len(item[1]), -sum(item[1]), item[0]))[0]
+        confidence = (sum(strengths) / len(strengths)) * 0.7 if strengths else 0.0
+        citations = [
+            str(relation.get("observation_id", ""))
+            for relation in supports
+            if str(relation.get("option", "")).strip().upper().startswith(option)
+            and str(relation.get("observation_id", ""))
+        ]
+        return AnswerAgentResult(
+            status="low_confidence_final",
+            answer=option,
+            rationale=f"Follow-up budget exhausted; option {option} has partial visually confirmed support.",
+            citations=citations,
+            candidate_option_relations=list(self.candidate_option_relations),
+            missing_evidence=list(self.missing_evidence),
+            confidence=confidence,
+            conflict=dict(self.conflict),
+            raw_text=self.raw_text,
+        )
+
 
 class AnswerAgent:
     """Generate a final answer from evidence text without raw video access."""
@@ -263,6 +298,18 @@ def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
             relation["strength"] = 0.5
         relations.append(relation)
     return relations
+
+
+def _is_visual_support_relation(relation: Mapping[str, Any]) -> bool:
+    if str(relation.get("relation", "")).strip().lower() not in {"support", "supports", "supported"}:
+        return False
+    grounding = str(
+        relation.get("grounding_quality")
+        or relation.get("support_grounding_quality")
+        or relation.get("grounding")
+        or ""
+    ).strip()
+    return grounding in {"", "visually_confirmed"}
 
 
 def _has_option_support(table: Mapping[str, Any]) -> bool:

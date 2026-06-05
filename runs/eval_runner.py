@@ -587,6 +587,9 @@ def _populate_run_summary_metrics(summary: RunSummary, results: Sequence[Mapping
     summary.need_more_evidence_rate = (
         sum(1 for item in strategy_results if item.get("status") == "need_more_evidence") / total
     )
+    summary.low_confidence_final_rate = (
+        sum(1 for item in strategy_results if item.get("status") == "low_confidence_final") / total
+    )
     summary.unsupported_final_rate = (
         sum(
             1
@@ -633,6 +636,17 @@ def _evidence_provenance_completeness(workspaces: Sequence[EvidenceWorkspace]) -
 
 
 def _hard_skill_followup_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[int, bool]:
+    explicit_attempts = sum(1 for event in events if _event_type(event) == "followup_attempt")
+    if explicit_attempts:
+        return explicit_attempts, any(
+            _event_type(event) == "iterative_final"
+            or _event_type(event) == "low_confidence_final"
+            or (
+                _event_type(event) == "iterative_answer_agent"
+                and str(_event_payload(event).get("status", "")) in {"final", "low_confidence_final"}
+            )
+            for event in events
+        )
     in_hard_skill = False
     attempts = 0
     success = False
