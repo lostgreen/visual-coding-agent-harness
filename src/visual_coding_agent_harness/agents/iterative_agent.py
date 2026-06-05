@@ -696,6 +696,33 @@ class IterativeVisualAgent:
 
             tool_name = str(step["tool"])
             args = dict(step.get("args", {}))
+            repair = self._repair_skill_route_tool(
+                tool_name=tool_name,
+                args=args,
+                active_skill=active_skill,
+                question=question,
+                video_path=video_path,
+            )
+            if repair is not None:
+                original_tool_name = tool_name
+                original_args = dict(args)
+                tool_name, args, repair_reason = repair
+                self.workspace.write_trace_event(
+                    "route_tool_repaired",
+                    {
+                        "skill": active_skill.name if active_skill is not None else "",
+                        "requested_tool": original_tool_name,
+                        "resolved_tool": tool_name,
+                        "reason": repair_reason,
+                    },
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=original_tool_name,
+                    reason=repair_reason,
+                    original={"tool": original_tool_name, "args": original_args},
+                    resolved={"tool": tool_name, "args": args},
+                )
             violation = _route_violation(tool_name=tool_name, active_skill=active_skill, free_exploration=self.budget.free_exploration)
             if violation is not None:
                 blocked_route_violation = True
@@ -891,6 +918,36 @@ class IterativeVisualAgent:
                     }
                 )
         return normalized
+
+    def _repair_skill_route_tool(
+        self,
+        *,
+        tool_name: str,
+        args: Mapping[str, Any],
+        active_skill: SkillSpec | None,
+        question: str,
+        video_path: str,
+    ) -> tuple[str, dict[str, Any], str] | None:
+        if self.budget.free_exploration or active_skill is None:
+            return None
+        if active_skill.name == "main_idea" and tool_name == "vision_read" and self._has_tool("global_gist"):
+            repaired_args: dict[str, Any] = {
+                "video_path": video_path,
+                "question": question,
+                "duration_sec": self.scene_index.duration_sec,
+            }
+            if self._tool_accepts_argument("global_gist", "seed"):
+                repaired_args["seed"] = max(2, self.workspace.evidence_table_row_count() + 1)
+            return "global_gist", repaired_args, "repair_main_idea_vision_read_to_global_gist"
+        if active_skill.name == "mutex_fact_qa" and tool_name == "inspect_segment" and self._has_tool("vision_read"):
+            repaired_args = {
+                key: value
+                for key, value in dict(args).items()
+                if key not in {"candidate_options", "question"}
+            }
+            repaired_args.setdefault("ask_for", str(args.get("question") or args.get("ask_for") or question))
+            return "vision_read", repaired_args, "repair_mutex_inspect_segment_to_vision_read"
+        return None
 
     def _fallback_inspector_program(
         self,

@@ -16,6 +16,18 @@ class StaticBackend:
         return BackendResponse(text=self.text)
 
 
+class SequenceBackend:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        if not self.responses:
+            return BackendResponse(text='{"answer": "need_more_evidence", "citations": []}')
+        return BackendResponse(text=self.responses.pop(0))
+
+
 def _scene_index() -> SceneIndex:
     return SceneIndex(
         video_path="/videos/demo.mp4",
@@ -65,6 +77,130 @@ def test_gist_qa_blocks_inspect_segment(tmp_path: Path):
 
     assert counter.get("inspect_segment", 0) == 0
     assert "route_violation" in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+
+def test_main_idea_repairs_planner_vision_read_to_global_gist(tmp_path: Path):
+    counter: dict[str, int] = {}
+    backend = SequenceBackend(
+        [
+            '{"answer": "need_more_evidence", "missing_evidence": ["global evidence"], "citations": []}',
+            json.dumps(
+                {
+                    "status": "continue",
+                    "program": [
+                        {
+                            "tool": "vision_read",
+                            "args": {"segment_id": "seg_0001", "ask_for": "main idea"},
+                        }
+                    ],
+                }
+            ),
+            '{"answer": "need_more_evidence", "missing_evidence": ["more evidence"], "citations": ["obs_0002"]}',
+        ]
+    )
+    registry = ToolRegistry()
+
+    @tool(name="global_gist", description="Read sparse global evidence.")
+    def global_gist(video_path: str, question: str, duration_sec: float, seed: int = 0):
+        counter["global_gist"] = counter.get("global_gist", 0) + 1
+        return {
+            "claim": "Global evidence is ambiguous.",
+            "confidence": 0.55,
+            "regions": [{"start_sec": 0.0, "end_sec": duration_sec, "seed": seed}],
+            "grounding_quality": "global_sparse",
+        }
+
+    @tool(name="vision_read", description="Wrong tool for main idea.")
+    def vision_read(**kwargs):
+        counter["vision_read"] = counter.get("vision_read", 0) + 1
+        return {"claim": "should not run", "confidence": 0.1}
+
+    registry.register(global_gist)
+    registry.register(vision_read)
+    workspace = EvidenceWorkspace.create(tmp_path, "main_idea_repair")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    agent.run(question="What is the video mainly about?", video_path="/videos/demo.mp4")
+
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert counter.get("global_gist", 0) == 2
+    assert counter.get("vision_read", 0) == 0
+    assert "route_tool_repaired" in trace
+    assert "route_violation" not in trace
+
+
+def test_mutex_fact_repairs_planner_inspect_segment_to_vision_read(tmp_path: Path):
+    counter: dict[str, int] = {}
+    backend = SequenceBackend(
+        [
+            json.dumps(
+                {
+                    "status": "continue",
+                    "program": [
+                        {
+                            "tool": "inspect_segment",
+                            "args": {
+                                "segment_id": "seg_0001",
+                                "question": "Did Francisco Goya have humble origins?",
+                            },
+                        }
+                    ],
+                }
+            ),
+            '{"answer": "need_more_evidence", "missing_evidence": ["more evidence"], "citations": ["obs_0001"]}',
+        ]
+    )
+    registry = ToolRegistry()
+
+    @tool(name="inspect_segment", description="Wrong tool for mutex fact QA.")
+    def inspect_segment(**kwargs):
+        counter["inspect_segment"] = counter.get("inspect_segment", 0) + 1
+        return {"claim": "should not run", "confidence": 0.1}
+
+    @tool(name="vision_read", description="Read localized mutex fact.")
+    def vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, **kwargs):
+        counter["vision_read"] = counter.get("vision_read", 0) + 1
+        return {
+            "claim": f"Visual read for {ask_for}",
+            "confidence": 0.6,
+            "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+            "grounding_quality": "visually_confirmed",
+        }
+
+    registry.register(inspect_segment)
+    registry.register(vision_read)
+    workspace = EvidenceWorkspace.create(tmp_path, "mutex_repair")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    agent.run(
+        question=(
+            "What was Francisco Goya's background and social status at birth?\n"
+            "Options:\n"
+            "A. noble family\n"
+            "B. humble origins\n"
+            "C. neither\n"
+            "D. upper class"
+        ),
+        video_path="/videos/demo.mp4",
+    )
+
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert counter.get("inspect_segment", 0) == 0
+    assert counter.get("vision_read", 0) == 1
+    assert "route_tool_repaired" in trace
+    assert "route_violation" not in trace
 
 
 def test_free_explore_allows_all(tmp_path: Path):
