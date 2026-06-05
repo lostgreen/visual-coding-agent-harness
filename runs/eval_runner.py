@@ -20,8 +20,10 @@ from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 try:
     from runs.summary_schema import RunSummary, validate as validate_run_summary
+    from runs.training_trajectory import TrainingTrajectory
 except ModuleNotFoundError:
     from summary_schema import RunSummary, validate as validate_run_summary
+    from training_trajectory import TrainingTrajectory
 
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
@@ -56,6 +58,7 @@ class EvalConfig:
     strategies: Sequence[str]
     window_sec: float = WINDOW_SEC
     budget: AgentBudget = AgentBudget()
+    export_training: bool = False
 
 
 def validate_python(*, expected: str = REMOTE_PYTHON, allow_any_python: bool = False) -> None:
@@ -360,6 +363,7 @@ def run_eval_cases(
         "window_sec": config.window_sec,
         "budget": asdict(config.budget),
         "model_path": config.model_path,
+        "export_training": config.export_training,
     }
     summary = _summary_payload(
         run_id=config.run_root.name,
@@ -415,9 +419,22 @@ def run_eval_cases(
                 )
                 case["strategies"][strategy] = summarize_strategy(raw, gt)
                 if strategy != "direct_full_video":
-                    case["raw_artifacts"]["workspaces"][strategy] = str(
-                        config.workspace_root / "runs" / f"{case_prefix}_{strategy}"
-                    )
+                    workspace_path = config.workspace_root / "runs" / f"{case_prefix}_{strategy}"
+                    case["raw_artifacts"]["workspaces"][strategy] = str(workspace_path)
+                    if config.export_training:
+                        trajectory_path = _export_training_trajectory(
+                            workspace_path=workspace_path,
+                            run_root=config.run_root,
+                            case_id=str(qid),
+                            strategy=strategy,
+                            question=question,
+                            options=case["options"],
+                            gt=gt,
+                            strategy_summary=case["strategies"][strategy],
+                        )
+                        if trajectory_path is not None:
+                            case["raw_artifacts"].setdefault("training_trajectories", {})[strategy] = str(trajectory_path)
+                            case["strategies"][strategy]["training_trajectory_path"] = str(trajectory_path)
             except Exception as exc:
                 case["strategies"][strategy] = {
                     "choice": "",
@@ -464,6 +481,7 @@ def _summary_payload(
     run_summary = RunSummary.with_defaults(run_id, list(case_ids))
     run_summary.per_case = results
     _populate_run_summary_metrics(run_summary, results)
+    run_summary.training_trajectory_exported = _training_trajectory_exported(results)
     workspaces = _workspaces_from_results(results)
     if workspaces:
         compliance, histogram = compute_nframes_metrics(workspaces)
@@ -475,6 +493,43 @@ def _summary_payload(
     payload["config"] = dict(config_payload)
     payload["cases"] = results
     return payload
+
+
+def _export_training_trajectory(
+    *,
+    workspace_path: Path,
+    run_root: Path,
+    case_id: str,
+    strategy: str,
+    question: str,
+    options: Sequence[str],
+    gt: str,
+    strategy_summary: Mapping[str, Any],
+) -> Path | None:
+    if not workspace_path.exists():
+        return None
+    selected = str(strategy_summary.get("choice") or "") or None
+    trajectory_path = run_root / "trajectories" / f"{case_id}_{strategy}.json"
+    TrainingTrajectory.from_workspace(
+        EvidenceWorkspace(root=workspace_path),
+        case_id=case_id,
+        question=question,
+        options=options,
+        ground_truth=gt,
+        final_decision=str(strategy_summary.get("status", "")),
+        selected_option=selected,
+        is_correct=bool(strategy_summary.get("correct")) if selected else None,
+        output_path=trajectory_path,
+    )
+    return trajectory_path
+
+
+def _training_trajectory_exported(results: Sequence[Mapping[str, Any]]) -> bool:
+    for case in results:
+        raw_artifacts = case.get("raw_artifacts", {})
+        if isinstance(raw_artifacts, Mapping) and raw_artifacts.get("training_trajectories"):
+            return True
+    return False
 
 
 def _write_run_evidence_chains(run_root: Path, results: Sequence[Mapping[str, Any]]) -> Path:
@@ -785,6 +840,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--free-max-rounds", type=int, default=24)
     parser.add_argument("--free-max-tool-calls-per-round", type=int, default=4)
+    parser.add_argument("--export-training", action="store_true", help="Export compact TrainingTrajectory JSON per case.")
     parser.add_argument("--allow-any-python", action="store_true", help="Skip the remote Python executable assertion.")
     return parser
 
@@ -826,6 +882,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         strategies=parse_strategies(args.strategy),
         window_sec=args.window_sec,
         budget=budget,
+        export_training=args.export_training,
     )
 
 

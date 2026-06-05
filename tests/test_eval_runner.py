@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -494,6 +495,119 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(raw["planner_prompt_count"], 0)
             self.assertIn("non_navigation_visual_citation", raw["reward_tags"])
             self.assertIn("final", raw["reward_tags"])
+
+    def test_run_eval_cases_exports_training_trajectory_when_enabled(self):
+        from runs import eval_runner
+
+        def fake_run_loop(backend, **kwargs):
+            workspace = _make_training_workspace(kwargs["workspace_root"], kwargs["run_id"])
+            return {
+                "answer": "B. red car",
+                "choice": "B",
+                "status": "final",
+                "confidence": 0.9,
+                "citations": ["obs_0001"],
+                "rounds": 1,
+                "tools": ["vision_read"],
+                "segments": ["seg_0001"],
+                "seconds": 1.0,
+                "evidence_chain_count": len(workspace.evidence_chain_summaries()),
+            }
+
+        rows_by_id = {
+            "605-1": {
+                "question_id": "605-1",
+                "video_id": "vid605",
+                "videoID": "video605",
+                "task_type": "Information Synopsis",
+                "question": "What is shown?",
+                "options": ["A. one", "B. two", "C. three", "D. four"],
+                "answer": "B",
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "eval"
+            config = eval_runner.EvalConfig(
+                run_root=run_root,
+                workspace_root=run_root / "workspaces",
+                model_path="/model",
+                data_root=Path("/dataset"),
+                parquet_path=Path("/dataset/videomme/test.parquet"),
+                video_dir=Path("/dataset/video"),
+                subtitle_dir=Path("/dataset/subtitle"),
+                cases=("605-1",),
+                strategies=("agent_v2",),
+                window_sec=300.0,
+                budget=AgentBudget(),
+                export_training=True,
+            )
+
+            with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                summary = eval_runner.run_eval_cases(
+                    backend=object(),
+                    rows_by_id=rows_by_id,
+                    config=config,
+                    duration_fn=lambda path: 30.0,
+                )
+
+            case = summary["cases"][0]
+            trajectory_path = Path(case["raw_artifacts"]["training_trajectories"]["agent_v2"])
+            self.assertTrue(trajectory_path.exists())
+            self.assertTrue(summary["training_trajectory_exported"])
+            payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], "TrainingTrajectoryV1")
+            self.assertEqual(payload["ground_truth"], "B")
+
+
+def _make_training_workspace(base_dir: Path, run_id: str) -> EvidenceWorkspace:
+    workspace = EvidenceWorkspace.create(base_dir, run_id=run_id)
+    workspace.write_trace_event("tool_use", {"step": 1, "tool": "vision_read", "arguments": {"segment_id": "seg_0001"}})
+    observation = workspace.write_observation(
+        tool_name="vision_read",
+        claim="The localized window shows a red car.",
+        confidence=0.9,
+        regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
+    )
+    distilled = EvidenceRecord(
+        evidence_id=workspace.next_evidence_id("distilled"),
+        stage="distilled",
+        parent_id=None,
+        tool="vision_read",
+        observation_id=observation.observation_id,
+        frame_set_id=None,
+        content={"claim": observation.claim},
+        grounding_quality="visually_confirmed",
+        confidence=0.9,
+        created_at=1.0,
+    )
+    ledger = EvidenceRecord(
+        evidence_id=workspace.next_evidence_id("ledger", sequence_offset=1),
+        stage="ledger",
+        parent_id=distilled.evidence_id,
+        tool="vision_read",
+        observation_id=observation.observation_id,
+        frame_set_id=None,
+        content={"claim": observation.claim},
+        grounding_quality="visually_confirmed",
+        confidence=0.9,
+        created_at=1.0,
+    )
+    mapped = EvidenceRecord(
+        evidence_id=workspace.next_evidence_id("mapped", sequence_offset=2),
+        stage="mapped",
+        parent_id=ledger.evidence_id,
+        tool="vision_read",
+        observation_id=observation.observation_id,
+        frame_set_id=None,
+        content={"candidate_option_relation": {"option": "B", "relation": "support", "strength": 0.9}},
+        grounding_quality="visually_confirmed",
+        confidence=0.9,
+        created_at=1.0,
+    )
+    for record in [distilled, ledger, mapped]:
+        workspace.write_evidence(record)
+    return workspace
 
 
 if __name__ == "__main__":
