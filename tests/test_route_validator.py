@@ -203,6 +203,52 @@ def test_mutex_fact_repairs_planner_inspect_segment_to_vision_read(tmp_path: Pat
     assert "route_violation" not in trace
 
 
+def test_timeline_ordering_allows_verify_ledger_answer(tmp_path: Path):
+    counter: dict[str, int] = {}
+    backend = StaticBackend(
+        json.dumps(
+            {
+                "status": "continue",
+                "program": [
+                    {
+                        "tool": "verify_ledger_answer",
+                        "args": {
+                            "answer": "A",
+                            "ledger_text": "partial timeline",
+                            "required_citations": [],
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    registry = ToolRegistry()
+
+    @tool(name="verify_ledger_answer", description="Verifier tool.")
+    def verify_ledger_answer(answer: str, ledger_text: str = "", required_citations=None, **kwargs):
+        counter["verify_ledger_answer"] = counter.get("verify_ledger_answer", 0) + 1
+        return {"claim": f"verified {answer}", "confidence": 0.5}
+
+    registry.register(verify_ledger_answer)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_verify_allowed")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    agent.run(
+        question="Which order happens first, the door opening before the light turning on?",
+        video_path="/videos/demo.mp4",
+    )
+
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert counter.get("verify_ledger_answer", 0) == 1
+    assert "route_violation" not in trace
+
+
 def test_free_explore_allows_all(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(

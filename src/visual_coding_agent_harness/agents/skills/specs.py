@@ -119,7 +119,7 @@ def builtin_skill_registry() -> SkillRegistry:
                     "Q: what is the video mainly about -> two sparse global views -> coverage margin -> answer",
                 ),
                 self_check=("g1.option == g2.option", "decision.citations include global evidence"),
-                allowed_actions=frozenset({"global_gist", "query_context"}),
+                allowed_actions=frozenset({"global_gist", "query_context", "verify_ledger_answer"}),
             ),
             SkillSpec(
                 name="mutex_fact_qa",
@@ -161,6 +161,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 self_check=("one vision_read per mutex window",),
                 allowed_actions=frozenset(
                     {"ground_question", "query_context", "vision_read", "zoom", "video_ls", "search_segments"}
+                    | {"verify_ledger_answer"}
                 ),
             ),
             SkillSpec(
@@ -200,6 +201,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 self_check=("decision.citations all visually_confirmed",),
                 allowed_actions=frozenset(
                     {"ground_question", "query_context", "vision_read", "zoom", "video_ls", "search_segments"}
+                    | {"verify_ledger_answer"}
                 ),
             ),
             SkillSpec(
@@ -252,6 +254,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 self_check=("decision.option != null", "decision.citations all confirmed"),
                 allowed_actions=frozenset(
                     {"caption_segment", "query_context", "vision_read", "read_timeline_sorted", "video_ls", "search_segments"}
+                    | {"verify_ledger_answer"}
                 ),
             ),
         ]
