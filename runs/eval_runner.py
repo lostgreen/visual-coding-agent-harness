@@ -59,6 +59,7 @@ class EvalConfig:
     window_sec: float = WINDOW_SEC
     budget: AgentBudget = AgentBudget()
     export_training: bool = False
+    ablation_flags: Mapping[str, Any] | None = None
 
 
 def validate_python(*, expected: str = REMOTE_PYTHON, allow_any_python: bool = False) -> None:
@@ -364,7 +365,12 @@ def run_eval_cases(
         "budget": asdict(config.budget),
         "model_path": config.model_path,
         "export_training": config.export_training,
+        "ablation_flags": dict(config.ablation_flags or {}),
     }
+    (config.run_root / "run_config.json").write_text(
+        json.dumps(config_payload, ensure_ascii=True, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     summary = _summary_payload(
         run_id=config.run_root.name,
         case_ids=config.cases,
@@ -830,6 +836,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-rounds", type=int, default=8)
     parser.add_argument("--max-tool-calls-per-round", type=int, default=2)
     parser.add_argument("--default-nframes", type=int, default=SEGMENT_NFRAMES)
+    parser.add_argument("--contract-nframes", type=int, default=None)
     parser.add_argument("--high-fps-nframes", type=int, default=32)
     parser.add_argument("--context-budget-tokens", type=int, default=12000)
     parser.add_argument(
@@ -847,6 +854,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use deterministic skill runtime for supported routes before falling back to planner loop.",
     )
+    parser.add_argument("--enable-query-context", dest="enable_query_context", action="store_true", default=None)
+    parser.add_argument("--disable-query-context", dest="enable_query_context", action="store_false")
+    parser.add_argument("--enable-followup", dest="enable_followup", action="store_true", default=None)
+    parser.add_argument("--disable-followup", dest="enable_followup", action="store_false")
+    parser.add_argument("--enable-context-budget", dest="enable_context_budget", action="store_true", default=None)
+    parser.add_argument("--disable-context-budget", dest="enable_context_budget", action="store_false")
+    parser.add_argument("--enable-map-reflux", dest="enable_map_reflux", action="store_true", default=None)
+    parser.add_argument("--disable-map-reflux", dest="enable_map_reflux", action="store_false")
+    parser.add_argument("--enable-evidence-staging", dest="enable_evidence_staging", action="store_true", default=None)
+    parser.add_argument("--disable-evidence-staging", dest="enable_evidence_staging", action="store_false")
+    parser.add_argument("--followup-budget", type=int, default=None)
     parser.add_argument(
         "--free-explore",
         action="store_true",
@@ -862,6 +880,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def config_from_args(args: argparse.Namespace) -> EvalConfig:
     workspace_root = args.workspace_root or (args.run_root / "workspaces")
     context_budget_ratios = parse_budget_ratios(args.budget_ratios) if args.budget_ratios else None
+    default_nframes = args.contract_nframes if args.contract_nframes is not None else args.default_nframes
+    context_budget_tokens = args.context_budget_tokens
+    if args.enable_context_budget is False:
+        context_budget_tokens = 10**9
     budget = (
         AgentBudget.free_explore(
             max_rounds=args.free_max_rounds,
@@ -871,9 +893,9 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         else AgentBudget(
             max_rounds=args.max_rounds,
             max_tool_calls_per_round=args.max_tool_calls_per_round,
-            default_nframes=args.default_nframes,
+            default_nframes=default_nframes,
             high_fps_nframes=args.high_fps_nframes,
-            context_budget_tokens=args.context_budget_tokens,
+            context_budget_tokens=context_budget_tokens,
             context_budget_ratios=context_budget_ratios,
             planner_receives_media=args.planner_receives_media,
             reserve_final_round=not args.no_reserve_final_round,
@@ -882,8 +904,21 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             verifier_tool_budget=args.verifier_tool_budget,
         )
     )
-    if args.hard_skill_runtime:
+    if args.followup_budget is not None:
+        budget = replace(budget, cheap_tool_budget=max(0, int(args.followup_budget)))
+    if args.enable_followup is False:
+        budget = replace(budget, hard_skill_runtime=False)
+    elif args.hard_skill_runtime or args.enable_followup is True:
         budget = replace(budget, hard_skill_runtime=True)
+    ablation_flags = {
+        "enable_query_context": args.enable_query_context,
+        "enable_followup": args.enable_followup,
+        "enable_context_budget": args.enable_context_budget,
+        "enable_map_reflux": args.enable_map_reflux,
+        "enable_evidence_staging": args.enable_evidence_staging,
+        "contract_nframes": args.contract_nframes,
+        "followup_budget": args.followup_budget,
+    }
     return EvalConfig(
         run_root=args.run_root,
         workspace_root=workspace_root,
@@ -897,6 +932,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         window_sec=args.window_sec,
         budget=budget,
         export_training=args.export_training,
+        ablation_flags=ablation_flags,
     )
 
 

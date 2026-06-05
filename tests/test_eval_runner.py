@@ -89,9 +89,13 @@ class EvalRunnerTest(unittest.TestCase):
                 )
 
             summary_path = run_root / "summary.json"
+            run_config_path = run_root / "run_config.json"
             evidence_chains_path = run_root / "evidence_chains.jsonl"
             self.assertTrue(summary_path.exists())
+            self.assertTrue(run_config_path.exists())
             self.assertTrue(evidence_chains_path.exists())
+            run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+            self.assertEqual(run_config["budget"]["default_nframes"], 12)
             self.assertEqual(summary["evidence_chains_path"], str(evidence_chains_path))
             self.assertEqual(summary["run_id"], "eval")
             self.assertEqual(summary["case_ids"], ["605-1"])
@@ -437,6 +441,43 @@ class EvalRunnerTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "sum to 1.0"):
             eval_runner.config_from_args(args)
+
+    def test_ablation_cli_flags_serialized_to_config(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--strategy",
+                "agent_v2",
+                "--cases",
+                "611-2",
+                "--run-root",
+                "/tmp/vcah-ablation",
+                "--enable-query-context",
+                "--disable-followup",
+                "--disable-context-budget",
+                "--enable-map-reflux",
+                "--disable-evidence-staging",
+                "--contract-nframes",
+                "128",
+                "--followup-budget",
+                "3",
+            ]
+        )
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertTrue(config.ablation_flags["enable_query_context"])
+        self.assertFalse(config.ablation_flags["enable_followup"])
+        self.assertFalse(config.ablation_flags["enable_context_budget"])
+        self.assertTrue(config.ablation_flags["enable_map_reflux"])
+        self.assertFalse(config.ablation_flags["enable_evidence_staging"])
+        self.assertEqual(config.ablation_flags["contract_nframes"], 128)
+        self.assertEqual(config.ablation_flags["followup_budget"], 3)
+        self.assertEqual(config.budget.default_nframes, 128)
+        self.assertEqual(config.budget.cheap_tool_budget, 3)
+        self.assertFalse(config.budget.hard_skill_runtime)
 
     def test_run_loop_exports_longvideoagent_trajectory(self):
         from runs import eval_runner
