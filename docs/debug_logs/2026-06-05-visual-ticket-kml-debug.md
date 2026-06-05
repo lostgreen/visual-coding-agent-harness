@@ -2,12 +2,14 @@
 
 ## Current Goal
 
-Implement the first foundation slice from `visual-coding-agent-harness-ticket-plan.md`, sync it through GitHub to the KML CodeBase, run a VideoMME subset debug pass on KML, and fix the hard-skill `need_more_evidence` early-exit so it can continue through the main agent loop.
+Continue the remaining partial/not-start DAG from `visual-coding-agent-harness-ticket-plan.md` using multi-agent review, sync through GitHub to the KML CodeBase, and keep current local/KML verification plus compact VideoMME smoke evidence in this handoff.
 
 ## Current Evidence
 
 - Local branch: `codex/visual-harness-ticket-plan`.
 - GitHub branch: `origin/codex/visual-harness-ticket-plan`.
+- Latest code commit verified locally and on KML: `6c819c2 fix training trajectory export path`.
+- Later docs-only handoff commits may advance branch HEAD without changing the verification evidence below.
 - KML target: `https://kml-dtmachine-23666-prod-0.kmlhb2az1l3-2.corp.kuaishou.com/`.
 - KML repo: `/home/xuboshen/zgw/visual-coding-agent-harness`.
 - KML run environment: `/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python`.
@@ -26,10 +28,17 @@ Implement the first foundation slice from `visual-coding-agent-harness-ticket-pl
 - Evidence chain linkage slice: `db1e0ec [TASK-015-016] chain ledger and mapped evidence`.
 - Mapped grounding floor slice: `99be1ed [TASK-017] enforce mapped grounding floor`.
 - Evidence chain export slice: `266380a [TASK-018] export evidence chains`.
-- Current local branch is ahead of GitHub/KML by these newer DAG commits until the next sync.
+- Context budget prompt-slot slice: `3fa4865 [TASK-026-028] wire context budget prompt slots`.
+- Training trajectory slice: `e854468 [TASK-033-035] export training trajectories`.
+- Follow-up/summary metric slice: `d392a2f [TASK-021-024] trace followup attempts and low confidence metrics`.
+- Query-context/map proposal slice: `7332484 [TASK-029-032] add query context map proposals`.
+- Low-confidence budget path slice: `00426f0 [TASK-023] finalize low confidence budget path`.
+- Ablation/reporting slice: `bec2039 [TASK-036-038] add ablation matrix reporting`.
+- Training trajectory export path fix: `6c819c2 fix training trajectory export path`.
 - KML branch was synced with:
   - `git fetch origin codex/visual-harness-ticket-plan`
   - `git checkout -B codex/visual-harness-ticket-plan FETCH_HEAD`
+- Latest KML code verification was run at `6c819c2`; KML branch is also synced after docs-only handoff updates.
 - Important preservation note: the prior remote branch `codex/v4-skill-framework` had local ahead commits with different hashes; it was not overwritten.
 
 ## Implemented Foundation Slice
@@ -46,19 +55,32 @@ Implement the first foundation slice from `visual-coding-agent-harness-ticket-pl
 - Interpreter-side distill hook from observations to evidence records.
 - Initial `tool_nframes_compliance` metric.
 - Trace-derived `route_violations`, `avg_followups_per_case`, and `followup_success_rate` summary metrics.
+- Slot-based replanning prompt with context budget reports and per-slot compaction strategies.
+- `TrainingTrajectoryV1` exporter plus trajectory audit CLI.
+- `query_context` context-only tool, frame manifest linkage, map proposal producers, and explicit `commit_map_proposals` channel.
+- `low_confidence_final` integration for reserved-final, prefinal-budget-exhausted, generic budget-exhausted, and hard-skill-budget-exhausted paths; still requires answer-facing non-navigation visual evidence.
+- Ablation CLI flags, JSON matrix runner, and JSON/Markdown ablation report generator.
 
 ## Verification
 
-- Local full test command: `PYTHONPATH=src python -m pytest -q`.
-- Local result after DAG continuation through `TASK-018`: `190 passed`.
-- Focused local regression check:
-  - `PYTHONPATH=src python -m pytest tests/test_prompt_stack_and_skill_runtime.py -k 'hard_skill_runtime_continues_followup_chunks or hard_skill_need_more_hands_off or hard_grounded_skill_runtime' -q`
-  - Result: `3 passed`.
-- KML full test command: `PYTHONPATH=src /home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python -m pytest -q`.
-- KML result after follow-up loop sync: `170 passed`.
+- Local full test command: `PYTHONPATH=src:. python -m pytest -q`.
+- Local current result at `6c819c2`: `220 passed in 0.66s`.
+- Focused local regression checks after reviewer findings:
+  - `PYTHONPATH=src:. python -m pytest -q tests/test_query_context.py tests/scripts/test_run_ablation.py tests/test_iterative_agent.py tests/test_answer_agent.py`
+  - Result: `54 passed`.
+  - `PYTHONPATH=src:. python -m pytest -q tests/test_eval_runner.py tests/scripts/test_generate_ablation_report.py tests/runs/test_training_trajectory.py tests/runs/test_audit_trajectory.py`
+  - Result after trajectory-path fix: `20 passed`.
+- KML full test command: `PYTHONPATH=src:. /home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python -m pytest -q`.
+- KML result at `6c819c2`: `220 passed in 3.74s`.
+- KML focused trajectory path regression:
+  - `PYTHONPATH=src:. /home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python -m pytest -q tests/test_eval_runner.py -k training_trajectory_export_path`
+  - Result: `1 passed, 14 deselected`.
 - KML direct-script entrypoint check:
   - `PYTHONPATH=src /home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python runs/eval_runner.py --help`
   - Result: entrypoint imported successfully.
+- KML CLI smoke after ablation tooling:
+  - `runs/eval_runner.py --help`, `scripts/run_ablation.py --help`, and `scripts/generate_ablation_report.py --help`
+  - Result: `cli_smoke_ok`.
 
 ## VideoMME Debug Runs
 
@@ -121,6 +143,7 @@ Compact case results:
 - Final status: completed successfully, returncode 0.
 - Summary path: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_ticket_followupfix_hardskill_3case_20260605/summary.json`.
 - `summary_violations.json`: not present.
+- Evidence status: stale for commits after `f5bc354`; useful only as the pre-DAG-continuation behavior baseline.
 
 Compact metrics:
 
@@ -161,15 +184,72 @@ Current diagnosis:
 - Stale before `de596ec`: `nframes_histogram` was empty because tool-to-manifest integration had not been implemented yet. A post-sync KML smoke run is needed to validate the new manifest producers.
 - Stale before `f6a122e`: `avg_followups_per_case` did not yet reflect the hard-skill follow-up path. Local code now aggregates follow-up attempts and success rate from trace events; KML needs a post-sync rerun.
 
+### DAG continuation smoke at `bec2039`
+
+- Run root: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_ticket_dag_bec2039_hardskill_3case_20260605`.
+- Cases: `605-1`, `611-2`, `612-1`.
+- Strategy: `agent_v2`.
+- Mode: `--hard-skill-runtime --export-training --allow-any-python`.
+- PID/log paths:
+  - `/tmp/videomme_ticket_dag_bec2039_hardskill_3case_20260605.pid`
+  - `/tmp/videomme_ticket_dag_bec2039_hardskill_3case_20260605.log`
+- Final status: completed successfully, returncode 0.
+- Summary path: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_ticket_dag_bec2039_hardskill_3case_20260605/summary.json`.
+- Evidence status: current for code through `bec2039`; after this smoke, `6c819c2` fixed a trajectory export path bug only, and KML pytest plus focused trajectory-path regression passed at `6c819c2`.
+- Important bug found from this smoke: `training_trajectory_exported=True` but summary trajectory paths did not exist when `run_root` was relative. Fixed by `6c819c2`.
+
+Compact metrics:
+
+| Metric | Value |
+| --- | --- |
+| `accuracy` | `0.0` |
+| `final_rate` | `0.6666666666666666` |
+| `need_more_evidence_rate` | `0.0` |
+| `unsupported_final_rate` | `0.0` |
+| `low_confidence_final_rate` | `0.0` |
+| `tool_nframes_compliance` | `1.0` |
+| `evidence_provenance_completeness` | `0.3333333333333333` |
+| `legacy_worker_vote_rows` | `0` |
+| `route_violations` | `0` |
+| `avg_followups_per_case` | `2.6666666666666665` |
+| `followup_success_rate` | `0.5` |
+| `context_budget_overflow_count` | `6` |
+| `avg_tokens_per_turn` | `5062` |
+| `query_context_usage_rate` | `0.0` |
+| `map_reflux_commit_count` | `0` |
+
+Nframes histogram:
+
+| Tool | Histogram |
+| --- | --- |
+| `global_gist` | `{128: 1}` |
+| `vision_read` | `{64: 2, 128: 8}` |
+
+Compact case results:
+
+| Case | GT | Status | Choice | Correct | Rounds | Citations | Tools |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `605-1` | `D` | `final` | `B` | false | 1 | 1 | `global_gist` |
+| `611-2` | `D` | `max_rounds_reached` | `` | false | 8 | 4 | `ground_question`, `vision_read`, `zoom` |
+| `612-1` | `B` | `final` | `D` | false | 2 | 2 | `ground_question`, `vision_read` |
+
+Current diagnosis:
+
+- `need_more_evidence` is no longer an early terminal for these anchors: rate is `0.0`; 611-2 now uses the loop until `max_rounds_reached`.
+- The current code improves observability/compliance (`tool_nframes_compliance=1.0`, non-empty `nframes_histogram`, trace follow-up metrics) but not accuracy on the 3-case smoke.
+- `context_budget_overflow_count=6` shows EPIC 5 is wired but budgets/compaction still need tuning.
+- `query_context_usage_rate=0.0` and `map_reflux_commit_count=0` mean the new EPIC 6/7 code is implemented and tested, but this smoke did not exercise it.
+- `evidence_provenance_completeness=0.3333` remains a gap for reportability and trajectory quality.
+
 ## 2026-06-05 Ticket Plan Delta Audit
 
 Source plan reviewed: `/Users/lostgreen/Downloads/visual-coding-agent-harness-ticket-plan.md`.
 
 Status counts against the original 38 TASKs:
 
-- Done: 19
-- Partial: 9
-- Not started: 10
+- Done: 28
+- Partial: 10
+- Not started: 0
 
 Task-level progress:
 
@@ -186,7 +266,7 @@ Task-level progress:
 | `TASK-009` | `inspect_segment` manifest integration | Done | `inspect_segment` observations now attach manifests and respect `resolve_nframes`. |
 | `TASK-010` | segment caption/QA contract integration | Done | `caption_segment` and `qa_segment` now use the 128-frame contract and manifest producer path. |
 | `TASK-011` | Observation `frame_set_id` | Done | Visual observations are reloaded after manifest linking so downstream distill/ledger evidence sees `frame_set_id`. |
-| `TASK-012` | `tool_nframes_compliance` metric | Partial | Metric and manifest histogram are wired; acceptance still needs a post-sync KML smoke run with non-empty manifest coverage and compliance >= 0.95. |
+| `TASK-012` | `tool_nframes_compliance` metric | Done | Metric and manifest histogram are wired; current KML smoke reports `tool_nframes_compliance=1.0` with non-empty `global_gist`/`vision_read` histogram. |
 | `TASK-013` | `EvidenceRecord` storage | Done | Dataclass, IDs, append/read, and chain lookup are implemented with tests. |
 | `TASK-014` | interpreter distillation hook | Partial | Interpreter writes distilled evidence records for tool observations; per-tool distillation semantics and all observation-producing paths still need completion. |
 | `TASK-015` | ledger entries with `parent_id` | Done | `ledger` stage records are written alongside `ledger.md` rows and parent to distilled evidence; split facts produce one ledger record per distilled fact. |
@@ -195,35 +275,35 @@ Task-level progress:
 | `TASK-018` | `evidence_chains.jsonl` export | Done | Workspace exports compact evidence chain artifacts, eval run writes root `evidence_chains.jsonl`, and summary computes `evidence_provenance_completeness`. |
 | `TASK-019` | `FollowupTarget` / `FollowupBudget` | Done | Data structures and normalization are implemented with tests. |
 | `TASK-020` | `FollowupScheduler` | Done | Queue, retry, global budget, and saturation behavior are implemented with tests. |
-| `TASK-021` | main loop followup integration | Partial | Hard-skill runtime now schedules target-fact follow-up chunks and hands unresolved cases back to the iterative planner; generic follow-up integration for all `need_more_evidence` sources and metrics remains incomplete. |
+| `TASK-021` | main loop followup integration | Partial | Hard-skill runtime schedules target-fact follow-up chunks and hands unresolved cases back to the iterative planner; AnswerAgent prefinal gaps feed planner feedback. Generic scheduler-backed follow-up for every `need_more_evidence` source remains incomplete. |
 | `TASK-022` | per-route followup strategies | Partial | Minimal hard-skill route mapping exists (`temporal_ordering` -> `temporal_order`, default -> `needle_local`) and executes `ground_question -> vision_read`; full temporal/needle/gist strategies across all tools/routes remain incomplete. |
-| `TASK-023` | `low_confidence_final` path | Not started | No low-confidence final status path or evidence-chain integration. |
+| `TASK-023` | `low_confidence_final` path | Done | AnswerAgent partial-support helpers are integrated into reserved-final, prefinal-budget-exhausted, generic budget-exhausted, and hard-skill-budget-exhausted paths; gate still requires answer-facing non-navigation visual citation. Unit tests cover positive and blocked paths. Current 3-case smoke did not trigger low-confidence. |
 | `TASK-024` | followup metrics | Done | Summary now aggregates hard-skill `ground_question` follow-up attempts and success rate from trace events. |
 | `TASK-025` | `ContextSlot` / allocator | Done | Context budget primitives and tests exist. |
-| `TASK-026` | slot-based `prompt_stack` refactor | Partial | Existing prompt stack remains active, but it is not driven by the new allocator and trace lacks `context_budget_report`. |
-| `TASK-027` | per-slot compact strategies | Not started | No production compact strategies are wired to prompt slots. |
-| `TASK-028` | CLI flags for context budgets | Not started | Eval CLI has existing tool-budget flags, but no context-slot budget controls. |
-| `TASK-029` | `tools/query_context.py` | Not started | No query-context tool implementation. |
+| `TASK-026` | slot-based `prompt_stack` refactor | Done | Replanning prompt is slot-based (`task`, `navigation`, `evidence`, `feedback`) and writes `context_budget_report` each round. |
+| `TASK-027` | per-slot compact strategies | Partial | Production allocator registers task/nav/evidence/feedback strategies and tests cover behavior. Current KML smoke still has `context_budget_overflow_count=6`, so acceptance `overflow_count == 0` is not met. |
+| `TASK-028` | CLI flags for context budgets | Done | Eval CLI parses `--context-budget-tokens` and `--budget-ratios`; tests cover valid and invalid ratio config. |
+| `TASK-029` | `tools/query_context.py` | Partial | `query_context` tool, registry integration, manifest path, context-only ledger handling, and answer-support exclusion are implemented with tests. Remaining gap: no round-0-only policy enforcement and current KML smoke did not exercise the tool. |
 | `TASK-030` | `MapUpdateProposal` storage | Done | Dataclass plus append/read pending proposals are implemented with tests. |
-| `TASK-031` | vision tools produce proposals | Not started | No tool emits `map_proposals.jsonl`. |
-| `TASK-032` | proposal commit channel | Not started | No commit/apply path for map proposals. |
-| `TASK-033` | `TrainingTrajectory` schema | Not started | Plan-specific schema is not implemented. |
-| `TASK-034` | trajectory exporter | Partial | Existing LongVideoAgent-style trajectory export is present, but it does not use the planned `TrainingTrajectory` schema or depend on evidence-chain export. |
-| `TASK-035` | audit CLI | Not started | No trajectory audit CLI. |
-| `TASK-036` | eval CLI extensions | Partial | Eval runner has existing strategy, budget, hard-skill, and free-explore flags; plan-specific flags for later phases/ablation are not complete. |
-| `TASK-037` | ablation matrix runner | Not started | No matrix runner. |
-| `TASK-038` | report generator | Not started | Existing report utilities remain, but no plan-specific final report generator for the ablation matrix. |
+| `TASK-031` | vision tools produce proposals | Partial | Interpreter creates `context_update` proposals from `query_context`, `vision_read`, `inspect_segment`, `caption_segment`, and `qa_segment` observations when segment/frame-set evidence exists. Remaining gap: entity/OCR/ASR diff-specific proposal types from raw tool output are not complete, and current KML smoke did not write proposals. |
+| `TASK-032` | proposal commit channel | Done | `commit_map_proposals` explicit tool applies whitelisted payload fields through `VideoMapStore.update_segment()` and marks proposals committed; tests cover apply/commit behavior. |
+| `TASK-033` | `TrainingTrajectory` schema | Done | `TrainingTrajectoryV1` exists with evidence chains, frame sets, tool calls, context reports, and follow-up history. |
+| `TASK-034` | trajectory exporter | Done | Eval runner exports per-case training trajectories behind `--export-training`; `6c819c2` fixes relative `run_root` path export and tests cover path existence. |
+| `TASK-035` | audit CLI | Done | `scripts/audit_trajectory.py` audits `TrainingTrajectoryV1`; unit tests cover valid and invalid artifacts. |
+| `TASK-036` | eval CLI extensions | Partial | Plan flags are parsed and serialized to `run_config.json`; `--contract-nframes`, context-budget disable, follow-up enable/disable, and follow-up budget affect current config. Remaining gap: some feature flags are recorded but not yet behaviorally wired (`enable_query_context`, `enable_map_reflux`, `enable_evidence_staging`). |
+| `TASK-037` | ablation matrix runner | Done | `scripts/run_ablation.py` builds dry-run/serial matrix entries, writes `index.json`, handles paired boolean disable flags, and has tests. Uses JSON instead of YAML to avoid a new dependency. |
+| `TASK-038` | report generator | Partial | `scripts/generate_ablation_report.py` writes `ablation_report.json` and `REPORT.md` with metrics/completeness and trajectory audit summaries. Remaining gap: no per-case comparison table or graph/key-finding generation yet. |
 
 Epic-level gap summary:
 
 - EPIC 1 is partially complete: schema, quarantine behavior, and trace metric aggregation are usable; route validation and CI gate need stronger integration.
-- EPIC 2 producer code is now implemented locally; KML smoke validation is the remaining blocker for frame evidence compliance.
+- EPIC 2 producer code is implemented and KML smoke validates manifest coverage/compliance for `global_gist` and `vision_read`.
 - EPIC 3 linkage is now implemented locally through ledger, mapped evidence, grounding floor, and compact chain export.
-- EPIC 4 has scheduler/data structures, a hard-skill follow-up handoff into the main loop, and trace-derived follow-up metrics; generic all-route strategies remain incomplete.
-- EPIC 5 only has allocator primitives; prompt stack refactor and compaction are not connected.
-- EPIC 6 and EPIC 7 have only `MapUpdateProposal` storage from EPIC 7; query-context and proposal producers are not started.
-- EPIC 8 has existing trajectory export but not the planned schema/audit pipeline.
-- EPIC 9 is mostly not started beyond existing eval runner/report utilities.
+- EPIC 4 has scheduler/data structures, a hard-skill follow-up handoff into the main loop, low-confidence terminal support, and trace-derived follow-up metrics; generic all-route follow-up strategies remain incomplete.
+- EPIC 5 is wired into the prompt stack with strategies and CLI flags, but overflow tuning remains.
+- EPIC 6 and EPIC 7 are implemented at the tool/storage/commit-channel level; policy gating and smoke coverage remain.
+- EPIC 8 has the planned schema/export/audit pipeline.
+- EPIC 9 has CLI flags, matrix runner, and a basic report generator; feature toggles and report richness remain partial.
 
 ## Current Constraints
 
@@ -234,9 +314,23 @@ Epic-level gap summary:
   - `docs/2026-06-03-handoff-videomme-agent-loop.md`
   - `docs/report-design-proposal.zh.md`
 
+## Multi-Agent Review Notes
+
+- Read-only subagent review found three actionable issues:
+  - `query_context` could satisfy visual citation gates through `VISUAL_EVIDENCE_TOOLS`.
+  - `query_context` could still appear in compact ledger answer-facing visual text.
+  - `scripts/run_ablation.py` did not map structured boolean `false` to paired `--disable-*` flags.
+- All three were fixed before commit:
+  - `has_non_navigation_visual_citation()` now only accepts `ANSWER_EVIDENCE_TOOLS`.
+  - `compact_ledger_text()` separates `Context-Only Visual Hints (Not Answer Support)` and excludes context-only entries from the short-term working buffer.
+  - Matrix boolean false values for paired flags now emit `--disable-*`; tests cover `enable_followup: false`.
+
 ## Next Actions
 
-1. Sync the local DAG commits to GitHub/KML, then run KML full pytest and a compact VideoMME subset smoke to validate manifest coverage, evidence-chain completeness, and updated follow-up metrics.
-2. Inspect only compact KML artifacts: `summary.json` metrics, `nframes_histogram`, `evidence_provenance_completeness`, and root `evidence_chains.jsonl` row counts.
-3. Continue remaining partial/not-start DAG after KML validation: generic all-route follow-up strategies (`TASK-021`/`022`), low-confidence final (`TASK-023`), context-slot prompt integration (`TASK-026`-`028`), query-context/map proposal producers (`TASK-029`/`031`/`032`), and training/reporting tasks (`TASK-033`-`038`).
-4. Keep EPIC 5+ expansion behind the three anchor cases showing real manifest coverage and evidence-chain completeness.
+1. Tune EPIC 5 context compaction/budgets: current smoke has `context_budget_overflow_count=6`.
+2. Improve EPIC 4 generic follow-up: implement scheduler-backed targets for non-hard-skill AnswerAgent `need_more_evidence`, and richer route strategies for temporal/needle/gist.
+3. Wire behavioral ablation flags that are currently recorded but not active: `enable_query_context`, `enable_map_reflux`, and `enable_evidence_staging`.
+4. Exercise EPIC 6/7 in a KML smoke or controlled fixture so `query_context_usage_rate` and `map_reflux_commit_count` are non-zero when enabled.
+5. Improve answer quality on the 3 anchors: current smoke at `bec2039` has `accuracy=0.0`; 605-1/612-1 produce wrong finals and 611-2 exhausts 8 rounds.
+6. Strengthen TASK-038 report generator with per-case comparison, graph/key-finding generation, and trajectory audit integration over a real matrix.
+7. If rerunning VideoMME after `6c819c2`, include `--export-training` and verify summary trajectory paths exist; this path bug is already covered by local/KML tests but not by a full post-fix model smoke.
