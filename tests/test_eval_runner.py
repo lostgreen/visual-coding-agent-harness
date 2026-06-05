@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +12,24 @@ from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 class EvalRunnerTest(unittest.TestCase):
+    def test_eval_runner_script_entrypoint_imports_summary_schema(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        env = dict(os.environ)
+        env["PYTHONPATH"] = "src"
+
+        completed = subprocess.run(
+            [sys.executable, "runs/eval_runner.py", "--help"],
+            cwd=repo_root,
+            env=env,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=20,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr[:500])
+        self.assertIn("Run reproducible VideoMME", completed.stdout)
+
     def test_run_eval_cases_writes_summary_for_requested_strategy_and_budget(self):
         from runs import eval_runner
 

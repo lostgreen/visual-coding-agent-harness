@@ -17,7 +17,10 @@ from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
-from runs.summary_schema import RunSummary, validate as validate_run_summary
+try:
+    from runs.summary_schema import RunSummary, validate as validate_run_summary
+except ModuleNotFoundError:
+    from summary_schema import RunSummary, validate as validate_run_summary
 
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
