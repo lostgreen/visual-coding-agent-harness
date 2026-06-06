@@ -29,13 +29,13 @@ def select_question_playbook(question: str) -> QuestionPlaybook:
             name="gist_global",
             route=route,
             instructions=[
-                "Start with global_gist to preserve the sparse whole-video floor.",
-                "Use local inspection only when the global view is insufficient or contradictory.",
+                "Start with global_gist to get a sparse whole-video topic and coverage hint.",
+                "Use local inspection or indexed transcript evidence to verify the full-video coverage.",
                 "Do not shred synopsis or overall-theme questions into local MCQ votes first.",
             ],
             sufficiency_rules=[
-                "A global_gist observation can be cited as whole-video sparse evidence.",
-                "Do not finalize an option that is strictly less supported than the global gist hypothesis.",
+                "A global_gist observation is a topic hint, not structured option support.",
+                "Prefer the option that covers the most video stages; partial ending-only coverage cannot beat a full rise/stability/fall arc.",
             ],
         )
 

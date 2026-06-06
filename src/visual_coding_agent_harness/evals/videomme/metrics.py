@@ -9,15 +9,16 @@ from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 INCOMPLETE_STATUSES = {"max_rounds_reached", "incomplete", "error", "failed"}
-VISUAL_SEGMENT_TOOLS = {"inspect_segment", "caption_segment", "qa_segment", "caption_segments"}
+VISUAL_SEGMENT_TOOLS = {"inspect_segment", "caption_segment", "qa_segment", "caption_segments", "vision_read"}
 GROUNDING_WEIGHTS = {
-    "global_sparse": 1.0,
+    "global_sparse": 0.35,
     "visually_confirmed": 1.0,
+    "indexed_transcript": 0.85,
     "inferred": 0.35,
     "weak": 0.2,
     "external_knowledge": 0.1,
 }
-WEAK_GROUNDING = {"inferred", "weak", "external_knowledge"}
+WEAK_GROUNDING = {"global_sparse", "inferred", "weak", "external_knowledge"}
 
 
 def build_report(summary_path: Path) -> dict[str, Any]:

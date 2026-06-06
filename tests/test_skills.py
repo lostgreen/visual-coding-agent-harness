@@ -2,14 +2,15 @@ from visual_coding_agent_harness.agents.skills.specs import builtin_skill_regist
 from visual_coding_agent_harness.tools.inspector import _mutex_read_prompt
 
 
-def test_main_idea_demands_agreement_between_two_gists():
+def test_main_idea_uses_global_gist_as_topic_hint_not_option_floor():
     skill = select_skill("What is the video mainly about?")
 
     assert skill.name == "main_idea"
     assert skill.version == 1
-    assert [step.op for step in skill.procedure].count("global_gist") == 2
-    assert "two_global_gists_agree" in skill.sufficiency
-    assert "option_coverage_margin_gt_0_15" in skill.sufficiency
+    assert [step.op for step in skill.procedure].count("global_gist") == 1
+    assert "whole_video_coverage_evidence" in skill.sufficiency
+    assert "localized_or_indexed_fact_support" in skill.sufficiency
+    assert "global_gist is not an option vote" in skill.self_check
 
 
 def test_mutex_fact_skill_one_call_per_window():

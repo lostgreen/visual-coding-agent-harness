@@ -285,7 +285,7 @@ class ReportMetricsTest(unittest.TestCase):
 
             detail = report["cases"][0]["strategies"]["agent_v2"]
             self.assertEqual(detail["legacy_worker_vote_rows"], 1)
-            self.assertEqual(detail["option_support"]["D"], 0.76)
+            self.assertNotIn("D", detail["option_support"])
             self.assertNotIn("B", detail["option_support"])
             self.assertEqual(report["strategies"]["agent_v2"]["legacy_worker_vote_rows"], 1)
 
@@ -352,7 +352,8 @@ class ReportMetricsTest(unittest.TestCase):
             detail = report["cases"][0]["strategies"]["agent_v2"]
             self.assertEqual(detail["workspace"], "runs/round3/workspaces/runs/case_agent_v2")
             self.assertEqual(detail["citations"], ["obs_0001"])
-            self.assertEqual(detail["option_support"]["D"], 0.76)
+            self.assertNotIn("D", detail["option_support"])
+            self.assertEqual(detail["top_supported_option"], "")
 
 
 if __name__ == "__main__":

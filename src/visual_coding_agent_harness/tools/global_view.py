@@ -1,4 +1,4 @@
-"""Sparse whole-video view tool for preserving a direct-answer floor."""
+"""Sparse whole-video view tool for whole-video topic observations."""
 
 from __future__ import annotations
 
@@ -48,21 +48,10 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
             )
         )
         answer_text = response.text.strip()
-        supported_option = _extract_choice(answer_text)
-        candidate_option_relations = []
-        if supported_option:
-            candidate_option_relations.append(
-                {
-                    "option": supported_option,
-                    "relation": "support",
-                    "strength": 0.76,
-                    "rationale": "Sparse whole-video global gist selected this option.",
-                    "assigned_by": "global_gist",
-                }
-            )
+        candidate_option_hint = _extract_choice(answer_text)
         raw_fields = {
-            "supported_option": supported_option,
-            "candidate_option_relations": candidate_option_relations,
+            "candidate_option_hint": candidate_option_hint,
+            "candidate_option_relations": [],
             "grounding_quality": "global_sparse",
             "time_range": [0.0, float(duration_sec)],
             "nframes": int(resolved_nframes),
@@ -97,9 +86,9 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
 def _global_gist_prompt(*, question: str, duration_sec: float, sample_offset_sec: float = 0.0) -> str:
     return (
         "Answer from a sparse full-video view before any local decomposition.\n"
-        "Use the sampled whole-video context as a direct baseline floor.\n"
-        "Start multiple-choice answers with exactly one option letter when options are provided.\n"
-        "Mention uncertainty if the sparse global view is insufficient for fine local details.\n"
+        "Describe the apparent whole-video topic, coverage, and uncertainty.\n"
+        "Do not choose an option or emit supported_option; any option-like text is only a candidate hint.\n"
+        "Mention if the sparse global view is insufficient for fine local details.\n"
         f"Video duration: {float(duration_sec):.1f} seconds.\n"
         f"Sampling offset: {float(sample_offset_sec):.3f} seconds.\n"
         f"Question:\n{question}"

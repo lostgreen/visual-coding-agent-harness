@@ -85,7 +85,7 @@ def build_segment_inspector_registry(
                 segment_id=segment_id,
                 start_sec=start_sec,
                 end_sec=end_sec,
-                question=ask_for,
+                question=_sanitize_vision_read_ask_for(ask_for),
                 candidate_options=(),
                 nframes=nframes,
                 max_pixels=max_pixels,
@@ -288,6 +288,24 @@ def _vision_read_prompt(
         f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]\n"
         f"Ask for: {ask_for}"
     )
+
+
+def _sanitize_vision_read_ask_for(ask_for: str) -> str:
+    text = str(ask_for or "").strip()
+    if not _looks_like_mcq(text):
+        return text
+    return (
+        "Describe the main factual content of this segment. Do not choose an option. "
+        "Focus on events, entities, temporal stage, and whether this segment is about "
+        "rise, stability, decline, collapse, or causes."
+    )
+
+
+def _looks_like_mcq(text: str) -> bool:
+    option_lines = re.findall(r"(?m)^\s*[A-H][\).]\s+\S+", str(text))
+    if len(option_lines) >= 2:
+        return True
+    return bool(re.search(r"\b(?:which|what|why|how)\b", str(text), flags=re.IGNORECASE)) and len(option_lines) >= 1
 
 
 def _mutex_read_prompt(

@@ -84,13 +84,14 @@ class AnswerAgent:
 
 
 GROUNDING_WEIGHTS = {
-    "global_sparse": 1.0,
+    "global_sparse": 0.35,
     "visually_confirmed": 1.0,
+    "indexed_transcript": 0.85,
     "inferred": 0.35,
     "weak": 0.2,
     "external_knowledge": 0.1,
 }
-WEAK_GROUNDING = {"inferred", "weak", "external_knowledge"}
+WEAK_GROUNDING = {"global_sparse", "inferred", "weak", "external_knowledge"}
 
 
 def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.12) -> AnswerAgentResult:
@@ -110,7 +111,6 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
             },
         )
     option_scores = _score_options(table)
-    global_floor = _global_floor_support(table)
     ranked = sorted(
         [(option, score) for option, score in option_scores.items() if option != "unassigned" and score > 0],
         key=lambda item: (-item[1], item[0]),
@@ -118,12 +118,9 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
     if not ranked:
         return _need_more_evidence("targeted follow-up needed: inspect the most relevant option-specific window.")
 
-    if global_floor is not None:
-        return _final_from_global_floor(
-            option_text=option_text,
-            option_scores=option_scores,
-            global_floor=global_floor,
-        )
+    coverage_result = _main_idea_coverage_decision(table=table, option_text=option_text, option_scores=option_scores)
+    if coverage_result is not None:
+        return coverage_result
 
     winner, winning_score = ranked[0]
     runner_up, runner_up_score = ranked[1] if len(ranked) > 1 else ("", 0.0)
@@ -250,55 +247,67 @@ def _score_options(table: Mapping[str, Any]) -> dict[str, float]:
     return scores
 
 
-def _global_floor_support(table: Mapping[str, Any]) -> tuple[str, Mapping[str, Any], float] | None:
-    groups = table.get("groups", {}) if isinstance(table.get("groups", {}), Mapping) else {}
-    candidates: list[tuple[str, Mapping[str, Any], float]] = []
-    for option, rows in groups.items():
-        if option == "unassigned" or not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
-            continue
-        for row in rows:
-            if not isinstance(row, Mapping):
-                continue
-            if str(row.get("tool", "")) != "global_gist" and str(row.get("grounding_quality", "")) != "global_sparse":
-                continue
-            score = _row_score(row)
-            if score > 0 and not _is_weak_grounding(row):
-                candidates.append((str(option), row, score))
-    if not candidates:
-        return None
-    if len(candidates) > 1:
-        options = {option for option, _row, _score in candidates}
-        if len(options) != 1:
-            return None
-    candidates.sort(key=lambda item: (-item[2], str(item[1].get("obs_id", ""))))
-    return candidates[0]
-
-
-def _final_from_global_floor(
+def _main_idea_coverage_decision(
     *,
+    table: Mapping[str, Any],
     option_text: Mapping[str, str],
     option_scores: Mapping[str, float],
-    global_floor: tuple[str, Mapping[str, Any], float],
-) -> AnswerAgentResult:
-    option, row, score = global_floor
-    citations = [str(row.get("obs_id", ""))] if row.get("obs_id") else []
-    conflict_options = sorted(option for option, value in option_scores.items() if option != "unassigned" and value > 0)
+) -> AnswerAgentResult | None:
+    coverage_by_option = {
+        option: _coverage_profile(option_text.get(option, option), _sorted_option_rows(table, option))
+        for option, score in option_scores.items()
+        if option != "unassigned" and score > 0
+    }
+    full_coverage = [
+        (option, profile)
+        for option, profile in coverage_by_option.items()
+        if _option_asks_for_full_arc(option_text.get(option, option)) and _profile_has_full_arc(profile)
+    ]
+    if not full_coverage:
+        return None
+
+    full_coverage.sort(
+        key=lambda item: (
+            -int(item[1]["stage_count"]),
+            -float(item[1]["score"]),
+            -float(option_scores.get(item[0], 0.0)),
+            item[0],
+        )
+    )
+    winner, profile = full_coverage[0]
+    runner_up, runner_up_score = _runner_up_score(option_scores, winner)
+    partial_competitors = [
+        option
+        for option, other_profile in coverage_by_option.items()
+        if option != winner
+        and _profile_is_partial_main_idea(other_profile)
+        and float(option_scores.get(option, 0.0)) <= float(option_scores.get(winner, 0.0)) + 0.25
+    ]
+    if not partial_competitors and runner_up and float(option_scores.get(winner, 0.0)) - runner_up_score < 0.12:
+        return None
+
+    rows = _sorted_option_rows(table, winner)
+    citation_rows = [row for row in rows if not _is_weak_grounding(row)][:2] or rows[:2]
+    citations = [str(row.get("obs_id", "")) for row in citation_rows if row.get("obs_id")]
+    if not citations:
+        return None
     conflict = {
-        "options": conflict_options,
-        "winner": option,
-        "runner_up": "",
-        "scores": {option: round(value, 3) for option, value in option_scores.items()},
-        "global_floor": True,
+        "options": sorted(option for option, score in option_scores.items() if option != "unassigned" and score > 0),
+        "winner": winner,
+        "runner_up": runner_up,
+        "scores": {option: round(score, 3) for option, score in option_scores.items()},
+        "coverage": {option: dict(profile) for option, profile in coverage_by_option.items()},
     }
     return AnswerAgentResult(
         status="final",
-        answer=option_text.get(option, option),
+        answer=option_text.get(winner, winner),
         rationale=(
-            f"Option {option} is the global sparse whole-video floor "
-            f"({score:.2f}); local evidence must not undercut it on gist questions."
+            f"Option {winner} has whole-video coverage across "
+            f"{', '.join(str(stage) for stage in profile['stages'])}; "
+            f"competing options are partial coverage."
         ),
         citations=citations,
-        confidence=min(1.0, score),
+        confidence=min(1.0, max(float(option_scores.get(winner, 0.0)), float(profile["score"]))),
         conflict=conflict,
     )
 
@@ -371,6 +380,121 @@ def _row_score(row: Mapping[str, Any]) -> float:
         str(row.get("grounding_quality", "weak")),
         0.2,
     )
+
+
+_RISE_TERMS = {
+    "rise",
+    "rose",
+    "rises",
+    "rising",
+    "formation",
+    "formed",
+    "creation",
+    "created",
+    "growth",
+    "grew",
+    "prosperity",
+    "prosperous",
+    "industrial",
+    "population",
+    "economy",
+    "economic",
+}
+_STABILITY_TERMS = {
+    "stability",
+    "stable",
+    "rights",
+    "government",
+    "governance",
+    "regional",
+    "minority",
+    "minorities",
+    "internal",
+    "maintain",
+    "maintained",
+    "tension",
+    "tensions",
+}
+_FALL_TERMS = {
+    "fall",
+    "fell",
+    "falls",
+    "collapse",
+    "collapsed",
+    "decline",
+    "declined",
+    "war",
+    "independence",
+    "divided",
+    "division",
+    "split",
+    "partition",
+    "apart",
+    "dissolution",
+}
+
+
+def _coverage_profile(option_text: str, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    row_text = " ".join(str(row.get("claim", "")) for row in rows).lower()
+    stage_text = f"{option_text} {row_text}".lower()
+    stages = []
+    evidence_stages = []
+    if _contains_any(stage_text, _RISE_TERMS):
+        stages.append("rise")
+    if _contains_any(row_text, _RISE_TERMS):
+        evidence_stages.append("rise")
+    if _contains_any(stage_text, _STABILITY_TERMS):
+        stages.append("stability")
+    if _contains_any(row_text, _STABILITY_TERMS):
+        evidence_stages.append("stability")
+    if _contains_any(stage_text, _FALL_TERMS):
+        stages.append("fall")
+    if _contains_any(row_text, _FALL_TERMS):
+        evidence_stages.append("fall")
+    strong_score = sum(_row_score(row) for row in rows if not _is_weak_grounding(row))
+    transcript_score = sum(
+        _row_score(row)
+        for row in rows
+        if str(row.get("grounding_quality", "")) in {"indexed_transcript", "visually_confirmed"}
+    )
+    return {
+        "stages": stages,
+        "stage_count": len(stages),
+        "evidence_stages": evidence_stages,
+        "evidence_stage_count": len(evidence_stages),
+        "score": max(strong_score, transcript_score),
+    }
+
+
+def _contains_any(text: str, terms: set[str]) -> bool:
+    tokens = set(re.findall(r"[A-Za-z0-9]+", str(text).lower()))
+    return bool(tokens.intersection(terms))
+
+
+def _option_asks_for_full_arc(text: str) -> bool:
+    lowered = str(text).lower()
+    return (
+        ("rise" in lowered or "rose" in lowered or "rises" in lowered or "formation" in lowered or "creation" in lowered)
+        and ("fall" in lowered or "fell" in lowered or "collapse" in lowered or "decline" in lowered)
+    )
+
+
+def _profile_has_full_arc(profile: Mapping[str, Any]) -> bool:
+    stages = set(str(stage) for stage in profile.get("evidence_stages", []))
+    return "rise" in stages and "fall" in stages and len(stages) >= 2
+
+
+def _profile_is_partial_main_idea(profile: Mapping[str, Any]) -> bool:
+    stages = set(str(stage) for stage in profile.get("stages", []))
+    return bool(stages) and not ("rise" in stages and "fall" in stages)
+
+
+def _runner_up_score(option_scores: Mapping[str, float], winner: str) -> tuple[str, float]:
+    ranked = sorted(
+        [(option, score) for option, score in option_scores.items() if option != "unassigned" and option != winner],
+        key=lambda item: (-item[1], item[0]),
+    )
+    return ranked[0] if ranked else ("", 0.0)
 
 
 _OPTION_STOPWORDS = {

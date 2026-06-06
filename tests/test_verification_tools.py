@@ -56,6 +56,25 @@ class VerificationToolsTest(unittest.TestCase):
         self.assertEqual(result["regions"][0]["evidence_gate"]["visual_observation_ids"], [])
         self.assertIn("no non-navigation visual evidence", result["regions"][0]["evidence_gate"]["reasons"])
 
+    def test_verify_ledger_answer_counts_vision_read_as_visual_evidence(self):
+        registry = build_verification_registry()
+
+        result = registry.execute(
+            "verify_ledger_answer",
+            {
+                "answer": "The segment describes the empire collapse.",
+                "ledger_text": (
+                    "- `obs_0001` | tool: `vision_read` | confidence: 0.82 | artifacts: clip.mp4 | "
+                    "claim: The segment describes the empire collapse. | limitations: -\n"
+                ),
+            },
+        )
+
+        gate = result["regions"][0]["evidence_gate"]
+        self.assertIn("supported", result["claim"])
+        self.assertEqual(gate["visual_observation_ids"], ["obs_0001"])
+        self.assertNotIn("no non-navigation visual evidence", gate["reasons"])
+
     def test_verify_ledger_answer_checks_required_citations(self):
         registry = build_verification_registry()
 

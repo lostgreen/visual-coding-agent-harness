@@ -358,8 +358,10 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("option_coverage: 1/2", prompt)
             self.assertIn("B: strong=1 weak=0 visual=yes", prompt)
 
-    def test_gist_global_mcq_requires_two_global_gist_passes_before_accepting(self):
-        backend = ScriptedPlannerBackend([])
+    def test_gist_global_route_seeds_one_topic_hint_without_finalizing(self):
+        backend = ScriptedPlannerBackend(
+            ['{"status": "final", "answer": "No more evidence.", "citations": [], "confidence": 0.0}']
+        )
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=1896.0, window_sec=300.0)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -382,12 +384,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D. an aviation documentary")
-            self.assertEqual(result.citations, ["obs_0001"])
-            self.assertEqual(backend.requests, [])
-            self.assertEqual([step["tool"] for step in result.rounds[0].program], ["global_gist", "global_gist"])
-            self.assertEqual(result.rounds[0].observation_ids, ["obs_0001", "obs_0002"])
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(workspace.observation_count(tool_name="global_gist"), 1)
+            self.assertIn("replan", [request.task for request in backend.requests])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("global_gist_topic_seeded", trace)
 
     def test_budget_can_disable_global_gist_shortcut_for_planner_trace_debugging(self):
         backend = ScriptedPlannerBackend(
@@ -419,6 +420,72 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertGreaterEqual(len(backend.requests), 1)
             self.assertEqual(backend.requests[0].task, "replan")
             self.assertEqual(workspace.observation_count(tool_name="global_gist"), 0)
+
+    def test_main_idea_vision_read_allowed_after_one_global_gist(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "rationale": "inspect local coverage", '
+                    '"program": [{"tool": "vision_read", "args": {"segment_id": "seg_0001", '
+                    '"ask_for": "Describe this segment facts."}, "assign": "local"}]}'
+                )
+            ]
+        )
+        registry = build_global_route_test_registry()
+
+        @tool(name="vision_read", description="Read localized facts.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 8,
+        ):
+            return {
+                "claim": f"{segment_id} discusses empire chronology.",
+                "confidence": 0.82,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+                "event_label": event_label or ask_for,
+            }
+
+        registry.register(vision_read)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=120.0, window_sec=60.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="allow_local_after_global")
+            workspace.write_observation(
+                tool_name="global_gist",
+                claim="Sparse whole-video topic hint.",
+                confidence=0.76,
+                regions=[{"start_sec": 0.0, "end_sec": 120.0}],
+                raw_output={"grounding_quality": "global_sparse", "candidate_option_hint": "D"},
+            )
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=1,
+                    max_tool_calls_per_round=1,
+                    reserve_final_round=False,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(
+                question="What is the video mainly about?\nA. cooking\nB. empire division\nD. empire rise and fall",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.rounds[0].program[0]["tool"], "vision_read")
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 1)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("repair_main_idea_vision_read_to_global_gist", trace)
 
     def test_normalizes_placeholder_video_path_for_global_tools(self):
         backend = ScriptedPlannerBackend(

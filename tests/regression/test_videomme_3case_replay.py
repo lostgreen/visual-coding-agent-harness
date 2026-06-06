@@ -168,6 +168,7 @@ def _build_replay_registry(fixture: Mapping[str, Any]) -> ToolRegistry:
         ask_for: str,
         event_label: str = "",
         mutex_group_id: str = "",
+        nframes: int = 8,
     ):
         payload = dict(_lookup_by_query(tools.get("vision_read", {}), event_label or ask_for))
         claim = str(payload.get("claim", f"{event_label or ask_for} is visible."))

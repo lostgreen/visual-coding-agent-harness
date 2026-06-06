@@ -8,7 +8,7 @@ from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 class RecordingBackend(VisionLanguageBackend):
-    def __init__(self, text="D. The global sparse view supports the aviation-documentary synopsis."):
+    def __init__(self, text="D. The global sparse view suggests an aviation-documentary synopsis."):
         self.text = text
         self.requests = []
 
@@ -18,7 +18,7 @@ class RecordingBackend(VisionLanguageBackend):
 
 
 class GlobalViewToolTest(unittest.TestCase):
-    def test_global_gist_samples_whole_video_and_records_global_sparse_support(self):
+    def test_global_gist_samples_whole_video_without_option_vote(self):
         from visual_coding_agent_harness.tools.global_view import build_global_view_registry
 
         backend = RecordingBackend()
@@ -36,24 +36,25 @@ class GlobalViewToolTest(unittest.TestCase):
         self.assertEqual(backend.requests[0].task, "global_gist")
         self.assertEqual(backend.requests[0].media_path, "/videos/long.mp4")
         self.assertEqual(backend.requests[0].metadata["nframes"], 128)
-        self.assertEqual(result["raw_output"]["supported_option"], "D")
+        self.assertNotIn("Start multiple-choice answers", backend.requests[0].prompt)
+        self.assertNotIn("supported_option", result["raw_output"])
         self.assertEqual(result["raw_output"]["grounding_quality"], "global_sparse")
-        self.assertEqual(result["raw_output"]["candidate_option_relations"][0]["option"], "D")
-        self.assertEqual(result["raw_output"]["candidate_option_relations"][0]["relation"], "support")
+        self.assertEqual(result["raw_output"]["candidate_option_hint"], "D")
+        self.assertEqual(result["raw_output"]["candidate_option_relations"], [])
         self.assertEqual(result["regions"][0]["start_sec"], 0.0)
         self.assertEqual(result["regions"][0]["end_sec"], 1896.0)
 
-    def test_global_gist_is_first_class_answer_evidence(self):
+    def test_global_gist_is_unassigned_sparse_answer_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = EvidenceWorkspace.create(Path(tmp), run_id="global_table")
             observation = workspace.write_observation(
                 tool_name="global_gist",
-                claim="Supported option: D. The whole video is an aviation documentary.",
+                claim="D. The whole video appears to be an aviation documentary.",
                 confidence=0.76,
                 regions=[{"start_sec": 0.0, "end_sec": 1896.0}],
                 limitations="Sparse full-video sampling.",
                 raw_output={
-                    "supported_option": "D",
+                    "candidate_option_hint": "D",
                     "grounding_quality": "global_sparse",
                     "time_range": [0.0, 1896.0],
                 },
@@ -69,11 +70,13 @@ class GlobalViewToolTest(unittest.TestCase):
             )
             chains = workspace.evidence_chain_summaries()
 
-            d_rows = table["groups"]["D"]
-            self.assertEqual(len(d_rows), 1)
-            self.assertEqual(d_rows[0]["tool"], "global_gist")
-            self.assertEqual(d_rows[0]["grounding_quality"], "global_sparse")
-            self.assertTrue(chains)
+            self.assertEqual(table["groups"]["D"], [])
+            unassigned_rows = table["groups"]["unassigned"]
+            self.assertEqual(len(unassigned_rows), 1)
+            self.assertEqual(unassigned_rows[0]["tool"], "global_gist")
+            self.assertEqual(unassigned_rows[0]["grounding_quality"], "global_sparse")
+            self.assertIsNone(unassigned_rows[0]["supported_option"])
+            self.assertEqual(chains, [])
 
 
 if __name__ == "__main__":

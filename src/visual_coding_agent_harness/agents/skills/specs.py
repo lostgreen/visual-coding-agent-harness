@@ -95,30 +95,19 @@ def builtin_skill_registry() -> SkillRegistry:
                         assign="g1",
                     ),
                     SkillStep(
-                        step="global_seed_1",
-                        op="global_gist",
-                        args={
-                            "video_path": "{video_id}",
-                            "question": "{question}",
-                            "duration_sec": "{duration_sec}",
-                            "seed": 1,
-                        },
-                        assign="g2",
-                    ),
-                    SkillStep(
                         step="decide",
                         op="answer_agent",
                         args={"evidence": "evidence_table_v2()", "route": "gist_global"},
                         assign="decision",
                     ),
                 ),
-                sufficiency=("two_global_gists_agree", "option_coverage_margin_gt_0_15"),
+                sufficiency=("whole_video_coverage_evidence", "localized_or_indexed_fact_support"),
                 verifier_checks=("selected_option_has_structured_support", "main_idea_coverage_floor_holds"),
                 recovery={"ambiguous": {"action": "escalate", "skill": "grounded_factual_qa"}},
                 exemplars=(
-                    "Q: what is the video mainly about -> two sparse global views -> coverage margin -> answer",
+                    "Q: what is the video mainly about -> sparse global topic hint -> local/indexed coverage facts -> answer",
                 ),
-                self_check=("g1.option == g2.option", "decision.citations include global evidence"),
+                self_check=("global_gist is not an option vote", "decision cites coverage evidence"),
                 allowed_actions=frozenset({"global_gist", "query_context", "vision_read", "verify_ledger_answer"}),
             ),
             SkillSpec(

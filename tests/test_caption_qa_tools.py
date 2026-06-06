@@ -173,6 +173,38 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(result["facts"][0]["event_label"], "red object")
         self.assertEqual(result["facts"][0]["time_range"], [30.0, 42.0])
 
+    def test_vision_read_sanitizes_full_mcq_into_fact_request(self):
+        backend = CaptionQARecordingBackend()
+        registry = build_segment_inspector_registry(backend)
+        full_mcq = (
+            "What is the video mainly about?\n"
+            "A. The fall of Rome\n"
+            "B. Why the Austro-Hungarian Empire was divided\n"
+            "C. A battle timeline\n"
+            "D. How the Austro-Hungarian Empire rose and fell"
+        )
+
+        result = registry.execute(
+            "vision_read",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0007",
+                "start_sec": 360.0,
+                "end_sec": 420.0,
+                "ask_for": full_mcq,
+                "nframes": 20,
+            },
+        )
+
+        request = backend.requests[0]
+        self.assertIn("Describe the main factual content of this segment", request.prompt)
+        self.assertIn("rise, stability, decline, collapse, or causes", request.prompt)
+        self.assertNotIn("Why the Austro-Hungarian Empire was divided", request.prompt)
+        self.assertNotIn("How the Austro-Hungarian Empire rose and fell", request.prompt)
+        self.assertNotIn("A. The fall of Rome", request.prompt)
+        self.assertNotIn("B.", request.prompt)
+        self.assertNotIn("supported_option", result)
+
 
 if __name__ == "__main__":
     unittest.main()

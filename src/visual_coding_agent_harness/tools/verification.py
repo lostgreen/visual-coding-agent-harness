@@ -17,9 +17,11 @@ from ..agents.skills.predicates import (
 )
 
 
-_VISUAL_EVIDENCE_TOOLS = {"caption_segment", "qa_segment", "inspect_segment"}
+_VISUAL_EVIDENCE_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read"}
 _GROUNDING_WEIGHTS = {
+    "global_sparse": 0.35,
     "visually_confirmed": 1.0,
+    "indexed_transcript": 0.85,
     "inferred": 0.35,
     "weak": 0.2,
     "external_knowledge": 0.1,

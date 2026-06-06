@@ -501,13 +501,14 @@ def _final_gate_block(*, final_round_reserved: bool) -> str:
     )
     return (
         "- Use video_ls first for open-ended description tasks or when the relevant segment is unclear.\n"
-        "- For gist/global questions, use global_gist before local decomposition and cite it as the direct floor when sufficient.\n"
+        "- For gist/global questions, use global_gist before local decomposition as a sparse topic hint, not an option vote.\n"
         "- caption_segments is offline VideoMap cache building; avoid it in online reasoning unless the cache/indexes are empty.\n"
         "- Use navigation output as a map, then delegate localized visual reading to vision_read or inspect_segment on one candidate segment.\n"
         "- Use zoom when a coarse segment is relevant but too long; then call vision_read or inspect_segment with the returned child segment_id and start_sec/end_sec.\n"
         "- Do not spend every round on navigation-only tools; gather visual evidence before finalizing.\n"
         "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.\n"
         "- Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.\n"
+        "- Main-idea answers must compare whole-video coverage; partial ending-only evidence cannot beat a full rise/stability/fall arc.\n"
         '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.\n'
         "- Do not copy quoted option text into JSON string values; refer to option letters instead.\n"
         "- Final answers require at least one non-navigation visual observation from vision_read, inspect_segment, caption_segment, or qa_segment; navigation-only evidence is insufficient.\n"

@@ -79,7 +79,7 @@ def test_gist_qa_blocks_inspect_segment(tmp_path: Path):
     assert "route_violation" in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 
-def test_main_idea_repairs_planner_vision_read_to_global_gist(tmp_path: Path):
+def test_main_idea_repairs_only_first_planner_vision_read_to_global_gist(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = SequenceBackend(
         [
@@ -129,9 +129,9 @@ def test_main_idea_repairs_planner_vision_read_to_global_gist(tmp_path: Path):
     agent.run(question="What is the video mainly about?", video_path="/videos/demo.mp4")
 
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert counter.get("global_gist", 0) == 2
-    assert counter.get("vision_read", 0) == 0
-    assert "route_tool_repaired" in trace
+    assert counter.get("global_gist", 0) == 1
+    assert counter.get("vision_read", 0) == 1
+    assert "global_gist_topic_seeded" in trace
     assert "route_violation" not in trace
 
 

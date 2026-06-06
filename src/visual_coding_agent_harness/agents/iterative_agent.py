@@ -973,7 +973,7 @@ class IterativeVisualAgent:
         if self.budget.free_exploration or active_skill is None:
             return None
         if active_skill.name == "main_idea" and tool_name == "vision_read" and self._has_tool("global_gist"):
-            if self.workspace.observation_count(tool_name="global_gist") >= 2:
+            if self.workspace.observation_count(tool_name="global_gist") >= 1:
                 return None
             repaired_args: dict[str, Any] = {
                 "video_path": video_path,
@@ -1259,113 +1259,17 @@ class IterativeVisualAgent:
         }
         if self._tool_accepts_argument("global_gist", "seed"):
             first_step["args"]["seed"] = 0
-        second_args = dict(first_step["args"])
-        if self._tool_accepts_argument("global_gist", "seed"):
-            second_args["seed"] = 1
-        elif self._tool_accepts_argument("global_gist", "sample_offset_sec"):
-            second_args["sample_offset_sec"] = _global_gist_second_pass_offset(self.scene_index.duration_sec)
-        second_step = {
-            "tool": "global_gist",
-            "args": second_args,
-            "assign": "global_gist_2",
-        }
-        program = [first_step, second_step]
         self.workspace.write_trace_event(
             "iterative_route",
-            {"route": "gist_global", "tool": "global_gist", "passes_required": 2},
+            {"route": "gist_global", "tool": "global_gist", "passes_required": 1, "mode": "topic_hint_seed"},
         )
         interpreter = ProgramInterpreter(registry=self.registry, workspace=self.workspace)
-        first_result = interpreter.run([first_step])
-        first_answer = AnswerAgent(self.backend).run(
-            question=question,
-            evidence_text=self._read_ledger(),
-            evidence_table=self._answer_evidence_table(question),
-        )
+        result = interpreter.run([first_step])
         self.workspace.write_trace_event(
-            "iterative_answer_agent",
-            {
-                "round": 1,
-                "source": "global_gist_route_first_pass",
-                "status": first_answer.status,
-                "answer": first_answer.answer,
-                "citations": list(first_answer.citations),
-                "missing_evidence": list(first_answer.missing_evidence),
-            },
+            "global_gist_topic_seeded",
+            {"observation_ids": list(result.observation_ids), "source": "global_gist_route"},
         )
-        if first_answer.status != "final":
-            return None
-
-        second_result = interpreter.run([second_step])
-        observation_ids = [*first_result.observation_ids, *second_result.observation_ids]
-        table = self._answer_evidence_table(question)
-        global_options = _global_gist_supported_options(table)
-        if len(global_options) < 2 or len(set(global_options)) != 1:
-            self.workspace.write_trace_event(
-                "global_gist_disagreement",
-                {"options": global_options, "observation_ids": list(observation_ids)},
-            )
-            return None
-        coverage_choice = _global_option_coverage_choice(question=question, ledger_text=self._read_ledger())
-        agreed_option = global_options[0]
-        if extract_candidate_options(question) and (
-            coverage_choice is None or coverage_choice.get("option") != agreed_option
-        ):
-            self.workspace.write_trace_event(
-                "global_gist_coverage_blocked",
-                {
-                    "agreed_option": agreed_option,
-                    "coverage_choice": dict(coverage_choice or {}),
-                    "observation_ids": list(observation_ids),
-                },
-            )
-            return None
-
-        answer_result = AnswerAgent(self.backend).run(
-            question=question,
-            evidence_text=self._read_ledger(),
-            evidence_table=table,
-        )
-        self.workspace.write_trace_event(
-            "iterative_answer_agent",
-            {
-                "round": 1,
-                "source": "global_gist_route",
-                "status": answer_result.status,
-                "answer": answer_result.answer,
-                "citations": list(answer_result.citations),
-                "missing_evidence": list(answer_result.missing_evidence),
-            },
-        )
-        if answer_result.status != "final":
-            return None
-
-        self.workspace.write_trace_event(
-            "iterative_final",
-            {
-                "round": 1,
-                "answer": answer_result.answer,
-                "citations": list(answer_result.citations),
-                "source": "global_gist_route",
-            },
-        )
-        return IterativeRunResult(
-            question=question,
-            video_path=video_path,
-            answer=answer_result.answer,
-            status="final",
-            citations=list(answer_result.citations),
-            confidence=answer_result.confidence,
-            rounds=[
-                IterativeRound(
-                    round_number=1,
-                    status="final",
-                    planner_text=answer_result.raw_text,
-                    rationale=answer_result.rationale,
-                    program=program,
-                    observation_ids=list(observation_ids),
-                )
-            ],
-        )
+        return None
 
     def _try_hard_skill_route(self, *, question: str, video_path: str) -> IterativeRunResult | None:
         skill = select_skill(question)

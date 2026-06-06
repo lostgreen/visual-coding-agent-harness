@@ -8,13 +8,14 @@ from typing import Any, Mapping, Sequence
 
 
 GROUNDING_WEIGHTS = {
-    "global_sparse": 1.0,
+    "global_sparse": 0.35,
     "visually_confirmed": 1.0,
+    "indexed_transcript": 0.85,
     "inferred": 0.35,
     "weak": 0.2,
     "external_knowledge": 0.1,
 }
-WEAK_GROUNDING = {"inferred", "weak", "external_knowledge"}
+WEAK_GROUNDING = {"global_sparse", "inferred", "weak", "external_knowledge"}
 NAVIGATION_TOOLS = {"video_ls", "search_segments", "read_segment", "expand_window", "zoom"}
 VISUAL_GROUNDING = {"visually_confirmed"}
 
@@ -195,7 +196,13 @@ def direct_floor_holds(
     selected_option: str | None = None,
 ) -> PredicateResult:
     option = selected_option or _top_option(table)
-    global_rows = [row for row in _rows(table) if _is_global_floor_row(row) and _row_supported_option(row)]
+    global_rows = [
+        row
+        for row in _rows(table)
+        if _is_global_floor_row(row)
+        and _row_supported_option(row)
+        and not _is_candidate_hint_only_global_row(row)
+    ]
     if not global_rows:
         return PredicateResult(name="direct_floor_holds", passed=True, details={"selected_option": option})
     global_rows.sort(key=lambda row: (-_row_score(row), str(row.get("obs_id", ""))))
@@ -317,6 +324,10 @@ def _is_weak_grounding(row: Mapping[str, Any]) -> bool:
 
 
 def _is_global_floor_row(row: Mapping[str, Any]) -> bool:
+    return str(row.get("tool", "")) == "global_gist" or str(row.get("grounding_quality", "")) == "global_sparse"
+
+
+def _is_candidate_hint_only_global_row(row: Mapping[str, Any]) -> bool:
     return str(row.get("tool", "")) == "global_gist" or str(row.get("grounding_quality", "")) == "global_sparse"
 
 

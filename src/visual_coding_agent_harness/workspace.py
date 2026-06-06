@@ -644,7 +644,9 @@ class EvidenceWorkspace:
                 continue
             if self.ANSWER_EVIDENCE_TOOLS and tool_name not in self.ANSWER_EVIDENCE_TOOLS:
                 continue
-            if row.get("legacy_worker_vote") and not include_legacy_worker_votes:
+            if _tool_emits_candidate_hints_only(tool_name):
+                row["supported_option"] = None
+            elif row.get("legacy_worker_vote") and not include_legacy_worker_votes:
                 row["supported_option"] = None
             else:
                 option_source = (
@@ -925,6 +927,8 @@ class EvidenceWorkspace:
                 )
                 handle.write(line)
         raw_relations = _candidate_option_relations(observation.raw_output.get("candidate_option_relations"))
+        if _tool_emits_candidate_hints_only(observation.tool):
+            raw_relations = []
         if not raw_relations and not has_worker_option_vote:
             raw_relations = _candidate_option_relations_from_supported_option(observation)
         if raw_relations:
@@ -1031,15 +1035,18 @@ class EvidenceWorkspace:
             display_claim = str(observation.get("claim", ""))
             if legacy_worker_vote:
                 display_claim = _claim_without_legacy_worker_vote(display_claim)
-            option_source = (
-                raw_output.get("supported_option")
-                or raw_output.get("supported_option_letter")
-                or raw_output.get("answer_option")
-                or _first_item(raw_output.get("supported_options"))
-                or _supported_option_from_relations(raw_output.get("candidate_option_relations"), option_map=option_map)
-                or _bare_option_from_claim(str(observation.get("claim", "")), option_map=option_map)
-                or _supported_option_from_claim(str(observation.get("claim", "")))
-            )
+            if _tool_emits_candidate_hints_only(tool_name):
+                option_source = None
+            else:
+                option_source = (
+                    raw_output.get("supported_option")
+                    or raw_output.get("supported_option_letter")
+                    or raw_output.get("answer_option")
+                    or _first_item(raw_output.get("supported_options"))
+                    or _supported_option_from_relations(raw_output.get("candidate_option_relations"), option_map=option_map)
+                    or _bare_option_from_claim(str(observation.get("claim", "")), option_map=option_map)
+                    or _supported_option_from_claim(str(observation.get("claim", "")))
+                )
             if legacy_worker_vote and not include_legacy_worker_votes:
                 supported_option = None
             else:
@@ -1722,6 +1729,10 @@ def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _tool_emits_candidate_hints_only(tool_name: Any) -> bool:
+    return str(tool_name) == "global_gist"
 
 
 def _candidate_option_relations_from_supported_option(observation: Observation) -> list[dict[str, Any]]:

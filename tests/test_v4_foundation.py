@@ -194,7 +194,7 @@ class V4FoundationTest(unittest.TestCase):
         table["rows"] = table["groups"]["A"] + table["groups"]["D"]
 
         self.assertFalse(no_decisive_weak_grounding(table, selected_option="A").passed)
-        self.assertFalse(direct_floor_holds(table, selected_option="A").passed)
+        self.assertTrue(direct_floor_holds(table, selected_option="A").passed)
         self.assertTrue(direct_floor_holds(table, selected_option="D").passed)
 
     def test_grounded_factual_requires_visual(self):
@@ -267,7 +267,7 @@ class V4FoundationTest(unittest.TestCase):
                 workspace=workspace,
             )
 
-            self.assertEqual(reason, "grounding_quality_floor")
+            self.assertEqual(reason, "selected_option_has_structured_support")
 
     def test_interpreter_foreach_fills_slots_and_collects_assignments(self):
         registry = ToolRegistry()

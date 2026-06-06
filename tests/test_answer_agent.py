@@ -125,7 +125,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertTrue(result.missing_evidence)
         self.assertIn("targeted", result.missing_evidence[0])
 
-    def test_arbitration_holds_global_gist_floor_for_gist_questions(self):
+    def test_arbitration_does_not_final_from_global_sparse_floor(self):
         table = {
             "options": ["B. a local scene guess", "D. whole-video synopsis"],
             "groups": {
@@ -142,7 +142,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
                     {
                         "obs_id": "obs_0001",
                         "tool": "global_gist",
-                        "claim": "Supported option: D. The global sparse view captures the whole-video synopsis.",
+                        "claim": "D. The global sparse view hints at the whole-video synopsis.",
                         "confidence": 0.74,
                         "grounding_quality": "global_sparse",
                     }
@@ -153,8 +153,75 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         result = arbitrate_evidence_table(table)
 
         self.assertEqual(result.status, "final")
-        self.assertEqual(result.answer, "D. whole-video synopsis")
-        self.assertEqual(result.citations, ["obs_0001"])
+        self.assertEqual(result.answer, "B. a local scene guess")
+        self.assertEqual(result.citations, ["obs_0002"])
+
+    def test_main_idea_coverage_prefers_full_rise_and_fall_over_partial_division(self):
+        table = {
+            "options": [
+                "B. Why the Austro-Hungarian Empire was divided",
+                "D. How the Austro-Hungarian Empire rose and fell",
+            ],
+            "groups": {
+                "B": [
+                    {
+                        "obs_id": "obs_0007",
+                        "tool": "vision_read",
+                        "claim": "The ending explains why the empire was divided after the war.",
+                        "confidence": 0.86,
+                        "grounding_quality": "visually_confirmed",
+                        "candidate_option_relations": [
+                            {"option": "B", "relation": "support", "strength": 0.86}
+                        ],
+                    }
+                ],
+                "D": [
+                    {
+                        "obs_id": "obs_0003",
+                        "tool": "timeline_asr_summary",
+                        "claim": (
+                            "Middle segments discuss the creation of the Austro-Hungarian Empire, "
+                            "economic growth, prosperity, population, industrial ability, and stability."
+                        ),
+                        "confidence": 0.84,
+                        "grounding_quality": "indexed_transcript",
+                        "candidate_option_relations": [
+                            {"option": "D", "relation": "support", "strength": 0.84}
+                        ],
+                    },
+                    {
+                        "obs_id": "obs_0006",
+                        "tool": "timeline_asr_summary",
+                        "claim": (
+                            "Late segments discuss war pressure, independence movements, collapse, "
+                            "and why the empire fell apart."
+                        ),
+                        "confidence": 0.84,
+                        "grounding_quality": "indexed_transcript",
+                        "candidate_option_relations": [
+                            {"option": "D", "relation": "support", "strength": 0.84}
+                        ],
+                    },
+                ],
+                "unassigned": [
+                    {
+                        "obs_id": "obs_0001",
+                        "tool": "global_gist",
+                        "claim": "Sparse topic hint: empire formation, internal tensions, and collapse.",
+                        "confidence": 0.76,
+                        "grounding_quality": "global_sparse",
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table)
+
+        self.assertEqual(result.status, "final")
+        self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rose and fell")
+        self.assertEqual(set(result.citations), {"obs_0003", "obs_0006"})
+        self.assertEqual(result.conflict["winner"], "D")
+        self.assertIn("coverage", result.rationale)
 
     def test_mutex_conflict_blocks_final(self):
         table = {

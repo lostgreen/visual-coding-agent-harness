@@ -9,7 +9,12 @@
     "C. A sports highlight reel",
     "D. The rise and fall of an ancient empire"
   ],
-  "backend_responses": [],
+  "backend_responses": [
+    {
+      "task": "replan",
+      "text": "{\"status\":\"continue\",\"program\":[{\"tool\":\"vision_read\",\"args\":{\"segment_id\":\"seg_0001\",\"ask_for\":\"Describe the main factual content of this segment.\"}}]}"
+    }
+  ],
   "tools": {
     "global_gist": {
       "0": {
@@ -23,6 +28,13 @@
         "confidence": 0.8,
         "supported_option": "D",
         "grounding_quality": "global_sparse"
+      }
+    },
+    "vision_read": {
+      "Describe the main factual content of this segment.": {
+        "claim": "The segment discusses the rise, battles, monuments, ruins, and fall of an ancient empire.",
+        "confidence": 0.9,
+        "supported_option": "D"
       }
     }
   }
