@@ -80,12 +80,12 @@ class HarnessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = EvidenceWorkspace.create(Path(tmp), run_id="multiline_claim")
             observation = workspace.write_observation(
-                tool_name="global_gist",
+                tool_name="vision_read",
                 input_artifacts=["demo.mp4#t=0,120"],
                 claim="B. Why the empire was divided.\nThe video shows maps and narration about its collapse.",
                 confidence=0.76,
                 regions=[{"start_sec": 0.0, "end_sec": 120.0}],
-                raw_output={"grounding_quality": "global_sparse"},
+                raw_output={"grounding_quality": "visually_confirmed"},
             )
             workspace.write_ledger_entry(observation)
 

@@ -144,6 +144,46 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(result["regions"][0]["tool_role"], "segment_inspector")
         self.assertEqual(result["regions"][0]["segment_id"], "seg_0004")
 
+    def test_inspect_segment_sanitizes_full_mcq_question_into_fact_request(self):
+        backend = CaptionQARecordingBackend()
+        registry = build_segment_inspector_registry(backend)
+        full_mcq = (
+            "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+            "Question: As depicted in the video, in what order do these sculptures appear?\n"
+            "Options:\n"
+            'A. "The rape of Persephone", "Apollo and Daphne", "David".\n'
+            'B. "David", "Aeneas", "Apollo and Daphne".\n'
+            'C. "Apollo and Daphne", "Aeneas", "David".\n'
+            'D. "Aeneas", "David", "The rape of Persephone".'
+        )
+
+        result = registry.execute(
+            "inspect_segment",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0003",
+                "start_sec": 600.0,
+                "end_sec": 900.0,
+                "question": full_mcq,
+                "candidate_options": [
+                    'A. "The rape of Persephone", "Apollo and Daphne", "David".',
+                    'B. "David", "Aeneas", "Apollo and Daphne".',
+                    'C. "Apollo and Daphne", "Aeneas", "David".',
+                    'D. "Aeneas", "David", "The rape of Persephone".',
+                ],
+                "nframes": 20,
+            },
+        )
+
+        request = backend.requests[0]
+        self.assertIn("Describe only the localized visible facts", request.prompt)
+        self.assertIn("names, artwork titles, order cues, timestamps", request.prompt)
+        self.assertNotIn("Answer with exactly one option letter", request.prompt)
+        self.assertNotIn("Candidate options:", request.prompt)
+        self.assertNotIn('"The rape of Persephone", "Apollo and Daphne", "David"', request.prompt)
+        self.assertNotIn("A.", request.prompt)
+        self.assertNotIn("supported_option", result)
+
     def test_vision_read_emits_typed_fact_without_option_vote(self):
         backend = CaptionQARecordingBackend()
         registry = build_segment_inspector_registry(backend)

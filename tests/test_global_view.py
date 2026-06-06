@@ -72,11 +72,40 @@ class GlobalViewToolTest(unittest.TestCase):
 
             self.assertEqual(table["groups"]["D"], [])
             unassigned_rows = table["groups"]["unassigned"]
-            self.assertEqual(len(unassigned_rows), 1)
-            self.assertEqual(unassigned_rows[0]["tool"], "global_gist")
-            self.assertEqual(unassigned_rows[0]["grounding_quality"], "global_sparse")
-            self.assertIsNone(unassigned_rows[0]["supported_option"])
+            self.assertEqual(unassigned_rows, [])
+            self.assertEqual(table["rows"], [])
             self.assertEqual(chains, [])
+
+    def test_global_gist_claim_is_hidden_from_planner_working_buffer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="global_context")
+            observation = workspace.write_observation(
+                tool_name="global_gist",
+                claim=(
+                    "B. Why the Austro-Hungarian Empire was divided. The video shows "
+                    "ethnic group distribution followed by division."
+                ),
+                confidence=0.76,
+                regions=[{"start_sec": 0.0, "end_sec": 1896.0}],
+                limitations="Sparse full-video sampling.",
+                raw_output={
+                    "candidate_option_hint": "B",
+                    "grounding_quality": "global_sparse",
+                    "time_range": [0.0, 1896.0],
+                },
+            )
+            distilled_records = distill(observation, workspace)
+            for record in distilled_records:
+                workspace.write_evidence(record)
+            workspace.write_ledger_entry(observation, parent_records=distilled_records)
+
+            context = workspace.compact_ledger_text()
+
+            self.assertIn("Context-Only Visual Hints", context)
+            self.assertIn("global_gist", context)
+            self.assertIn("sparse topic hint", context)
+            self.assertNotIn("B. Why the Austro-Hungarian Empire was divided", context)
+            self.assertNotIn("ethnic group distribution followed by division", context)
 
 
 if __name__ == "__main__":

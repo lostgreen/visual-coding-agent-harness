@@ -34,14 +34,18 @@ def build_segment_inspector_registry(
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
+        sanitized_question, sanitized_options = _sanitize_inspect_segment_question(
+            question,
+            candidate_options=candidate_options,
+        )
         return _run_inspector(
             backend=backend,
             video_path=video_path,
             segment_id=segment_id,
             start_sec=start_sec,
             end_sec=end_sec,
-            question=question,
-            candidate_options=candidate_options,
+            question=sanitized_question,
+            candidate_options=sanitized_options,
             nframes=nframes,
             max_pixels=max_pixels,
             fps=fps,
@@ -258,8 +262,7 @@ def _inspector_prompt(
     question: str,
     candidate_options: Sequence[str],
 ) -> str:
-    options_text = "\n".join(str(option) for option in candidate_options) or "(none)"
-    return (
+    prompt = (
         "You are a Segment Inspector subagent for long-video reasoning.\n"
         "Your context is intentionally isolated from the master planner.\n"
         "Inspect only the provided time window and do not rely on outside video context.\n"
@@ -268,9 +271,12 @@ def _inspector_prompt(
         "Do not choose an option. Do not emit supported_option, answer_option, or final_answer.\n"
         "Do not include step-by-step reasoning or raw frame descriptions unless essential evidence.\n"
         f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]\n"
-        f"Question: {question}\n"
-        f"Candidate options:\n{options_text}"
+        f"Question: {question}"
     )
+    if candidate_options:
+        options_text = "\n".join(str(option) for option in candidate_options)
+        prompt += f"\nCandidate options:\n{options_text}"
+    return prompt
 
 
 def _vision_read_prompt(
@@ -301,11 +307,38 @@ def _sanitize_vision_read_ask_for(ask_for: str) -> str:
     )
 
 
+def _sanitize_inspect_segment_question(
+    question: str,
+    *,
+    candidate_options: Sequence[str],
+) -> tuple[str, Sequence[str]]:
+    text = str(question or "").strip()
+    if not _looks_like_mcq(text) and not _candidate_options_look_like_full_mcq(candidate_options):
+        return text, candidate_options
+    return (
+        "Describe only the localized visible facts in this segment. Do not choose an option. "
+        "Focus on names, artwork titles, order cues, timestamps, entities, events, and any explicit text or narration that is visible.",
+        (),
+    )
+
+
 def _looks_like_mcq(text: str) -> bool:
     option_lines = re.findall(r"(?m)^\s*[A-H][\).]\s+\S+", str(text))
     if len(option_lines) >= 2:
         return True
     return bool(re.search(r"\b(?:which|what|why|how)\b", str(text), flags=re.IGNORECASE)) and len(option_lines) >= 1
+
+
+def _candidate_options_look_like_full_mcq(candidate_options: Sequence[str]) -> bool:
+    option_lines = [
+        str(option)
+        for option in candidate_options
+        if re.match(r"\s*[A-H][\).]\s+\S+", str(option), flags=re.IGNORECASE)
+    ]
+    if len(option_lines) < 3:
+        return False
+    joined = "\n".join(option_lines)
+    return len(joined) > 180 or any("," in line or '"' in line for line in option_lines)
 
 
 def _mutex_read_prompt(

@@ -203,8 +203,8 @@ class V4FoundationTest(unittest.TestCase):
             mapped = _write_evidence_chain(
                 workspace,
                 option="A",
-                grounding_quality="global_sparse",
-                tool="global_gist",
+                grounding_quality="inferred",
+                tool="caption_segment",
             )
 
             reason = grounding_quality_floor([mapped], workspace=workspace, require_visual=True)
@@ -218,8 +218,8 @@ class V4FoundationTest(unittest.TestCase):
             mapped = _write_evidence_chain(
                 workspace,
                 option="A",
-                grounding_quality="global_sparse",
-                tool="global_gist",
+                grounding_quality="inferred",
+                tool="caption_segment",
             )
 
             self.assertIsNone(grounding_quality_floor([mapped], workspace=workspace, require_visual=False))
@@ -227,11 +227,11 @@ class V4FoundationTest(unittest.TestCase):
     def test_visual_plus_global_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = EvidenceWorkspace.create(Path(tmp), run_id="grounding_floor")
-            global_mapped = _write_evidence_chain(
+            weak_mapped = _write_evidence_chain(
                 workspace,
                 option="A",
-                grounding_quality="global_sparse",
-                tool="global_gist",
+                grounding_quality="inferred",
+                tool="caption_segment",
             )
             visual_mapped = _write_evidence_chain(
                 workspace,
@@ -241,7 +241,7 @@ class V4FoundationTest(unittest.TestCase):
             )
 
             self.assertIsNone(
-                grounding_quality_floor([global_mapped, visual_mapped], workspace=workspace, require_visual=True)
+                grounding_quality_floor([weak_mapped, visual_mapped], workspace=workspace, require_visual=True)
             )
 
     def test_hard_skill_gate_uses_mapped_grounding_floor(self):
@@ -250,8 +250,8 @@ class V4FoundationTest(unittest.TestCase):
             _write_evidence_chain(
                 workspace,
                 option="A",
-                grounding_quality="global_sparse",
-                tool="global_gist",
+                grounding_quality="inferred",
+                tool="caption_segment",
             )
             table = workspace.evidence_table_v2(
                 question="Which option is shown?",

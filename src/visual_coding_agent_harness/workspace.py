@@ -180,7 +180,7 @@ class EvidenceWorkspace:
         "read_hypothesis",
         "update_hypothesis_slot",
     }
-    CONTEXT_ONLY_TOOLS = {"query_context"}
+    CONTEXT_ONLY_TOOLS = {"global_gist", "query_context"}
     ANSWER_EVIDENCE_TOOLS = (VISUAL_EVIDENCE_TOOLS - CONTEXT_ONLY_TOOLS) | {
         "caption_image",
         "caption_region",
@@ -966,7 +966,10 @@ class EvidenceWorkspace:
         ]
         working_entries = (
             [
-                entry for entry in entries if str(entry.get("tool", "")) not in self.CONTEXT_ONLY_TOOLS
+                entry
+                for entry in entries
+                if str(entry.get("tool", "")) not in self.CONTEXT_ONLY_TOOLS
+                and str(entry.get("tool", "")) not in self.NAVIGATION_TOOLS
             ][-max_working_observations:]
             if max_working_observations > 0
             else []
@@ -2267,8 +2270,14 @@ def _format_compact_entry(entry: Mapping[str, Any]) -> str:
 
 def _format_context_only_entry(entry: Mapping[str, Any]) -> str:
     limitations = entry.get("limitations") or "-"
+    tool_name = str(entry.get("tool", "unknown"))
+    if _tool_emits_candidate_hints_only(tool_name):
+        return (
+            f"- `{entry['observation_id']}` | tool: `{tool_name}` | "
+            f"sparse topic hint only; not answer support; claim hidden from planner | limitations: {limitations}"
+        )
     return (
-        f"- `{entry['observation_id']}` | tool: `{entry.get('tool', 'unknown')}` | "
+        f"- `{entry['observation_id']}` | tool: `{tool_name}` | "
         f"context hint only; not answer support | claim: {entry.get('claim', '')} | limitations: {limitations}"
     )
 
