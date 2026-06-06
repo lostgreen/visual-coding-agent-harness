@@ -14,6 +14,7 @@ vh-eval-videomme = "visual_coding_agent_harness.cli.eval_videomme:main"
 vh-run-ablation = "visual_coding_agent_harness.cli.run_ablation:main"
 vh-ablation-report = "visual_coding_agent_harness.cli.generate_ablation_report:main"
 vh-audit-trajectory = "visual_coding_agent_harness.cli.audit_trajectory:main"
+vh-trajectory-markdown = "visual_coding_agent_harness.cli.trajectory_markdown:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

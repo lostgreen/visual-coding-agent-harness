@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def test_videomme_eval_code_lives_in_package_with_legacy_runs_compatibility():
-    from visual_coding_agent_harness.evals.videomme import metrics, runner, summary_schema, training_trajectory
+    from visual_coding_agent_harness.evals.videomme import metrics, runner, summary_schema, training_trajectory, trajectory_markdown
     from runs import eval_runner, report_metrics
     from runs.summary_schema import RunSummary
     from runs.training_trajectory import TrainingTrajectory
@@ -14,6 +14,7 @@ def test_videomme_eval_code_lives_in_package_with_legacy_runs_compatibility():
     assert report_metrics.build_report is metrics.build_report
     assert RunSummary is summary_schema.RunSummary
     assert TrainingTrajectory is training_trajectory.TrainingTrajectory
+    assert callable(trajectory_markdown.render_trajectory_markdown)
 
 
 def test_ablation_code_lives_in_package_with_legacy_scripts_compatibility():
@@ -35,6 +36,7 @@ def test_new_package_cli_entrypoints_have_help():
         "visual_coding_agent_harness.cli.run_ablation",
         "visual_coding_agent_harness.cli.generate_ablation_report",
         "visual_coding_agent_harness.cli.audit_trajectory",
+        "visual_coding_agent_harness.cli.trajectory_markdown",
     ):
         completed = subprocess.run(
             [sys.executable, "-m", module, "--help"],
@@ -59,3 +61,4 @@ def test_pyproject_exposes_packaged_eval_console_scripts():
     assert 'vh-run-ablation = "visual_coding_agent_harness.cli.run_ablation:main"' in pyproject
     assert 'vh-ablation-report = "visual_coding_agent_harness.cli.generate_ablation_report:main"' in pyproject
     assert 'vh-audit-trajectory = "visual_coding_agent_harness.cli.audit_trajectory:main"' in pyproject
+    assert 'vh-trajectory-markdown = "visual_coding_agent_harness.cli.trajectory_markdown:main"' in pyproject
