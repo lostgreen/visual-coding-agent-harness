@@ -863,11 +863,12 @@ class EvidenceWorkspace:
         artifacts = ", ".join(observation.input_artifacts) or "-"
         base_limitation = observation.limitations or "-"
         confidence_signal = observation.confidence_signal or str(observation.raw_output.get("confidence_signal", ""))
-        if _has_worker_option_vote(
+        has_worker_option_vote = _has_worker_option_vote(
             tool_name=observation.tool,
             raw_output=observation.raw_output,
             claim=observation.claim,
-        ):
+        )
+        if has_worker_option_vote:
             sanitized_claim = _claim_without_legacy_worker_vote(observation.claim)
             note = f"legacy local-worker option vote quarantined; fact_text: {sanitized_claim}"
             base_limitation = f"{base_limitation}; {note}" if base_limitation != "-" else note
@@ -877,11 +878,7 @@ class EvidenceWorkspace:
         with (self.root / "ledger.md").open("a", encoding="utf-8") as handle:
             for parent_record in parents:
                 claim = _ledger_claim(observation, parent_record=parent_record)
-                if _has_worker_option_vote(
-                    tool_name=observation.tool,
-                    raw_output=observation.raw_output,
-                    claim=observation.claim,
-                ):
+                if has_worker_option_vote:
                     claim = _claim_without_legacy_worker_vote(claim)
                 grounding_quality = _ledger_grounding_quality(observation, parent_record=parent_record)
                 frame_set_id = (
@@ -928,6 +925,8 @@ class EvidenceWorkspace:
                 )
                 handle.write(line)
         raw_relations = _candidate_option_relations(observation.raw_output.get("candidate_option_relations"))
+        if not raw_relations and not has_worker_option_vote:
+            raw_relations = _candidate_option_relations_from_supported_option(observation)
         if raw_relations:
             self.annotate_candidate_option_relations(
                 observation_ids=[observation.observation_id],
@@ -1723,6 +1722,28 @@ def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _candidate_option_relations_from_supported_option(observation: Observation) -> list[dict[str, Any]]:
+    raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+    option = (
+        raw_output.get("supported_option")
+        or raw_output.get("supported_option_letter")
+        or raw_output.get("answer_option")
+        or _first_item(raw_output.get("supported_options"))
+    )
+    if not option:
+        return []
+    return [
+        {
+            "option": str(option),
+            "relation": "support",
+            "strength": float(observation.confidence),
+            "observation_id": observation.observation_id,
+            "rationale": "Tool output reported this supported option.",
+            "assigned_by": observation.tool,
+        }
+    ]
 
 
 def _observation_relation_count(observation: Mapping[str, Any]) -> int:

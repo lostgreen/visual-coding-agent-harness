@@ -49,8 +49,20 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
         )
         answer_text = response.text.strip()
         supported_option = _extract_choice(answer_text)
+        candidate_option_relations = []
+        if supported_option:
+            candidate_option_relations.append(
+                {
+                    "option": supported_option,
+                    "relation": "support",
+                    "strength": 0.76,
+                    "rationale": "Sparse whole-video global gist selected this option.",
+                    "assigned_by": "global_gist",
+                }
+            )
         raw_fields = {
             "supported_option": supported_option,
+            "candidate_option_relations": candidate_option_relations,
             "grounding_quality": "global_sparse",
             "time_range": [0.0, float(duration_sec)],
             "nframes": int(resolved_nframes),

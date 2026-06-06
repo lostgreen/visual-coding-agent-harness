@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from visual_coding_agent_harness.agents.distill import distill
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
@@ -37,6 +38,8 @@ class GlobalViewToolTest(unittest.TestCase):
         self.assertEqual(backend.requests[0].metadata["nframes"], 128)
         self.assertEqual(result["raw_output"]["supported_option"], "D")
         self.assertEqual(result["raw_output"]["grounding_quality"], "global_sparse")
+        self.assertEqual(result["raw_output"]["candidate_option_relations"][0]["option"], "D")
+        self.assertEqual(result["raw_output"]["candidate_option_relations"][0]["relation"], "support")
         self.assertEqual(result["regions"][0]["start_sec"], 0.0)
         self.assertEqual(result["regions"][0]["end_sec"], 1896.0)
 
@@ -55,17 +58,22 @@ class GlobalViewToolTest(unittest.TestCase):
                     "time_range": [0.0, 1896.0],
                 },
             )
-            workspace.write_ledger_entry(observation)
+            distilled_records = distill(observation, workspace)
+            for record in distilled_records:
+                workspace.write_evidence(record)
+            workspace.write_ledger_entry(observation, parent_records=distilled_records)
 
             table = workspace.evidence_table(
                 question="What is the video mainly about?",
                 options=["A. one", "B. two", "C. three", "D. aviation documentary"],
             )
+            chains = workspace.evidence_chain_summaries()
 
             d_rows = table["groups"]["D"]
             self.assertEqual(len(d_rows), 1)
             self.assertEqual(d_rows[0]["tool"], "global_gist")
             self.assertEqual(d_rows[0]["grounding_quality"], "global_sparse")
+            self.assertTrue(chains)
 
 
 if __name__ == "__main__":
