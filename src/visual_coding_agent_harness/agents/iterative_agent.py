@@ -413,6 +413,31 @@ class IterativeVisualAgent:
                         answer_feedback = [
                             "All your tool calls were filtered. Last reasons: " + ", ".join(reasons) + "."
                         ]
+                if (
+                    no_evidence_growth_rounds >= 2
+                    and not final_round_reserved
+                    and program
+                    and not _program_has_visual_evidence_tool(program)
+                ):
+                    forced_program = self._fallback_visual_evidence_program(
+                        question=question,
+                        video_path=video_path,
+                        inspected_segment_ids=inspected_segment_ids,
+                        tool_class_counts=tool_class_counts,
+                        planner_skill=planner_skill,
+                    )
+                    if forced_program:
+                        self.workspace.write_trace_event(
+                            "exploration_policy_adjustment",
+                            {
+                                "reason": "force_visual_after_no_evidence_growth",
+                                "round": round_number,
+                                "no_growth_rounds": no_evidence_growth_rounds,
+                                "skipped_tools": [str(step.get("tool", "")) for step in program],
+                                "resolved_program": forced_program,
+                            },
+                        )
+                        program = forced_program
             else:
                 program = []
                 last_round_normalization_notes = []
@@ -1097,6 +1122,63 @@ class IterativeVisualAgent:
             if self._has_tool(tool_name):
                 return tool_name
         return None
+
+    def _fallback_visual_evidence_program(
+        self,
+        *,
+        question: str,
+        video_path: str,
+        inspected_segment_ids: set[str],
+        tool_class_counts: Mapping[str, int],
+        planner_skill: SkillSpec | None,
+    ) -> list[dict[str, Any]]:
+        segment_id = self._resolve_next_segment_id("", inspected_segment_ids)
+        if segment_id is None:
+            return []
+        tool_name = self._fallback_visual_tool_name_for_skill(planner_skill)
+        if tool_name is None:
+            return []
+        pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
+        if not _tool_budget_available(
+            budget=self.budget,
+            tool_name=tool_name,
+            tool_class_counts=tool_class_counts,
+            pending_tool_class_counts=pending_tool_class_counts,
+        ):
+            return []
+        segment = self.scene_index.get(segment_id)
+        args: dict[str, Any] = {
+            "video_path": video_path,
+            "segment_id": segment.segment_id,
+            "start_sec": segment.start_sec,
+            "end_sec": segment.end_sec,
+            "nframes": self.budget.default_nframes,
+        }
+        if tool_name == "vision_read":
+            args["ask_for"] = question
+            args["event_label"] = question
+        else:
+            args["question"] = question
+        candidate_options = extract_candidate_options(question)
+        if candidate_options and tool_name == "inspect_segment":
+            args["candidate_options"] = list(candidate_options)
+        return [{"tool": tool_name, "args": args, "assign": f"forced_visual_{segment.segment_id}"}]
+
+    def _fallback_visual_tool_name_for_skill(self, planner_skill: SkillSpec | None) -> str | None:
+        if planner_skill is not None and not self.budget.free_exploration:
+            if planner_skill.name == "timeline_ordering":
+                preferences = ["caption_segment", "vision_read", "qa_segment", "inspect_segment"]
+            elif planner_skill.name in {"mutex_fact_qa", "grounded_factual_qa"}:
+                preferences = ["vision_read", "qa_segment", "caption_segment", "inspect_segment"]
+            elif planner_skill.name == "main_idea":
+                preferences = ["vision_read", "caption_segment", "qa_segment", "inspect_segment"]
+            else:
+                preferences = ["vision_read", "inspect_segment", "caption_segment", "qa_segment"]
+            for tool_name in preferences:
+                if self._has_tool(tool_name) and tool_name in planner_skill.allowed_actions:
+                    return tool_name
+            return None
+        return self._fallback_visual_tool_name()
 
     def _resolve_next_segment_id(self, requested_segment_id: str, reserved_segment_ids: set[str]) -> Optional[str]:
         if requested_segment_id and requested_segment_id not in reserved_segment_ids:
@@ -1994,6 +2076,10 @@ def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, A
         if isinstance(args, Mapping) and args.get("candidate_options"):
             return True
     return False
+
+
+def _program_has_visual_evidence_tool(program: Sequence[Mapping[str, Any]]) -> bool:
+    return any(str(step.get("tool", "")) in _SEGMENT_MEDIA_TOOLS or str(step.get("tool", "")) in _GLOBAL_VIEW_TOOLS for step in program)
 
 
 def _blocked_final_reason(

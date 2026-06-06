@@ -2489,6 +2489,80 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("evidence_table_no_growth", trace)
 
+    def test_no_evidence_growth_replaces_navigation_only_plan_with_visual_read(self):
+        planner_responses = [
+            '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "first pass"}, "assign": "map1"}]}',
+            '{"status": "continue", "program": [{"tool": "search_segments", "args": {"query": "second pass"}, "assign": "map2"}]}',
+            '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "third pass"}, "assign": "map3"}]}',
+        ]
+
+        class AbstainBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text='{"answer": "need_more_evidence", "citations": [], "missing_evidence": ["visual read needed"]}'
+                    )
+                return super().generate(request)
+
+        registry = ToolRegistry()
+        calls = []
+
+        @tool(name="video_ls", description="Cheap navigation that adds no answer evidence.")
+        def video_ls(query: str = ""):
+            calls.append(("video_ls", query))
+            return {"claim": f"navigation only: {query}", "confidence": 1.0}
+
+        @tool(name="search_segments", description="Cheap search that adds no answer evidence.")
+        def search_segments(query: str, top_k: int = 5):
+            calls.append(("search_segments", query))
+            return {"claim": f"search only: {query}", "confidence": 1.0}
+
+        @tool(name="vision_read", description="Visual read that creates answer evidence.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 8,
+        ):
+            calls.append(("vision_read", segment_id, ask_for))
+            return {
+                "claim": f"{segment_id} visual evidence for {ask_for}",
+                "confidence": 0.74,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(video_ls)
+        registry.register(search_segments)
+        registry.register(vision_read)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=20.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="no_growth_visual_fallback")
+            agent = IterativeVisualAgent(
+                backend=AbstainBackend(planner_responses),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=3,
+                    reserve_final_round=False,
+                    max_repeated_programs=0,
+                    answer_probe_rounds_before_final=0,
+                ),
+            )
+
+            result = agent.run(question="Which option is visible?\nA. red object\nB. blue object", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.rounds[2].program[0]["tool"], "vision_read")
+            self.assertEqual(calls[-1][0], "vision_read")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("force_visual_after_no_evidence_growth", trace)
+
     def test_segment_vlm_tools_share_backend_and_pass_temporal_metadata(self):
         class SegmentToolBackend(VisionLanguageBackend):
             def __init__(self):
