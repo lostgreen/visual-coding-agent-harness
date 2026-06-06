@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -22,6 +24,8 @@ class TrainingTrajectory:
     evidence_chain_ids: list[list[str]]
     frame_set_ids: list[str]
     tool_calls: list[dict[str, Any]]
+    tool_results: list[dict[str, Any]]
+    planner_turns: list[dict[str, Any]]
     context_budget_reports: list[dict[str, Any]]
     followup_history: list[dict[str, Any]]
     contract_version: str = CONTRACT_VERSION
@@ -45,6 +49,7 @@ class TrainingTrajectory:
     ) -> "TrainingTrajectory":
         trace_events = _read_jsonl(workspace.root / "trace.jsonl")
         chains = workspace.evidence_chain_summaries(max_chains=100)
+        planner_turns = _planner_turns(trace_events, workspace=workspace)
         trajectory = cls(
             run_id=workspace.run_id,
             case_id=str(case_id),
@@ -60,6 +65,8 @@ class TrainingTrajectory:
             ],
             frame_set_ids=_frame_set_ids(workspace, chains),
             tool_calls=_tool_calls(trace_events),
+            tool_results=_tool_results(trace_events, workspace=workspace, planner_turns=planner_turns),
+            planner_turns=planner_turns,
             context_budget_reports=_event_payloads(trace_events, "context_budget_report"),
             followup_history=_followup_events(trace_events),
             workspace_root=workspace.root.as_posix(),
@@ -94,6 +101,32 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _planner_turns(events: Sequence[Mapping[str, Any]], *, workspace: EvidenceWorkspace) -> list[dict[str, Any]]:
+    turns: list[dict[str, Any]] = []
+    for event in events:
+        if str(event.get("type", "")) != "planner_io":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        prompt_artifact = _artifact_summary(workspace.root, payload.get("prompt", {}))
+        response_artifact = _artifact_summary(workspace.root, payload.get("response", {}))
+        prompt_text = _artifact_text(workspace.root, prompt_artifact)
+        turns.append(
+            {
+                "round": int(payload.get("round", len(turns) + 1) or len(turns) + 1),
+                "planner_input_mode": str(payload.get("planner_input_mode", "")),
+                "prompt_artifact": prompt_artifact,
+                "response_artifact": response_artifact,
+                "response_excerpt": str(payload.get("response_excerpt", "")),
+                "evidence_observation_ids": _evidence_observation_ids_from_prompt(prompt_text),
+                "evidence_snapshot_chars": len(_evidence_section(prompt_text)),
+                "created_at": str(event.get("created_at", "")),
+            }
+        )
+    return turns
+
+
 def _tool_calls(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     for event in events:
@@ -112,6 +145,51 @@ def _tool_calls(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return calls
+
+
+def _tool_results(
+    events: Sequence[Mapping[str, Any]],
+    *,
+    workspace: EvidenceWorkspace,
+    planner_turns: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    observations = _observations_by_id(workspace)
+    evidence_ids = _evidence_ids_by_observation(workspace)
+    visible_rounds = _visible_rounds_by_observation(planner_turns)
+    results: list[dict[str, Any]] = []
+    for event in events:
+        if str(event.get("type", "")) != "tool_result":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        observation_id = str(payload.get("observation_id", ""))
+        observation = observations.get(observation_id, {})
+        raw_output = observation.get("raw_output", {})
+        raw_mapping = raw_output if isinstance(raw_output, Mapping) else {}
+        result = {
+            "step": int(payload.get("step", len(results) + 1) or len(results) + 1),
+            "tool": str(payload.get("tool", "")),
+            "observation_id": observation_id,
+            "claim": str(observation.get("claim", "")),
+            "confidence": float(observation.get("confidence", 0.0) or 0.0),
+            "confidence_signal": str(
+                observation.get("confidence_signal", "") or raw_mapping.get("confidence_signal", "")
+            ),
+            "grounding_quality": str(raw_mapping.get("grounding_quality", "")),
+            "limitations": str(observation.get("limitations", "")),
+            "regions": _bounded_sequence(observation.get("regions", []), max_items=8),
+            "frame_set_id": str(observation.get("frame_set_id", "")),
+            "input_artifacts": _bounded_sequence(observation.get("input_artifacts", []), max_items=8),
+            "evidence_record_ids": evidence_ids.get(observation_id, []),
+            "visible_in_planner_rounds": visible_rounds.get(observation_id, []),
+            "created_at": str(event.get("created_at", "")),
+        }
+        relations = raw_mapping.get("candidate_option_relations")
+        if isinstance(relations, Sequence) and not isinstance(relations, (str, bytes)):
+            result["candidate_option_relations"] = _bounded_sequence(relations, max_items=8)
+        results.append(result)
+    return results
 
 
 def _event_payloads(events: Sequence[Mapping[str, Any]], event_type: str) -> list[dict[str, Any]]:
@@ -146,3 +224,93 @@ def _frame_set_ids(workspace: EvidenceWorkspace, chains: Sequence[Mapping[str, A
     }
     ids.update(str(manifest.frame_set_id) for manifest in workspace.load_all_manifests())
     return sorted(item for item in ids if item)
+
+
+def _artifact_summary(root: Path, artifact: Any) -> dict[str, Any]:
+    payload = artifact if isinstance(artifact, Mapping) else {}
+    summary: dict[str, Any] = {
+        "path": str(payload.get("path", "")),
+        "chars": int(payload.get("chars", 0) or 0),
+        "stored_chars": int(payload.get("stored_chars", 0) or 0),
+        "truncated": bool(payload.get("truncated", False)),
+    }
+    path = _artifact_path(root, summary)
+    if path is not None and path.exists():
+        data = path.read_bytes()
+        summary["sha256"] = hashlib.sha256(data).hexdigest()
+        summary["bytes"] = len(data)
+    else:
+        summary["sha256"] = ""
+        summary["bytes"] = 0
+    return summary
+
+
+def _artifact_text(root: Path, artifact: Mapping[str, Any]) -> str:
+    path = _artifact_path(root, artifact)
+    if path is None or not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
+def _artifact_path(root: Path, artifact: Mapping[str, Any]) -> Path | None:
+    artifact_path = str(artifact.get("path", "")).strip()
+    if not artifact_path:
+        return None
+    path = Path(artifact_path)
+    return path if path.is_absolute() else root / path
+
+
+def _evidence_observation_ids_from_prompt(prompt_text: str) -> list[str]:
+    return sorted(set(re.findall(r"obs_\d{4}", _evidence_section(prompt_text))))
+
+
+def _evidence_section(prompt_text: str) -> str:
+    if "## Evidence" not in prompt_text:
+        return ""
+    section = prompt_text.split("## Evidence", 1)[1]
+    for marker in ["\n## Feedback", "\n## Response Contract", "\n## Task"]:
+        if marker in section:
+            return section.split(marker, 1)[0]
+    return section
+
+
+def _observations_by_id(workspace: EvidenceWorkspace) -> dict[str, dict[str, Any]]:
+    return {
+        str(row.get("observation_id", "")): row
+        for row in _read_jsonl(workspace.root / "observations.jsonl")
+        if row.get("observation_id")
+    }
+
+
+def _evidence_ids_by_observation(workspace: EvidenceWorkspace) -> dict[str, list[str]]:
+    ids: dict[str, list[str]] = {}
+    for row in _read_jsonl(workspace.root / "evidence.jsonl"):
+        observation_id = str(row.get("observation_id", ""))
+        evidence_id = str(row.get("evidence_id", ""))
+        if observation_id and evidence_id:
+            ids.setdefault(observation_id, []).append(evidence_id)
+    return ids
+
+
+def _visible_rounds_by_observation(planner_turns: Sequence[Mapping[str, Any]]) -> dict[str, list[int]]:
+    visible: dict[str, list[int]] = {}
+    for turn in planner_turns:
+        try:
+            round_number = int(turn.get("round", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        observation_ids = turn.get("evidence_observation_ids", [])
+        if not isinstance(observation_ids, Sequence) or isinstance(observation_ids, (str, bytes)):
+            continue
+        for observation_id in observation_ids:
+            visible.setdefault(str(observation_id), []).append(round_number)
+    return visible
+
+
+def _bounded_sequence(value: Any, *, max_items: int) -> list[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [dict(item) if isinstance(item, Mapping) else item for item in value[:max_items]]
