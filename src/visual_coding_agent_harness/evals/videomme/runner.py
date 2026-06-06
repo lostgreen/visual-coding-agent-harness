@@ -20,6 +20,7 @@ from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 from .summary_schema import RunSummary, validate as validate_run_summary
 from .training_trajectory import TrainingTrajectory
+from .trajectory_markdown import write_trajectory_markdown
 
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
@@ -435,8 +436,11 @@ def run_eval_cases(
                             strategy_summary=case["strategies"][strategy],
                         )
                         if trajectory_path is not None:
+                            markdown_path = trajectory_path.with_suffix(".md")
                             case["raw_artifacts"].setdefault("training_trajectories", {})[strategy] = str(trajectory_path)
+                            case["raw_artifacts"].setdefault("training_trajectory_markdown", {})[strategy] = str(markdown_path)
                             case["strategies"][strategy]["training_trajectory_path"] = str(trajectory_path)
+                            case["strategies"][strategy]["training_trajectory_markdown_path"] = str(markdown_path)
             except Exception as exc:
                 case["strategies"][strategy] = {
                     "choice": "",
@@ -523,6 +527,7 @@ def _export_training_trajectory(
         is_correct=bool(strategy_summary.get("correct")) if selected else None,
         output_path=trajectory_path,
     )
+    write_trajectory_markdown(trajectory_path)
     return trajectory_path
 
 

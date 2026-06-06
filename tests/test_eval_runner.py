@@ -620,11 +620,16 @@ class EvalRunnerTest(unittest.TestCase):
 
             case = summary["cases"][0]
             trajectory_path = Path(case["raw_artifacts"]["training_trajectories"]["agent_v2"])
+            markdown_path = Path(case["raw_artifacts"]["training_trajectory_markdown"]["agent_v2"])
             self.assertTrue(trajectory_path.exists())
+            self.assertTrue(markdown_path.exists())
+            self.assertEqual(markdown_path, trajectory_path.with_suffix(".md"))
+            self.assertEqual(case["strategies"]["agent_v2"]["training_trajectory_markdown_path"], str(markdown_path))
             self.assertTrue(summary["training_trajectory_exported"])
             payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["schema_version"], "TrainingTrajectoryV1")
             self.assertEqual(payload["ground_truth"], "B")
+            self.assertIn("# Trajectory 605-1", markdown_path.read_text(encoding="utf-8"))
 
     def test_training_trajectory_export_path_exists_for_relative_run_root(self):
         from runs import eval_runner
@@ -652,6 +657,7 @@ class EvalRunnerTest(unittest.TestCase):
             assert trajectory_path is not None
             self.assertTrue(trajectory_path.is_absolute())
             self.assertTrue(trajectory_path.exists())
+            self.assertTrue(trajectory_path.with_suffix(".md").exists())
 
 
 def _make_training_workspace(base_dir: Path, run_id: str) -> EvidenceWorkspace:
