@@ -296,12 +296,13 @@ class IterativeVisualAgent:
             planned_program: Any = action.get("program", [])
 
             if status == "final":
-                blocked_reason = _blocked_final_reason(
+                final_citations = [str(item) for item in action.get("citations", [])]
+                blocked_reason = _blocked_planner_final_reason(
                     question=question,
                     has_inspect_with_candidate_options=has_inspect_with_candidate_options,
                     workspace=self.workspace,
                     answer=str(action.get("answer", "")),
-                    citations=[str(item) for item in action.get("citations", [])],
+                    citations=final_citations,
                 )
                 if blocked_reason:
                     self.workspace.write_trace_event(
@@ -310,7 +311,7 @@ class IterativeVisualAgent:
                             "round": round_number,
                             "reason": blocked_reason,
                             "answer": str(action.get("answer", "")),
-                            "citations": [str(item) for item in action.get("citations", [])],
+                            "citations": final_citations,
                         },
                     )
                     self.workspace.write_reflection_memory(
@@ -327,7 +328,6 @@ class IterativeVisualAgent:
                     status = "continue"
                     rationale = blocked_reason
                 else:
-                    final_citations = [str(item) for item in action.get("citations", [])]
                     result_round = IterativeRound(
                         round_number=round_number,
                         status="final",
@@ -1925,6 +1925,43 @@ def _blocked_final_reason(
     if not workspace.has_non_navigation_visual_citation(citations):
         return "final_requires_non_navigation_visual_evidence"
     return ""
+
+
+def _blocked_planner_final_reason(
+    *,
+    question: str,
+    has_inspect_with_candidate_options: bool,
+    workspace: EvidenceWorkspace,
+    answer: str,
+    citations: Sequence[str],
+) -> str:
+    base_reason = _blocked_final_reason(
+        question=question,
+        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+        workspace=workspace,
+        answer=answer,
+        citations=citations,
+    )
+    if base_reason:
+        return base_reason
+    options = extract_candidate_options(question)
+    if classify_question_route(question) != "gist_global" or not options:
+        return ""
+
+    selected_option = _answer_option_letter(answer)
+    table = workspace.evidence_table_v2(
+        question=question,
+        options=options,
+        include_legacy_worker_votes=True,
+    )
+    return _hard_skill_gate_reason(
+        workspace=workspace,
+        skill_name="main_idea",
+        question=question,
+        table=table,
+        selected_option=selected_option,
+        citations=citations,
+    )
 
 
 def _hard_skill_gate_reason(

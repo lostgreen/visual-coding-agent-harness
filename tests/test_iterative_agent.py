@@ -1445,6 +1445,68 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_final_blocked", trace)
 
+    def test_iterative_agent_blocks_main_idea_planner_final_without_structured_support(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "vision_read", "args": {"segment_id": "seg_0001", '
+                    '"ask_for": "Describe the opening collapse evidence."}, "assign": "v1"}'
+                    "]}"
+                ),
+                '{"status": "final", "answer": "C. the empire declining and collapsing", '
+                '"citations": ["obs_0001"], "confidence": 0.91}',
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+        registry = build_segment_test_registry()
+
+        @tool(name="vision_read", description="Read localized visual evidence.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 16,
+        ):
+            return {
+                "claim": "The sampled segment shows only an ending collapse scene, not a full-video arc.",
+                "confidence": 0.82,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec, "nframes": nframes}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(vision_read)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="block_main_idea_planner_final")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=2, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question=(
+                    "What is the video mainly about?\n"
+                    "A. the empire's allies\n"
+                    "B. why the empire was divided\n"
+                    "C. the empire declining and collapsing\n"
+                    "D. the empire's rise, stability, decline, and collapse"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertNotEqual(result.status, "final")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_final_blocked", trace)
+            self.assertIn("selected_option_has_structured_support", trace)
+
     def test_iterative_agent_prompt_includes_broad_long_video_index(self):
         backend = ScriptedPlannerBackend(
             ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']
