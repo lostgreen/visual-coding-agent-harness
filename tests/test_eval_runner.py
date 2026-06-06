@@ -399,6 +399,16 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertFalse(config.budget.reserve_final_round)
         self.assertTrue(config.budget.hard_skill_runtime)
 
+    def test_disable_global_gist_route_cli_sets_budget_flag(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(["--disable-global-gist-route"])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertTrue(config.budget.disable_global_gist_route)
+
     def test_context_budget_cli_flags_build_agent_config(self):
         from runs import eval_runner
 

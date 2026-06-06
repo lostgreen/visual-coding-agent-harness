@@ -1053,6 +1053,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use deterministic skill runtime for supported routes before falling back to planner loop.",
     )
+    parser.add_argument(
+        "--disable-global-gist-route",
+        action="store_true",
+        help="Skip the automatic gist_global shortcut so debugging runs capture planner-loop IO.",
+    )
     parser.add_argument("--enable-query-context", dest="enable_query_context", action="store_true", default=None)
     parser.add_argument("--disable-query-context", dest="enable_query_context", action="store_false")
     parser.add_argument("--enable-followup", dest="enable_followup", action="store_true", default=None)
@@ -1101,8 +1106,11 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             cheap_tool_budget=args.cheap_tool_budget,
             expensive_tool_budget=args.expensive_tool_budget,
             verifier_tool_budget=args.verifier_tool_budget,
+            disable_global_gist_route=args.disable_global_gist_route,
         )
     )
+    if args.disable_global_gist_route and budget.free_exploration:
+        budget = replace(budget, disable_global_gist_route=True)
     if args.followup_budget is not None:
         budget = replace(budget, cheap_tool_budget=max(0, int(args.followup_budget)))
     if args.enable_followup is False:

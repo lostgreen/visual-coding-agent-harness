@@ -389,6 +389,37 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual([step["tool"] for step in result.rounds[0].program], ["global_gist", "global_gist"])
             self.assertEqual(result.rounds[0].observation_ids, ["obs_0001", "obs_0002"])
 
+    def test_budget_can_disable_global_gist_shortcut_for_planner_trace_debugging(self):
+        backend = ScriptedPlannerBackend(
+            ['{"status": "final", "answer": "planner handled it", "citations": [], "confidence": 0.4}']
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=1896.0, window_sec=300.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="disable_global_route")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_global_route_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(disable_global_gist_route=True, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question=(
+                    "What is the video mainly about?\n"
+                    "A. cooking\n"
+                    "B. a local airport scene\n"
+                    "C. a city walk\n"
+                    "D. an aviation documentary"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertGreaterEqual(len(backend.requests), 1)
+            self.assertEqual(backend.requests[0].task, "replan")
+            self.assertEqual(workspace.observation_count(tool_name="global_gist"), 0)
+
     def test_normalization_failure_surfaces_in_next_prompt(self):
         backend = ScriptedPlannerBackend(
             [

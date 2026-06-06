@@ -78,6 +78,7 @@ class AgentBudget:
     max_repeated_programs: int = 3
     hard_skill_runtime: bool = False
     reflection_memory_max_items: int = 5
+    disable_global_gist_route: bool = False
 
     @classmethod
     def free_explore(cls, *, max_rounds: int = 24, max_tool_calls_per_round: int = 4) -> "AgentBudget":
@@ -175,7 +176,11 @@ class IterativeVisualAgent:
 
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
         self.workspace.ensure_hypothesis(question)
-        if classify_question_route(question) == "gist_global" and self._has_tool("global_gist"):
+        if (
+            not self.budget.disable_global_gist_route
+            and classify_question_route(question) == "gist_global"
+            and self._has_tool("global_gist")
+        ):
             global_result = self._try_global_gist_route(question=question, video_path=video_path)
             if global_result is not None:
                 return global_result
