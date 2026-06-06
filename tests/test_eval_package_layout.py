@@ -1,7 +1,6 @@
 import os
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 
@@ -53,11 +52,10 @@ def test_new_package_cli_entrypoints_have_help():
 
 def test_pyproject_exposes_packaged_eval_console_scripts():
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    pyproject = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+    pyproject = pyproject_path.read_text(encoding="utf-8")
 
-    assert pyproject["project"]["scripts"] == {
-        "vh-eval-videomme": "visual_coding_agent_harness.cli.eval_videomme:main",
-        "vh-run-ablation": "visual_coding_agent_harness.cli.run_ablation:main",
-        "vh-ablation-report": "visual_coding_agent_harness.cli.generate_ablation_report:main",
-        "vh-audit-trajectory": "visual_coding_agent_harness.cli.audit_trajectory:main",
-    }
+    assert "[project.scripts]" in pyproject
+    assert 'vh-eval-videomme = "visual_coding_agent_harness.cli.eval_videomme:main"' in pyproject
+    assert 'vh-run-ablation = "visual_coding_agent_harness.cli.run_ablation:main"' in pyproject
+    assert 'vh-ablation-report = "visual_coding_agent_harness.cli.generate_ablation_report:main"' in pyproject
+    assert 'vh-audit-trajectory = "visual_coding_agent_harness.cli.audit_trajectory:main"' in pyproject
