@@ -291,6 +291,51 @@ def test_timeline_ordering_allows_verify_ledger_answer(tmp_path: Path):
     assert "route_violation" not in trace
 
 
+def test_planner_selected_skill_overrides_fallback_route_for_tool_policy(tmp_path: Path):
+    counter: dict[str, int] = {}
+    backend = StaticBackend(
+        json.dumps(
+            {
+                "status": "continue",
+                "skill": "timeline_ordering",
+                "program": [
+                    {
+                        "tool": "caption_segment",
+                        "args": {"segment_id": "seg_0001", "question": "Find life-stage evidence."},
+                    }
+                ],
+            }
+        )
+    )
+    registry = ToolRegistry()
+
+    @tool(name="caption_segment", description="Caption one segment.")
+    def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str = "", **kwargs):
+        counter["caption_segment"] = counter.get("caption_segment", 0) + 1
+        return {
+            "claim": f"{segment_id} caption for {question}",
+            "confidence": 0.75,
+            "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+        }
+
+    registry.register(caption_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "planner_skill_override")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    agent.run(question="How was his life journey according to the video?", video_path="/videos/demo.mp4")
+
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert counter.get("caption_segment", 0) == 1
+    assert "planner_skill_selection" in trace
+    assert "route_violation" not in trace
+
+
 def test_free_explore_allows_all(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(

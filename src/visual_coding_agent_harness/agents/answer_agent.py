@@ -155,7 +155,7 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
                 conflict=conflict,
             )
 
-    citation_rows = strong_winning_rows[:2]
+    citation_rows = _temporal_citation_rows(strong_winning_rows) or strong_winning_rows[:2]
     citations = [str(row.get("obs_id", "")) for row in citation_rows if row.get("obs_id")]
     answer = option_text.get(winner, winner)
     rationale = (
@@ -337,6 +337,35 @@ def _main_idea_citation_rows(rows: Sequence[Mapping[str, Any]], *, max_rows: int
         if len(selected) >= max_rows:
             break
     return selected
+
+
+def _temporal_citation_rows(rows: Sequence[Mapping[str, Any]], *, max_rows: int = 2) -> list[Mapping[str, Any]]:
+    temporal_rows = [
+        row
+        for row in rows
+        if str(row.get("event_label", "")).strip()
+        and (row.get("observed_at_sec") is not None or row.get("time_range") is not None)
+    ]
+    if len(temporal_rows) < 2:
+        return []
+    temporal_rows.sort(key=lambda row: (_row_start_sec(row), str(row.get("obs_id", ""))))
+    if max_rows <= 1:
+        return temporal_rows[:1]
+    return [temporal_rows[0], temporal_rows[-1]]
+
+
+def _row_start_sec(row: Mapping[str, Any]) -> float:
+    try:
+        return float(row.get("observed_at_sec"))
+    except (TypeError, ValueError):
+        pass
+    time_range = row.get("time_range")
+    if isinstance(time_range, Sequence) and not isinstance(time_range, (str, bytes)) and time_range:
+        try:
+            return float(time_range[0])
+        except (TypeError, ValueError):
+            return 0.0
+    return 0.0
 
 
 def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:

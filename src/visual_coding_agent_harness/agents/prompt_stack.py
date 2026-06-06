@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 from ..video_index import SceneIndex
 from .context_budget import ContextBudgetAllocator, ContextBudgetReport, SlotName
 from .question_policy import select_question_playbook
-from .skills.specs import select_skill
+from .skills.specs import select_skill, skill_catalog_prompt
 
 
 @dataclass(frozen=True)
@@ -102,9 +102,11 @@ def compose_replanning_prompt_slots(
             name="active_skill",
             title="Active Skill",
             body=(
-                f"{skill.prompt_context()}\n"
-                "Treat this skill as the current workflow contract. Use planner freedom only to fill missing slots, "
-                "recover from failed grounding, or request targeted evidence."
+                f"Recommended fallback skill:\n{skill.prompt_context()}\n\n"
+                f"{skill_catalog_prompt()}\n"
+                "Select the skill that best matches this case in every planner JSON as `skill`. "
+                "Use the recommended skill only when it matches the video question; otherwise choose a better catalog skill. "
+                "The harness validates tool calls and final evidence against the selected skill."
             ),
         ),
         PromptBlock(name="tool_schema", title="Tool Schema", body=_tool_schema_block()),
@@ -114,8 +116,8 @@ def compose_replanning_prompt_slots(
             title="Response Contract",
             body=(
                 "Return only JSON with one of these schemas:\n"
-                '{"status": "continue", "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
-                '{"status": "final", "answer": string, "citations": [observation_id], "confidence": number}'
+                '{"status": "continue", "skill": string, "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
+                '{"status": "final", "skill": string, "answer": string, "citations": [observation_id], "confidence": number}'
             ),
         ),
     ]
@@ -184,9 +186,11 @@ def compose_replanning_prompt_blocks(
             name="active_skill",
             title="Active Skill",
             body=(
-                f"{skill.prompt_context()}\n"
-                "Treat this skill as the current workflow contract. Use planner freedom only to fill missing slots, "
-                "recover from failed grounding, or request targeted evidence."
+                f"Recommended fallback skill:\n{skill.prompt_context()}\n\n"
+                f"{skill_catalog_prompt()}\n"
+                "Select the skill that best matches this case in every planner JSON as `skill`. "
+                "Use the recommended skill only when it matches the video question; otherwise choose a better catalog skill. "
+                "The harness validates tool calls and final evidence against the selected skill."
             ),
         ),
         PromptBlock(
@@ -254,8 +258,8 @@ def compose_replanning_prompt_blocks(
                 title="Response Contract",
                 body=(
                     "Return only JSON with one of these schemas:\n"
-                    '{"status": "continue", "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
-                    '{"status": "final", "answer": string, "citations": [observation_id], "confidence": number}'
+                    '{"status": "continue", "skill": string, "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
+                    '{"status": "final", "skill": string, "answer": string, "citations": [observation_id], "confidence": number}'
                 ),
             ),
         ]

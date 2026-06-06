@@ -71,6 +71,19 @@ class SkillRegistry:
         return tuple(self._skills.values())
 
 
+def skill_catalog_prompt(*, registry: SkillRegistry | None = None) -> str:
+    resolved_registry = registry or builtin_skill_registry()
+    lines = ["Available skills:"]
+    for skill in resolved_registry.list():
+        marker_text = ", ".join(skill.trigger.markers) if skill.trigger.markers else "(none)"
+        lines.append(
+            f"- {skill.name}@v{skill.version}: route={skill.trigger.route}; markers={marker_text}; "
+            f"allowed_actions={', '.join(sorted(skill.allowed_actions)) or '(none)'}; "
+            f"sufficiency={'; '.join(skill.sufficiency)}"
+        )
+    return "\n".join(lines)
+
+
 def builtin_skill_registry() -> SkillRegistry:
     return SkillRegistry(
         [

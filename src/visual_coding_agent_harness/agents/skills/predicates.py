@@ -338,14 +338,19 @@ def _confirmed_timestamped_events(table: Mapping[str, Any]) -> list[Mapping[str,
 
     observed = []
     for row in _rows(table):
-        if str(row.get("grounding_quality", "")) != "visually_confirmed":
+        if str(row.get("grounding_quality", "")) not in {"visually_confirmed", "indexed_transcript"}:
             continue
         event = str(row.get("event_label", "")).strip()
-        time_range = row.get("time_range")
-        if not event or not isinstance(time_range, Sequence) or isinstance(time_range, (str, bytes)) or len(time_range) < 2:
+        if not event:
             continue
+        start_value = row.get("observed_at_sec")
+        if start_value is None:
+            time_range = row.get("time_range")
+            if not isinstance(time_range, Sequence) or isinstance(time_range, (str, bytes)) or len(time_range) < 2:
+                continue
+            start_value = time_range[0]
         try:
-            start_sec = float(time_range[0])
+            start_sec = float(start_value)
         except (TypeError, ValueError):
             continue
         observed.append(

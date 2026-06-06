@@ -26,7 +26,7 @@ from .skills.predicates import (
     selected_option_has_structured_support,
     temporal_order_consistent,
 )
-from .skills.specs import SkillSpec, select_skill
+from .skills.specs import SkillSpec, builtin_skill_registry, select_skill
 
 
 _SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read"}
@@ -295,6 +295,16 @@ class IterativeVisualAgent:
             status = str(action.get("status", "continue"))
             rationale = str(action.get("rationale", ""))
             planned_program: Any = action.get("program", [])
+            planner_skill = _planner_selected_skill(action, question=question)
+            if str(action.get("skill", "")).strip():
+                self.workspace.write_trace_event(
+                    "planner_skill_selection",
+                    {
+                        "round": round_number,
+                        "requested_skill": str(action.get("skill", "")).strip(),
+                        "resolved_skill": planner_skill.name,
+                    },
+                )
 
             if status == "final":
                 final_citations = [str(item) for item in action.get("citations", [])]
@@ -304,6 +314,7 @@ class IterativeVisualAgent:
                     workspace=self.workspace,
                     answer=str(action.get("answer", "")),
                     citations=final_citations,
+                    planner_skill=planner_skill,
                 )
                 if blocked_reason:
                     self.workspace.write_trace_event(
@@ -363,6 +374,7 @@ class IterativeVisualAgent:
                     inspected_segment_ids=inspected_segment_ids,
                     tool_class_counts=tool_class_counts,
                     final_round_reserved=final_round_reserved,
+                    planner_skill=planner_skill,
                     notes_out=normalization_notes,
                 )
                 last_round_normalization_notes = normalization_notes
@@ -688,6 +700,7 @@ class IterativeVisualAgent:
         inspected_segment_ids: set[str],
         tool_class_counts: Mapping[str, int],
         final_round_reserved: bool,
+        planner_skill: SkillSpec | None = None,
         notes_out: list[NormalizationNote] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         if not isinstance(program, list):
@@ -696,7 +709,7 @@ class IterativeVisualAgent:
         normalized = []
         reserved_segment_ids = set(inspected_segment_ids)
         pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
-        active_skill = select_skill(question) if self.budget.hard_skill_runtime else None
+        active_skill = planner_skill or (select_skill(question) if self.budget.hard_skill_runtime else None)
         blocked_route_violation = False
         for step in program:
             if not isinstance(step, Mapping):
@@ -1201,15 +1214,19 @@ class IterativeVisualAgent:
         )
 
     def _seed_scene_coverage_evidence(self, question: str) -> None:
-        if classify_question_route(question) != "gist_global":
-            return
+        route = classify_question_route(question)
         options = extract_candidate_options(question)
         if not options:
+            return
+        if route not in {"gist_global", "temporal_order"} and not _question_has_sequence_options(options):
             return
         if self.workspace.evidence_table_row_count() > 0:
             return
 
-        rows = _scene_coverage_evidence_rows(scene_index=self.scene_index, question=question, options=options)
+        rows = [
+            *_scene_coverage_evidence_rows(scene_index=self.scene_index, question=question, options=options),
+            *_scene_order_evidence_rows(scene_index=self.scene_index, question=question, options=options),
+        ]
         for row in rows:
             self.workspace.write_evidence_row(row)
         if rows:
@@ -1856,6 +1873,18 @@ def _parse_replan_action(text: str) -> Mapping[str, Any]:
     return payload
 
 
+def _planner_selected_skill(action: Mapping[str, Any], *, question: str) -> SkillSpec | None:
+    requested = str(action.get("skill", "") or "").strip()
+    if not requested:
+        return None
+    name = requested.split("@", 1)[0].strip()
+    registry = builtin_skill_registry()
+    try:
+        return registry.get(name)
+    except KeyError:
+        return select_skill(question)
+
+
 def _extract_json_object(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("{") and stripped.endswith("}"):
@@ -1945,7 +1974,7 @@ def _blocked_final_reason(
     if (
         extract_candidate_options(question)
         and not has_inspect_with_candidate_options
-        and not _main_idea_indexed_coverage_supports_answer(
+        and not _indexed_transcript_supports_answer(
             workspace=workspace,
             question=question,
             answer=answer,
@@ -1964,6 +1993,7 @@ def _blocked_planner_final_reason(
     workspace: EvidenceWorkspace,
     answer: str,
     citations: Sequence[str],
+    planner_skill: SkillSpec | None = None,
 ) -> str:
     base_reason = _blocked_final_reason(
         question=question,
@@ -1975,7 +2005,9 @@ def _blocked_planner_final_reason(
     if base_reason:
         return base_reason
     options = extract_candidate_options(question)
-    if classify_question_route(question) != "gist_global" or not options:
+    if not options:
+        return ""
+    if planner_skill is None and classify_question_route(question) != "gist_global":
         return ""
 
     selected_option = _answer_option_letter(answer)
@@ -1986,7 +2018,7 @@ def _blocked_planner_final_reason(
     )
     return _hard_skill_gate_reason(
         workspace=workspace,
-        skill_name="main_idea",
+        skill_name=planner_skill.name if planner_skill is not None else "main_idea",
         question=question,
         table=table,
         selected_option=selected_option,
@@ -2000,8 +2032,17 @@ def _main_idea_indexed_coverage_supports_answer(
     question: str,
     answer: str,
 ) -> bool:
+    return _indexed_transcript_supports_answer(workspace=workspace, question=question, answer=answer)
+
+
+def _indexed_transcript_supports_answer(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    answer: str,
+) -> bool:
     options = extract_candidate_options(question)
-    if classify_question_route(question) != "gist_global" or not options:
+    if not options:
         return False
     selected_option = _answer_option_letter(answer)
     if not selected_option:
@@ -2119,6 +2160,91 @@ def _scene_coverage_evidence_rows(
     return [row for row in rows if _scene_row_is_useful_for_full_arc(row, seen_stage_by_option)]
 
 
+def _scene_order_evidence_rows(
+    *,
+    scene_index: SceneIndex,
+    question: str,
+    options: Sequence[str],
+) -> list[dict[str, Any]]:
+    if classify_question_route(question) != "temporal_order" and not _question_has_sequence_options(options):
+        return []
+    if not scene_index.segments:
+        return []
+
+    option_events = {
+        _option_letter(option_text, index=index): _scene_option_event_sequence(option_text)
+        for index, option_text in enumerate(options)
+    }
+    option_events = {
+        option: events
+        for option, events in option_events.items()
+        if len(events) >= 2
+    }
+    if not option_events:
+        return []
+
+    segment_texts = [
+        (segment, _normalize_scene_event_text(_scene_segment_text(segment)))
+        for segment in scene_index.segments
+        if _scene_segment_text(segment)
+    ]
+    matched_options: dict[str, list[tuple[VideoSegment, str]]] = {}
+    for option, events in option_events.items():
+        matches = _match_scene_events_in_order(events=events, segment_texts=segment_texts)
+        if matches is not None:
+            matched_options[option] = matches
+    if not matched_options:
+        return []
+    max_events = max(len(matches) for matches in matched_options.values())
+    matched_options = {
+        option: matches
+        for option, matches in matched_options.items()
+        if len(matches) == max_events
+    }
+    if len(matched_options) != 1:
+        return []
+
+    option, matches = next(iter(matched_options.items()))
+    rows = []
+    for index, (segment, event) in enumerate(matches, start=1):
+        rows.append(
+            {
+                "evidence_id": f"ev_scene_order_{segment.segment_id}_{index:02d}",
+                "obs_id": f"scene_order_{segment.segment_id}",
+                "tool": "timeline_asr_summary",
+                "segment_id": segment.segment_id,
+                "time_range": [float(segment.start_sec), float(segment.end_sec)],
+                "supported_option": option,
+                "event_label": event,
+                "observed_at_sec": float(segment.start_sec),
+                "claim": _scene_order_claim(
+                    segment_id=segment.segment_id,
+                    event=event,
+                    position=index,
+                    text=_scene_segment_text(segment),
+                ),
+                "confidence": 0.86,
+                "grounding_quality": "indexed_transcript",
+                "candidate_option_relations": [
+                    {
+                        "option": option,
+                        "relation": "support",
+                        "strength": 0.86,
+                        "assigned_by": "scene_index_order",
+                    }
+                ],
+                "confidence_signal": "indexed transcript order",
+                "limitations": "Derived from indexed scene captions/subtitles; verify fine visual details locally when needed.",
+                "artifact": scene_index.video_path,
+            }
+        )
+    return rows
+
+
+def _question_has_sequence_options(options: Sequence[str]) -> bool:
+    return any(len(_scene_option_event_sequence(option)) >= 2 for option in options)
+
+
 def _scene_option_stage_targets(option_text: str) -> set[str]:
     lowered = str(option_text).lower()
     stages = set()
@@ -2172,6 +2298,99 @@ def _scene_row_is_useful_for_full_arc(row: Mapping[str, Any], seen_stage_by_opti
     return "rise" in stages and "fall" in stages
 
 
+def _scene_option_event_sequence(option_text: str) -> list[str]:
+    text = _strip_option_letter(option_text)
+    quoted = [part.strip() for part in re.findall(r'"([^"]+)"|“([^”]+)”|‘([^’]+)’', text) for part in part if part.strip()]
+    if len(quoted) >= 2:
+        return quoted
+    normalized = (
+        text.replace("->", ",")
+        .replace(">", ",")
+        .replace(" and ", ",")
+        .replace(" then ", ",")
+    )
+    events = [part.strip(" .:-\"'") for part in re.split(r"[,;/]+", normalized) if part.strip(" .:-\"'")]
+    return [event for event in events if len(_scene_event_tokens(event)) >= 2]
+
+
+def _match_scene_events_in_order(
+    *,
+    events: Sequence[str],
+    segment_texts: Sequence[tuple[VideoSegment, str]],
+) -> list[tuple[VideoSegment, str]] | None:
+    cursor = 0
+    matches: list[tuple[VideoSegment, str]] = []
+    for event in events:
+        event_tokens = _scene_event_tokens(event)
+        if not event_tokens:
+            return None
+        matched = None
+        for index in range(cursor, len(segment_texts)):
+            segment, normalized_text = segment_texts[index]
+            if event_tokens.issubset(set(normalized_text.split())):
+                matched = (index, segment)
+                break
+        if matched is None:
+            return None
+        cursor = matched[0] + 1
+        matches.append((matched[1], event))
+    return matches
+
+
+def _scene_order_claim(*, segment_id: str, event: str, position: int, text: str) -> str:
+    compact_text = re.sub(r"\s+", " ", text).strip()
+    compact_text = compact_text[:360] + ("..." if len(compact_text) > 360 else "")
+    return f"{segment_id} indexed transcript/caption places ordered item {position}: {event}. Context: {compact_text}"
+
+
+def _strip_option_letter(option_text: str) -> str:
+    return re.sub(r"^\s*[A-H](?:[\.)]\s*|\s+)", "", str(option_text), flags=re.IGNORECASE).strip()
+
+
+def _normalize_scene_event_text(text: str) -> str:
+    return " ".join(_scene_event_tokens(text))
+
+
+def _scene_event_tokens(text: str) -> set[str]:
+    stopwords = {
+        "a",
+        "an",
+        "and",
+        "as",
+        "by",
+        "created",
+        "depicted",
+        "does",
+        "for",
+        "four",
+        "in",
+        "is",
+        "of",
+        "order",
+        "present",
+        "presented",
+        "scene",
+        "shown",
+        "single",
+        "the",
+        "then",
+        "to",
+        "video",
+        "with",
+    }
+    return {
+        _normalize_scene_event_token(token)
+        for token in re.findall(r"[A-Za-z0-9]+", str(text).lower())
+        if len(token) >= 3 and token not in stopwords
+    }
+
+
+def _normalize_scene_event_token(token: str) -> str:
+    if token == "borned":
+        return "born"
+    return token
+
+
 def _hard_skill_gate_reason(
     *,
     workspace: EvidenceWorkspace,
@@ -2202,16 +2421,43 @@ def _hard_skill_gate_reason(
             return "temporal_order_requires_confirmed_event_timestamps"
 
     grounding_reason = grounding_quality_floor(
-        workspace.mapped_evidence_records(
-            observation_ids=citations,
-            selected_option=selected_option,
-        ),
+        workspace.mapped_evidence_records(observation_ids=citations, selected_option=selected_option),
         workspace=workspace,
         require_visual=skill_name not in {"gist_qa", "main_idea"},
     )
-    if grounding_reason:
+    if grounding_reason and not _cited_table_rows_satisfy_grounding_floor(
+        table=table,
+        selected_option=selected_option,
+        citations=citations,
+        require_visual=skill_name not in {"gist_qa", "main_idea"},
+    ):
         return "grounding_quality_floor"
     return ""
+
+
+def _cited_table_rows_satisfy_grounding_floor(
+    *,
+    table: Mapping[str, Any],
+    selected_option: str | None,
+    citations: Sequence[str],
+    require_visual: bool,
+) -> bool:
+    cited = {str(citation) for citation in citations if str(citation)}
+    if not cited:
+        return False
+    for row in table.get("groups", {}).get(selected_option, []):
+        if not isinstance(row, Mapping):
+            continue
+        row_ids = {str(row.get("obs_id", "")), str(row.get("evidence_id", ""))}
+        if not cited.intersection(row_ids):
+            continue
+        quality = str(row.get("grounding_quality", ""))
+        if require_visual and quality not in {"visually_confirmed", "indexed_transcript"}:
+            continue
+        if quality in {"weak", "inferred", "external_knowledge", "global_sparse"}:
+            continue
+        return True
+    return False
 
 
 def _reflection_rule_for_failure(failure_tag: str) -> str:

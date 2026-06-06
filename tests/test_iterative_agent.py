@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
+from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.registry import ToolRegistry, tool
@@ -1582,6 +1583,150 @@ class IterativeAgentTest(unittest.TestCase):
                 ],
             )
             self.assertGreaterEqual(len(table["groups"]["D"]), 2)
+
+    def test_iterative_agent_indexes_scene_order_for_videomme_masterpiece_sequence(self):
+        class SceneOrderBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "need_more_evidence", "rationale": "use indexed order rows", '
+                            '"citations": [], "missing_evidence": ["ordered artwork evidence"], "confidence": 0.0}'
+                        )
+                    )
+                return BackendResponse(text='{"status": "continue", "program": []}')
+
+        scene_index = SceneIndex(
+            video_path="/videos/bernini.mp4",
+            duration_sec=1200.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=300.0,
+                    low_fps_caption='The first Borghese masterpiece shown is "Aeneas, Anchises, and Ascanius fleeing Troy".',
+                ),
+                VideoSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    low_fps_caption='The next sculpture presented is "David" by Bernini.',
+                ),
+                VideoSegment(
+                    segment_id="seg_0003",
+                    start_sec=600.0,
+                    end_sec=900.0,
+                    low_fps_caption='The scene then discusses "The rape of Persephone".',
+                ),
+                VideoSegment(
+                    segment_id="seg_0004",
+                    start_sec=900.0,
+                    end_sec=1200.0,
+                    low_fps_caption='The final sculpture in the sequence is "Apollo and Daphne".',
+                ),
+            ],
+        )
+
+        question = (
+            "VideoMME multiple-choice question. Answer with exactly one option letter (A/B/C/D) first.\n"
+            "Question: As depicted in the video, in what order does the author present Bernini's four "
+            "masterpieces created for Borghese in a single scene?\n"
+            "Options:\n"
+            'A. "The rape of Persephone", "Apollo and Daphne", "David" and "Aeneas, Anchises, and Ascanius fleeing Troy".\n'
+            'B. "David", "Aeneas, Anchises, and Ascanius fleeing Troy", "Apollo and Daphne" and "The rape of Persephone".\n'
+            'C. "Apollo and Daphne", "Aeneas, Anchises, and Ascanius fleeing Troy", "David" and "The rape of Persephone".\n'
+            'D. "Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The rape of Persephone" and "Apollo and Daphne".'
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="scene_order_masterpieces")
+            agent = IterativeVisualAgent(
+                backend=SceneOrderBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=1,
+                    reserve_final_round=True,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(question=question, video_path="/videos/bernini.mp4")
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(
+                result.answer,
+                'D. "Aeneas, Anchises, and Ascanius fleeing Troy", "David", '
+                '"The rape of Persephone" and "Apollo and Daphne".',
+            )
+            self.assertEqual(set(result.citations), {"scene_order_seg_0001", "scene_order_seg_0004"})
+            table = workspace.evidence_table_v2(question=question, options=extract_candidate_options(question))
+            self.assertGreaterEqual(len(table["groups"]["D"]), 4)
+
+    def test_iterative_agent_indexes_scene_order_for_life_journey_when_planner_selects_timeline_skill(self):
+        class LifeJourneyBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": []}')
+                return BackendResponse(
+                    text='{"status": "continue", "skill": "timeline_ordering", "program": []}'
+                )
+
+        scene_index = SceneIndex(
+            video_path="/videos/goya.mp4",
+            duration_sec=900.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=300.0,
+                    low_fps_caption="The narration says he was born with a humble background.",
+                ),
+                VideoSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    low_fps_caption="Later he entered the upper class as his work gained noble patrons.",
+                ),
+                VideoSegment(
+                    segment_id="seg_0003",
+                    start_sec=600.0,
+                    end_sec=900.0,
+                    low_fps_caption="In the final part he lived in seclusion in a farmhouse.",
+                ),
+            ],
+        )
+        question = (
+            "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+            "Question: How was his life journey according to the video?\n"
+            "Options:\n"
+            "A. Borned with humble background and lived in seclusion in a farmhouse.\n"
+            "B. Borned with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+            "C. Borned with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
+            "D. Borned in the upper class and lived in seclusion in a farmhouse."
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="scene_order_life_journey")
+            agent = IterativeVisualAgent(
+                backend=LifeJourneyBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=True, disable_global_gist_route=True),
+            )
+
+            result = agent.run(question=question, video_path="/videos/goya.mp4")
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(
+                result.answer,
+                "B. Borned with a humble background, entered the upper class and then lived in seclusion in a farmhouse.",
+            )
+            self.assertEqual(set(result.citations), {"scene_order_seg_0001", "scene_order_seg_0003"})
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("planner_skill_selection", trace)
 
     def test_iterative_agent_prompt_includes_broad_long_video_index(self):
         backend = ScriptedPlannerBackend(
