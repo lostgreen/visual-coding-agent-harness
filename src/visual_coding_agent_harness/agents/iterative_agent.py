@@ -937,6 +937,8 @@ class IterativeVisualAgent:
         if self.budget.free_exploration or active_skill is None:
             return None
         if active_skill.name == "main_idea" and tool_name == "vision_read" and self._has_tool("global_gist"):
+            if self.workspace.observation_count(tool_name="global_gist") >= 2:
+                return None
             repaired_args: dict[str, Any] = {
                 "video_path": video_path,
                 "question": question,

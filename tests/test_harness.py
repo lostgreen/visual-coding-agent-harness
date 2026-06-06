@@ -76,6 +76,24 @@ class HarnessTest(unittest.TestCase):
             self.assertIn("obs_0001: video_ls", compact)
             self.assertNotIn("very long navigation explanation", compact)
 
+    def test_compact_ledger_preserves_multiline_visual_claims(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="multiline_claim")
+            observation = workspace.write_observation(
+                tool_name="global_gist",
+                input_artifacts=["demo.mp4#t=0,120"],
+                claim="B. Why the empire was divided.\nThe video shows maps and narration about its collapse.",
+                confidence=0.76,
+                regions=[{"start_sec": 0.0, "end_sec": 120.0}],
+                raw_output={"grounding_quality": "global_sparse"},
+            )
+            workspace.write_ledger_entry(observation)
+
+            compact = workspace.compact_ledger_text()
+
+            self.assertIn("claim: B. Why the empire was divided. The video shows maps", compact)
+            self.assertNotIn("claim:  | limitations", compact)
+
     def test_workspace_builds_option_grouped_evidence_table(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = EvidenceWorkspace.create(Path(tmp), run_id="evidence_table")

@@ -616,6 +616,14 @@ class EvidenceWorkspace:
 
         return len(self._read_jsonl_dicts("evidence_table.jsonl"))
 
+    def observation_count(self, *, tool_name: str | None = None) -> int:
+        """Return persisted observation count, optionally filtered by tool."""
+
+        rows = self._read_observation_dicts()
+        if tool_name is None:
+            return len(rows)
+        return sum(1 for row in rows if str(row.get("tool", "")) == str(tool_name))
+
     def read_evidence_table_v3(
         self,
         *,
@@ -909,11 +917,14 @@ class EvidenceWorkspace:
                         )
                     )
                 ledger_records.append(ledger_record)
+                ledger_claim = _ledger_markdown_field(claim)
+                ledger_limitations = _ledger_markdown_field(base_limitation)
+                ledger_artifacts = _ledger_markdown_field(artifacts)
                 line = (
                     f"- `{observation.observation_id}` | ev: `{ledger_record.evidence_id}` | "
                     f"fs: `{frame_set_id or '-'}` | gq: `{grounding_quality}` | "
                     f"tool: `{observation.tool}` | confidence: {ledger_record.confidence:.2f} | "
-                    f"artifacts: {artifacts} | claim: {claim} | limitations: {base_limitation}\n"
+                    f"artifacts: {ledger_artifacts} | claim: {ledger_claim} | limitations: {ledger_limitations}\n"
                 )
                 handle.write(line)
         raw_relations = _candidate_option_relations(observation.raw_output.get("candidate_option_relations"))
@@ -1564,6 +1575,10 @@ def _compact_relation(relation: Mapping[str, Any]) -> dict[str, Any]:
 def _compact_text(text: str, *, limit: int) -> str:
     compact = " ".join(str(text).split())
     return compact[:limit] + ("..." if len(compact) > limit else "")
+
+
+def _ledger_markdown_field(value: Any) -> str:
+    return " ".join(str(value or "-").split())
 
 
 def _ledger_claim(observation: Observation, *, parent_record: EvidenceRecord | None) -> str:

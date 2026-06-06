@@ -135,6 +135,48 @@ def test_main_idea_repairs_planner_vision_read_to_global_gist(tmp_path: Path):
     assert "route_violation" not in trace
 
 
+def test_main_idea_allows_local_read_after_global_floor(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="global_gist", description="Read sparse global evidence.")
+    def global_gist(video_path: str, question: str, duration_sec: float):
+        return {"claim": "global", "confidence": 0.7}
+
+    @tool(name="vision_read", description="Read localized visual evidence.")
+    def vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, **kwargs):
+        return {"claim": "local", "confidence": 0.8}
+
+    registry.register(global_gist)
+    registry.register(vision_read)
+    workspace = EvidenceWorkspace.create(tmp_path, "main_idea_local_after_floor")
+    for index in range(2):
+        workspace.write_observation(
+            tool_name="global_gist",
+            claim=f"global floor {index}",
+            confidence=0.7,
+            regions=[{"start_sec": 0.0, "end_sec": 12.0}],
+        )
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=2, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "main idea"}}],
+        question="What is the video mainly about?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+    )
+
+    assert normalized[0]["tool"] == "vision_read"
+    assert normalized[0]["args"]["segment_id"] == "seg_0001"
+
+
 def test_mutex_fact_repairs_planner_inspect_segment_to_vision_read(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = SequenceBackend(

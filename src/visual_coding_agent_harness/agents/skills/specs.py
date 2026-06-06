@@ -119,7 +119,7 @@ def builtin_skill_registry() -> SkillRegistry:
                     "Q: what is the video mainly about -> two sparse global views -> coverage margin -> answer",
                 ),
                 self_check=("g1.option == g2.option", "decision.citations include global evidence"),
-                allowed_actions=frozenset({"global_gist", "query_context", "verify_ledger_answer"}),
+                allowed_actions=frozenset({"global_gist", "query_context", "vision_read", "verify_ledger_answer"}),
             ),
             SkillSpec(
                 name="mutex_fact_qa",
