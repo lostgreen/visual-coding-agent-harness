@@ -59,7 +59,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
             [
                 "base_identity",
                 "route_playbook",
-                "active_skill",
+                "skill_catalog",
                 "tool_schema",
                 "evidence_snapshot",
                 "hypothesis",
@@ -70,14 +70,15 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
             ],
         )
         self.assertLess(prompt.index("# Base Identity"), prompt.index("# Route Playbook"))
-        self.assertLess(prompt.index("# Route Playbook"), prompt.index("# Active Skill"))
-        self.assertLess(prompt.index("# Active Skill"), prompt.index("# Tool Schema"))
+        self.assertLess(prompt.index("# Route Playbook"), prompt.index("# Skill Catalog"))
+        self.assertLess(prompt.index("# Skill Catalog"), prompt.index("# Tool Schema"))
         self.assertLess(prompt.index("# Evidence Snapshot"), prompt.index("# Hypothesis"))
         self.assertIn("Allowed ReAct actions: ground_question, vision_read, answer_agent, verify", prompt)
         self.assertIn("Available skills:", prompt)
         self.assertIn('"skill": string', prompt)
         self.assertIn("Select the skill that best matches this case", prompt)
-        self.assertIn("Skill: timeline_ordering@v1", prompt)
+        self.assertNotIn("Recommended fallback skill", prompt)
+        self.assertIn("timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
         self.assertIn("Final answers require at least one non-navigation visual observation", prompt)
 

@@ -59,6 +59,7 @@ def test_gist_qa_blocks_inspect_segment(tmp_path: Path):
         json.dumps(
             {
                 "status": "continue",
+                "skill": "main_idea",
                 "program": [
                     {"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "main idea"}}
                 ],
@@ -88,6 +89,7 @@ def test_main_idea_repairs_only_first_planner_vision_read_to_global_gist(tmp_pat
             json.dumps(
                 {
                     "status": "continue",
+                    "skill": "main_idea",
                     "program": [
                         {
                             "tool": "vision_read",
@@ -172,6 +174,7 @@ def test_main_idea_allows_local_read_after_global_floor(tmp_path: Path):
         inspected_segment_ids=set(),
         tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("main_idea"),
     )
 
     assert normalized[0]["tool"] == "vision_read"
@@ -185,6 +188,7 @@ def test_mutex_fact_repairs_planner_inspect_segment_to_vision_read(tmp_path: Pat
             json.dumps(
                 {
                     "status": "continue",
+                    "skill": "mutex_fact_qa",
                     "program": [
                         {
                             "tool": "inspect_segment",
@@ -334,6 +338,74 @@ def test_planner_selected_skill_overrides_fallback_route_for_tool_policy(tmp_pat
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert counter.get("caption_segment", 0) == 1
     assert "planner_skill_selection" in trace
+    assert "route_violation" not in trace
+
+
+def test_missing_planner_skill_does_not_enable_route_policy(tmp_path: Path):
+    counter: dict[str, int] = {}
+    backend = StaticBackend(
+        json.dumps(
+            {
+                "status": "continue",
+                "program": [
+                    {
+                        "tool": "inspect_segment",
+                        "args": {"segment_id": "seg_0001", "question": "Inspect visible order."},
+                    }
+                ],
+            }
+        )
+    )
+    registry = _inspect_registry(counter)
+    workspace = EvidenceWorkspace.create(tmp_path, "missing_planner_skill_policy")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    agent.run(question="Which event happened first?\nA. red then blue\nB. blue then red", video_path="/videos/demo.mp4")
+
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert counter.get("inspect_segment", 0) == 1
+    assert "planner_skill_missing" in trace
+    assert "route_violation" not in trace
+
+
+def test_invalid_planner_skill_does_not_fallback_to_route_classifier(tmp_path: Path):
+    counter: dict[str, int] = {}
+    backend = StaticBackend(
+        json.dumps(
+            {
+                "status": "continue",
+                "skill": "not_a_real_skill",
+                "program": [
+                    {
+                        "tool": "inspect_segment",
+                        "args": {"segment_id": "seg_0001", "question": "Inspect visible order."},
+                    }
+                ],
+            }
+        )
+    )
+    registry = _inspect_registry(counter)
+    workspace = EvidenceWorkspace.create(tmp_path, "invalid_planner_skill_policy")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    agent.run(question="Which event happened first?\nA. red then blue\nB. blue then red", video_path="/videos/demo.mp4")
+
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert counter.get("inspect_segment", 0) == 1
+    assert "planner_skill_invalid" in trace
+    assert "planner_skill_selection" not in trace
     assert "route_violation" not in trace
 
 

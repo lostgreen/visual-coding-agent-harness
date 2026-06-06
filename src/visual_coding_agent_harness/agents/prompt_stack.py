@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 from ..video_index import SceneIndex
 from .context_budget import ContextBudgetAllocator, ContextBudgetReport, SlotName
 from .question_policy import select_question_playbook
-from .skills.specs import select_skill, skill_catalog_prompt
+from .skills.specs import skill_catalog_prompt
 
 
 @dataclass(frozen=True)
@@ -84,7 +84,6 @@ def compose_replanning_prompt_slots(
     evidence_status_summary: Mapping[str, Any] | None = None,
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
-    skill = select_skill(question, route=playbook.route)
     task_blocks = [
         PromptBlock(
             name="base_identity",
@@ -99,14 +98,14 @@ def compose_replanning_prompt_slots(
         ),
         PromptBlock(name="route_playbook", title="Route Playbook", body=playbook.to_prompt()),
         PromptBlock(
-            name="active_skill",
-            title="Active Skill",
+            name="skill_catalog",
+            title="Skill Catalog",
             body=(
-                f"Recommended fallback skill:\n{skill.prompt_context()}\n\n"
                 f"{skill_catalog_prompt()}\n"
                 "Select the skill that best matches this case in every planner JSON as `skill`. "
-                "Use the recommended skill only when it matches the video question; otherwise choose a better catalog skill. "
-                "The harness validates tool calls and final evidence against the selected skill."
+                "Choose from the catalog yourself; the route playbook is guidance, not a skill assignment. "
+                "If no catalog skill fits, omit `skill` and use ordinary tool exploration. "
+                "The harness validates tool calls and final evidence only against a skill you explicitly select."
             ),
         ),
         PromptBlock(name="tool_schema", title="Tool Schema", body=_tool_schema_block()),
@@ -164,7 +163,6 @@ def compose_replanning_prompt_blocks(
     evidence_status_summary: Mapping[str, Any] | None = None,
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
-    skill = select_skill(question, route=playbook.route)
     blocks = [
         PromptBlock(
             name="base_identity",
@@ -183,14 +181,14 @@ def compose_replanning_prompt_blocks(
             body=playbook.to_prompt(),
         ),
         PromptBlock(
-            name="active_skill",
-            title="Active Skill",
+            name="skill_catalog",
+            title="Skill Catalog",
             body=(
-                f"Recommended fallback skill:\n{skill.prompt_context()}\n\n"
                 f"{skill_catalog_prompt()}\n"
                 "Select the skill that best matches this case in every planner JSON as `skill`. "
-                "Use the recommended skill only when it matches the video question; otherwise choose a better catalog skill. "
-                "The harness validates tool calls and final evidence against the selected skill."
+                "Choose from the catalog yourself; the route playbook is guidance, not a skill assignment. "
+                "If no catalog skill fits, omit `skill` and use ordinary tool exploration. "
+                "The harness validates tool calls and final evidence only against a skill you explicitly select."
             ),
         ),
         PromptBlock(

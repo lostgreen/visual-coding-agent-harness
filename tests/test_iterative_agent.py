@@ -493,6 +493,7 @@ class IterativeAgentTest(unittest.TestCase):
             [
                 (
                     '{"status": "continue", "rationale": "planner repeated sparse topic hint", '
+                    '"skill": "main_idea", '
                     '"program": [{"tool": "global_gist", "args": {"question": "main idea", '
                     '"duration_sec": 120.0}, "assign": "repeat_global"}]}'
                 )

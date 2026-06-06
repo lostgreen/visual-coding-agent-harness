@@ -295,14 +295,31 @@ class IterativeVisualAgent:
             status = str(action.get("status", "continue"))
             rationale = str(action.get("rationale", ""))
             planned_program: Any = action.get("program", [])
-            planner_skill = _planner_selected_skill(action, question=question)
-            if str(action.get("skill", "")).strip():
+            planner_skill, skill_status = _planner_selected_skill(action)
+            if skill_status["status"] == "selected":
                 self.workspace.write_trace_event(
                     "planner_skill_selection",
                     {
                         "round": round_number,
-                        "requested_skill": str(action.get("skill", "")).strip(),
+                        "requested_skill": skill_status["requested_skill"],
                         "resolved_skill": planner_skill.name,
+                    },
+                )
+            elif skill_status["status"] == "missing":
+                self.workspace.write_trace_event(
+                    "planner_skill_missing",
+                    {
+                        "round": round_number,
+                        "message": "Planner omitted skill; continuing with ordinary exploration policy.",
+                    },
+                )
+            elif skill_status["status"] == "invalid":
+                self.workspace.write_trace_event(
+                    "planner_skill_invalid",
+                    {
+                        "round": round_number,
+                        "requested_skill": skill_status["requested_skill"],
+                        "message": "Planner requested an unknown skill; continuing with ordinary exploration policy.",
                     },
                 )
 
@@ -709,7 +726,7 @@ class IterativeVisualAgent:
         normalized = []
         reserved_segment_ids = set(inspected_segment_ids)
         pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
-        active_skill = planner_skill or (select_skill(question) if self.budget.hard_skill_runtime else None)
+        active_skill = planner_skill
         blocked_route_violation = False
         for step in program:
             if not isinstance(step, Mapping):
@@ -986,11 +1003,7 @@ class IterativeVisualAgent:
     ) -> tuple[str, dict[str, Any], str] | None:
         if self.budget.free_exploration:
             return None
-        is_main_idea_route = (
-            active_skill.name == "main_idea"
-            if active_skill is not None
-            else classify_question_route(question) == "gist_global"
-        )
+        is_main_idea_route = active_skill is not None and active_skill.name == "main_idea"
         if is_main_idea_route and tool_name == "vision_read" and self._has_tool("global_gist"):
             if self.workspace.observation_count(tool_name="global_gist") >= 1:
                 return None
@@ -1896,16 +1909,16 @@ def _parse_replan_action(text: str) -> Mapping[str, Any]:
     return payload
 
 
-def _planner_selected_skill(action: Mapping[str, Any], *, question: str) -> SkillSpec | None:
+def _planner_selected_skill(action: Mapping[str, Any]) -> tuple[SkillSpec | None, dict[str, str]]:
     requested = str(action.get("skill", "") or "").strip()
     if not requested:
-        return None
+        return None, {"status": "missing", "requested_skill": ""}
     name = requested.split("@", 1)[0].strip()
     registry = builtin_skill_registry()
     try:
-        return registry.get(name)
+        return registry.get(name), {"status": "selected", "requested_skill": requested}
     except KeyError:
-        return select_skill(question)
+        return None, {"status": "invalid", "requested_skill": requested}
 
 
 def _extract_json_object(text: str) -> str:
