@@ -97,8 +97,18 @@ def test_audit_checks_tool_results_are_visible_in_later_planner_turns(tmp_path):
                     }
                 ],
                 "planner_turns": [
-                    {"round": 1, "prompt_artifact": {"sha256": "aaa"}, "evidence_observation_ids": []},
-                    {"round": 2, "prompt_artifact": {"sha256": "bbb"}, "evidence_observation_ids": ["obs_0001"]},
+                    {
+                        "round": 1,
+                        "prompt_artifact": {"sha256": "aaa"},
+                        "evidence_observation_ids": [],
+                        "empty_evidence_claim_count": 0,
+                    },
+                    {
+                        "round": 2,
+                        "prompt_artifact": {"sha256": "bbb"},
+                        "evidence_observation_ids": ["obs_0001"],
+                        "empty_evidence_claim_count": 0,
+                    },
                 ],
                 "evidence_chain_ids": [],
                 "frame_set_ids": ["fs_001"],
@@ -136,8 +146,18 @@ def test_audit_rejects_missing_tool_result_claim_and_prompt_visibility(tmp_path)
                     }
                 ],
                 "planner_turns": [
-                    {"round": 1, "prompt_artifact": {"sha256": "aaa"}, "evidence_observation_ids": []},
-                    {"round": 2, "prompt_artifact": {"sha256": "bbb"}, "evidence_observation_ids": []},
+                    {
+                        "round": 1,
+                        "prompt_artifact": {"sha256": "aaa"},
+                        "evidence_observation_ids": [],
+                        "empty_evidence_claim_count": 0,
+                    },
+                    {
+                        "round": 2,
+                        "prompt_artifact": {"sha256": "bbb"},
+                        "evidence_observation_ids": [],
+                        "empty_evidence_claim_count": 1,
+                    },
                 ],
                 "evidence_chain_ids": [],
                 "frame_set_ids": [],
@@ -151,6 +171,7 @@ def test_audit_rejects_missing_tool_result_claim_and_prompt_visibility(tmp_path)
 
     assert status == 1
     assert "empty claim for obs_0001" in output
+    assert "planner round 2 has empty evidence claim lines: 1" in output
     assert "not visible in later planner prompt: obs_0001" in output
 
 

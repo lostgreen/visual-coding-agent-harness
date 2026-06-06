@@ -108,6 +108,9 @@ def _planner_turn_errors(planner_turns: Sequence[Any]) -> list[str]:
         prompt_artifact = turn.get("prompt_artifact", {})
         if isinstance(prompt_artifact, Mapping) and not str(prompt_artifact.get("sha256", "")).strip():
             errors.append(f"planner round {turn.get('round', '?')} has no prompt sha256")
+        empty_claim_count = _optional_int(turn.get("empty_evidence_claim_count")) or 0
+        if empty_claim_count > 0:
+            errors.append(f"planner round {turn.get('round', '?')} has empty evidence claim lines: {empty_claim_count}")
     return errors
 
 

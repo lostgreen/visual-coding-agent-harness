@@ -116,6 +116,7 @@ def _planner_turns(events: Sequence[Mapping[str, Any]], *, workspace: EvidenceWo
         prompt_artifact = _artifact_summary(workspace.root, payload.get("prompt", {}))
         response_artifact = _artifact_summary(workspace.root, payload.get("response", {}))
         prompt_text = _artifact_text(workspace.root, prompt_artifact)
+        evidence_section = _evidence_section(prompt_text)
         turns.append(
             {
                 "round": int(payload.get("round", len(turns) + 1) or len(turns) + 1),
@@ -123,8 +124,9 @@ def _planner_turns(events: Sequence[Mapping[str, Any]], *, workspace: EvidenceWo
                 "prompt_artifact": prompt_artifact,
                 "response_artifact": response_artifact,
                 "response_excerpt": str(payload.get("response_excerpt", "")),
-                "evidence_observation_ids": _evidence_observation_ids_from_prompt(prompt_text),
-                "evidence_snapshot_chars": len(_evidence_section(prompt_text)),
+                "evidence_observation_ids": _evidence_observation_ids_from_section(evidence_section),
+                "empty_evidence_claim_count": _empty_claim_line_count(evidence_section),
+                "evidence_snapshot_chars": len(evidence_section),
                 "created_at": str(event.get("created_at", "")),
             }
         )
@@ -324,7 +326,11 @@ def _artifact_path(root: Path, artifact: Mapping[str, Any]) -> Path | None:
 
 
 def _evidence_observation_ids_from_prompt(prompt_text: str) -> list[str]:
-    return sorted(set(re.findall(r"obs_\d{4}", _evidence_section(prompt_text))))
+    return _evidence_observation_ids_from_section(_evidence_section(prompt_text))
+
+
+def _evidence_observation_ids_from_section(evidence_section: str) -> list[str]:
+    return sorted(set(re.findall(r"obs_\d{4}", evidence_section)))
 
 
 def _evidence_section(prompt_text: str) -> str:
@@ -335,6 +341,16 @@ def _evidence_section(prompt_text: str) -> str:
         if marker in section:
             return section.split(marker, 1)[0]
     return section
+
+
+def _empty_claim_line_count(evidence_section: str) -> int:
+    count = 0
+    for line in evidence_section.splitlines():
+        if "claim:" not in line:
+            continue
+        if re.search(r"claim:\s*(?:\|\s*limitations:|$)", line):
+            count += 1
+    return count
 
 
 def _observations_by_id(workspace: EvidenceWorkspace) -> dict[str, dict[str, Any]]:
