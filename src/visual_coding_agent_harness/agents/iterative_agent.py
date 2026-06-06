@@ -1036,6 +1036,29 @@ class IterativeVisualAgent:
             }
             repaired_args.setdefault("ask_for", str(args.get("question") or args.get("ask_for") or question))
             return "vision_read", repaired_args, "repair_mutex_inspect_segment_to_vision_read"
+        if (
+            active_skill is not None
+            and active_skill.name == "timeline_ordering"
+            and tool_name == "caption_segments"
+            and self._has_tool("caption_segment")
+        ):
+            segment_ids = [
+                str(segment_id)
+                for segment_id in args.get("segment_ids", [])
+                if str(segment_id).strip()
+            ]
+            segment_id = segment_ids[0] if segment_ids else self._resolve_next_segment_id("", set())
+            if segment_id is None:
+                return None
+            return (
+                "caption_segment",
+                {
+                    "segment_id": segment_id,
+                    "question": str(args.get("question") or "Find mentions of target temporal entities."),
+                    "nframes": int(args.get("nframes", self.budget.default_nframes) or self.budget.default_nframes),
+                },
+                "repair_timeline_batch_caption_to_caption_segment",
+            )
         return None
 
     def _fallback_inspector_program(
