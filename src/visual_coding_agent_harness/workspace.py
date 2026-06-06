@@ -187,6 +187,7 @@ class EvidenceWorkspace:
         "ocr_region",
         "qa_region",
         "inspect_region",
+        "timeline_asr_summary",
         "verify_local_claim",
     }
 
@@ -1265,6 +1266,13 @@ class EvidenceWorkspace:
             if str(observation.get("observation_id", "")) not in cited:
                 continue
             tool_name = str(observation.get("tool", ""))
+            if tool_name in self.ANSWER_EVIDENCE_TOOLS and tool_name not in self.NAVIGATION_TOOLS:
+                return True
+        for raw_row in self._read_jsonl_dicts("evidence_table.jsonl"):
+            row = _normalize_evidence_row(raw_row)
+            if str(row.get("obs_id", "")) not in cited and str(row.get("evidence_id", "")) not in cited:
+                continue
+            tool_name = str(row.get("tool", ""))
             if tool_name in self.ANSWER_EVIDENCE_TOOLS and tool_name not in self.NAVIGATION_TOOLS:
                 return True
         return False

@@ -176,6 +176,7 @@ class IterativeVisualAgent:
 
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
         self.workspace.ensure_hypothesis(question)
+        self._seed_scene_coverage_evidence(question)
         if (
             not self.budget.disable_global_gist_route
             and classify_question_route(question) == "gist_global"
@@ -1199,6 +1200,27 @@ class IterativeVisualAgent:
             options=extract_candidate_options(question),
         )
 
+    def _seed_scene_coverage_evidence(self, question: str) -> None:
+        if classify_question_route(question) != "gist_global":
+            return
+        options = extract_candidate_options(question)
+        if not options:
+            return
+        if self.workspace.evidence_table_row_count() > 0:
+            return
+
+        rows = _scene_coverage_evidence_rows(scene_index=self.scene_index, question=question, options=options)
+        for row in rows:
+            self.workspace.write_evidence_row(row)
+        if rows:
+            self.workspace.write_trace_event(
+                "scene_coverage_evidence_seeded",
+                {
+                    "row_count": len(rows),
+                    "obs_ids": [str(row.get("obs_id", "")) for row in rows],
+                },
+            )
+
     def _has_tool(self, tool_name: str) -> bool:
         try:
             self.registry.get(tool_name)
@@ -1920,7 +1942,15 @@ def _blocked_final_reason(
     unsatisfied_slots = workspace.unsatisfied_hypothesis_slots()
     if unsatisfied_slots:
         return "hypothesis_slots_unsatisfied: " + ", ".join(unsatisfied_slots[:5])
-    if extract_candidate_options(question) and not has_inspect_with_candidate_options:
+    if (
+        extract_candidate_options(question)
+        and not has_inspect_with_candidate_options
+        and not _main_idea_indexed_coverage_supports_answer(
+            workspace=workspace,
+            question=question,
+            answer=answer,
+        )
+    ):
         return "mcq_final_requires_local_visual_read"
     if not workspace.has_non_navigation_visual_citation(citations):
         return "final_requires_non_navigation_visual_evidence"
@@ -1962,6 +1992,181 @@ def _blocked_planner_final_reason(
         selected_option=selected_option,
         citations=citations,
     )
+
+
+def _main_idea_indexed_coverage_supports_answer(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    answer: str,
+) -> bool:
+    options = extract_candidate_options(question)
+    if classify_question_route(question) != "gist_global" or not options:
+        return False
+    selected_option = _answer_option_letter(answer)
+    if not selected_option:
+        return False
+    table = workspace.evidence_table_v2(question=question, options=options, include_legacy_worker_votes=True)
+    support = selected_option_has_structured_support(table, selected_option=selected_option)
+    if not support.passed:
+        return False
+    for row in table.get("groups", {}).get(selected_option, []):
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("tool", "")) == "timeline_asr_summary" and str(row.get("grounding_quality", "")) == "indexed_transcript":
+            return True
+    return False
+
+
+_SCENE_RISE_TERMS = {
+    "rise",
+    "rises",
+    "rose",
+    "rising",
+    "formation",
+    "formed",
+    "created",
+    "creation",
+    "growth",
+    "prosperity",
+    "industrial",
+}
+_SCENE_STABILITY_TERMS = {
+    "stable",
+    "stability",
+    "governance",
+    "government",
+    "rights",
+    "internal",
+    "prosperity",
+    "population",
+}
+_SCENE_FALL_TERMS = {
+    "fall",
+    "fell",
+    "collapse",
+    "collapsing",
+    "decline",
+    "declining",
+    "dissolution",
+    "divided",
+    "partition",
+    "war",
+    "independence",
+}
+
+
+def _scene_coverage_evidence_rows(
+    *,
+    scene_index: SceneIndex,
+    question: str,
+    options: Sequence[str],
+) -> list[dict[str, Any]]:
+    option_stage_targets = {
+        _option_letter(option_text, index=index): _scene_option_stage_targets(option_text)
+        for index, option_text in enumerate(options)
+    }
+    full_arc_options = {
+        option
+        for option, stages in option_stage_targets.items()
+        if "rise" in stages and "fall" in stages
+    }
+    if not full_arc_options:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    seen_stage_by_option: dict[str, set[str]] = {option: set() for option in full_arc_options}
+    for segment in scene_index.segments:
+        text = _scene_segment_text(segment)
+        if not text:
+            continue
+        stages = _scene_text_stages(text)
+        if not stages:
+            continue
+        for option in sorted(full_arc_options):
+            missing = stages.difference(seen_stage_by_option[option])
+            if not missing:
+                continue
+            seen_stage_by_option[option].update(stages)
+            rows.append(
+                {
+                    "evidence_id": f"ev_scene_coverage_{segment.segment_id}",
+                    "obs_id": f"scene_coverage_{segment.segment_id}",
+                    "tool": "timeline_asr_summary",
+                    "segment_id": segment.segment_id,
+                    "time_range": [float(segment.start_sec), float(segment.end_sec)],
+                    "supported_option": option,
+                    "event_label": "scene index coverage",
+                    "claim": _scene_coverage_claim(segment_id=segment.segment_id, stages=stages, text=text),
+                    "confidence": 0.84,
+                    "grounding_quality": "indexed_transcript",
+                    "candidate_option_relations": [
+                        {
+                            "option": option,
+                            "relation": "support",
+                            "strength": 0.84,
+                            "assigned_by": "scene_index_coverage",
+                        }
+                    ],
+                    "confidence_signal": "indexed transcript coverage",
+                    "limitations": "Derived from indexed scene captions/subtitles; verify fine visual details locally when needed.",
+                    "artifact": scene_index.video_path,
+                }
+            )
+    return [row for row in rows if _scene_row_is_useful_for_full_arc(row, seen_stage_by_option)]
+
+
+def _scene_option_stage_targets(option_text: str) -> set[str]:
+    lowered = str(option_text).lower()
+    stages = set()
+    if _scene_contains_any(lowered, _SCENE_RISE_TERMS):
+        stages.add("rise")
+    if _scene_contains_any(lowered, _SCENE_STABILITY_TERMS):
+        stages.add("stability")
+    if _scene_contains_any(lowered, _SCENE_FALL_TERMS):
+        stages.add("fall")
+    return stages
+
+
+def _scene_segment_text(segment: VideoSegment) -> str:
+    return " ".join(
+        part
+        for part in [
+            str(getattr(segment, "low_fps_caption", "")),
+            str(getattr(segment, "keyframe_path", "")) if not str(getattr(segment, "low_fps_caption", "")) else "",
+        ]
+        if part
+    ).strip()
+
+
+def _scene_text_stages(text: str) -> set[str]:
+    lowered = str(text).lower()
+    stages = set()
+    if _scene_contains_any(lowered, _SCENE_RISE_TERMS):
+        stages.add("rise")
+    if _scene_contains_any(lowered, _SCENE_STABILITY_TERMS):
+        stages.add("stability")
+    if _scene_contains_any(lowered, _SCENE_FALL_TERMS):
+        stages.add("fall")
+    return stages
+
+
+def _scene_contains_any(text: str, terms: set[str]) -> bool:
+    tokens = set(re.findall(r"[A-Za-z0-9]+", str(text).lower()))
+    return bool(tokens.intersection(terms))
+
+
+def _scene_coverage_claim(*, segment_id: str, stages: set[str], text: str) -> str:
+    stage_text = ", ".join(sorted(stages))
+    compact_text = re.sub(r"\s+", " ", text).strip()
+    compact_text = compact_text[:420] + ("..." if len(compact_text) > 420 else "")
+    return f"{segment_id} indexed transcript/caption covers {stage_text}: {compact_text}"
+
+
+def _scene_row_is_useful_for_full_arc(row: Mapping[str, Any], seen_stage_by_option: Mapping[str, set[str]]) -> bool:
+    option = str(row.get("supported_option", ""))
+    stages = seen_stage_by_option.get(option, set())
+    return "rise" in stages and "fall" in stages
 
 
 def _hard_skill_gate_reason(

@@ -1507,6 +1507,82 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("iterative_final_blocked", trace)
             self.assertIn("selected_option_has_structured_support", trace)
 
+    def test_iterative_agent_indexes_scene_coverage_for_main_idea_mcq(self):
+        class SceneCoverageBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "need_more_evidence", "rationale": "use indexed coverage rows", '
+                            '"citations": [], "missing_evidence": ["more coverage"], "confidence": 0.0}'
+                        )
+                    )
+                return BackendResponse(text='{"status": "continue", "program": []}')
+
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=90.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=30.0,
+                    low_fps_caption="ASR/subtitle excerpt: the empire is created and rises with economic growth.",
+                ),
+                VideoSegment(
+                    segment_id="seg_0002",
+                    start_sec=30.0,
+                    end_sec=60.0,
+                    low_fps_caption="ASR/subtitle excerpt: internal stability, governance, and prosperity are discussed.",
+                ),
+                VideoSegment(
+                    segment_id="seg_0003",
+                    start_sec=60.0,
+                    end_sec=90.0,
+                    low_fps_caption="ASR/subtitle excerpt: war pressure leads to decline, collapse, and the fall of the empire.",
+                ),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="scene_coverage_main_idea")
+            agent = IterativeVisualAgent(
+                backend=SceneCoverageBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=1,
+                    reserve_final_round=True,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(
+                question=(
+                    "What is the video mainly about?\n"
+                    "B. Why the Austro-Hungarian Empire was divided\n"
+                    "D. How the Austro-Hungarian Empire rose and fell"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rose and fell")
+            self.assertEqual(set(result.citations), {"scene_coverage_seg_0001", "scene_coverage_seg_0003"})
+            table = workspace.evidence_table_v2(
+                question="What is the video mainly about?",
+                options=[
+                    "B. Why the Austro-Hungarian Empire was divided",
+                    "D. How the Austro-Hungarian Empire rose and fell",
+                ],
+            )
+            self.assertGreaterEqual(len(table["groups"]["D"]), 2)
+
     def test_iterative_agent_prompt_includes_broad_long_video_index(self):
         backend = ScriptedPlannerBackend(
             ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']

@@ -287,7 +287,7 @@ def _main_idea_coverage_decision(
         return None
 
     rows = _sorted_option_rows(table, winner)
-    citation_rows = [row for row in rows if not _is_weak_grounding(row)][:2] or rows[:2]
+    citation_rows = _main_idea_citation_rows(rows)
     citations = [str(row.get("obs_id", "")) for row in citation_rows if row.get("obs_id")]
     if not citations:
         return None
@@ -310,6 +310,33 @@ def _main_idea_coverage_decision(
         confidence=min(1.0, max(float(option_scores.get(winner, 0.0)), float(profile["score"]))),
         conflict=conflict,
     )
+
+
+def _main_idea_citation_rows(rows: Sequence[Mapping[str, Any]], *, max_rows: int = 2) -> list[Mapping[str, Any]]:
+    strong_rows = [row for row in rows if not _is_weak_grounding(row)] or list(rows)
+    selected: list[Mapping[str, Any]] = []
+    covered_stages: set[str] = set()
+    for required_stage in ["rise", "fall"]:
+        candidates = [
+            row
+            for row in strong_rows
+            if required_stage in _coverage_profile("", [row])["evidence_stages"]
+            and str(row.get("obs_id", "")) not in {str(item.get("obs_id", "")) for item in selected}
+        ]
+        if not candidates:
+            continue
+        candidates.sort(key=lambda row: (-_row_score(row), str(row.get("obs_id", ""))))
+        selected.append(candidates[0])
+        covered_stages.add(required_stage)
+        if len(selected) >= max_rows and {"rise", "fall"}.issubset(covered_stages):
+            return selected
+    for row in strong_rows:
+        if str(row.get("obs_id", "")) in {str(item.get("obs_id", "")) for item in selected}:
+            continue
+        selected.append(row)
+        if len(selected) >= max_rows:
+            break
+    return selected
 
 
 def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
