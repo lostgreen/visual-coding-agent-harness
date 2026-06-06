@@ -28,6 +28,24 @@ The demo writes:
 - `runs/demo/trace.jsonl`
 - `runs/demo/ledger.md`
 
+## Project Layout
+
+Package code lives under `src/visual_coding_agent_harness/`. Evaluation
+runners, metrics, schemas, and ablation helpers live under
+`src/visual_coding_agent_harness/evals/`; command modules live under
+`src/visual_coding_agent_harness/cli/`.
+
+`runs/` is reserved for generated run artifacts. The legacy Python files in
+`runs/` and `scripts/` are compatibility wrappers for older commands.
+Prefer the package CLIs for new usage:
+
+```bash
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.eval_videomme --help
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.run_ablation --help
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.generate_ablation_report --help
+PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.audit_trajectory --help
+```
+
 ## P0 Scope
 
 - No external visual models.

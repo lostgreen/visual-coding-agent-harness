@@ -9,6 +9,12 @@ description = "A lightweight visual coding-agent harness for multimodal tool-use
 requires-python = ">=3.9"
 dependencies = []
 
+[project.scripts]
+vh-eval-videomme = "visual_coding_agent_harness.cli.eval_videomme:main"
+vh-run-ablation = "visual_coding_agent_harness.cli.run_ablation:main"
+vh-ablation-report = "visual_coding_agent_harness.cli.generate_ablation_report:main"
+vh-audit-trajectory = "visual_coding_agent_harness.cli.audit_trajectory:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 

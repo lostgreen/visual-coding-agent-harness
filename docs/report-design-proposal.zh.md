@@ -156,7 +156,7 @@ and every final answer cites evidence.
 | Evidence workspace | [workspace.py](../src/visual_coding_agent_harness/workspace.py) | 维护 `trace.jsonl`、`observations.jsonl`、`ledger.md`、`evidence_table_v2()`。 |
 | Global skill 工具 | [tools/global_view.py](../src/visual_coding_agent_harness/tools/global_view.py) | 实现 `global_gist`，为整体理解题提供 sparse whole-video direct floor。 |
 | Local visual workers | [tools/inspector.py](../src/visual_coding_agent_harness/tools/inspector.py) | 实现 `inspect_segment` 和 `vision_read` 的局部视觉读取提示词与 observation 协议。 |
-| 评测入口 | [runs/eval_runner.py](../runs/eval_runner.py) | 暴露 `agent_v2`、`--free-explore`、`--free-max-rounds`、`--temperature` 等评测配置。 |
+| 评测入口 | `visual_coding_agent_harness.cli.eval_videomme`（旧路径 [runs/eval_runner.py](../runs/eval_runner.py) 保留兼容） | 暴露 `agent_v2`、`--free-explore`、`--free-max-rounds`、`--temperature` 等评测配置。 |
 
 ### 5.2 当前 Skill 模式的关键提示词
 
