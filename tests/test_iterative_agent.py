@@ -1566,13 +1566,13 @@ class IterativeAgentTest(unittest.TestCase):
                 question=(
                     "What is the video mainly about?\n"
                     "B. Why the Austro-Hungarian Empire was divided\n"
-                    "D. How the Austro-Hungarian Empire rose and fell"
+                    "D. How the Austro-Hungarian Empire rises and falls"
                 ),
                 video_path="/videos/demo.mp4",
             )
 
             self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rose and fell")
+            self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rises and falls")
             self.assertEqual(set(result.citations), {"scene_coverage_seg_0001", "scene_coverage_seg_0003"})
             table = workspace.evidence_table_v2(
                 question="What is the video mainly about?",

@@ -2044,7 +2044,10 @@ _SCENE_STABILITY_TERMS = {
 _SCENE_FALL_TERMS = {
     "fall",
     "fell",
+    "falls",
+    "fallen",
     "collapse",
+    "collapsed",
     "collapsing",
     "decline",
     "declining",
