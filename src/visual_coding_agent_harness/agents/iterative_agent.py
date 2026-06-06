@@ -707,6 +707,27 @@ class IterativeVisualAgent:
 
             tool_name = str(step["tool"])
             args = dict(step.get("args", {}))
+            alias_repair = self._repair_tool_alias(tool_name=tool_name, args=args)
+            if alias_repair is not None:
+                original_tool_name = tool_name
+                original_args = dict(args)
+                tool_name, args, repair_reason = alias_repair
+                self.workspace.write_trace_event(
+                    "route_tool_repaired",
+                    {
+                        "skill": active_skill.name if active_skill is not None else "",
+                        "requested_tool": original_tool_name,
+                        "resolved_tool": tool_name,
+                        "reason": repair_reason,
+                    },
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=original_tool_name,
+                    reason=repair_reason,
+                    original={"tool": original_tool_name, "args": original_args},
+                    resolved={"tool": tool_name, "args": args},
+                )
             repair = self._repair_skill_route_tool(
                 tool_name=tool_name,
                 args=args,
@@ -1159,6 +1180,13 @@ class IterativeVisualAgent:
             return str(argument_name) in self.registry.get(tool_name).parameters
         except ToolError:
             return False
+
+    def _repair_tool_alias(self, *, tool_name: str, args: Mapping[str, Any]) -> tuple[str, dict[str, Any], str] | None:
+        aliases = {"verify": "verify_ledger_answer"}
+        resolved_tool = aliases.get(tool_name)
+        if resolved_tool is None or not self._has_tool(resolved_tool):
+            return None
+        return resolved_tool, dict(args), f"repair_tool_alias_{tool_name}_to_{resolved_tool}"
 
     def _try_low_confidence_final(
         self,

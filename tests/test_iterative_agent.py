@@ -456,6 +456,50 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(tool_args["video_path"], "/videos/demo.mp4")
             self.assertEqual(workspace.get_observation("obs_0001").input_artifacts, ["/videos/demo.mp4"])
 
+    def test_repairs_verify_alias_to_registered_ledger_verifier(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "verify", "args": {"answer": "B", "ledger_text": "B is supported"}, "assign": "v1"}'
+                    "]}"
+                )
+            ]
+        )
+        registry = ToolRegistry()
+
+        @tool(name="verify_ledger_answer", description="Verify answer support.")
+        def verify_ledger_answer(answer: str, ledger_text: str = ""):
+            return {"claim": f"{answer} is checked against {ledger_text}", "confidence": 0.8}
+
+        registry.register(verify_ledger_answer)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_alias")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=1,
+                    reserve_final_round=False,
+                    hard_skill_runtime=True,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(
+                question="What is the video mainly about?\nA. cooking\nB. empire division",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.rounds[0].program[0]["tool"], "verify_ledger_answer")
+            self.assertEqual(workspace.observation_count(tool_name="verify_ledger_answer"), 1)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn('"type": "route_violation"', trace)
+
     def test_normalization_failure_surfaces_in_next_prompt(self):
         backend = ScriptedPlannerBackend(
             [
