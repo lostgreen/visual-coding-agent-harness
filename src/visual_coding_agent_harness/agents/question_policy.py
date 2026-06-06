@@ -141,6 +141,19 @@ def extract_candidate_options(question: str) -> Sequence[str]:
         stripped = line.strip()
         if re.match(r"^[A-H][.)]\s+\S+", stripped):
             options.append(stripped)
+    if options:
+        return options
+
+    normalized = re.sub(r"\bOptions\s*:\s*", " ", question, flags=re.IGNORECASE)
+    matches = re.finditer(
+        r"(?<![A-Za-z0-9])([A-H])([.)])\s+(.*?)(?=(?<![A-Za-z0-9])[A-H][.)]\s+|$)",
+        normalized,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for match in matches:
+        text = " ".join(str(match.group(3)).split()).strip()
+        if text:
+            options.append(f"{match.group(1).upper()}{match.group(2)} {text}")
     return options
 
 

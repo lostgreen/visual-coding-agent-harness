@@ -1,6 +1,6 @@
 import unittest
 
-from visual_coding_agent_harness.agents.question_policy import classify_question_route, select_question_playbook
+from visual_coding_agent_harness.agents.question_policy import classify_question_route, extract_candidate_options, select_question_playbook
 
 
 class QuestionPolicyTest(unittest.TestCase):
@@ -42,6 +42,26 @@ class QuestionPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(route, "gist_global")
+
+    def test_extracts_videomme_options_from_single_line_wrapper(self):
+        options = extract_candidate_options(
+            "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+            "Question: What's the main idea of the video?\n"
+            "Options: A. What did the French gain from World War One. "
+            "B. Why the Austro-Hungarian Empire was divided. "
+            "C. The process of World War One. "
+            "D. How the Austro-Hungarian Empire rises and falls."
+        )
+
+        self.assertEqual(
+            list(options),
+            [
+                "A. What did the French gain from World War One.",
+                "B. Why the Austro-Hungarian Empire was divided.",
+                "C. The process of World War One.",
+                "D. How the Austro-Hungarian Empire rises and falls.",
+            ],
+        )
 
     def test_classifies_temporal_mcq_as_temporal_order_route(self):
         route = classify_question_route(
