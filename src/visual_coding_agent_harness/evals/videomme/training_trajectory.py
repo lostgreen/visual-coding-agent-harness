@@ -26,6 +26,8 @@ class TrainingTrajectory:
     tool_calls: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
     planner_turns: list[dict[str, Any]]
+    planner_plans: list[dict[str, Any]]
+    route_repairs: list[dict[str, Any]]
     context_budget_reports: list[dict[str, Any]]
     followup_history: list[dict[str, Any]]
     contract_version: str = CONTRACT_VERSION
@@ -67,6 +69,8 @@ class TrainingTrajectory:
             tool_calls=_tool_calls(trace_events),
             tool_results=_tool_results(trace_events, workspace=workspace, planner_turns=planner_turns),
             planner_turns=planner_turns,
+            planner_plans=_planner_plans(trace_events),
+            route_repairs=_route_repairs(trace_events),
             context_budget_reports=_event_payloads(trace_events, "context_budget_report"),
             followup_history=_followup_events(trace_events),
             workspace_root=workspace.root.as_posix(),
@@ -129,10 +133,15 @@ def _planner_turns(events: Sequence[Mapping[str, Any]], *, workspace: EvidenceWo
 
 def _tool_calls(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
+    current_source_round = 0
     for event in events:
-        if str(event.get("type", "")) != "tool_use":
-            continue
+        event_type = str(event.get("type", ""))
         payload = event.get("payload", {})
+        if event_type == "iterative_plan" and isinstance(payload, Mapping):
+            current_source_round = int(payload.get("round", current_source_round) or current_source_round)
+            continue
+        if event_type != "tool_use":
+            continue
         if not isinstance(payload, Mapping):
             continue
         arguments = payload.get("arguments", {})
@@ -141,6 +150,7 @@ def _tool_calls(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                 "step": int(payload.get("step", len(calls) + 1) or len(calls) + 1),
                 "tool": str(payload.get("tool", "")),
                 "arguments": dict(arguments) if isinstance(arguments, Mapping) else {},
+                "source_round": current_source_round,
                 "created_at": str(event.get("created_at", "")),
             }
         )
@@ -157,10 +167,15 @@ def _tool_results(
     evidence_ids = _evidence_ids_by_observation(workspace)
     visible_rounds = _visible_rounds_by_observation(planner_turns)
     results: list[dict[str, Any]] = []
+    current_source_round = 0
     for event in events:
-        if str(event.get("type", "")) != "tool_result":
-            continue
+        event_type = str(event.get("type", ""))
         payload = event.get("payload", {})
+        if event_type == "iterative_plan" and isinstance(payload, Mapping):
+            current_source_round = int(payload.get("round", current_source_round) or current_source_round)
+            continue
+        if event_type != "tool_result":
+            continue
         if not isinstance(payload, Mapping):
             continue
         observation_id = str(payload.get("observation_id", ""))
@@ -183,6 +198,7 @@ def _tool_results(
             "input_artifacts": _bounded_sequence(observation.get("input_artifacts", []), max_items=8),
             "evidence_record_ids": evidence_ids.get(observation_id, []),
             "visible_in_planner_rounds": visible_rounds.get(observation_id, []),
+            "source_round": current_source_round,
             "created_at": str(event.get("created_at", "")),
         }
         relations = raw_mapping.get("candidate_option_relations")
@@ -190,6 +206,50 @@ def _tool_results(
             result["candidate_option_relations"] = _bounded_sequence(relations, max_items=8)
         results.append(result)
     return results
+
+
+def _planner_plans(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    plans: list[dict[str, Any]] = []
+    for event in events:
+        if str(event.get("type", "")) != "iterative_plan":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        program = payload.get("program", [])
+        plans.append(
+            {
+                "round": int(payload.get("round", len(plans) + 1) or len(plans) + 1),
+                "rationale": str(payload.get("rationale", "")),
+                "program": _bounded_sequence(program, max_items=8),
+                "created_at": str(event.get("created_at", "")),
+            }
+        )
+    return plans
+
+
+def _route_repairs(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    repairs: list[dict[str, Any]] = []
+    current_planner_round = 0
+    for event in events:
+        event_type = str(event.get("type", ""))
+        payload = event.get("payload", {})
+        if event_type in {"planner_io", "iterative_round_start"} and isinstance(payload, Mapping):
+            current_planner_round = int(payload.get("round", current_planner_round) or current_planner_round)
+            continue
+        if event_type != "route_tool_repaired" or not isinstance(payload, Mapping):
+            continue
+        repairs.append(
+            {
+                "round": current_planner_round,
+                "skill": str(payload.get("skill", "")),
+                "requested_tool": str(payload.get("requested_tool", "")),
+                "resolved_tool": str(payload.get("resolved_tool", "")),
+                "reason": str(payload.get("reason", "")),
+                "created_at": str(event.get("created_at", "")),
+            }
+        )
+    return repairs
 
 
 def _event_payloads(events: Sequence[Mapping[str, Any]], event_type: str) -> list[dict[str, Any]]:

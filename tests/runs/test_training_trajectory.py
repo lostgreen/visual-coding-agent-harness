@@ -105,6 +105,23 @@ def test_planner_turns_show_context_growth_without_inlining_prompts(tmp_path):
         },
     )
     workspace.write_trace_event(
+        "route_tool_repaired",
+        {
+            "skill": "main_idea",
+            "requested_tool": "vision_read",
+            "resolved_tool": "global_gist",
+            "reason": "repair_main_idea_vision_read_to_global_gist",
+        },
+    )
+    workspace.write_trace_event(
+        "iterative_plan",
+        {
+            "round": 1,
+            "rationale": "inspect local evidence",
+            "program": [{"tool": "vision_read", "args": {"segment_id": "seg_0001"}}],
+        },
+    )
+    workspace.write_trace_event(
         "planner_io",
         {
             "round": 2,
@@ -114,6 +131,7 @@ def test_planner_turns_show_context_growth_without_inlining_prompts(tmp_path):
             "response_excerpt": '{"status":"final"}',
         },
     )
+    workspace.write_trace_event("tool_use", {"step": 1, "tool": "vision_read", "arguments": {"segment_id": "seg_0001"}})
     workspace.write_trace_event("tool_result", {"step": 1, "tool": "vision_read", "observation_id": "obs_0001"})
 
     trajectory = TrainingTrajectory.from_workspace(
@@ -126,6 +144,10 @@ def test_planner_turns_show_context_growth_without_inlining_prompts(tmp_path):
 
     assert [turn["evidence_observation_ids"] for turn in trajectory.planner_turns] == [[], ["obs_0001"]]
     assert trajectory.planner_turns[0]["prompt_artifact"]["sha256"] != trajectory.planner_turns[1]["prompt_artifact"]["sha256"]
+    assert trajectory.planner_plans[0]["round"] == 1
+    assert trajectory.route_repairs[0]["round"] == 1
+    assert trajectory.tool_calls[0]["source_round"] == 1
+    assert trajectory.tool_results[0]["source_round"] == 1
     assert trajectory.tool_results[0]["visible_in_planner_rounds"] == [2]
     assert "## Evidence" not in json.dumps(payload)
 
