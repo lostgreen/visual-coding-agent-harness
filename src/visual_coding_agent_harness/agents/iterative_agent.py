@@ -752,6 +752,16 @@ class IterativeVisualAgent:
                     original={"tool": tool_name, "args": args},
                 )
                 continue
+            if self._tool_accepts_argument(tool_name, "video_path") and _is_video_path_placeholder(args.get("video_path")):
+                original_args = dict(args)
+                args["video_path"] = video_path
+                _append_normalization_note(
+                    notes_out,
+                    tool=tool_name,
+                    reason="replace_video_path_placeholder",
+                    original={"tool": tool_name, "args": original_args},
+                    resolved={"tool": tool_name, "args": args},
+                )
             if final_round_reserved and tool_name not in _VERIFIER_TOOLS:
                 self.workspace.write_trace_event(
                     "exploration_policy_adjustment",
@@ -2536,6 +2546,13 @@ def _route_violation(*, tool_name: str, active_skill: SkillSpec | None, free_exp
 
 def _segment_has_index_text(segment: Any) -> bool:
     return bool(getattr(segment, "low_fps_caption", ""))
+
+
+def _is_video_path_placeholder(value: Any) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    return text in {"", "video_path", "<video_path>", "$video_path", "${video_path}"}
 
 
 def _dynamic_segment_id(*, start_sec: float, end_sec: float) -> str:

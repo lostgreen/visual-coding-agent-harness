@@ -420,6 +420,42 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(backend.requests[0].task, "replan")
             self.assertEqual(workspace.observation_count(tool_name="global_gist"), 0)
 
+    def test_normalizes_placeholder_video_path_for_global_tools(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "program": ['
+                    '{"tool": "global_gist", "args": {"video_path": "video_path", '
+                    '"question": "main idea", "duration_sec": 60.0}, "assign": "g1"}'
+                    "]}"
+                )
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="placeholder_video_path")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_global_route_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=1,
+                    reserve_final_round=False,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(
+                question="What is the video mainly about?\nA. cooking\nD. aviation documentary",
+                video_path="/videos/demo.mp4",
+            )
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertEqual(tool_args["video_path"], "/videos/demo.mp4")
+            self.assertEqual(workspace.get_observation("obs_0001").input_artifacts, ["/videos/demo.mp4"])
+
     def test_normalization_failure_surfaces_in_next_prompt(self):
         backend = ScriptedPlannerBackend(
             [
