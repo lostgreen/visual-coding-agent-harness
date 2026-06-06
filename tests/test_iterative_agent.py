@@ -2563,6 +2563,70 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("force_visual_after_no_evidence_growth", trace)
 
+    def test_repeated_empty_program_finalizes_from_structured_evidence_before_stopping(self):
+        class ShouldNotAnswerBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    raise AssertionError("structured table should arbitrate without backend")
+                return super().generate(request)
+
+        responses = [
+            '{"status": "continue", "program": []}',
+            '{"status": "continue", "program": []}',
+            '{"status": "continue", "program": []}',
+        ]
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=20.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="repeated_empty_finalizes")
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": "ev_scene_coverage_1",
+                    "obs_id": "scene_coverage_seg_0001",
+                    "tool": "timeline_asr_summary",
+                    "supported_option": "D",
+                    "claim": "Early transcript covers the rise and formation of the empire.",
+                    "confidence": 0.84,
+                    "grounding_quality": "indexed_transcript",
+                    "candidate_option_relations": [{"option": "D", "relation": "support", "strength": 0.84}],
+                    "time_range": [0.0, 20.0],
+                }
+            )
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": "ev_scene_coverage_2",
+                    "obs_id": "scene_coverage_seg_0003",
+                    "tool": "timeline_asr_summary",
+                    "supported_option": "D",
+                    "claim": "Late transcript covers decline, collapse, and the fall of the empire.",
+                    "confidence": 0.84,
+                    "grounding_quality": "indexed_transcript",
+                    "candidate_option_relations": [{"option": "D", "relation": "support", "strength": 0.84}],
+                    "time_range": [40.0, 60.0],
+                }
+            )
+            agent = IterativeVisualAgent(
+                backend=ShouldNotAnswerBackend(responses),
+                registry=ToolRegistry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=6, reserve_final_round=True, max_repeated_programs=1),
+            )
+
+            result = agent.run(
+                question=(
+                    "What is the video mainly about?\n"
+                    "B. Why the empire was divided\n"
+                    "D. How the empire rose and fell"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "D. How the empire rose and fell")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("source\": \"repeated_program_guard", trace)
+
     def test_segment_vlm_tools_share_backend_and_pass_temporal_metadata(self):
         class SegmentToolBackend(VisionLanguageBackend):
             def __init__(self):

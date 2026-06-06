@@ -539,6 +539,18 @@ class IterativeVisualAgent:
                         "program_signature": program_key,
                     },
                 )
+                guard_final = self._try_answer_agent_final(
+                    question=question,
+                    video_path=video_path,
+                    rounds=rounds,
+                    round_number=round_number,
+                    source="repeated_program_guard",
+                    has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                    program=program,
+                    observation_ids=[],
+                )
+                if guard_final is not None:
+                    return guard_final
                 plural = "round" if len(rounds) == 1 else "rounds"
                 partial_answer = _partial_answer_from_ledger(self._read_ledger())
                 return IterativeRunResult(
@@ -694,6 +706,16 @@ class IterativeVisualAgent:
             "iterative_budget_exhausted",
             {"max_rounds": self.budget.max_rounds, "citations": citations},
         )
+        budget_final = self._try_answer_agent_final(
+            question=question,
+            video_path=video_path,
+            rounds=rounds,
+            round_number=self.budget.max_rounds,
+            source="budget_exhausted",
+            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+        )
+        if budget_final is not None:
+            return budget_final
         if extract_candidate_options(question) and citations:
             answer_result = AnswerAgent(self.backend).run(
                 question=question,
@@ -731,6 +753,87 @@ class IterativeVisualAgent:
             status="max_rounds_reached",
             citations=citations,
             rounds=rounds,
+        )
+
+    def _try_answer_agent_final(
+        self,
+        *,
+        question: str,
+        video_path: str,
+        rounds: Sequence[IterativeRound],
+        round_number: int,
+        source: str,
+        has_inspect_with_candidate_options: bool,
+        program: Sequence[Mapping[str, Any]] = (),
+        observation_ids: Sequence[str] = (),
+    ) -> IterativeRunResult | None:
+        if not extract_candidate_options(question):
+            return None
+        answer_result = AnswerAgent(self.backend).run(
+            question=question,
+            evidence_text=self._read_ledger(),
+            evidence_table=self._answer_evidence_table(question),
+        )
+        self.workspace.write_trace_event(
+            "iterative_answer_agent",
+            {
+                "round": round_number,
+                "source": source,
+                "status": answer_result.status,
+                "answer": answer_result.answer,
+                "citations": list(answer_result.citations),
+                "missing_evidence": list(answer_result.missing_evidence),
+            },
+        )
+        if answer_result.status != "final":
+            return None
+        blocked_reason = _blocked_final_reason(
+            question=question,
+            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+            workspace=self.workspace,
+            answer=answer_result.answer,
+            citations=answer_result.citations,
+        )
+        if blocked_reason:
+            self.workspace.write_trace_event(
+                "iterative_final_blocked",
+                {
+                    "round": round_number,
+                    "source": source,
+                    "reason": blocked_reason,
+                    "answer": answer_result.answer,
+                    "citations": list(answer_result.citations),
+                },
+            )
+            return None
+        final_rounds = list(rounds)
+        final_rounds.append(
+            IterativeRound(
+                round_number=round_number,
+                status="final",
+                planner_text=answer_result.raw_text,
+                rationale=answer_result.rationale,
+                program=program,
+                observation_ids=observation_ids,
+            )
+        )
+        self.workspace.write_trace_event(
+            "iterative_final",
+            {
+                "round": round_number,
+                "answer": answer_result.answer,
+                "citations": list(answer_result.citations),
+                "source": source,
+            },
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer=answer_result.answer,
+            status="final",
+            citations=list(answer_result.citations),
+            confidence=answer_result.confidence,
+            rounds=final_rounds,
         )
 
     def _normalize_program(
@@ -1154,11 +1257,12 @@ class IterativeVisualAgent:
             "end_sec": segment.end_sec,
             "nframes": self.budget.default_nframes,
         }
+        target_question = _local_fact_question(question=question, planner_skill=planner_skill)
         if tool_name == "vision_read":
-            args["ask_for"] = question
-            args["event_label"] = question
+            args["ask_for"] = target_question
+            args["event_label"] = target_question
         else:
-            args["question"] = question
+            args["question"] = target_question
         candidate_options = extract_candidate_options(question)
         if candidate_options and tool_name == "inspect_segment":
             args["candidate_options"] = list(candidate_options)
@@ -2080,6 +2184,33 @@ def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, A
 
 def _program_has_visual_evidence_tool(program: Sequence[Mapping[str, Any]]) -> bool:
     return any(str(step.get("tool", "")) in _SEGMENT_MEDIA_TOOLS or str(step.get("tool", "")) in _GLOBAL_VIEW_TOOLS for step in program)
+
+
+def _local_fact_question(*, question: str, planner_skill: SkillSpec | None) -> str:
+    semantic = _semantic_question_text(question).strip() or question
+    if planner_skill is None:
+        return semantic
+    if planner_skill.name == "timeline_ordering":
+        return (
+            "Describe only the visible/narrated temporal sequence relevant to this question. "
+            "List entities/events in the order they appear with timestamps if possible. "
+            "Do not choose an option. Question: "
+            + semantic
+        )
+    if planner_skill.name == "mutex_fact_qa":
+        return (
+            "Describe only facts that distinguish the candidate options, including background, class/status, "
+            "life-stage changes, locations, and temporal order when visible or narrated. "
+            "Do not choose an option. Question: "
+            + semantic
+        )
+    if planner_skill.name == "main_idea":
+        return (
+            "Describe localized main-idea evidence in this segment. Focus on entities, events, and narrative stage. "
+            "Do not choose an option. Question: "
+            + semantic
+        )
+    return semantic
 
 
 def _blocked_final_reason(
