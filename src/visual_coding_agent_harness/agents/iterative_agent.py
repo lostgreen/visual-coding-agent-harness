@@ -970,9 +970,14 @@ class IterativeVisualAgent:
         question: str,
         video_path: str,
     ) -> tuple[str, dict[str, Any], str] | None:
-        if self.budget.free_exploration or active_skill is None:
+        if self.budget.free_exploration:
             return None
-        if active_skill.name == "main_idea" and tool_name == "vision_read" and self._has_tool("global_gist"):
+        is_main_idea_route = (
+            active_skill.name == "main_idea"
+            if active_skill is not None
+            else classify_question_route(question) == "gist_global"
+        )
+        if is_main_idea_route and tool_name == "vision_read" and self._has_tool("global_gist"):
             if self.workspace.observation_count(tool_name="global_gist") >= 1:
                 return None
             repaired_args: dict[str, Any] = {
@@ -983,7 +988,33 @@ class IterativeVisualAgent:
             if self._tool_accepts_argument("global_gist", "seed"):
                 repaired_args["seed"] = max(2, self.workspace.evidence_table_row_count() + 1)
             return "global_gist", repaired_args, "repair_main_idea_vision_read_to_global_gist"
-        if active_skill.name == "mutex_fact_qa" and tool_name == "inspect_segment" and self._has_tool("vision_read"):
+        if (
+            is_main_idea_route
+            and tool_name == "global_gist"
+            and self.workspace.observation_count(tool_name="global_gist") >= 1
+            and self._has_tool("vision_read")
+        ):
+            segment_id = self._resolve_next_segment_id("", set())
+            if segment_id is None:
+                return None
+            return (
+                "vision_read",
+                {
+                    "segment_id": segment_id,
+                    "ask_for": (
+                        "Describe localized main-idea evidence for this segment. Do not choose an option. "
+                        "Focus on visible entities, events, and whether this part shows rise, stability, decline, collapse, or causes."
+                    ),
+                    "event_label": "localized main-idea evidence",
+                },
+                "repair_repeated_main_idea_global_gist_to_vision_read",
+            )
+        if (
+            active_skill is not None
+            and active_skill.name == "mutex_fact_qa"
+            and tool_name == "inspect_segment"
+            and self._has_tool("vision_read")
+        ):
             repaired_args = {
                 key: value
                 for key, value in dict(args).items()

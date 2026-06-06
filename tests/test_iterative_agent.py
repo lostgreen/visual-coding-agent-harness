@@ -487,6 +487,61 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("repair_main_idea_vision_read_to_global_gist", trace)
 
+    def test_main_idea_repeated_global_gist_repaired_to_local_read(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "rationale": "planner repeated sparse topic hint", '
+                    '"program": [{"tool": "global_gist", "args": {"question": "main idea", '
+                    '"duration_sec": 120.0}, "assign": "repeat_global"}]}'
+                )
+            ]
+        )
+        registry = build_global_route_test_registry()
+
+        @tool(name="vision_read", description="Read localized facts.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 8,
+        ):
+            return {
+                "claim": f"{segment_id} local coverage fact.",
+                "confidence": 0.82,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(vision_read)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=120.0, window_sec=60.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="repeat_global_to_local")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="What is the video mainly about?\nA. cooking\nB. empire division\nD. empire rise and fall",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(workspace.observation_count(tool_name="global_gist"), 1)
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 1)
+            self.assertEqual(result.rounds[0].program[0]["tool"], "vision_read")
+            self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("repair_repeated_main_idea_global_gist_to_vision_read", trace)
+
     def test_normalizes_placeholder_video_path_for_global_tools(self):
         backend = ScriptedPlannerBackend(
             [
