@@ -9,6 +9,7 @@ from typing import Callable, Mapping, Optional
 
 from ..agents.contracts import resolve_nframes
 from ..agents.open_questions import exploration_question
+from ..agents.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
@@ -152,14 +153,20 @@ def _run_segment_tool(
             metadata=metadata,
         )
     )
-    return {
-        "claim": response.text.strip(),
+    claim = response.text.strip()
+    confidence_signal = confidence_signal_from_text(claim)
+    result: dict[str, object] = {
+        "claim": claim,
         "confidence": 0.66,
         "input_artifacts": input_artifacts,
         "regions": [metadata],
         "limitations": limitations,
         "raw_backend": dict(response.raw),
     }
+    if confidence_signal:
+        result["confidence_signal"] = confidence_signal
+        result["grounding_quality"] = "inferred"
+    return result
 
 
 def _segment_prompt(*, task: str, segment_id: str, start_sec: float, end_sec: float, question: str) -> str:

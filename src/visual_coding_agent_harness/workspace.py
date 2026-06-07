@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .agents.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
+from .agents.output_quality import is_unsupported_claim
 from .schemas import EvidenceRowV2
 
 
@@ -484,10 +485,14 @@ class EvidenceWorkspace:
         return row
 
     def append_timeline_from_observation(self, observation: Observation) -> dict[str, Any] | None:
-        if observation.tool not in {"vision_read", "inspect_segment"}:
+        if observation.tool not in {"vision_read", "inspect_segment", "caption_segment"}:
+            return None
+        if is_unsupported_claim(observation.claim):
             return None
         raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
         entity = _observation_event_label(raw_output=raw_output, claim=observation.claim)
+        if not entity and observation.tool == "caption_segment":
+            entity = _caption_timeline_entity(observation.claim)
         if not entity:
             return None
         observed_at_sec = _observed_at_sec(raw_output)
@@ -2229,6 +2234,15 @@ def _observation_event_label(*, raw_output: Mapping[str, Any], claim: str) -> st
             return str(value).strip()
     match = re.search(r"\bevent:\s*([^.;|]+)", claim, flags=re.IGNORECASE)
     return match.group(1).strip() if match else ""
+
+
+def _caption_timeline_entity(claim: str, *, max_chars: int = 220) -> str:
+    text = " ".join(str(claim or "").split())
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "..."
 
 
 def _grounding_quality(*, raw_output: Mapping[str, Any], limitations: str, confidence_signal: str = "") -> str:

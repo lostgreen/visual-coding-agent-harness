@@ -17,8 +17,13 @@ _UNSUPPORTED_PATTERNS = [
     re.compile(r"limitations?:\s*the video does not", flags=re.IGNORECASE),
     re.compile(r"\bi (?:cannot|can't) (?:see|confirm|verify)\b", flags=re.IGNORECASE),
     re.compile(r"\b(?:the\s+)?video does not contain (?:any )?(?:visible )?evidence\b", flags=re.IGNORECASE),
+    re.compile(
+        r"\b(?:the\s+)?video does not (?:show|depict|present|provide|include)\b",
+        flags=re.IGNORECASE,
+    ),
     re.compile(r"\bdoes not contain any (?:visible )?(?:evidence|mentions?)\b", flags=re.IGNORECASE),
     re.compile(r"\bno (?:visible )?(?:evidence|mentions?) of\b", flags=re.IGNORECASE),
+    re.compile(r"\bno direct evidence (?:is )?visible\b", flags=re.IGNORECASE),
 ]
 
 

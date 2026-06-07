@@ -49,6 +49,16 @@ class CaptionQARecordingBackend(VisionLanguageBackend):
         return BackendResponse(text=f"{request.task} answer", raw={"task": request.task})
 
 
+class FixedTextBackend(VisionLanguageBackend):
+    def __init__(self, text: str):
+        self.text = text
+        self.requests = []
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        return BackendResponse(text=self.text, raw={"task": request.task})
+
+
 class CaptionQAToolsTest(unittest.TestCase):
     def test_caption_and_qa_prompts_are_structured_by_task(self):
         backend = CaptionQARecordingBackend()
@@ -172,6 +182,23 @@ class CaptionQAToolsTest(unittest.TestCase):
             self.assertIn("What is the video mainly about?", request.prompt)
             self.assertIn("Do not choose an option.", request.prompt)
             assert_no_mcq_leak(self, request.prompt)
+
+    def test_segment_tool_marks_explicit_no_evidence_as_unsupported(self):
+        backend = FixedTextBackend("The video does not depict Bernini's four masterpieces in this segment.")
+        registry = build_segment_vlm_registry(backend)
+
+        result = registry.execute(
+            "caption_segment",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0001",
+                "start_sec": 0.0,
+                "end_sec": 30.0,
+            },
+        )
+
+        self.assertEqual(result["confidence_signal"], "unsupported")
+        self.assertEqual(result["grounding_quality"], "inferred")
 
     def test_caption_segments_sanitizes_full_mcq_before_backend_generate(self):
         backend = CaptionQARecordingBackend()

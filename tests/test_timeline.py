@@ -68,6 +68,51 @@ def test_timeline_window_only_marked_when_no_explicit_timestamp(tmp_path: Path):
     assert rows[0]["confidence_signal"] == "window_only"
 
 
+def test_timeline_auto_appended_from_positive_caption_segment(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="caption_segment", description="Caption a localized temporal window.")
+    def caption_segment():
+        return {
+            "claim": "The author presents Apollo and Daphne after discussing earlier sculptures.",
+            "confidence": 0.72,
+            "regions": [{"segment_id": "seg_0007", "start_sec": 1800.0, "end_sec": 1804.957}],
+            "grounding_quality": "visually_confirmed",
+        }
+
+    registry.register(caption_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_caption")
+
+    ProgramInterpreter(registry=registry, workspace=workspace).run([{"tool": "caption_segment"}])
+
+    rows = workspace.read_timeline_sorted()
+    assert len(rows) == 1
+    assert rows[0]["obs_id"] == "obs_0001"
+    assert rows[0]["entity"].startswith("The author presents Apollo and Daphne")
+    assert rows[0]["observed_at_sec"] is None
+    assert rows[0]["window"] == [1800.0, 1804.957]
+    assert rows[0]["confidence_signal"] == "window_only"
+
+
+def test_timeline_skips_unsupported_caption_segment(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="caption_segment", description="Caption a localized temporal window.")
+    def caption_segment():
+        return {
+            "claim": "The video does not depict Bernini's four masterpieces in this segment.",
+            "confidence": 0.72,
+            "regions": [{"segment_id": "seg_0002", "start_sec": 300.0, "end_sec": 600.0}],
+        }
+
+    registry.register(caption_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_caption_negative")
+
+    ProgramInterpreter(registry=registry, workspace=workspace).run([{"tool": "caption_segment"}])
+
+    assert workspace.read_timeline_sorted() == []
+
+
 def test_temporal_predicate_uses_only_confirmed_timeline_entries():
     table = {
         "timeline": [
