@@ -1950,6 +1950,90 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("budget_exhausted", trace)
             self.assertIn("low_confidence_final", trace)
 
+    def test_iterative_agent_low_confidence_from_arbitration_partial_support_at_budget(self):
+        class CloseSupportBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            '{"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "Inspect first order"}, "assign": "a"},'
+                            '{"tool": "inspect_segment", "args": {"segment_id": "seg_0002", "question": "Inspect fourth order"}, "assign": "d"}'
+                            "]}"
+                        )
+                    )
+                return BackendResponse(text="unexpected")
+
+        registry = ToolRegistry()
+
+        @tool(name="inspect_segment", description="Inspect one segment with close option support.")
+        def inspect_segment(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            question: str,
+            candidate_options=None,
+            nframes: int = 16,
+        ):
+            option = "A" if segment_id == "seg_0001" else "D"
+            confidence = 0.70 if option == "A" else 0.66
+            return {
+                "claim": f"{segment_id} visually supports option {option}.",
+                "confidence": confidence,
+                "candidate_option_relations": [
+                    {
+                        "option": option,
+                        "relation": "support",
+                        "strength": confidence,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec, "nframes": nframes}],
+            }
+
+        registry.register(inspect_segment)
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=20.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=10.0),
+                VideoSegment(segment_id="seg_0002", start_sec=10.0, end_sec=20.0),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="low_conf_arbitration_budget")
+            agent = IterativeVisualAgent(
+                backend=CloseSupportBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=1,
+                    max_tool_calls_per_round=2,
+                    reserve_final_round=False,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(
+                question="Which order is shown?\nA. first order\nD. fourth order",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.answer, "A")
+            self.assertEqual(result.citations, ["obs_0001"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("resolve close support", trace)
+            self.assertIn("low_confidence_final", trace)
+
     def test_iterative_agent_blocks_low_confidence_without_visual_citation(self):
         class NoVisualLowConfidenceBackend(VisionLanguageBackend):
             def __init__(self):

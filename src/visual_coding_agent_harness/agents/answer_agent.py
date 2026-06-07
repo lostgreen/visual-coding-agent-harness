@@ -158,11 +158,13 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
         return _need_more_evidence(
             f"targeted follow-up needed: option {winner} is only supported by weak or inferred evidence.",
             conflict=conflict,
+            candidate_option_relations=_partial_support_relations(table, options=[winner]),
         )
     if runner_up and winning_score - runner_up_score < min_margin:
         return _need_more_evidence(
             f"targeted follow-up needed: resolve close support between options {winner} and {runner_up}.",
             conflict=conflict,
+            candidate_option_relations=_partial_support_relations(table, options=[winner, runner_up]),
         )
     if runner_up and _options_overlap(option_text.get(winner, winner), option_text.get(runner_up, runner_up)):
         if not _has_distinguishing_evidence(
@@ -173,6 +175,7 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
             return _need_more_evidence(
                 "disambiguate_overlapping_options",
                 conflict=conflict,
+                candidate_option_relations=_partial_support_relations(table, options=[winner, runner_up]),
             )
 
     citation_rows = _temporal_citation_rows(strong_winning_rows) or strong_winning_rows[:2]
@@ -255,11 +258,17 @@ def _parse_json_like_object(text: str) -> Mapping[str, Any]:
     return payload
 
 
-def _need_more_evidence(reason: str, *, conflict: Mapping[str, Any] | None = None) -> AnswerAgentResult:
+def _need_more_evidence(
+    reason: str,
+    *,
+    conflict: Mapping[str, Any] | None = None,
+    candidate_option_relations: Sequence[Mapping[str, Any]] = (),
+) -> AnswerAgentResult:
     return AnswerAgentResult(
         status="need_more_evidence",
         answer="need_more_evidence",
         rationale=reason,
+        candidate_option_relations=list(candidate_option_relations),
         missing_evidence=[reason],
         confidence=0.0,
         conflict=dict(conflict or {}),
@@ -279,6 +288,48 @@ def _score_options(table: Mapping[str, Any]) -> dict[str, float]:
             score += _row_score(row)
         scores[str(option)] = score
     return scores
+
+
+def _partial_support_relations(
+    table: Mapping[str, Any],
+    *,
+    options: Sequence[str] | None = None,
+    max_per_option: int = 3,
+) -> list[dict[str, Any]]:
+    option_filter = {str(option).strip().upper()[:1] for option in options or [] if str(option).strip()}
+    groups = table.get("groups", {}) if isinstance(table.get("groups", {}), Mapping) else {}
+    relations: list[dict[str, Any]] = []
+    for option in sorted(str(key).strip().upper()[:1] for key in groups if str(key) != "unassigned"):
+        if option_filter and option not in option_filter:
+            continue
+        for row in _sorted_option_rows(table, option)[:max_per_option]:
+            obs_id = str(row.get("obs_id", "")).strip()
+            if not obs_id or _row_score(row) <= 0.0:
+                continue
+            try:
+                strength = float(row.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                strength = 0.0
+            if strength <= 0.0:
+                strength = _row_score(row)
+            relations.append(
+                {
+                    "option": option,
+                    "relation": "support",
+                    "strength": strength,
+                    "observation_id": obs_id,
+                    "grounding_quality": str(row.get("grounding_quality", "")),
+                    "rationale": _compact_relation_rationale(str(row.get("claim", ""))),
+                }
+            )
+    return relations
+
+
+def _compact_relation_rationale(text: str, *, limit: int = 160) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "..."
 
 
 def _main_idea_coverage_decision(

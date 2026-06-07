@@ -183,6 +183,38 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertTrue(result.missing_evidence)
         self.assertIn("targeted", result.missing_evidence[0])
 
+    def test_arbitration_abstain_preserves_partial_support_for_budget_fallback(self):
+        table = {
+            "options": ["A. first order", "D. fourth order"],
+            "groups": {
+                "A": [
+                    {
+                        "obs_id": "obs_0001",
+                        "claim": "One visual window supports option A.",
+                        "confidence": 0.7,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+                "D": [
+                    {
+                        "obs_id": "obs_0002",
+                        "claim": "Another visual window supports option D.",
+                        "confidence": 0.66,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table, min_margin=0.1)
+        low_conf = result.as_low_confidence_final()
+
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertTrue(result.has_partial_support())
+        self.assertEqual(low_conf.status, "low_confidence_final")
+        self.assertEqual(low_conf.answer, "A")
+        self.assertEqual(low_conf.citations, ["obs_0001"])
+
     def test_arbitration_does_not_final_from_global_sparse_floor(self):
         table = {
             "options": ["B. a local scene guess", "D. whole-video synopsis"],
