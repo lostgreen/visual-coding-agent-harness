@@ -181,6 +181,37 @@ def test_main_idea_allows_local_read_after_global_floor(tmp_path: Path):
     assert normalized[0]["args"]["segment_id"] == "seg_0001"
 
 
+def test_main_idea_allows_video_map_exploration(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="video_ls", description="List candidate segments.")
+    def video_ls(query: str = "", max_segments: int = 3):
+        return {"claim": f"listed {query}", "confidence": 0.4}
+
+    registry.register(video_ls)
+    workspace = EvidenceWorkspace.create(tmp_path, "main_idea_video_ls_allowed")
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [{"tool": "video_ls", "args": {"query": "main topic", "max_segments": 2}}],
+        question="What is the video mainly about?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("main_idea"),
+    )
+
+    assert normalized[0]["tool"] == "video_ls"
+    assert "route_violation" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+
 def test_mutex_fact_repairs_planner_inspect_segment_to_vision_read(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = SequenceBackend(
@@ -294,6 +325,41 @@ def test_timeline_ordering_allows_verify_ledger_answer(tmp_path: Path):
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert counter.get("verify_ledger_answer", 0) == 1
     assert "route_violation" not in trace
+
+
+def test_timeline_ordering_allows_window_expansion(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="expand_window", description="Expand a candidate segment.")
+    def expand_window(segment_id: str, before_sec: float = 0.0, after_sec: float = 0.0):
+        return {
+            "claim": f"expanded {segment_id}",
+            "confidence": 0.4,
+            "regions": [{"segment_id": segment_id, "start_sec": 0.0, "end_sec": 12.0}],
+        }
+
+    registry.register(expand_window)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_expand_allowed")
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [{"tool": "expand_window", "args": {"segment_id": "seg_0001", "before_sec": 2.0, "after_sec": 3.0}}],
+        question="Which order is shown?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("timeline_ordering"),
+    )
+
+    assert normalized[0]["tool"] == "expand_window"
+    assert "route_violation" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 
 def test_planner_selected_skill_overrides_fallback_route_for_tool_policy(tmp_path: Path):

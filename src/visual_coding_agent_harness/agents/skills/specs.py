@@ -121,7 +121,10 @@ def builtin_skill_registry() -> SkillRegistry:
                     "Q: what is the video mainly about -> sparse global topic hint -> local/indexed coverage facts -> answer",
                 ),
                 self_check=("global_gist is not an option vote", "decision cites coverage evidence"),
-                allowed_actions=frozenset({"global_gist", "query_context", "vision_read", "verify_ledger_answer"}),
+                allowed_actions=frozenset(
+                    {"global_gist", "query_context", "vision_read", "video_ls", "search_segments"}
+                    | {"verify_ledger_answer"}
+                ),
             ),
             SkillSpec(
                 name="mutex_fact_qa",
@@ -255,7 +258,16 @@ def builtin_skill_registry() -> SkillRegistry:
                 ),
                 self_check=("decision.option != null", "decision.citations all confirmed"),
                 allowed_actions=frozenset(
-                    {"caption_segment", "query_context", "vision_read", "read_timeline_sorted", "video_ls", "search_segments"}
+                    {
+                        "caption_segment",
+                        "query_context",
+                        "vision_read",
+                        "read_timeline_sorted",
+                        "video_ls",
+                        "search_segments",
+                        "expand_window",
+                        "zoom",
+                    }
                     | {"verify_ledger_answer"}
                 ),
             ),
