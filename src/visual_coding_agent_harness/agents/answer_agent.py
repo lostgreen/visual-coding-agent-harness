@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ast
 from dataclasses import dataclass, field
 import re
 from typing import Any, Mapping, Sequence
@@ -196,7 +197,7 @@ def _answer_prompt(*, question: str, evidence_text: str) -> str:
 
 def _parse_answer_response(text: str) -> AnswerAgentResult:
     try:
-        payload = json.loads(_extract_json_object(text))
+        payload = _parse_json_like_object(text)
     except (json.JSONDecodeError, ValueError) as exc:
         return AnswerAgentResult(
             status="need_more_evidence",
@@ -219,6 +220,20 @@ def _parse_answer_response(text: str) -> AnswerAgentResult:
         confidence=float(payload.get("confidence", 0.0) or 0.0),
         raw_text=text,
     )
+
+
+def _parse_json_like_object(text: str) -> Mapping[str, Any]:
+    raw_object = _extract_json_object(text)
+    try:
+        payload = json.loads(raw_object)
+    except json.JSONDecodeError:
+        try:
+            payload = ast.literal_eval(raw_object)
+        except (SyntaxError, ValueError) as exc:
+            raise ValueError("Answer response is not JSON-like") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("Answer response JSON is not an object")
+    return payload
 
 
 def _need_more_evidence(reason: str, *, conflict: Mapping[str, Any] | None = None) -> AnswerAgentResult:

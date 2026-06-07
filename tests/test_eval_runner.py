@@ -535,6 +535,7 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(config.budget.max_rounds, 20)
         self.assertEqual(config.budget.expensive_tool_budget, 20)
+        self.assertEqual(config.budget.max_repeated_programs, 20)
 
     def test_explicit_expensive_tool_budget_is_respected(self):
         from runs import eval_runner

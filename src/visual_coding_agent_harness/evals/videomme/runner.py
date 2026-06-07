@@ -1167,6 +1167,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             cheap_tool_budget=args.cheap_tool_budget,
             expensive_tool_budget=expensive_tool_budget,
             verifier_tool_budget=args.verifier_tool_budget,
+            max_repeated_programs=max(args.max_rounds, AgentBudget().max_repeated_programs),
             disable_global_gist_route=args.disable_global_gist_route,
             rewrite_mcq_for_exploration=not args.disable_mcq_rewrite,
         )

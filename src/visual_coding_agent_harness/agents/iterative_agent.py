@@ -474,6 +474,30 @@ class IterativeVisualAgent:
                         )
                         program = forced_program
                 if (
+                    program
+                    and not final_round_reserved
+                    and not _program_has_visual_evidence_tool(program)
+                    and _all_scene_segments_inspected(self.scene_index, inspected_segment_ids)
+                ):
+                    forced_program = self._visual_evidence_from_navigation_program(
+                        program=program,
+                        question=exploration_question_text,
+                        video_path=video_path,
+                        tool_class_counts=tool_class_counts,
+                        planner_skill=planner_skill,
+                    )
+                    if forced_program:
+                        self.workspace.write_trace_event(
+                            "exploration_policy_adjustment",
+                            {
+                                "round": round_number,
+                                "reason": "force_visual_from_navigation_no_growth",
+                                "original_tools": [str(step.get("tool", "")) for step in program],
+                                "forced_tools": [str(step.get("tool", "")) for step in forced_program],
+                            },
+                        )
+                        program = forced_program
+                if (
                     round_number > 1
                     and extract_candidate_options(raw_question)
                     and not final_round_reserved
@@ -1378,6 +1402,62 @@ class IterativeVisualAgent:
         if candidate_options and tool_name == "inspect_segment":
             args["candidate_options"] = list(candidate_options)
         return [{"tool": tool_name, "args": args, "assign": f"forced_visual_{segment.segment_id}"}]
+
+    def _visual_evidence_from_navigation_program(
+        self,
+        *,
+        program: Sequence[Mapping[str, Any]],
+        question: str,
+        video_path: str,
+        tool_class_counts: Mapping[str, int],
+        planner_skill: SkillSpec | None,
+    ) -> list[dict[str, Any]]:
+        tool_name = "vision_read" if self._has_tool("vision_read") else self._fallback_visual_tool_name_for_skill(planner_skill)
+        if tool_name is None:
+            return []
+        pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
+        forced: list[dict[str, Any]] = []
+        for step in program:
+            if len(forced) >= self.budget.max_tool_calls_per_round:
+                break
+            args = step.get("args", {})
+            if not isinstance(args, Mapping):
+                continue
+            segment_id = str(args.get("segment_id", "")).strip()
+            if not segment_id:
+                continue
+            segment = _scene_segment_or_none(self.scene_index, segment_id)
+            if segment is None:
+                continue
+            if not _tool_budget_available(
+                budget=self.budget,
+                tool_name=tool_name,
+                tool_class_counts=tool_class_counts,
+                pending_tool_class_counts=pending_tool_class_counts,
+            ):
+                break
+            media_args: dict[str, Any] = {
+                "video_path": video_path,
+                "segment_id": segment.segment_id,
+                "start_sec": segment.start_sec,
+                "end_sec": segment.end_sec,
+                "nframes": self.budget.default_nframes,
+            }
+            target_question = _local_fact_question(question=question, planner_skill=planner_skill)
+            if tool_name == "vision_read":
+                media_args["ask_for"] = target_question
+                media_args["event_label"] = target_question
+            else:
+                media_args["question"] = target_question
+            forced.append(
+                {
+                    "tool": tool_name,
+                    "args": media_args,
+                    "assign": f"forced_navigation_visual_{segment.segment_id}_{len(forced) + 1}",
+                }
+            )
+            pending_tool_class_counts[_tool_class(tool_name)] += 1
+        return forced
 
     def _fallback_visual_tool_name_for_skill(self, planner_skill: SkillSpec | None) -> str | None:
         if planner_skill is not None and not self.budget.free_exploration:

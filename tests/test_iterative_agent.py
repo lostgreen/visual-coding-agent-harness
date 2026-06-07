@@ -3023,6 +3023,72 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("source\": \"repeated_program_guard", trace)
 
+    def test_navigation_only_no_growth_forces_visual_read_on_requested_segment(self):
+        class NavThenAnswerBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+                self.replan_calls = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    self.replan_calls += 1
+                    if self.replan_calls == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status": "continue", "program": ['
+                                '{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "initial read"}, '
+                                '"assign": "v1"}]}'
+                            )
+                        )
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            '{"tool": "expand_window", "args": {"segment_id": "seg_0001", "before_sec": 30, "after_sec": 30}, '
+                            '"assign": "nav"}]}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "missing_evidence": ["more visual facts"]}')
+                return BackendResponse(text="unexpected")
+
+        registry = ToolRegistry()
+        calls = []
+
+        @tool(name="vision_read", description="Read a segment.")
+        def vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, **kwargs):
+            calls.append(("vision_read", segment_id, ask_for))
+            return {
+                "claim": f"visual read {len(calls)}",
+                "confidence": 0.8,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+            }
+
+        @tool(name="expand_window", description="Expand a segment.")
+        def expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0):
+            calls.append(("expand_window", segment_id, ""))
+            return {"claim": f"expanded {segment_id}", "confidence": 1.0}
+
+        registry.register(vision_read)
+        registry.register(expand_window)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="nav_to_visual")
+            agent = IterativeVisualAgent(
+                backend=NavThenAnswerBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=4, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            self.assertIn(("vision_read", "seg_0001", "What happens?"), calls)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("force_visual_from_navigation_no_growth", trace)
+
     def test_answer_agent_final_trace_includes_scene_index_citation_provenance(self):
         class ProvenanceBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:

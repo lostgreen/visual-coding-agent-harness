@@ -32,6 +32,19 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.candidate_option_relations[0]["observation_id"], "obs_0002")
         self.assertIn("candidate_option_relations", backend.requests[0].prompt)
 
+    def test_answer_agent_parses_single_quoted_json_like_response(self):
+        backend = StaticBackend(
+            "Here is the final JSON:\n"
+            "{'answer': 'D. full rise and fall', 'rationale': 'obs_0003 supports D', "
+            "'citations': ['obs_0003'], 'missing_evidence': [], 'confidence': 0.81}"
+        )
+
+        result = AnswerAgent(backend).run(question="Which option?", evidence_text="- obs_0003 supports D")
+
+        self.assertEqual(result.status, "final")
+        self.assertEqual(result.answer, "D. full rise and fall")
+        self.assertEqual(result.citations, ["obs_0003"])
+
     def test_arbitration_prefers_visually_grounded_support_over_weak_caption(self):
         table = {
             "options": ["A. first order", "D. fourth order"],
