@@ -82,11 +82,7 @@ class AnswerAgent:
             )
         )
         parsed = _parse_answer_response(response.text)
-        if (
-            parsed.status == "need_more_evidence"
-            and evidence_table is not None
-            and any(str(item).startswith("answer_json_parse_failed") for item in parsed.missing_evidence)
-        ):
+        if parsed.status == "need_more_evidence" and evidence_table is not None:
             fallback = _fallback_main_idea_from_unassigned_evidence(evidence_table)
             if fallback is not None:
                 return AnswerAgentResult(
