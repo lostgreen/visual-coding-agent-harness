@@ -237,6 +237,40 @@ class VideoNavigationTest(unittest.TestCase):
             self.assertEqual(listing["candidates"][0]["segment_id"], "seg_0002")
             self.assertEqual(store.current.get("seg_0002").low_fps_caption, "caption_segment observation")
 
+    def test_exploration_caption_segments_uses_physical_clip_when_enabled(self):
+        backend = NavigationBackend()
+        store = VideoMapStore(
+            VideoMap(
+                video_path="/videos/demo.mp4",
+                duration_sec=80.0,
+                segments=[VideoMapSegment(segment_id="seg_0002", start_sec=40.0, end_sec=80.0)],
+            )
+        )
+        extracted = []
+
+        def fake_clip_extractor(video_path, output_path, start_sec, end_sec):
+            extracted.append((video_path, output_path, start_sec, end_sec))
+            Path(output_path).write_text("fake clip", encoding="utf-8")
+            return output_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="enrich_clip")
+            registry = build_video_exploration_registry(
+                video_map=store,
+                backend=backend,
+                workspace=workspace,
+                extract_clips=True,
+                clip_extractor=fake_clip_extractor,
+            )
+
+            result = registry.execute("caption_segments", {"segment_ids": ["seg_0002"]})
+
+        self.assertEqual(len(extracted), 1)
+        self.assertEqual((extracted[0][2], extracted[0][3]), (40.0, 80.0))
+        self.assertEqual(backend.requests[0].media_path, extracted[0][1])
+        self.assertEqual(backend.requests[0].metadata["source_video_path"], "/videos/demo.mp4")
+        self.assertEqual(result["input_artifacts"], [extracted[0][1]])
+
     def test_exploration_tools_can_ingest_asr_ocr_and_entities(self):
         store = VideoMapStore(demo_video_map())
         registry = build_video_exploration_registry(video_map=store, backend=NavigationBackend())
