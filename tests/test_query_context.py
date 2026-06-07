@@ -10,7 +10,35 @@ from visual_coding_agent_harness.tools.exploration import build_video_exploratio
 from visual_coding_agent_harness.tools.query_context import build_query_context_registry
 from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
-from tests.test_open_questions import MCQ_QUESTION, assert_no_mcq_leak
+
+
+MCQ_OPTIONS = [
+    "The fall of Rome",
+    "Why the Austro-Hungarian Empire was divided",
+    "A battle timeline",
+    "How the Austro-Hungarian Empire rose and fell",
+]
+MCQ_QUESTION = (
+    "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+    "Question: What is the video mainly about?\n"
+    "Options:\n"
+    "A. The fall of Rome\n"
+    "B. Why the Austro-Hungarian Empire was divided\n"
+    "C. A battle timeline\n"
+    "D. How the Austro-Hungarian Empire rose and fell\n"
+    "Select option A, B, C, or D."
+)
+
+
+def assert_no_mcq_leak(testcase: unittest.TestCase, prompt: str, option_texts=MCQ_OPTIONS) -> None:
+    text = str(prompt)
+    testcase.assertNotIn("Options:", text)
+    testcase.assertNotIn("Candidate options:", text)
+    for label in ("A.", "B.", "C.", "D."):
+        testcase.assertNotIn(label, text)
+    testcase.assertNotRegex(text, r"\boption\s+[A-D]\b")
+    for option in option_texts:
+        testcase.assertNotIn(option, text)
 
 
 class QueryContextBackend(VisionLanguageBackend):
