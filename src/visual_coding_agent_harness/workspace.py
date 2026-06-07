@@ -632,6 +632,14 @@ class EvidenceWorkspace:
             return len(rows)
         return sum(1 for row in rows if str(row.get("tool", "")) == str(tool_name))
 
+    def read_observations(self, *, tool_name: str | None = None) -> list[Observation]:
+        """Return persisted observations, optionally filtered by tool name."""
+
+        observations = [Observation.from_mapping(row) for row in self._read_observation_dicts()]
+        if tool_name is None:
+            return observations
+        return [observation for observation in observations if observation.tool == str(tool_name)]
+
     def read_evidence_table_v3(
         self,
         *,

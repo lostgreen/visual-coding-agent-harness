@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
@@ -129,6 +130,31 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(detail["target_hits"][0]["target"], "blue aircraft")
         self.assertTrue(detail["target_hits"][0]["matched"])
         self.assertFalse(detail["target_hits"][1]["matched"])
+
+    def test_read_segment_detail_inherits_target_coverage_targets_from_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="detail_targets")
+            registry = build_video_navigation_registry(demo_video_map(), workspace=workspace)
+
+            ProgramInterpreter(registry=registry, workspace=workspace).run(
+                [
+                    {
+                        "tool": "target_coverage",
+                        "args": {"targets": ["blue aircraft", "travel diary", "Persephone"], "top_k": 2},
+                    }
+                ]
+            )
+            detail = registry.execute("read_segment_detail", {"segment_id": "seg_0002"})
+
+        self.assertEqual(detail["segment_id"], "seg_0002")
+        self.assertIn("visual_caption", detail)
+        self.assertIn("asr_summary", detail)
+        self.assertEqual([hit["target"] for hit in detail["target_hits"]], ["blue aircraft", "travel diary", "Persephone"])
+        self.assertEqual(detail["target_matches"][0]["target"], "blue aircraft")
+        self.assertIn("travel diary", detail["unmatched_targets"])
+        self.assertIn("Persephone", detail["unmatched_targets"])
+        self.assertEqual(detail["recommended_next_tools"][0]["tool"], "vision_read")
+        self.assertEqual(detail["recommended_next_tools"][0]["args"]["segment_id"], "seg_0002")
 
     def test_search_segments_returns_modality_channels_and_evidence_snippets(self):
         registry = build_video_navigation_registry(demo_video_map())

@@ -493,6 +493,11 @@ class IterativeVisualAgent:
                         planner_skill=planner_skill,
                     )
                     if forced_program:
+                        resolved_program = _append_program_steps(
+                            program,
+                            forced_program,
+                            max_steps=self.budget.max_tool_calls_per_round,
+                        )
                         self.workspace.write_trace_event(
                             "exploration_policy_adjustment",
                             {
@@ -501,9 +506,10 @@ class IterativeVisualAgent:
                                 "no_growth_rounds": no_evidence_growth_rounds,
                                 "skipped_tools": [str(step.get("tool", "")) for step in program],
                                 "resolved_program": forced_program,
+                                "mode": "append_visual_followup",
                             },
                         )
-                        program = forced_program
+                        program = resolved_program
                 if (
                     program
                     and not final_round_reserved
@@ -518,6 +524,11 @@ class IterativeVisualAgent:
                         planner_skill=planner_skill,
                     )
                     if forced_program:
+                        resolved_program = _append_program_steps(
+                            program,
+                            forced_program,
+                            max_steps=self.budget.max_tool_calls_per_round,
+                        )
                         self.workspace.write_trace_event(
                             "exploration_policy_adjustment",
                             {
@@ -525,9 +536,10 @@ class IterativeVisualAgent:
                                 "reason": "force_visual_from_navigation_no_growth",
                                 "original_tools": [str(step.get("tool", "")) for step in program],
                                 "forced_tools": [str(step.get("tool", "")) for step in forced_program],
+                                "mode": "append_visual_followup",
                             },
                         )
-                        program = forced_program
+                        program = resolved_program
                 if (
                     round_number > 1
                     and extract_candidate_options(raw_question)
@@ -544,6 +556,11 @@ class IterativeVisualAgent:
                         planner_skill=planner_skill,
                     )
                     if forced_program:
+                        resolved_program = _append_program_steps(
+                            program,
+                            forced_program,
+                            max_steps=self.budget.max_tool_calls_per_round,
+                        )
                         self.workspace.write_trace_event(
                             "exploration_policy_adjustment",
                             {
@@ -552,9 +569,10 @@ class IterativeVisualAgent:
                                 "skipped_tools": [str(step.get("tool", "")) for step in program],
                                 "resolved_program": forced_program,
                                 "evidence_status": evidence_status_summary,
+                                "mode": "append_visual_followup",
                             },
                         )
-                        program = forced_program
+                        program = resolved_program
                 if (
                     extract_candidate_options(raw_question)
                     and not final_round_reserved
@@ -2626,6 +2644,37 @@ def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, A
 
 def _program_has_visual_evidence_tool(program: Sequence[Mapping[str, Any]]) -> bool:
     return any(str(step.get("tool", "")) in _SEGMENT_MEDIA_TOOLS or str(step.get("tool", "")) in _GLOBAL_VIEW_TOOLS for step in program)
+
+
+def _append_program_steps(
+    program: Sequence[Mapping[str, Any]],
+    extra_steps: Sequence[Mapping[str, Any]],
+    *,
+    max_steps: int,
+) -> list[Mapping[str, Any]]:
+    merged = [dict(step) for step in program]
+    seen = {_program_step_key(step) for step in merged}
+    for step in extra_steps:
+        if len(merged) >= max_steps:
+            break
+        key = _program_step_key(step)
+        if key in seen:
+            continue
+        merged.append(dict(step))
+        seen.add(key)
+    return merged
+
+
+def _program_step_key(step: Mapping[str, Any]) -> str:
+    return json.dumps(
+        {
+            "tool": str(step.get("tool", "")),
+            "args": step.get("args", {}),
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        default=str,
+    )
 
 
 def _all_scene_segments_inspected(scene_index: SceneIndex, inspected_segment_ids: set[str]) -> bool:

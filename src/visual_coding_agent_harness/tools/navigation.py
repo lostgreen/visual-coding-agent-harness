@@ -151,7 +151,14 @@ def build_video_navigation_registry(
     def read_segment_detail(segment_id: str, targets: Sequence[str] = ()) -> Mapping[str, object]:
         current = video_map_store.current
         segment = current.get(segment_id)
-        target_hits = [_target_hit_for_segment(segment=segment, target=str(target)) for target in targets if str(target).strip()]
+        resolved_targets = _detail_targets(targets=targets, workspace=workspace)
+        target_hits = [
+            _target_hit_for_segment(segment=segment, target=str(target))
+            for target in resolved_targets
+            if str(target).strip()
+        ]
+        target_matches = [_detail_target_match(hit) for hit in target_hits if bool(hit.get("matched"))]
+        unmatched_targets = [str(hit.get("target", "")) for hit in target_hits if not bool(hit.get("matched"))]
         return {
             "claim": _segment_detail_claim(segment, target_hits=target_hits),
             "confidence": 1.0,
@@ -166,7 +173,10 @@ def build_video_navigation_registry(
             "entities": list(segment.entities),
             "keyframe_paths": list(segment.keyframe_paths),
             "target_hits": target_hits,
+            "target_matches": target_matches,
+            "unmatched_targets": unmatched_targets,
             "regions": [segment.to_dict()],
+            "recommended_next_tools": _detail_recommended_next_tools(segment=segment, target_matches=target_matches),
             "limitations": "Indexed segment detail only; call vision_read or caption_segment for fresh visual evidence.",
         }
 
@@ -502,6 +512,81 @@ def _segment_detail_claim(segment: VideoMapSegment, *, target_hits: Sequence[Map
     return " ".join(part for part in parts if part)
 
 
+def _detail_targets(*, targets: Sequence[str], workspace: EvidenceWorkspace | None) -> list[str]:
+    explicit = _unique_nonempty_texts(targets)
+    if explicit or workspace is None:
+        return explicit
+    for observation in reversed(workspace.read_observations(tool_name="target_coverage")):
+        coverage = observation.raw_output.get("coverage", [])
+        if not isinstance(coverage, Sequence) or isinstance(coverage, (str, bytes)):
+            continue
+        inherited = _unique_nonempty_texts(
+            str(row.get("target", ""))
+            for row in coverage
+            if isinstance(row, Mapping)
+        )
+        if inherited:
+            return inherited
+    return []
+
+
+def _detail_target_match(hit: Mapping[str, object]) -> Mapping[str, object]:
+    matches = hit.get("matches", [])
+    best_match = {}
+    if isinstance(matches, Sequence) and not isinstance(matches, (str, bytes)):
+        best_match = max(
+            [dict(match) for match in matches if isinstance(match, Mapping)],
+            key=lambda match: float(match.get("score", 0.0) or 0.0),
+            default={},
+        )
+    score = float(best_match.get("score", 0.0) or 0.0)
+    return {
+        "target": str(hit.get("target", "")),
+        "source": str(best_match.get("field") or best_match.get("modality") or ""),
+        "snippet": str(best_match.get("evidence", "")),
+        "score": score,
+        "directness": _target_directness(score),
+    }
+
+
+def _target_directness(score: float) -> str:
+    if score >= 0.75:
+        return "direct_mention"
+    if score >= 0.4:
+        return "possible_mention"
+    return "weak_overlap"
+
+
+def _detail_recommended_next_tools(
+    *,
+    segment: VideoMapSegment,
+    target_matches: Sequence[Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    if target_matches:
+        ask_for = (
+            "Openly verify the concrete visible artworks, objects, onscreen text, and narrated events in this segment. "
+            "Use the indexed target hints only as possible search cues, not as a yes/no checklist: "
+            + "; ".join(str(match.get("target", "")) for match in target_matches if str(match.get("target", "")))
+        )
+    else:
+        ask_for = (
+            "Openly describe the concrete visible artworks, objects, onscreen text, and narrated events in this segment. "
+            "Do not answer a multiple-choice option; report observations in presentation order."
+        )
+    return [
+        {
+            "tool": "vision_read",
+            "args": {
+                "segment_id": segment.segment_id,
+                "start_sec": float(segment.start_sec),
+                "end_sec": float(segment.end_sec),
+                "ask_for": ask_for,
+            },
+            "reason": "Use after reading the cheap detail pack when a fresh visual grounding check is needed.",
+        }
+    ]
+
+
 def _target_hit_for_segment(*, segment: VideoMapSegment, target: str) -> Mapping[str, object]:
     target_text = str(target).strip()
     target_terms = _target_tokens(target_text)
@@ -555,3 +640,15 @@ def _detail_evidence_snippet(text: str, max_chars: int = 160) -> str:
     if len(compact) <= max_chars:
         return compact
     return compact[: max_chars - 3].rstrip() + "..."
+
+
+def _unique_nonempty_texts(values: Sequence[str]) -> list[str]:
+    items = []
+    seen = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        items.append(text)
+        seen.add(text)
+    return items

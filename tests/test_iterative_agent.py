@@ -429,6 +429,93 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("target_coverage_seeded", trace)
             self.assertEqual(workspace.observation_count(tool_name="target_coverage"), 1)
 
+    def test_read_segment_detail_is_preserved_when_navigation_needs_visual_followup(self):
+        class DetailThenFinalBackend(ScriptedPlannerBackend):
+            def __init__(self):
+                super().__init__([])
+                self.replan_calls = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "rewrite_exploration_question":
+                    return BackendResponse(
+                        text='{"exploration_question":"Describe the video segment by segment.","target_entities":["David"]}'
+                    )
+                if request.task == "replan":
+                    self.replan_calls += 1
+                    if self.replan_calls == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status":"continue","program":['
+                                '{"tool":"vision_read","args":{"segment_id":"seg_0001","ask_for":"open visual pass"},"assign":"v1"},'
+                                '{"tool":"vision_read","args":{"segment_id":"seg_0002","ask_for":"open visual pass"},"assign":"v2"}'
+                                "]}"
+                            )
+                        )
+                    return BackendResponse(
+                        text=(
+                            '{"status":"continue","program":['
+                            '{"tool":"read_segment_detail","args":{"segment_id":"seg_0002"},"assign":"detail"}'
+                            "]}"
+                        )
+                    )
+                if request.task == "vision_read":
+                    return BackendResponse(text="A visual follow-up observes David sculpture details.")
+                return BackendResponse(text="unexpected")
+
+        backend = DetailThenFinalBackend()
+        scene_index = SceneIndex(
+            video_path="/videos/bernini.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=30.0,
+                    visual_caption="Intro title card.",
+                    asr_summary="Intro narration.",
+                ),
+                VideoSegment(
+                    segment_id="seg_0002",
+                    start_sec=30.0,
+                    end_sec=60.0,
+                    visual_caption="Bernini's David sculpture is shown.",
+                    asr_summary="The narration discusses David.",
+                ),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="preserve_detail")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(scene_index), backend=backend, workspace=workspace),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=2,
+                    reserve_final_round=False,
+                    max_tool_calls_per_round=2,
+                    rewrite_mcq_for_exploration=True,
+                ),
+            )
+
+            result = agent.run(
+                question=(
+                    "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+                    "Question: Which work appears?\n"
+                    "Options:\n"
+                    "A. David.\n"
+                    "B. Apollo and Daphne."
+                ),
+                video_path="/videos/bernini.mp4",
+            )
+
+            second_program = result.rounds[1].program
+            self.assertEqual([step["tool"] for step in second_program], ["read_segment_detail", "vision_read"])
+            self.assertEqual(workspace.observation_count(tool_name="read_segment_detail"), 1)
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 3)
+
     def test_iterative_agent_prompt_puts_scene_evidence_before_tooling(self):
         backend = ScriptedPlannerBackend(
             ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']
@@ -3112,7 +3199,7 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("evidence_table_no_growth", trace)
 
-    def test_no_evidence_growth_replaces_navigation_only_plan_with_visual_read(self):
+    def test_no_evidence_growth_appends_visual_read_to_navigation_only_plan(self):
         planner_responses = [
             '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "first pass"}, "assign": "map1"}]}',
             '{"status": "continue", "program": [{"tool": "search_segments", "args": {"query": "second pass"}, "assign": "map2"}]}',
@@ -3181,10 +3268,11 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="Describe what is visible.", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.rounds[2].program[0]["tool"], "vision_read")
+            self.assertEqual([step["tool"] for step in result.rounds[2].program], ["video_ls", "vision_read"])
             self.assertEqual(calls[-1][0], "vision_read")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("force_visual_after_no_evidence_growth", trace)
+            self.assertIn("append_visual_followup", trace)
 
     def test_navigation_only_mcq_round_forces_uninspected_visual_when_no_option_support(self):
         planner_responses = [
@@ -3243,10 +3331,11 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             self.assertEqual(result.rounds[0].program[0]["tool"], "search_segments")
-            self.assertEqual(result.rounds[1].program[0]["tool"], "vision_read")
+            self.assertEqual([step["tool"] for step in result.rounds[1].program], ["search_segments", "vision_read"])
             self.assertEqual(calls[-1], ("vision_read", "seg_0001", 0.0, 20.0))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("force_uninspected_visual_without_option_support", trace)
+            self.assertIn("append_visual_followup", trace)
 
     def test_mcq_full_segment_sweep_hands_off_to_answer_agent_before_budget_end(self):
         class FullSweepAnswerBackend(VisionLanguageBackend):
@@ -3266,8 +3355,8 @@ class IterativeAgentTest(unittest.TestCase):
                 if request.task == "answer_from_evidence":
                     return BackendResponse(
                         text=(
-                            '{"answer": "A. red object", "rationale": "obs_0002 has the local visual read.", '
-                            '"citations": ["obs_0002"], "missing_evidence": [], "confidence": 0.84}'
+                            '{"answer": "A. red object", "rationale": "obs_0003 has the local visual read.", '
+                            '"citations": ["obs_0003"], "missing_evidence": [], "confidence": 0.84}'
                         )
                     )
                 raise AssertionError(request.task)
@@ -3326,8 +3415,8 @@ class IterativeAgentTest(unittest.TestCase):
 
             self.assertEqual(result.status, "final")
             self.assertTrue(result.answer.startswith("A"))
-            self.assertEqual(result.citations, ["obs_0002"])
-            self.assertEqual([call[0] for call in calls], ["search_segments", "vision_read"])
+            self.assertEqual(result.citations, ["obs_0003"])
+            self.assertEqual([call[0] for call in calls], ["search_segments", "search_segments", "vision_read"])
             self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "replan", "answer_from_evidence"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn('"source": "all_segments_inspected"', trace)
