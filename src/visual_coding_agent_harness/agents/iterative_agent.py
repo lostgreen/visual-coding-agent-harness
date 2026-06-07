@@ -458,6 +458,33 @@ class IterativeVisualAgent:
                             },
                         )
                         program = forced_program
+                if (
+                    round_number > 1
+                    and extract_candidate_options(question)
+                    and not final_round_reserved
+                    and program
+                    and not _program_has_visual_evidence_tool(program)
+                    and not _evidence_status_has_strong_option_support(evidence_status_summary)
+                ):
+                    forced_program = self._fallback_visual_evidence_program(
+                        question=question,
+                        video_path=video_path,
+                        inspected_segment_ids=inspected_segment_ids,
+                        tool_class_counts=tool_class_counts,
+                        planner_skill=planner_skill,
+                    )
+                    if forced_program:
+                        self.workspace.write_trace_event(
+                            "exploration_policy_adjustment",
+                            {
+                                "reason": "force_uninspected_visual_without_option_support",
+                                "round": round_number,
+                                "skipped_tools": [str(step.get("tool", "")) for step in program],
+                                "resolved_program": forced_program,
+                                "evidence_status": evidence_status_summary,
+                            },
+                        )
+                        program = forced_program
             else:
                 program = []
                 last_round_normalization_notes = []
@@ -2242,6 +2269,21 @@ def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, A
 
 def _program_has_visual_evidence_tool(program: Sequence[Mapping[str, Any]]) -> bool:
     return any(str(step.get("tool", "")) in _SEGMENT_MEDIA_TOOLS or str(step.get("tool", "")) in _GLOBAL_VIEW_TOOLS for step in program)
+
+
+def _evidence_status_has_strong_option_support(summary: Mapping[str, Any]) -> bool:
+    option_status = summary.get("option_status", {})
+    if not isinstance(option_status, Mapping):
+        return False
+    for status in option_status.values():
+        if not isinstance(status, Mapping):
+            continue
+        try:
+            if int(status.get("strong_evidence_count", 0) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def _local_fact_question(*, question: str, planner_skill: SkillSpec | None) -> str:

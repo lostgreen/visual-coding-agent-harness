@@ -2662,12 +2662,74 @@ class IterativeAgentTest(unittest.TestCase):
                 ),
             )
 
-            result = agent.run(question="Which option is visible?\nA. red object\nB. blue object", video_path="/videos/demo.mp4")
+            result = agent.run(question="Describe what is visible.", video_path="/videos/demo.mp4")
 
             self.assertEqual(result.rounds[2].program[0]["tool"], "vision_read")
             self.assertEqual(calls[-1][0], "vision_read")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("force_visual_after_no_evidence_growth", trace)
+
+    def test_navigation_only_mcq_round_forces_uninspected_visual_when_no_option_support(self):
+        planner_responses = [
+            '{"status": "continue", "program": [{"tool": "search_segments", "args": {"query": "first localization"}, "assign": "map1"}]}',
+            '{"status": "continue", "program": [{"tool": "search_segments", "args": {"query": "repeat localization"}, "assign": "map2"}]}',
+        ]
+        registry = ToolRegistry()
+        calls = []
+
+        @tool(name="search_segments", description="Cheap search that adds no answer evidence.")
+        def search_segments(query: str, top_k: int = 5):
+            calls.append(("search_segments", query))
+            return {"claim": f"search only: {query}", "confidence": 1.0}
+
+        @tool(name="vision_read", description="Visual read that creates answer evidence.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 8,
+        ):
+            calls.append(("vision_read", segment_id, start_sec, end_sec))
+            return {
+                "claim": f"{segment_id} visual evidence",
+                "confidence": 0.74,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(search_segments)
+        registry.register(vision_read)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=20.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_sweep")
+            agent = IterativeVisualAgent(
+                backend=ScriptedPlannerBackend(planner_responses),
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=2,
+                    reserve_final_round=False,
+                    max_repeated_programs=0,
+                    answer_probe_rounds_before_final=0,
+                ),
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. red object\nB. blue object",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.rounds[0].program[0]["tool"], "search_segments")
+            self.assertEqual(result.rounds[1].program[0]["tool"], "vision_read")
+            self.assertEqual(calls[-1], ("vision_read", "seg_0001", 0.0, 20.0))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("force_uninspected_visual_without_option_support", trace)
 
     def test_repeated_empty_program_finalizes_from_structured_evidence_before_stopping(self):
         class ShouldNotAnswerBackend(ScriptedPlannerBackend):
