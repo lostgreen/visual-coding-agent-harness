@@ -72,7 +72,15 @@ def rewrite_exploration_question_with_model(
             fallback_reason=f"rewrite_json_error:{type(exc).__name__}",
         )
 
+    focus_points = tuple(_clean_list(payload.get("focus_points", ())))
+    target_entities = tuple(_clean_list(payload.get("target_entities", ())))
+    normalized_target_entities = target_entities
     rewritten = _clean_rewritten_question(str(payload.get("exploration_question", "")))
+    if _is_temporal_order_question(question=question, route_hint=route_hint):
+        temporal_targets = _temporal_targets(target_entities, raw_question=question)
+        normalized_target_entities = temporal_targets
+        if len(temporal_targets) >= 2:
+            rewritten = _temporal_order_exploration_question(temporal_targets)
     if not rewritten:
         return ExplorationQuestionRewrite(
             exploration_question=fallback,
@@ -87,12 +95,10 @@ def rewrite_exploration_question_with_model(
             used_model=False,
             fallback_reason="rewrite_option_leak",
         )
-    focus_points = tuple(_clean_list(payload.get("focus_points", ())))
-    target_entities = tuple(_clean_list(payload.get("target_entities", ())))
     return ExplorationQuestionRewrite(
         exploration_question=rewritten,
         focus_points=focus_points,
-        target_entities=target_entities,
+        target_entities=normalized_target_entities or tuple(_temporal_targets((), raw_question=question)),
         raw_text=response.text,
         used_model=True,
     )
@@ -144,8 +150,8 @@ def _rewrite_prompt(*, question: str, route_hint: str = "") -> str:
         "and temporal relations that should be observed.\n"
         "- For main-idea questions, ask for overall topic, main entity, time span, narrative arc, and major stages "
         "such as origin, growth, stability, decline, collapse, causes, or consequences when relevant.\n"
-        "- For temporal-order questions, list the unique events/entities to look for without giving candidate orders, "
-        "then ask for the order in which the video presents them.\n"
+        "- For temporal-order questions, extract the unique events/entities to look for, but present them as an "
+        "explicitly unordered target list. Never list them in any candidate order from the choices.\n"
         "- For local factual questions, ask what visible/audio/text evidence is present in the relevant window.\n"
         "- Keep the exploration question concise but complete enough to guide search and segment inspection.\n\n"
         "Example 1 input:\n"
@@ -166,10 +172,11 @@ def _rewrite_prompt(*, question: str, route_hint: str = "") -> str:
         'A. "The Rape of Persephone", "Apollo and Daphne", "David", "Aeneas fleeing Troy".\n'
         'B. "David", "Aeneas fleeing Troy", "Apollo and Daphne", "The Rape of Persephone".\n'
         "Example 2 output:\n"
-        '{"exploration_question":"Determine the order in which the video presents these sculptures: The Rape of '
-        'Persephone, Apollo and Daphne, David, and Aeneas fleeing Troy. Record the segment or timestamp evidence for '
-        'each item.","focus_points":["presentation order","timestamp evidence","artwork identification"],'
-        '"target_entities":["The Rape of Persephone","Apollo and Daphne","David","Aeneas fleeing Troy"]}\n\n'
+        '{"exploration_question":"Determine the order in which the video presents the target items from this '
+        'unordered list: Aeneas fleeing Troy; Apollo and Daphne; David; The Rape of Persephone. Record segment or '
+        'timestamp evidence for each target before inferring the order.","focus_points":["presentation order",'
+        '"timestamp evidence","artwork identification"],"target_entities":["Aeneas fleeing Troy",'
+        '"Apollo and Daphne","David","The Rape of Persephone"]}\n\n'
         f"Route hint: {route_hint or '(none)'}\n"
         f"Input question:\n{question}\n"
     )
@@ -180,11 +187,7 @@ def _fallback_rewrite(*, question: str, route_hint: str = "") -> str:
     quoted = _quoted_targets(question)
     lowered = semantic.lower()
     if len(quoted) >= 2 and any(term in lowered for term in ["order", "sequence", "present", "shown"]):
-        return (
-            "Determine the order in which the video presents these items: "
-            + ", ".join(quoted[:8])
-            + ". Record segment or timestamp evidence for each item."
-        )
+        return _temporal_order_exploration_question(_sort_unique_targets(quoted[:8]))
     if any(term in lowered for term in ["main idea", "mainly about", "overall", "topic", "theme"]):
         return (
             "Describe the overall topic and narrative arc of the video. Identify the main entity, time span, "
@@ -209,6 +212,38 @@ def _clean_list(value: object) -> list[str]:
         if text:
             cleaned.append(text)
     return cleaned[:12]
+
+
+def _is_temporal_order_question(*, question: str, route_hint: str = "") -> bool:
+    lowered = f"{route_hint} {_semantic_question(question)}".lower()
+    return any(term in lowered for term in ["temporal_order", "order", "sequence", "present", "shown", "before", "after"])
+
+
+def _temporal_targets(target_entities: tuple[str, ...], *, raw_question: str) -> tuple[str, ...]:
+    targets = list(target_entities)
+    if len(targets) < 2:
+        targets = _quoted_targets(raw_question)
+    return tuple(_sort_unique_targets(targets))
+
+
+def _sort_unique_targets(targets: list[str]) -> list[str]:
+    seen = set()
+    unique = []
+    for target in targets:
+        cleaned = " ".join(str(target or "").split()).strip(" .")
+        key = re.sub(r"[^a-z0-9]+", " ", cleaned.lower()).strip()
+        if cleaned and key and key not in seen:
+            seen.add(key)
+            unique.append(cleaned)
+    return sorted(unique, key=lambda item: re.sub(r"^(the|a|an)\s+", "", item.lower()))[:8]
+
+
+def _temporal_order_exploration_question(targets: list[str] | tuple[str, ...]) -> str:
+    return (
+        "Determine the order in which the video presents the target items from this unordered list: "
+        + "; ".join(str(target) for target in targets)
+        + ". Record segment or timestamp evidence for each target before inferring the order."
+    )
 
 
 def _leaks_option_surface(rewritten: str, raw_question: str) -> bool:

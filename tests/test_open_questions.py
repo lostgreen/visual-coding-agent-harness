@@ -20,6 +20,22 @@ MCQ_OPTIONS = [
     "A battle timeline",
     "How the Austro-Hungarian Empire rose and fell",
 ]
+TEMPORAL_MCQ_QUESTION = (
+    "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+    "Question: In what order does the video present the four sculptures?\n"
+    "Options:\n"
+    'A. "The Rape of Persephone", "Apollo and Daphne", "David", "Aeneas fleeing Troy".\n'
+    'B. "David", "Aeneas fleeing Troy", "Apollo and Daphne", "The Rape of Persephone".\n'
+    'C. "Apollo and Daphne", "The Rape of Persephone", "Aeneas fleeing Troy", "David".\n'
+    'D. "Aeneas fleeing Troy", "David", "The Rape of Persephone", "Apollo and Daphne".\n'
+    "Select option A, B, C, or D."
+)
+TEMPORAL_OPTION_TEXTS = [
+    '"The Rape of Persephone", "Apollo and Daphne", "David", "Aeneas fleeing Troy".',
+    '"David", "Aeneas fleeing Troy", "Apollo and Daphne", "The Rape of Persephone".',
+    '"Apollo and Daphne", "The Rape of Persephone", "Aeneas fleeing Troy", "David".',
+    '"Aeneas fleeing Troy", "David", "The Rape of Persephone", "Apollo and Daphne".',
+]
 
 
 def assert_no_mcq_leak(testcase: unittest.TestCase, prompt: str, option_texts=MCQ_OPTIONS) -> None:
@@ -88,6 +104,36 @@ class OpenQuestionsTest(unittest.TestCase):
         self.assertFalse(rewrite.used_model)
         self.assertEqual(rewrite.fallback_reason, "rewrite_option_leak")
         assert_no_mcq_leak(self, rewrite.exploration_question)
+
+    def test_temporal_rewrite_uses_unordered_targets_even_if_model_returns_candidate_order(self):
+        class CandidateOrderBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                return BackendResponse(
+                    text=(
+                        '{"exploration_question":"Determine the order in which the video presents these sculptures: '
+                        'The Rape of Persephone, Apollo and Daphne, David, and Aeneas fleeing Troy.",'
+                        '"focus_points":["presentation order"],'
+                        '"target_entities":["The Rape of Persephone","Apollo and Daphne","David","Aeneas fleeing Troy"]}'
+                    )
+                )
+
+        rewrite = rewrite_exploration_question_with_model(
+            CandidateOrderBackend(),
+            question=TEMPORAL_MCQ_QUESTION,
+            route_hint="temporal_order",
+        )
+
+        self.assertTrue(rewrite.used_model)
+        self.assertIn("unordered list", rewrite.exploration_question)
+        assert_no_mcq_leak(self, rewrite.exploration_question, TEMPORAL_OPTION_TEXTS)
+        self.assertEqual(
+            rewrite.target_entities,
+            ("Aeneas fleeing Troy", "Apollo and Daphne", "David", "The Rape of Persephone"),
+        )
+        text = rewrite.exploration_question
+        self.assertLess(text.index("Aeneas fleeing Troy"), text.index("Apollo and Daphne"))
+        self.assertLess(text.index("Apollo and Daphne"), text.index("David"))
+        self.assertLess(text.index("David"), text.index("The Rape of Persephone"))
 
 
 if __name__ == "__main__":
