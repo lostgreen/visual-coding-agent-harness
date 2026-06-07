@@ -46,7 +46,7 @@ def select_question_playbook(question: str) -> QuestionPlaybook:
             instructions=[
                 "Use coarse captions to locate candidate event segments before focused timestamp reads.",
                 "Inspect at least the relevant earlier and later event windows when order matters.",
-                "Use candidate options only as fact-finding hints; local workers must not choose an option.",
+                "Use local workers for open factual descriptions; compare options only after evidence is collected.",
             ],
             sufficiency_rules=[
                 "Citations must include timestamped visual observations for the ordered events.",

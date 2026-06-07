@@ -230,7 +230,12 @@ def builtin_skill_registry() -> SkillRegistry:
                         step="caption_coarse_segments",
                         op="caption_segment",
                         foreach="segments",
-                        args={"question": "Find mentions of target temporal entities."},
+                        args={
+                            "question": (
+                                "Openly describe the segment's actual visible/narrated events, artworks, objects, "
+                                "people, scene changes, and onscreen text in presentation order."
+                            )
+                        },
                         assign="caption[{segment}]",
                     ),
                     SkillStep(

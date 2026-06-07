@@ -1587,6 +1587,60 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertNotIn("A. red then blue", tool_args["question"])
             self.assertNotIn("B. blue then red", tool_args["question"])
 
+    def test_option_blind_inspect_segment_does_not_receive_candidate_options(self):
+        class RewriteInspectBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "rewrite_exploration_question":
+                    return BackendResponse(
+                        text=(
+                            '{"exploration_question":"Describe the actual visible objects and narrated facts.",'
+                            '"focus_points":["visible facts"],"target_entities":["aircraft","submarine"]}'
+                        )
+                    )
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status":"continue","program":[{"tool":"inspect_segment","args":{'
+                            '"segment_id":"seg_0001","question":"Inspect option A. aircraft museum"},'
+                            '"assign":"inspection"}]}'
+                        )
+                    )
+                return BackendResponse(text='{"answer":"need_more_evidence","citations":[],"missing_evidence":[]}')
+
+        backend = RewriteInspectBackend()
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="option_blind_inspect")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=1,
+                    reserve_final_round=False,
+                    rewrite_mcq_for_exploration=True,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. aircraft museum\nB. submarine",
+                video_path="/videos/demo.mp4",
+            )
+
+            tool_args = result.rounds[0].program[0]["args"]
+            self.assertEqual(result.rounds[0].program[0]["tool"], "inspect_segment")
+            self.assertNotIn("candidate_options", tool_args)
+            self.assertNotIn("option A", tool_args["question"])
+            self.assertNotIn("aircraft museum", tool_args["question"])
+            self.assertEqual(tool_args["question"], "Describe the actual visible objects and narrated facts.")
+
     def test_iterative_agent_blocks_mcq_final_until_inspector_with_options(self):
         class McqFinalBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:

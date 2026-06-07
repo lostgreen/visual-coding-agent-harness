@@ -1338,7 +1338,7 @@ class IterativeVisualAgent:
                 if candidate_options:
                     if tool_name == "vision_read":
                         args.setdefault("event_label", str(args.get("ask_for", "")))
-                    if tool_name == "inspect_segment":
+                    if tool_name == "inspect_segment" and not self.budget.rewrite_mcq_for_exploration:
                         args["candidate_options"] = candidate_options
                 args.setdefault("nframes", self.budget.default_nframes)
                 reserved_segment_ids.add(segment.segment_id)
@@ -1369,12 +1369,17 @@ class IterativeVisualAgent:
                     "nframes": self.budget.default_nframes,
                 }
                 if fallback_tool_name == "vision_read":
-                    fallback_args["ask_for"] = question
-                    fallback_args["event_label"] = question
+                    target_question = _local_fact_question(question=question, planner_skill=active_skill)
+                    fallback_args["ask_for"] = target_question
+                    fallback_args["event_label"] = target_question
                 else:
-                    fallback_args["question"] = question
+                    fallback_args["question"] = _local_fact_question(question=question, planner_skill=active_skill)
                 candidate_options = extract_candidate_options(question)
-                if candidate_options and fallback_tool_name == "inspect_segment":
+                if (
+                    candidate_options
+                    and fallback_tool_name == "inspect_segment"
+                    and not self.budget.rewrite_mcq_for_exploration
+                ):
                     fallback_args["candidate_options"] = list(candidate_options)
                 normalized.append(
                     {
@@ -1463,7 +1468,14 @@ class IterativeVisualAgent:
                 "caption_segment",
                 {
                     "segment_id": segment_id,
-                    "question": str(args.get("question") or "Find mentions of target temporal entities."),
+                    "question": str(
+                        args.get("question")
+                        or (
+                            "Openly describe this segment's actual visible artworks, objects, people, scene changes, "
+                            "onscreen text, and narrated events in presentation order. Include timestamps if possible. "
+                            "Focus on concrete observations rather than conclusions."
+                        )
+                    ),
                     "nframes": int(args.get("nframes", self.budget.default_nframes) or self.budget.default_nframes),
                 },
                 "repair_timeline_batch_caption_to_caption_segment",
@@ -2245,7 +2257,11 @@ class IterativeVisualAgent:
                     "segment_id": segment.segment_id,
                     "start_sec": float(segment.start_sec),
                     "end_sec": float(segment.end_sec),
-                    "question": "Find mentions of target temporal entities: " + ", ".join(target_facts),
+                    "question": (
+                        "Openly describe this segment's actual visible artworks, objects, people, scene changes, "
+                        "onscreen text, and narrated events in presentation order. Include timestamps if possible. "
+                        "Focus on concrete observations rather than conclusions."
+                    ),
                 },
                 "assign": f"timeline_caption_{index}",
             }
@@ -2596,20 +2612,14 @@ def _local_fact_question(*, question: str, planner_skill: SkillSpec | None) -> s
     )
     if planner_skill.name == "timeline_ordering":
         return (
-            "Describe only the visible/narrated temporal sequence relevant to this question. "
-            "List entities/events in the order they appear with timestamps if possible. "
-            f"{fact_only_instruction} Question: "
-            + semantic
+            "Openly describe this segment's actual visible artworks, objects, people, scene changes, onscreen text, "
+            "and narrated events in presentation order. Include timestamps if possible. "
+            "Focus on concrete observations rather than conclusions."
         )
     if planner_skill.name == "mutex_fact_qa":
-        distinction_target = (
-            "the candidate options"
-            if extract_candidate_options(question)
-            else "the relevant entities, attributes, and events"
-        )
         return (
-            f"Describe only facts that distinguish {distinction_target}, including background, class/status, "
-            "life-stage changes, locations, and temporal order when visible or narrated. "
+            "Describe only relevant visible or narrated facts, including entities, attributes, background, "
+            "class/status, life-stage changes, locations, and temporal order when visible or narrated. "
             f"{fact_only_instruction} Question: "
             + semantic
         )
@@ -3639,7 +3649,7 @@ def _tool_exploration_question(
         return (
             "Openly describe this segment's actual visible artworks, objects, people, scene changes, "
             "onscreen text, and narrated events in presentation order. Include timestamps if possible. "
-            "Do not answer whether a target list is present or absent; report only observed facts."
+            "Focus on concrete observations rather than conclusions."
         )
     if "main_idea" in lowered_route or "gist" in lowered_route:
         return (

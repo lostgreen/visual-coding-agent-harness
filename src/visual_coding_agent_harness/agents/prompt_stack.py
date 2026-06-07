@@ -687,7 +687,7 @@ def _final_gate_block(*, final_round_reserved: bool, option_blind: bool = False)
     option_blind_lines = (
         "- MCQ choices were rewritten into an option-blind exploration task; do not pass option labels or candidate choice text to local tools.\n"
         "- Use target_coverage for a target-to-segment coverage matrix, then read_segment_detail for selected segments.\n"
-        "- Local VLM tools must openly describe what is visible/narrated in the segment; do not ask them to decide whether target items are present or absent.\n"
+        "- Local VLM tools must openly describe visible/narrated segment content as concrete observations.\n"
         "- The AnswerAgent will compare cited open facts to the original choices later.\n"
         if option_blind
         else (

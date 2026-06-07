@@ -105,7 +105,7 @@ class OpenQuestionsTest(unittest.TestCase):
         self.assertEqual(rewrite.fallback_reason, "rewrite_option_leak")
         assert_no_mcq_leak(self, rewrite.exploration_question)
 
-    def test_temporal_rewrite_uses_unordered_targets_even_if_model_returns_candidate_order(self):
+    def test_temporal_rewrite_keeps_targets_as_metadata_not_local_tool_instruction(self):
         class CandidateOrderBackend(VisionLanguageBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 return BackendResponse(
@@ -124,16 +124,18 @@ class OpenQuestionsTest(unittest.TestCase):
         )
 
         self.assertTrue(rewrite.used_model)
-        self.assertIn("unordered list", rewrite.exploration_question)
+        self.assertIn("Describe the video segment by segment", rewrite.exploration_question)
+        self.assertIn("artworks", rewrite.exploration_question)
+        self.assertNotIn("target items", rewrite.exploration_question)
+        self.assertNotIn("unordered list", rewrite.exploration_question)
+        self.assertNotIn("present or absent", rewrite.exploration_question)
+        for target in ("Aeneas fleeing Troy", "Apollo and Daphne", "David", "The Rape of Persephone"):
+            self.assertNotIn(target, rewrite.exploration_question)
         assert_no_mcq_leak(self, rewrite.exploration_question, TEMPORAL_OPTION_TEXTS)
         self.assertEqual(
             rewrite.target_entities,
             ("Aeneas fleeing Troy", "Apollo and Daphne", "David", "The Rape of Persephone"),
         )
-        text = rewrite.exploration_question
-        self.assertLess(text.index("Aeneas fleeing Troy"), text.index("Apollo and Daphne"))
-        self.assertLess(text.index("Apollo and Daphne"), text.index("David"))
-        self.assertLess(text.index("David"), text.index("The Rape of Persephone"))
 
 
 if __name__ == "__main__":

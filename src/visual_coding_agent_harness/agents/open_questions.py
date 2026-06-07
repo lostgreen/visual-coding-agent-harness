@@ -150,8 +150,9 @@ def _rewrite_prompt(*, question: str, route_hint: str = "") -> str:
         "and temporal relations that should be observed.\n"
         "- For main-idea questions, ask for overall topic, main entity, time span, narrative arc, and major stages "
         "such as origin, growth, stability, decline, collapse, causes, or consequences when relevant.\n"
-        "- For temporal-order questions, extract the unique events/entities to look for, but present them as an "
-        "explicitly unordered target list. Never list them in any candidate order from the choices.\n"
+        "- For temporal-order questions, extract the unique events/entities into target_entities metadata, but keep "
+        "exploration_question as an open request to describe the video's actual presentation flow. Do not list those "
+        "targets inside exploration_question.\n"
         "- For local factual questions, ask what visible/audio/text evidence is present in the relevant window.\n"
         "- Keep the exploration question concise but complete enough to guide search and segment inspection.\n\n"
         "Example 1 input:\n"
@@ -172,9 +173,9 @@ def _rewrite_prompt(*, question: str, route_hint: str = "") -> str:
         'A. "The Rape of Persephone", "Apollo and Daphne", "David", "Aeneas fleeing Troy".\n'
         'B. "David", "Aeneas fleeing Troy", "Apollo and Daphne", "The Rape of Persephone".\n'
         "Example 2 output:\n"
-        '{"exploration_question":"Determine the order in which the video presents the target items from this '
-        'unordered list: Aeneas fleeing Troy; Apollo and Daphne; David; The Rape of Persephone. Record segment or '
-        'timestamp evidence for each target before inferring the order.","focus_points":["presentation order",'
+        '{"exploration_question":"Describe the video segment by segment. Record the actual artworks, sculptures, '
+        'onscreen text, narration, and scene transitions in the order they appear, with timestamps when possible; '
+        'focus on concrete observations rather than conclusions.","focus_points":["presentation order",'
         '"timestamp evidence","artwork identification"],"target_entities":["Aeneas fleeing Troy",'
         '"Apollo and Daphne","David","The Rape of Persephone"]}\n\n'
         f"Route hint: {route_hint or '(none)'}\n"
@@ -240,9 +241,9 @@ def _sort_unique_targets(targets: list[str]) -> list[str]:
 
 def _temporal_order_exploration_question(targets: list[str] | tuple[str, ...]) -> str:
     return (
-        "Determine the order in which the video presents the target items from this unordered list: "
-        + "; ".join(str(target) for target in targets)
-        + ". Record segment or timestamp evidence for each target before inferring the order."
+        "Describe the video segment by segment. Record the actual artworks, sculptures, onscreen text, narration, "
+        "and scene transitions in the order they appear, with timestamps when possible; focus on concrete "
+        "observations rather than conclusions."
     )
 
 
