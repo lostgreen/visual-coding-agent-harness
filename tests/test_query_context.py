@@ -10,6 +10,7 @@ from visual_coding_agent_harness.tools.exploration import build_video_exploratio
 from visual_coding_agent_harness.tools.query_context import build_query_context_registry
 from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
+from tests.test_open_questions import MCQ_QUESTION, assert_no_mcq_leak
 
 
 class QueryContextBackend(VisionLanguageBackend):
@@ -52,6 +53,21 @@ class QueryContextTest(unittest.TestCase):
         self.assertEqual(result["grounding_quality"], "query_global_context")
         self.assertNotIn("supported_option", result)
         self.assertIn("not sole support", result["limitations"])
+
+    def test_query_context_sanitizes_full_mcq_before_backend_generate(self):
+        backend = QueryContextBackend()
+        registry = build_query_context_registry(video_map=_video_map(), backend=backend)
+
+        registry.execute(
+            "query_context",
+            {"video_path": "/videos/demo.mp4", "query": MCQ_QUESTION, "duration_sec": 120.0},
+        )
+
+        request = backend.requests[0]
+        self.assertEqual(request.metadata["original_query"], MCQ_QUESTION)
+        self.assertIn("What is the video mainly about?", request.prompt)
+        self.assertIn("Do not choose an option.", request.prompt)
+        assert_no_mcq_leak(self, request.prompt)
 
     def test_query_context_cannot_be_sole_support(self):
         with tempfile.TemporaryDirectory() as tmp:

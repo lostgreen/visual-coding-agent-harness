@@ -39,6 +39,37 @@ def test_evidence_table_jsonl_roundtrip(tmp_path: Path):
     assert table["groups"]["B"][0]["time_range"] == [10.0, 12.5]
 
 
+def test_evidence_table_preserves_source_provenance(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "table_provenance")
+
+    workspace.write_evidence_row(
+        {
+            "obs_id": "scene_order_seg_0001",
+            "tool": "timeline_asr_summary",
+            "segment_id": "seg_0001",
+            "source_segment_id": "dual_seg_0001",
+            "raw_asr_ref": {"cue_ids": ["cue-1", "cue-2"]},
+            "visual_caption_source": "caption_scene_segment:vl-mini",
+            "citation_provenance": {"asr": "subtitle", "visual": "video"},
+            "claim": "Indexed evidence supports option D.",
+            "grounding_quality": "indexed_transcript",
+            "confidence": 0.86,
+            "supported_option": "D",
+        }
+    )
+
+    table = workspace.read_evidence_table_v3(
+        question="Which sequence is shown?",
+        options=["A. first", "D. fourth"],
+    )
+    row = table["groups"]["D"][0]
+
+    assert row["source_segment_id"] == "dual_seg_0001"
+    assert row["raw_asr_ref"] == {"cue_ids": ["cue-1", "cue-2"]}
+    assert row["visual_caption_source"] == "caption_scene_segment:vl-mini"
+    assert row["citation_provenance"] == {"asr": "subtitle", "visual": "video"}
+
+
 def test_answer_evidence_table_prefers_jsonl_artifact(tmp_path: Path):
     workspace = EvidenceWorkspace.create(tmp_path, "table_file_source")
     workspace.write_evidence_row(

@@ -214,7 +214,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual([round_result.status for round_result in result.rounds], ["continue", "final"])
             self.assertEqual(result.rounds[0].observation_ids, ["obs_0001"])
             self.assertEqual(len(backend.requests), 2)
-            self.assertIn("Scene index", backend.requests[0].prompt)
+            self.assertIn("Compact scene index", backend.requests[0].prompt)
             self.assertIn("seg_0002 [60.0-120.0s] aircraft museum", backend.requests[0].prompt)
             self.assertIn("Evidence ledger", backend.requests[1].prompt)
             self.assertIn("aircraft history", backend.requests[1].prompt)
@@ -292,6 +292,41 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("Multiple-choice answers must use vision_read or inspect_segment", prompt)
             self.assertIn("non-navigation visual observation", prompt)
             self.assertIn("caption_segments is offline VideoMap cache building", prompt)
+
+    def test_iterative_agent_prompt_puts_scene_evidence_before_tooling(self):
+        backend = ScriptedPlannerBackend(
+            ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=30.0,
+                    low_fps_caption="opening clue",
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="late_tooling_prompt")
+            workspace.write_observation(tool_name="vision_read", claim="prior visual fact", confidence=0.8)
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            agent.run(question="What happens?", video_path="/videos/demo.mp4")
+
+            prompt = backend.requests[0].prompt
+            self.assertLess(prompt.index("Evidence ledger"), prompt.index("Available tools"))
+            self.assertLess(prompt.index("Compact scene index"), prompt.index("Available tools"))
+            self.assertLess(prompt.index("Current budgets"), prompt.index("Available tools"))
+            self.assertGreater(prompt.rindex("Return only JSON"), prompt.index("Available tools"))
 
     def test_iterative_agent_prompt_includes_task_type_playbook(self):
         backend = ScriptedPlannerBackend(
@@ -1352,7 +1387,18 @@ class IterativeAgentTest(unittest.TestCase):
             '"args": {"segment_id": "seg_0001", "question": "Which artwork appears after "David"?", '
             '"candidate_options": ["A. "David" then Apollo", "B. plain option"]}, "assign": "bad_json"}]}'
         )
-        backend = ScriptedPlannerBackend(
+        class BadJsonRecoveryBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    self.requests.append(request)
+                    return BackendResponse(
+                        text='{"answer": "A. The cited inspection supports A.", "citations": ["obs_0001"], '
+                        '"confidence": 0.8, "candidate_option_relations": ['
+                        '{"option": "A", "relation": "support", "strength": 0.8, "observation_id": "obs_0001"}]}'
+                    )
+                return super().generate(request)
+
+        backend = BadJsonRecoveryBackend(
             [
                 malformed_planner_json,
                 '{"status": "final", "answer": "A. The cited inspection supports A.", "citations": ["obs_0001"]}',
@@ -1383,7 +1429,7 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_json_parse_error", trace)
 
-    def test_iterative_agent_appends_mcq_options_to_caption_question(self):
+    def test_iterative_agent_rewrites_mcq_caption_question_without_options(self):
         backend = ScriptedPlannerBackend(
             [
                 (
@@ -1412,12 +1458,25 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             tool_args = result.rounds[0].program[0]["args"]
-            self.assertIn("Options:", tool_args["question"])
-            self.assertIn("A. red then blue", tool_args["question"])
-            self.assertIn("B. blue then red", tool_args["question"])
+            self.assertIn("Describe the sequence", tool_args["question"])
+            self.assertIn("Do not choose an option", tool_args["question"])
+            self.assertNotIn("Options:", tool_args["question"])
+            self.assertNotIn("A. red then blue", tool_args["question"])
+            self.assertNotIn("B. blue then red", tool_args["question"])
 
     def test_iterative_agent_blocks_mcq_final_until_inspector_with_options(self):
-        backend = ScriptedPlannerBackend(
+        class McqFinalBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    self.requests.append(request)
+                    return BackendResponse(
+                        text='{"answer": "A. aircraft museum", "citations": ["obs_0001"], "confidence": 0.9, '
+                        '"candidate_option_relations": [{"option": "A", "relation": "support", '
+                        '"strength": 0.9, "observation_id": "obs_0001"}]}'
+                    )
+                return super().generate(request)
+
+        backend = McqFinalBackend(
             [
                 '{"status": "final", "answer": "A", "citations": [], "confidence": 0.9}',
                 '{"status": "final", "answer": "A", "citations": ["obs_0001"], "confidence": 0.9}',
@@ -1446,6 +1505,52 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.rounds[0].program[0]["args"]["candidate_options"], ["A. aircraft museum", "B. submarine"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_final_blocked", trace)
+
+    def test_planner_final_mcq_is_always_replaced_by_answer_agent_final(self):
+        class FinalTakeoverBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    return BackendResponse(
+                        text='{"status": "final", "answer": "A", "citations": ["obs_0001"], "confidence": 0.99}'
+                    )
+                if request.task == "answer_from_evidence":
+                    self.assertIn("A. wrong option", request.prompt)
+                    self.assertIn("B. correct option from evidence", request.prompt)
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "B. correct option from evidence", "citations": ["obs_0001"], '
+                            '"confidence": 0.86, "candidate_option_relations": ['
+                            '{"option": "B", "relation": "support", "strength": 0.86, '
+                            '"observation_id": "obs_0001", "mapped_from_facts": ["obs_0001"]}]}'
+                        )
+                    )
+                raise AssertionError(request.task)
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="planner_final_takeover")
+            workspace.write_observation(tool_name="vision_read", claim="Evidence supports B.", confidence=0.9)
+            agent = IterativeVisualAgent(
+                backend=FinalTakeoverBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            result = agent.run(
+                question="Which option is supported?\nA. wrong option\nB. correct option from evidence",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertTrue(result.answer.startswith("B"))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("planner_final_answer_agent_takeover", trace)
+            self.assertIn('"source": "planner_final_takeover"', trace)
 
     def test_iterative_agent_blocks_main_idea_planner_final_without_structured_support(self):
         backend = ScriptedPlannerBackend(
@@ -1507,7 +1612,8 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertNotEqual(result.status, "final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_final_blocked", trace)
-            self.assertIn("selected_option_has_structured_support", trace)
+            self.assertIn("planner_final_answer_agent_takeover", trace)
+            self.assertIn("planner_final_requires_answer_agent", trace)
 
     def test_iterative_agent_indexes_scene_coverage_for_main_idea_mcq(self):
         class SceneCoverageBackend(VisionLanguageBackend):
@@ -2627,6 +2733,81 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("source\": \"repeated_program_guard", trace)
 
+    def test_answer_agent_final_trace_includes_scene_index_citation_provenance(self):
+        class ProvenanceBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "D. Rome rose and fell", "citations": ["scene_order_seg_0001"], '
+                            '"confidence": 0.86, "candidate_option_relations": ['
+                            '{"option": "D", "relation": "support", "strength": 0.86, '
+                            '"observation_id": "scene_order_seg_0001"}]}'
+                        )
+                    )
+                return super().generate(request)
+
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    source_segment_id="dual_seg_0001",
+                    start_sec=0.0,
+                    end_sec=30.0,
+                    asr_summary="Rome rose and later fell.",
+                    visual_caption="Historical maps and narration.",
+                    visual_caption_source="caption_scene_segment:vl-mini",
+                    raw_asr_ref="cue-1,cue-2",
+                    citation_provenance={"asr": "subtitle", "visual": "video"},
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="final_citation_provenance")
+            workspace.write_evidence_row(
+                {
+                    "obs_id": "scene_order_seg_0001",
+                    "tool": "timeline_asr_summary",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 30.0],
+                    "supported_option": "D",
+                    "claim": "Indexed segment supports the rise and fall sequence.",
+                    "confidence": 0.86,
+                    "grounding_quality": "indexed_transcript",
+                    "candidate_option_relations": [{"option": "D", "relation": "support", "strength": 0.86}],
+                }
+            )
+            agent = IterativeVisualAgent(
+                backend=ProvenanceBackend(
+                    ['{"status": "final", "answer": "D. Rome rose and fell", "citations": ["scene_order_seg_0001"]}']
+                ),
+                registry=ToolRegistry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question=(
+                    "What sequence is described?\n"
+                    "Options:\n"
+                    "A. Rome only rises\n"
+                    "D. Rome rose and fell\n"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"citation_provenance"', trace)
+            self.assertIn('"source_segment_id": "dual_seg_0001"', trace)
+            self.assertIn('"raw_asr_ref": "cue-1,cue-2"', trace)
+            self.assertIn('"visual_caption_source": "caption_scene_segment:vl-mini"', trace)
+
     def test_segment_vlm_tools_share_backend_and_pass_temporal_metadata(self):
         class SegmentToolBackend(VisionLanguageBackend):
             def __init__(self):
@@ -2659,7 +2840,7 @@ class IterativeAgentTest(unittest.TestCase):
         self.assertEqual(backend.requests[0].metadata["end_sec"], 20.0)
         self.assertEqual(backend.requests[0].metadata["nframes"], 64)
         self.assertEqual(backend.requests[0].metadata["max_pixels"], 151200)
-        self.assertEqual(backend.requests[0].metadata["question"], "What is visible?")
+        self.assertEqual(backend.requests[0].metadata["question"], "What is visible? Do not choose an option.")
 
     def test_segment_vlm_tools_can_extract_physical_clip_before_backend_call(self):
         class SegmentToolBackend(VisionLanguageBackend):

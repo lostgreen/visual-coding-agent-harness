@@ -6,6 +6,7 @@ import re
 from typing import Mapping, Optional, Sequence
 
 from ..agents.contracts import resolve_nframes
+from ..agents.open_questions import exploration_question
 from ..agents.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
@@ -34,10 +35,7 @@ def build_segment_inspector_registry(
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
-        sanitized_question, sanitized_options = _sanitize_inspect_segment_question(
-            question,
-            candidate_options=candidate_options,
-        )
+        sanitized_question = exploration_question(question)
         return _run_inspector(
             backend=backend,
             video_path=video_path,
@@ -45,7 +43,9 @@ def build_segment_inspector_registry(
             start_sec=start_sec,
             end_sec=end_sec,
             question=sanitized_question,
-            candidate_options=sanitized_options,
+            candidate_options=(),
+            original_question=question,
+            original_candidate_options=candidate_options,
             nframes=nframes,
             max_pixels=max_pixels,
             fps=fps,
@@ -91,6 +91,7 @@ def build_segment_inspector_registry(
                 end_sec=end_sec,
                 question=_sanitize_vision_read_ask_for(ask_for),
                 candidate_options=(),
+                original_question=ask_for,
                 nframes=nframes,
                 max_pixels=max_pixels,
                 fps=fps,
@@ -168,8 +169,11 @@ def _run_inspector(
     task_name: str = "inspect_segment",
     prompt_style: str = "inspect_segment",
     prompt_override: str = "",
+    original_question: str | None = None,
+    original_candidate_options: Sequence[str] = (),
 ) -> Mapping[str, object]:
     resolved_nframes, _ = resolve_nframes(nframes)
+    metadata_candidate_options = list(original_candidate_options or candidate_options)
     metadata = {
         "tool_role": "segment_inspector",
         "context_tier": "isolated_subagent",
@@ -177,10 +181,14 @@ def _run_inspector(
         "start_sec": float(start_sec),
         "end_sec": float(end_sec),
         "question": question,
-        "candidate_options": list(candidate_options),
+        "candidate_options": metadata_candidate_options,
         "nframes": int(resolved_nframes),
         "max_pixels": int(max_pixels),
     }
+    if original_question is not None and str(original_question or "").strip() != str(question or "").strip():
+        metadata["original_question"] = original_question
+    if original_candidate_options:
+        metadata["original_candidate_options"] = list(original_candidate_options)
     if fps > 0:
         metadata["fps"] = float(fps)
 
@@ -297,14 +305,7 @@ def _vision_read_prompt(
 
 
 def _sanitize_vision_read_ask_for(ask_for: str) -> str:
-    text = str(ask_for or "").strip()
-    if not _looks_like_mcq(text):
-        return text
-    return (
-        "Describe the main factual content of this segment. Do not choose an option. "
-        "Focus on events, entities, temporal stage, and whether this segment is about "
-        "rise, stability, decline, collapse, or causes."
-    )
+    return exploration_question(ask_for)
 
 
 def _sanitize_inspect_segment_question(
@@ -312,14 +313,7 @@ def _sanitize_inspect_segment_question(
     *,
     candidate_options: Sequence[str],
 ) -> tuple[str, Sequence[str]]:
-    text = str(question or "").strip()
-    if not _looks_like_mcq(text) and not _candidate_options_look_like_full_mcq(candidate_options):
-        return text, candidate_options
-    return (
-        "Describe only the localized visible facts in this segment. Do not choose an option. "
-        "Focus on names, artwork titles, order cues, timestamps, entities, events, and any explicit text or narration that is visible.",
-        (),
-    )
+    return exploration_question(question), ()
 
 
 def _looks_like_mcq(text: str) -> bool:

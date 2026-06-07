@@ -458,7 +458,7 @@ def test_timeline_skill_repairs_batch_caption_segments_to_single_caption_segment
 
     assert normalized[0]["tool"] == "caption_segment"
     assert normalized[0]["args"]["segment_id"] == "seg_0001"
-    assert normalized[0]["args"]["question"] == "Find ordered entities."
+    assert normalized[0]["args"]["question"] == "Find ordered entities? Do not choose an option. timeline_ordering"
 
 
 def test_free_explore_allows_all(tmp_path: Path):

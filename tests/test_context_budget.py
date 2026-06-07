@@ -150,14 +150,44 @@ def test_feedback_latest_only_compacts_history():
 
 
 def test_parse_budget_ratios_validates_full_distribution():
-    ratios = parse_budget_ratios("task:0.1,navigation:0.15,hypothesis:0.15,evidence:0.45,feedback:0.15")
+    ratios = parse_budget_ratios(
+        "task:0.08,trajectory:0.07,hypothesis:0.12,evidence:0.28,scene_index:0.22,feedback:0.10,budget:0.05,tooling:0.08"
+    )
 
-    assert ratios == {"task": 0.1, "navigation": 0.15, "hypothesis": 0.15, "evidence": 0.45, "feedback": 0.15}
+    assert ratios == {
+        "task": 0.08,
+        "trajectory": 0.07,
+        "hypothesis": 0.12,
+        "evidence": 0.28,
+        "scene_index": 0.22,
+        "feedback": 0.10,
+        "budget": 0.05,
+        "tooling": 0.08,
+    }
+
+
+def test_parse_budget_ratios_accepts_scene_index_and_late_tooling_slots():
+    ratios = parse_budget_ratios(
+        "task:0.08,trajectory:0.07,hypothesis:0.12,evidence:0.28,scene_index:0.22,feedback:0.10,budget:0.05,tooling:0.08"
+    )
+
+    assert ratios == {
+        "task": 0.08,
+        "trajectory": 0.07,
+        "hypothesis": 0.12,
+        "evidence": 0.28,
+        "scene_index": 0.22,
+        "feedback": 0.10,
+        "budget": 0.05,
+        "tooling": 0.08,
+    }
 
 
 def test_parse_budget_ratios_rejects_bad_sum():
     try:
-        parse_budget_ratios("task:0.1,navigation:0.1,hypothesis:0.1,evidence:0.1,feedback:0.1")
+        parse_budget_ratios(
+            "task:0.1,trajectory:0.1,hypothesis:0.1,evidence:0.1,scene_index:0.1,feedback:0.1,budget:0.1,tooling:0.1"
+        )
     except ValueError as exc:
         assert "sum to 1.0" in str(exc)
     else:

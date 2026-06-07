@@ -3,10 +3,13 @@ import unittest
 from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.tools.enrichment import build_video_enrichment_registry
 from visual_coding_agent_harness.tools.inspector import build_segment_inspector_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry
 from visual_coding_agent_harness.tools.vlm import build_vlm_registry
+from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from tests.test_open_questions import MCQ_OPTIONS, MCQ_QUESTION, assert_no_mcq_leak
 
 
 class CaptionQARecordingBackend(VisionLanguageBackend):
@@ -111,6 +114,56 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertIn("QA task", request.prompt)
         self.assertEqual(result["regions"][0]["max_pixels"], 200000)
 
+    def test_caption_and_qa_segment_sanitize_full_mcq_before_backend_generate(self):
+        backend = CaptionQARecordingBackend()
+        registry = build_segment_vlm_registry(backend)
+
+        registry.execute(
+            "caption_segment",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0001",
+                "start_sec": 0.0,
+                "end_sec": 30.0,
+                "question": MCQ_QUESTION,
+            },
+        )
+        registry.execute(
+            "qa_segment",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0002",
+                "start_sec": 30.0,
+                "end_sec": 60.0,
+                "question": MCQ_QUESTION,
+            },
+        )
+
+        for request in backend.requests:
+            self.assertEqual(request.metadata["original_question"], MCQ_QUESTION)
+            self.assertIn("What is the video mainly about?", request.prompt)
+            self.assertIn("Do not choose an option.", request.prompt)
+            assert_no_mcq_leak(self, request.prompt)
+
+    def test_caption_segments_sanitizes_full_mcq_before_backend_generate(self):
+        backend = CaptionQARecordingBackend()
+        store = VideoMapStore(
+            VideoMap(
+                video_path="/videos/demo.mp4",
+                duration_sec=40.0,
+                segments=[VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=40.0)],
+            )
+        )
+        registry = build_video_enrichment_registry(video_map_store=store, backend=backend)
+
+        registry.execute("caption_segments", {"segment_ids": ["seg_0001"], "question": MCQ_QUESTION})
+
+        request = backend.requests[0]
+        self.assertEqual(request.metadata["original_question"], MCQ_QUESTION)
+        self.assertIn("What is the video mainly about?", request.prompt)
+        self.assertIn("Do not choose an option.", request.prompt)
+        assert_no_mcq_leak(self, request.prompt)
+
     def test_segment_inspector_returns_one_distilled_observation(self):
         backend = CaptionQARecordingBackend()
         registry = build_segment_inspector_registry(backend)
@@ -137,7 +190,7 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertIn("Do not choose an option", request.prompt)
         self.assertIn("Do not emit supported_option", request.prompt)
         self.assertNotIn("supported option if any", request.prompt)
-        self.assertIn("A. aircraft", request.prompt)
+        assert_no_mcq_leak(self, request.prompt, option_texts=["aircraft", "submarine"])
         self.assertEqual(result["claim"], "inspect_segment answer")
         self.assertNotIn("supported_option", result)
         self.assertNotIn("answer_option", result)
@@ -176,12 +229,18 @@ class CaptionQAToolsTest(unittest.TestCase):
         )
 
         request = backend.requests[0]
-        self.assertIn("Describe only the localized visible facts", request.prompt)
-        self.assertIn("names, artwork titles, order cues, timestamps", request.prompt)
-        self.assertNotIn("Answer with exactly one option letter", request.prompt)
-        self.assertNotIn("Candidate options:", request.prompt)
-        self.assertNotIn('"The rape of Persephone", "Apollo and Daphne", "David"', request.prompt)
-        self.assertNotIn("A.", request.prompt)
+        self.assertIn("As depicted in the video, in what order do these sculptures appear?", request.prompt)
+        self.assertIn("Do not choose an option.", request.prompt)
+        assert_no_mcq_leak(
+            self,
+            request.prompt,
+            option_texts=[
+                '"The rape of Persephone", "Apollo and Daphne", "David"',
+                '"David", "Aeneas", "Apollo and Daphne"',
+                '"Apollo and Daphne", "Aeneas", "David"',
+                '"Aeneas", "David", "The rape of Persephone"',
+            ],
+        )
         self.assertNotIn("supported_option", result)
 
     def test_vision_read_emits_typed_fact_without_option_vote(self):
@@ -237,12 +296,18 @@ class CaptionQAToolsTest(unittest.TestCase):
         )
 
         request = backend.requests[0]
-        self.assertIn("Describe the main factual content of this segment", request.prompt)
-        self.assertIn("rise, stability, decline, collapse, or causes", request.prompt)
-        self.assertNotIn("Why the Austro-Hungarian Empire was divided", request.prompt)
-        self.assertNotIn("How the Austro-Hungarian Empire rose and fell", request.prompt)
-        self.assertNotIn("A. The fall of Rome", request.prompt)
-        self.assertNotIn("B.", request.prompt)
+        self.assertIn("What is the video mainly about?", request.prompt)
+        self.assertIn("Do not choose an option.", request.prompt)
+        assert_no_mcq_leak(
+            self,
+            request.prompt,
+            option_texts=[
+                "The fall of Rome",
+                "Why the Austro-Hungarian Empire was divided",
+                "A battle timeline",
+                "How the Austro-Hungarian Empire rose and fell",
+            ],
+        )
         self.assertNotIn("supported_option", result)
 
 

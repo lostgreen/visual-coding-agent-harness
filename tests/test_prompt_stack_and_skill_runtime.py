@@ -60,18 +60,22 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
                 "base_identity",
                 "route_playbook",
                 "skill_catalog",
-                "tool_schema",
+                "trajectory_snapshot",
                 "evidence_snapshot",
                 "hypothesis",
+                "scene_index_snapshot",
                 "answer_feedback",
                 "reflection_memory",
+                "budget_snapshot",
+                "tool_schema",
                 "final_gate",
                 "response_contract",
             ],
         )
         self.assertLess(prompt.index("# Base Identity"), prompt.index("# Route Playbook"))
         self.assertLess(prompt.index("# Route Playbook"), prompt.index("# Skill Catalog"))
-        self.assertLess(prompt.index("# Skill Catalog"), prompt.index("# Tool Schema"))
+        self.assertLess(prompt.index("# Evidence Snapshot"), prompt.index("# Tool Schema"))
+        self.assertLess(prompt.index("# Compact Scene Index"), prompt.index("# Tool Schema"))
         self.assertLess(prompt.index("# Evidence Snapshot"), prompt.index("# Hypothesis"))
         self.assertIn("Allowed ReAct actions: ground_question, vision_read, answer_agent, verify", prompt)
         self.assertIn("Available skills:", prompt)
@@ -96,12 +100,14 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
             answer_feedback=["confirm red car"],
         )
 
-        self.assertLess(prompt.index("## Task"), prompt.index("## Navigation"))
-        self.assertLess(prompt.index("## Navigation"), prompt.index("## Evidence"))
-        self.assertLess(prompt.index("## Evidence"), prompt.index("## Feedback"))
+        self.assertLess(prompt.index("## Task"), prompt.index("## Trajectory"))
+        self.assertLess(prompt.index("## Evidence"), prompt.index("## Compact scene index"))
+        self.assertLess(prompt.index("## Compact scene index"), prompt.index("## Current budgets"))
+        self.assertLess(prompt.index("## Current budgets"), prompt.index("## Tooling"))
         self.assertIn("obs_0001 | red car", prompt)
         self.assertEqual(report.turn_index, 0)
         self.assertIn("task", report.used_tokens_per_slot)
+        self.assertIn("tooling", report.used_tokens_per_slot)
 
     def test_slot_prompt_includes_structured_evidence_status_summary(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
@@ -369,7 +375,18 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
             )
 
     def test_hard_skill_need_more_hands_off_to_main_replanning_loop(self):
-        backend = RecordingBackend(
+        class HandoffBackend(RecordingBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    self.requests.append(request)
+                    return BackendResponse(
+                        text='{"answer": "D. enough after follow-up", "citations": ["obs_0002"], '
+                        '"confidence": 0.7, "candidate_option_relations": ['
+                        '{"option": "D", "relation": "support", "strength": 0.7, "observation_id": "obs_0002"}]}'
+                    )
+                return super().generate(request)
+
+        backend = HandoffBackend(
             [
                 '{"status": "final", "answer": "D. enough after follow-up", "citations": ["obs_0002"], "confidence": 0.7}'
             ]
@@ -437,11 +454,14 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
 
             self.assertEqual(result.status, "final")
             self.assertEqual(result.answer, "D. enough after follow-up")
-            self.assertEqual(len(result.rounds), 3)
             self.assertEqual(result.rounds[-1].status, "final")
-            self.assertEqual([request.task for request in backend.requests if request.task == "replan"], ["replan"])
+            self.assertEqual([request.task for request in backend.requests if request.task == "replan"], [])
+            self.assertEqual(
+                [request.task for request in backend.requests if request.task == "answer_from_evidence"],
+                ["answer_from_evidence"],
+            )
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("hard_skill_followup_handoff", trace)
+            self.assertIn('"source": "hard_skill_runtime"', trace)
 
     def test_planner_final_with_navigation_only_citation_is_blocked(self):
         backend = RecordingBackend(

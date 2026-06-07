@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
+from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..video_map import VideoMapStore
@@ -22,6 +23,7 @@ def build_video_enrichment_registry(*, video_map_store: VideoMapStore, backend: 
         max_segments: int = 3,
     ) -> Mapping[str, object]:
         selected_segments = _select_segments(video_map_store=video_map_store, segment_ids=segment_ids, max_segments=max_segments)
+        prompt_question = exploration_question(question)
         regions = []
         for segment in selected_segments:
             metadata = {
@@ -30,14 +32,21 @@ def build_video_enrichment_registry(*, video_map_store: VideoMapStore, backend: 
                 "end_sec": segment.end_sec,
                 "nframes": int(nframes),
                 "max_pixels": int(max_pixels),
-                "question": question,
+                "question": prompt_question,
             }
+            if prompt_question != str(question or "").strip():
+                metadata["original_question"] = question
             if fps > 0:
                 metadata["fps"] = float(fps)
             response = backend.generate(
                 BackendRequest(
                     task="caption_segment",
-                    prompt=_caption_segment_prompt(segment_id=segment.segment_id, start_sec=segment.start_sec, end_sec=segment.end_sec, question=question),
+                    prompt=_caption_segment_prompt(
+                        segment_id=segment.segment_id,
+                        start_sec=segment.start_sec,
+                        end_sec=segment.end_sec,
+                        question=prompt_question,
+                    ),
                     media_path=video_map_store.current.video_path,
                     media_type="video",
                     max_new_tokens=192,

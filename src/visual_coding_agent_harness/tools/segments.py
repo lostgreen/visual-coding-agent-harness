@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 from ..agents.contracts import resolve_nframes
+from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
@@ -101,14 +102,17 @@ def _run_segment_tool(
     clip_extractor: Optional[ClipExtractor] = None,
 ) -> Mapping[str, object]:
     resolved_nframes, _ = resolve_nframes(nframes)
+    prompt_question = exploration_question(question)
     metadata = {
         "segment_id": segment_id,
         "start_sec": float(start_sec),
         "end_sec": float(end_sec),
         "nframes": int(resolved_nframes),
         "max_pixels": int(max_pixels),
-        "question": question,
+        "question": prompt_question,
     }
+    if prompt_question != str(question or "").strip():
+        metadata["original_question"] = question
     if fps > 0:
         metadata["fps"] = float(fps)
     media_path = video_path
@@ -140,7 +144,7 @@ def _run_segment_tool(
                 segment_id=segment_id,
                 start_sec=float(start_sec),
                 end_sec=float(end_sec),
-                question=question,
+                question=prompt_question,
             ),
             media_path=media_path,
             media_type="video",

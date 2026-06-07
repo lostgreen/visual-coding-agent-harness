@@ -6,6 +6,7 @@ import re
 from typing import Mapping
 
 from ..agents.contracts import VISUAL_EVIDENCE_NFRAMES, resolve_nframes
+from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 
@@ -27,24 +28,28 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
         sample_offset_sec: float = 0.0,
     ) -> Mapping[str, object]:
         resolved_nframes, _ = resolve_nframes(nframes)
+        prompt_question = exploration_question(question)
+        metadata = {
+            "nframes": int(resolved_nframes),
+            "max_pixels": int(max_pixels),
+            "duration_sec": float(duration_sec),
+            "sample_offset_sec": float(sample_offset_sec),
+            "question": prompt_question,
+        }
+        if prompt_question != str(question or "").strip():
+            metadata["original_question"] = question
         response = backend.generate(
             BackendRequest(
                 task="global_gist",
                 prompt=_global_gist_prompt(
-                    question=question,
+                    question=prompt_question,
                     duration_sec=duration_sec,
                     sample_offset_sec=sample_offset_sec,
                 ),
                 media_path=video_path,
                 media_type="video",
                 max_new_tokens=256,
-                metadata={
-                    "nframes": int(resolved_nframes),
-                    "max_pixels": int(max_pixels),
-                    "duration_sec": float(duration_sec),
-                    "sample_offset_sec": float(sample_offset_sec),
-                    "question": question,
-                },
+                metadata=metadata,
             )
         )
         answer_text = response.text.strip()

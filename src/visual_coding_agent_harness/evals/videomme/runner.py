@@ -14,6 +14,8 @@ from typing import Any, Callable, Mapping, Sequence
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget
 from visual_coding_agent_harness.agents.context_budget import parse_budget_ratios
 from visual_coding_agent_harness.backends.base import BackendRequest
+from visual_coding_agent_harness.evals.videomme.scene_index_builder import SceneIndexBuilder, SubtitleCue
+from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -24,7 +26,9 @@ from .trajectory_markdown import write_trajectory_markdown
 
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
-MODEL_PATH = "/m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct"
+KML_MANAGED_ROOT = Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness")
+MODEL_PATH = "/home/xuboshen/models/Qwen3-VL-4B-Instruct"
+PLANNER_MODEL_PATH = ""
 DATA_ROOT = Path(
     "/ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/"
     "datasets--lmms-lab--Video-MME/snapshots/ead1408f75b618502df9a1d8e0950166bf0a2a0b"
@@ -32,7 +36,8 @@ DATA_ROOT = Path(
 DEFAULT_PARQUET_PATH = DATA_ROOT / "videomme/test-00000-of-00001.parquet"
 DEFAULT_VIDEO_DIR = DATA_ROOT / "video"
 DEFAULT_SUBTITLE_DIR = DATA_ROOT / "subtitle"
-DEFAULT_RUN_ROOT = Path("runs/videomme_agent_eval")
+DEFAULT_RUN_ROOT = KML_MANAGED_ROOT / "runs" / "videomme_agent_eval"
+DEFAULT_SCENE_INDEX_CACHE_DIR = KML_MANAGED_ROOT / "scene_index_cache"
 DEFAULT_CASES = ("605-1", "611-2", "612-1")
 DEFAULT_STRATEGIES = ("direct_full_video", "agent_v2")
 STRATEGIES = ("direct_full_video", "empty_index_loop", "subtitle_index_loop", "agent_v2")
@@ -53,7 +58,12 @@ class EvalConfig:
     subtitle_dir: Path
     cases: Sequence[str]
     strategies: Sequence[str]
+    planner_model_path: str = PLANNER_MODEL_PATH
     window_sec: float = WINDOW_SEC
+    scene_index_mode: str = "subtitle"
+    scene_index_cache_dir: Path = DEFAULT_SCENE_INDEX_CACHE_DIR
+    scene_index_cache_enabled: bool = True
+    scene_caption_nframes: int = SEGMENT_NFRAMES
     budget: AgentBudget = AgentBudget()
     export_training: bool = False
     ablation_flags: Mapping[str, Any] | None = None
@@ -144,20 +154,34 @@ def clean_subtitle_text(value: str) -> str:
 
 
 def parse_srt(path: Path) -> list[tuple[float, str]]:
+    return [(cue.start_sec, cue.text) for cue in parse_srt_cues(path)]
+
+
+def parse_srt_cues(path: Path) -> list[SubtitleCue]:
     if not path.exists():
         return []
     text = path.read_text(encoding="utf-8", errors="ignore")
-    cues: list[tuple[float, str]] = []
+    cues: list[SubtitleCue] = []
     for block in re.split(r"\n\s*\n", text):
         lines = [line.strip() for line in block.splitlines() if line.strip()]
         time_index = next((idx for idx, line in enumerate(lines) if "-->" in line), None)
         if time_index is None:
             continue
-        start = lines[time_index].split("-->")[0].strip()
+        time_parts = lines[time_index].split("-->")
+        start = time_parts[0].strip()
+        end = time_parts[1].strip() if len(time_parts) > 1 else start
         body = " ".join(lines[time_index + 1 :])
         cleaned = clean_subtitle_text(body)
         if cleaned:
-            cues.append((parse_time(start), cleaned))
+            cue_id = lines[0] if time_index > 0 else f"cue_{len(cues) + 1}"
+            cues.append(
+                SubtitleCue(
+                    start_sec=parse_time(start),
+                    end_sec=max(parse_time(end), parse_time(start) + 0.001),
+                    text=cleaned,
+                    cue_id=str(cue_id),
+                )
+            )
     return cues
 
 
@@ -361,6 +385,11 @@ def run_eval_cases(
         "window_sec": config.window_sec,
         "budget": asdict(config.budget),
         "model_path": config.model_path,
+        "planner_model_path": config.planner_model_path,
+        "scene_index_mode": config.scene_index_mode,
+        "scene_index_cache_dir": str(config.scene_index_cache_dir),
+        "scene_index_cache_enabled": config.scene_index_cache_enabled,
+        "scene_caption_nframes": config.scene_caption_nframes,
         "export_training": config.export_training,
         "ablation_flags": dict(config.ablation_flags or {}),
     }
@@ -983,6 +1012,22 @@ def run_strategy(
             window_sec=config.window_sec,
             source="fixed_window_empty",
         )
+    elif config.scene_index_mode == "dual-source":
+        cache = SceneIndexCache(config.scene_index_cache_dir) if config.scene_index_cache_enabled else None
+        builder = SceneIndexBuilder(
+            backend=backend,
+            text_model_id=config.planner_model_path or config.model_path,
+            vl_model_id=config.model_path,
+            window_sec=config.window_sec,
+            caption_nframes=config.scene_caption_nframes,
+            cache=cache,
+        )
+        scene_index = builder.build(
+            video_id=video_id,
+            video_path=video_path,
+            duration_sec=duration_sec,
+            subtitle_cues=parse_srt_cues(config.subtitle_dir / f"{video_id}.srt"),
+        )
     else:
         scene_index = subtitle_scene_index(
             video_path=video_path,
@@ -1027,11 +1072,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
     parser.add_argument("--workspace-root", type=Path, default=None)
     parser.add_argument("--model-path", default=MODEL_PATH)
+    parser.add_argument("--planner-model-path", default=PLANNER_MODEL_PATH)
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
     parser.add_argument("--parquet-path", type=Path, default=DEFAULT_PARQUET_PATH)
     parser.add_argument("--video-dir", type=Path, default=DEFAULT_VIDEO_DIR)
     parser.add_argument("--subtitle-dir", type=Path, default=DEFAULT_SUBTITLE_DIR)
     parser.add_argument("--window-sec", type=float, default=WINDOW_SEC)
+    parser.add_argument("--scene-index-mode", choices=("subtitle", "dual-source"), default="subtitle")
+    parser.add_argument("--scene-index-cache-dir", type=Path, default=DEFAULT_SCENE_INDEX_CACHE_DIR)
+    parser.add_argument("--no-scene-index-cache", action="store_true")
+    parser.add_argument("--scene-caption-nframes", type=int, default=SEGMENT_NFRAMES)
     parser.add_argument("--max-rounds", type=int, default=8)
     parser.add_argument("--max-tool-calls-per-round", type=int, default=2)
     parser.add_argument("--default-nframes", type=int, default=SEGMENT_NFRAMES)
@@ -1130,6 +1180,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         run_root=args.run_root,
         workspace_root=workspace_root,
         model_path=args.model_path,
+        planner_model_path=args.planner_model_path,
         data_root=args.data_root,
         parquet_path=args.parquet_path,
         video_dir=args.video_dir,
@@ -1137,10 +1188,28 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         cases=parse_csv(args.cases),
         strategies=parse_strategies(args.strategy),
         window_sec=args.window_sec,
+        scene_index_mode=args.scene_index_mode,
+        scene_index_cache_dir=args.scene_index_cache_dir,
+        scene_index_cache_enabled=not args.no_scene_index_cache,
+        scene_caption_nframes=args.scene_caption_nframes,
         budget=budget,
         export_training=args.export_training,
         ablation_flags=ablation_flags,
     )
+
+
+def build_backend(config: EvalConfig) -> Any:
+    from visual_coding_agent_harness.backends.qwen_vl import QwenVLBackend
+
+    vl_backend = QwenVLBackend.from_pretrained(config.model_path)
+    if not config.planner_model_path:
+        return vl_backend
+
+    from visual_coding_agent_harness.backends.qwen_text import QwenTextBackend
+    from visual_coding_agent_harness.backends.routed import RoutedBackend
+
+    text_backend = QwenTextBackend.from_pretrained(config.planner_model_path)
+    return RoutedBackend(text_backend=text_backend, vl_backend=vl_backend)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -1148,9 +1217,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     validate_python(allow_any_python=args.allow_any_python)
     config = config_from_args(args)
     rows_by_id = load_rows_by_id(config.parquet_path, config.cases)
-    from visual_coding_agent_harness.backends.qwen_vl import QwenVLBackend
-
-    backend = QwenVLBackend.from_pretrained(config.model_path)
+    backend = build_backend(config)
     run_eval_cases(backend=backend, rows_by_id=rows_by_id, config=config)
 
 

@@ -108,6 +108,8 @@ def compose_replanning_prompt_slots(
                 "The harness validates tool calls and final evidence only against a skill you explicitly select."
             ),
         ),
+    ]
+    tooling_blocks = [
         PromptBlock(name="tool_schema", title="Tool Schema", body=_tool_schema_block()),
         PromptBlock(name="final_gate", title="Final Gate", body=_final_gate_block(final_round_reserved=final_round_reserved)),
         PromptBlock(
@@ -127,22 +129,30 @@ def compose_replanning_prompt_slots(
     evidence_body += "Evidence ledger:\n" + (ledger_text or "(none)")
     return {
         "task": render_prompt_blocks(task_blocks),
-        "navigation": _navigation_snapshot_block(
-            question=question,
-            scene_index=scene_index,
+        "trajectory": _trajectory_snapshot_block(
             round_number=round_number,
             budget=budget,
             inspected_segment_ids=inspected_segment_ids,
-            tool_class_counts=tool_class_counts,
-            final_round_reserved=final_round_reserved,
         ),
         "hypothesis": _hypothesis_slot(hypothesis_text),
         "evidence": evidence_body,
+        "scene_index": _scene_index_snapshot_block(
+            question=question,
+            scene_index=scene_index,
+            inspected_segment_ids=inspected_segment_ids,
+        ),
         "feedback": _feedback_slot(
             answer_feedback=answer_feedback,
             normalization_notes=normalization_notes,
             reflection_memory=reflection_memory,
         ),
+        "budget": _budget_snapshot_block(
+            round_number=round_number,
+            budget=budget,
+            tool_class_counts=tool_class_counts,
+            final_round_reserved=final_round_reserved,
+        ),
+        "tooling": render_prompt_blocks(tooling_blocks),
     }
 
 
@@ -192,22 +202,19 @@ def compose_replanning_prompt_blocks(
             ),
         ),
         PromptBlock(
-            name="tool_schema",
-            title="Tool Schema",
-            body=_tool_schema_block(),
+            name="trajectory_snapshot",
+            title="Trajectory Snapshot",
+            body=_trajectory_snapshot_block(
+                round_number=round_number,
+                budget=budget,
+                inspected_segment_ids=inspected_segment_ids,
+            ),
         ),
         PromptBlock(
             name="evidence_snapshot",
             title="Evidence Snapshot",
-            body=_evidence_snapshot_block(
-                question=question,
-                scene_index=scene_index,
+            body=_evidence_only_snapshot_block(
                 ledger_text=ledger_text,
-                round_number=round_number,
-                budget=budget,
-                inspected_segment_ids=inspected_segment_ids,
-                tool_class_counts=tool_class_counts,
-                final_round_reserved=final_round_reserved,
                 evidence_status_summary=evidence_status_summary,
             ),
         ),
@@ -215,6 +222,15 @@ def compose_replanning_prompt_blocks(
             name="hypothesis",
             title="Hypothesis",
             body=_hypothesis_slot(hypothesis_text),
+        ),
+        PromptBlock(
+            name="scene_index_snapshot",
+            title="Compact Scene Index",
+            body=_scene_index_snapshot_block(
+                question=question,
+                scene_index=scene_index,
+                inspected_segment_ids=inspected_segment_ids,
+            ),
         ),
     ]
     if normalization_notes:
@@ -246,6 +262,21 @@ def compose_replanning_prompt_blocks(
         )
     blocks.extend(
         [
+            PromptBlock(
+                name="budget_snapshot",
+                title="Current Budgets",
+                body=_budget_snapshot_block(
+                    round_number=round_number,
+                    budget=budget,
+                    tool_class_counts=tool_class_counts,
+                    final_round_reserved=final_round_reserved,
+                ),
+            ),
+            PromptBlock(
+                name="tool_schema",
+                title="Tool Schema",
+                body=_tool_schema_block(),
+            ),
             PromptBlock(
                 name="final_gate",
                 title="Final Gate",
@@ -295,14 +326,19 @@ def _tool_schema_block() -> str:
 def _join_slots(slots: Mapping[SlotName, str]) -> str:
     titles = {
         "task": "Task",
+        "trajectory": "Trajectory",
         "navigation": "Navigation",
         "hypothesis": "Hypothesis",
         "evidence": "Evidence",
+        "scene_index": "Compact scene index",
         "feedback": "Feedback",
+        "budget": "Current budgets",
+        "tooling": "Tooling",
     }
     return "\n\n".join(
         f"## {titles[name]}\n{slots.get(name, '').strip()}"
-        for name in ["task", "navigation", "hypothesis", "evidence", "feedback"]
+        for name in ["task", "trajectory", "hypothesis", "evidence", "scene_index", "feedback", "budget", "tooling"]
+        if name in slots
     ).strip()
 
 
@@ -375,6 +411,66 @@ def _navigation_snapshot_block(
         f"{final_round_line}"
         "Scene index:\n"
         f"{scene_index.summary(max_segments=64)}"
+    )
+
+
+def _trajectory_snapshot_block(
+    *,
+    round_number: int,
+    budget: Any,
+    inspected_segment_ids: Sequence[str],
+) -> str:
+    inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
+    return (
+        f"Round: {round_number}/{getattr(budget, 'max_rounds', '?')}\n"
+        f"Already inspected segments: {inspected_line}"
+    )
+
+
+def _scene_index_snapshot_block(
+    *,
+    question: str,
+    scene_index: SceneIndex,
+    inspected_segment_ids: Sequence[str],
+) -> str:
+    uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
+    return (
+        f"Question: {question}\n"
+        f"Uninspected segment candidates: {uninspected_line}\n"
+        "Compact scene index:\n"
+        f"{scene_index.summary(max_segments=64)}"
+    )
+
+
+def _budget_snapshot_block(
+    *,
+    round_number: int,
+    budget: Any,
+    tool_class_counts: Mapping[str, int] | None,
+    final_round_reserved: bool,
+) -> str:
+    counts = tool_class_counts or {}
+    remaining_budget_line = (
+        "free exploration mode; no per-class tool budget, only emergency round/tool-call caps"
+        if getattr(budget, "free_exploration", False)
+        else (
+            f"cheap={max(0, int(getattr(budget, 'cheap_tool_budget', 0)) - int(counts.get('cheap', 0)))}, "
+            f"expensive={max(0, int(getattr(budget, 'expensive_tool_budget', 0)) - int(counts.get('expensive', 0)))}, "
+            f"verifier={max(0, int(getattr(budget, 'verifier_tool_budget', 0)) - int(counts.get('verifier', 0)))}"
+        )
+    )
+    final_round_line = (
+        "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
+        if final_round_reserved
+        else ""
+    )
+    return (
+        f"Round: {round_number}/{getattr(budget, 'max_rounds', '?')}\n"
+        f"Request at most {getattr(budget, 'max_tool_calls_per_round', 1)} new tool call(s) this round.\n"
+        "Cheap navigation tools and expensive VLM tools have separate budgets unless free exploration mode is active.\n"
+        "In free exploration mode, prioritize answer quality: keep using tools until evidence is sufficient, then finalize with citations.\n"
+        f"Remaining tool budgets: {remaining_budget_line}.\n"
+        f"{final_round_line}"
     )
 
 
@@ -493,6 +589,16 @@ def _evidence_snapshot_block(
         "Evidence ledger:\n"
         f"{ledger_text}"
     )
+
+
+def _evidence_only_snapshot_block(
+    *,
+    ledger_text: str,
+    evidence_status_summary: Mapping[str, Any] | None = None,
+) -> str:
+    evidence_status_text = _evidence_status_summary_text(evidence_status_summary)
+    status_block = f"{evidence_status_text}\n" if evidence_status_text else ""
+    return f"{status_block}Evidence ledger:\n{ledger_text}"
 
 
 def _final_gate_block(*, final_round_reserved: bool) -> str:

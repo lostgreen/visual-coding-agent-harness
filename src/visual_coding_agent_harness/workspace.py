@@ -1060,6 +1060,7 @@ class EvidenceWorkspace:
 
             row = EvidenceRowV2(
                 obs_id=str(observation.get("observation_id", "")),
+                segment_id=_observation_segment_id(observation),
                 time_range=_observation_time_range(observation),
                 tool=tool_name,
                 supported_option=supported_option,
@@ -1080,6 +1081,7 @@ class EvidenceWorkspace:
                 legacy_worker_vote=legacy_worker_vote,
                 limitations=str(observation.get("limitations", "")),
                 artifact=_first_item(observation.get("input_artifacts")) or "",
+                **_evidence_provenance_fields(raw_output),
             ).to_dict()
             rows.append(row)
             groups[group_key].append(row)
@@ -1983,6 +1985,7 @@ def _normalize_evidence_row(row: Mapping[str, Any], *, evidence_id: str | None =
         legacy_worker_vote=bool(row.get("legacy_worker_vote", False)),
         limitations=str(row.get("limitations", "")),
         artifact=str(row.get("artifact", "")),
+        **_evidence_provenance_fields(row),
     ).to_dict()
     if payload["time_range"] is None and payload["t_start"] is not None and payload["t_end"] is not None:
         payload["time_range"] = [payload["t_start"], payload["t_end"]]
@@ -2115,7 +2118,7 @@ def _evidence_row_from_observation_mapping(
         "evidence_id": str(evidence_id),
         "obs_id": str(observation.get("observation_id", "")),
         "tool": str(observation.get("tool", "")),
-        "segment_id": str(raw_output.get("segment_id", "")),
+        "segment_id": _observation_segment_id(observation),
         "time_range": time_range,
         "t_start": time_range[0] if time_range is not None else None,
         "t_end": time_range[1] if time_range is not None else None,
@@ -2138,6 +2141,7 @@ def _evidence_row_from_observation_mapping(
         ),
         "limitations": str(observation.get("limitations", "")),
         "artifact": _first_item(observation.get("input_artifacts")) or "",
+        **_evidence_provenance_fields(raw_output),
     }
     option_source = (
         raw_output.get("supported_option")
@@ -2169,6 +2173,30 @@ def _optional_float(value: Any) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _evidence_provenance_fields(source: Mapping[str, Any]) -> dict[str, Any]:
+    citation_provenance = source.get("citation_provenance", {})
+    if not isinstance(citation_provenance, Mapping):
+        citation_provenance = {}
+    return {
+        "source_segment_id": str(source.get("source_segment_id") or ""),
+        "raw_asr_ref": source.get("raw_asr_ref", ""),
+        "visual_caption_source": str(source.get("visual_caption_source") or ""),
+        "citation_provenance": dict(citation_provenance),
+    }
+
+
+def _observation_segment_id(observation: Mapping[str, Any]) -> str:
+    raw_output = observation.get("raw_output", {})
+    if isinstance(raw_output, Mapping) and raw_output.get("segment_id"):
+        return str(raw_output.get("segment_id"))
+    regions = observation.get("regions", [])
+    if isinstance(regions, Sequence) and not isinstance(regions, (str, bytes)):
+        for region in regions:
+            if isinstance(region, Mapping) and region.get("segment_id"):
+                return str(region.get("segment_id"))
+    return ""
 
 
 def _observation_time_range(observation: Mapping[str, Any]) -> list[float] | None:

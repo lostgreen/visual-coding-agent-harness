@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal, Mapping, Optional
 
 from ..agents.contracts import resolve_nframes
+from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..video_map import VideoMap, VideoMapStore
@@ -32,25 +33,29 @@ def build_query_context_registry(
         max_pixels: int = DEFAULT_MAX_PIXELS,
     ) -> Mapping[str, object]:
         resolved_nframes, budget_reason = resolve_nframes(nframes)
+        prompt_query = exploration_question(query)
         current = video_map_store.current
         resolved_duration = float(duration_sec if duration_sec is not None else current.duration_sec)
-        regions = _regions_for_scope(video_map_store=video_map_store, query=query, scope=scope)
+        regions = _regions_for_scope(video_map_store=video_map_store, query=prompt_query, scope=scope)
+        metadata = {
+            "query": prompt_query,
+            "scope": scope,
+            "nframes": int(resolved_nframes),
+            "budget_reason": budget_reason,
+            "duration_sec": resolved_duration,
+            "max_pixels": int(max_pixels),
+            "candidate_segments": [str(region.get("segment_id", "")) for region in regions],
+        }
+        if prompt_query != str(query or "").strip():
+            metadata["original_query"] = query
         response = backend.generate(
             BackendRequest(
                 task="query_context",
-                prompt=_query_context_prompt(query=query, scope=scope),
+                prompt=_query_context_prompt(query=prompt_query, scope=scope),
                 media_path=video_path,
                 media_type="video",
                 max_new_tokens=256,
-                metadata={
-                    "query": query,
-                    "scope": scope,
-                    "nframes": int(resolved_nframes),
-                    "budget_reason": budget_reason,
-                    "duration_sec": resolved_duration,
-                    "max_pixels": int(max_pixels),
-                    "candidate_segments": [str(region.get("segment_id", "")) for region in regions],
-                },
+                metadata=metadata,
             )
         )
         capsule = response.text.strip()
@@ -61,11 +66,11 @@ def build_query_context_registry(
             "budget_reason": budget_reason,
             "max_pixels": int(max_pixels),
             "scope": scope,
-            "query": query,
+            "query": prompt_query,
             "raw_backend": dict(response.raw),
         }
         return {
-            "claim": _format_capsule(capsule=capsule, query=query),
+            "claim": _format_capsule(capsule=capsule, query=prompt_query),
             "confidence": 0.62,
             "input_artifacts": [f"{video_path}#query_context={scope}"],
             "regions": regions

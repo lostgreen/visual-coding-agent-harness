@@ -22,6 +22,14 @@ class ReplayBackend(VisionLanguageBackend):
     def generate(self, request: BackendRequest) -> BackendResponse:
         self.requests.append(request)
         if not self.responses:
+            if request.task == "answer_from_evidence":
+                return BackendResponse(
+                    text=(
+                        '{"answer": "need_more_evidence", "citations": [], '
+                        '"missing_evidence": ["replay fixture has no scripted AnswerAgent response"], '
+                        '"confidence": 0.0}'
+                    )
+                )
             raise AssertionError(f"Unexpected backend.generate call for task={request.task}")
         response = self.responses.pop(0)
         expected_task = str(response.get("task", ""))

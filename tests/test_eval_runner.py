@@ -368,6 +368,100 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(captured["scene_index"].segments[0].source, "fixed_window_subtitle")
             self.assertIn("ASR/subtitle excerpt: opening clue", captured["scene_index"].segments[0].low_fps_caption)
 
+    def test_agent_v2_dual_source_scene_index_uses_builder_and_cache_root(self):
+        from runs import eval_runner
+
+        captured = {}
+        builder_inits = []
+
+        class FakeBuilder:
+            def __init__(self, **kwargs):
+                builder_inits.append(kwargs)
+
+            def build(self, **kwargs):
+                captured["build_kwargs"] = kwargs
+                return SceneIndex(
+                    video_path=kwargs["video_path"],
+                    duration_sec=kwargs["duration_sec"],
+                    segments=[
+                        VideoSegment(
+                            segment_id="seg_0001",
+                            start_sec=0.0,
+                            end_sec=300.0,
+                            source="dual_source_scene_index",
+                            asr_summary="opening clue",
+                            visual_caption="wide shot",
+                        )
+                    ],
+                )
+
+        def fake_run_loop(backend, **kwargs):
+            captured["scene_index"] = kwargs["scene_index"]
+            return {
+                "answer": "D. Based on dual source index.",
+                "choice": "D",
+                "status": "final",
+                "confidence": 0.7,
+                "citations": ["obs_0001"],
+                "rounds": 1,
+                "tools": ["inspect_segment"],
+                "segments": ["seg_0001"],
+                "seconds": 7.0,
+            }
+
+        rows_by_id = {
+            "611-2": {
+                "question_id": "611-2",
+                "video_id": "vid611",
+                "videoID": "video611",
+                "task_type": "Temporal Reasoning",
+                "question": "What happens last?",
+                "options": ["A. one", "B. two", "C. three", "D. four"],
+                "answer": "D",
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "eval"
+            subtitle_dir = Path(tmp) / "subtitle"
+            cache_dir = Path(tmp) / "scene_cache"
+            subtitle_dir.mkdir()
+            (subtitle_dir / "video611.srt").write_text(
+                "1\n00:00:02,000 --> 00:00:03,000\nopening clue\n",
+                encoding="utf-8",
+            )
+            config = eval_runner.EvalConfig(
+                run_root=run_root,
+                workspace_root=run_root / "workspaces",
+                model_path="/models/vl",
+                planner_model_path="/models/text",
+                data_root=Path("/dataset"),
+                parquet_path=Path("/dataset/videomme/test.parquet"),
+                video_dir=Path("/dataset/video"),
+                subtitle_dir=subtitle_dir,
+                cases=("611-2",),
+                strategies=("agent_v2",),
+                window_sec=300.0,
+                scene_index_mode="dual-source",
+                scene_index_cache_dir=cache_dir,
+                budget=AgentBudget(),
+            )
+
+            with patch.object(eval_runner, "SceneIndexBuilder", FakeBuilder):
+                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                    eval_runner.run_eval_cases(
+                        backend=object(),
+                        rows_by_id=rows_by_id,
+                        config=config,
+                        duration_fn=lambda path: 1805.0,
+                    )
+
+            self.assertEqual(captured["scene_index"].segments[0].source, "dual_source_scene_index")
+            self.assertEqual(captured["build_kwargs"]["video_id"], "video611")
+            self.assertEqual(builder_inits[0]["text_model_id"], "/models/text")
+            self.assertEqual(builder_inits[0]["vl_model_id"], "/models/vl")
+            self.assertEqual(builder_inits[0]["cache"].cache_dir, cache_dir)
+
     def test_free_explore_cli_builds_budgetless_agent_config(self):
         from runs import eval_runner
 
@@ -424,7 +518,7 @@ class EvalRunnerTest(unittest.TestCase):
                 "--context-budget-tokens",
                 "9000",
                 "--budget-ratios",
-                "task:0.2,navigation:0.2,hypothesis:0.1,evidence:0.3,feedback:0.2",
+                "task:0.08,trajectory:0.07,hypothesis:0.12,evidence:0.28,scene_index:0.22,feedback:0.10,budget:0.05,tooling:0.08",
             ]
         )
 
@@ -433,7 +527,16 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.budget.context_budget_tokens, 9000)
         self.assertEqual(
             config.budget.context_budget_ratios,
-            {"task": 0.2, "navigation": 0.2, "hypothesis": 0.1, "evidence": 0.3, "feedback": 0.2},
+            {
+                "task": 0.08,
+                "trajectory": 0.07,
+                "hypothesis": 0.12,
+                "evidence": 0.28,
+                "scene_index": 0.22,
+                "feedback": 0.10,
+                "budget": 0.05,
+                "tooling": 0.08,
+            },
         )
 
     def test_context_budget_cli_rejects_bad_ratio_sum(self):
@@ -445,12 +548,84 @@ class EvalRunnerTest(unittest.TestCase):
                 "--run-root",
                 "/tmp/vcah-context",
                 "--budget-ratios",
-                "task:0.1,navigation:0.1,hypothesis:0.1,evidence:0.1,feedback:0.1",
+                "task:0.1,trajectory:0.1,hypothesis:0.1,evidence:0.1,scene_index:0.1,feedback:0.1,budget:0.1,tooling:0.1",
             ]
         )
 
         with self.assertRaisesRegex(ValueError, "sum to 1.0"):
             eval_runner.config_from_args(args)
+
+    def test_dual_model_and_scene_index_cli_flags_build_agent_config(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--model-path",
+                "/home/xuboshen/models/Qwen3-VL-4B-Instruct",
+                "--planner-model-path",
+                "/home/xuboshen/models/Qwen3-4B-Instruct-2507",
+                "--scene-index-mode",
+                "dual-source",
+                "--scene-index-cache-dir",
+                "/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache",
+            ]
+        )
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.model_path, "/home/xuboshen/models/Qwen3-VL-4B-Instruct")
+        self.assertEqual(config.planner_model_path, "/home/xuboshen/models/Qwen3-4B-Instruct-2507")
+        self.assertEqual(config.scene_index_mode, "dual-source")
+        self.assertEqual(
+            config.scene_index_cache_dir,
+            Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache"),
+        )
+
+    def test_default_run_and_scene_cache_roots_are_under_m2v_management_root(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args([])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertEqual(
+            config.run_root,
+            Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_eval"),
+        )
+        self.assertEqual(
+            config.scene_index_cache_dir,
+            Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache"),
+        )
+
+    def test_build_backend_uses_routed_backend_for_dual_model_config(self):
+        from runs import eval_runner
+
+        config = eval_runner.EvalConfig(
+            run_root=Path("/tmp/run"),
+            workspace_root=Path("/tmp/run/workspaces"),
+            model_path="/models/vl",
+            planner_model_path="/models/text",
+            data_root=Path("/dataset"),
+            parquet_path=Path("/dataset/test.parquet"),
+            video_dir=Path("/dataset/video"),
+            subtitle_dir=Path("/dataset/subtitle"),
+            cases=("605-1",),
+            strategies=("agent_v2",),
+        )
+
+        with patch("visual_coding_agent_harness.backends.qwen_vl.QwenVLBackend.from_pretrained", return_value="vl") as vl_load:
+            with patch(
+                "visual_coding_agent_harness.backends.qwen_text.QwenTextBackend.from_pretrained",
+                return_value="text",
+            ) as text_load:
+                backend = eval_runner.build_backend(config)
+
+        self.assertEqual(backend.vl_backend, "vl")
+        self.assertEqual(backend.text_backend, "text")
+        vl_load.assert_called_once_with("/models/vl")
+        text_load.assert_called_once_with("/models/text")
 
     def test_ablation_cli_flags_serialized_to_config(self):
         from runs import eval_runner

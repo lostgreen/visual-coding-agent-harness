@@ -16,6 +16,7 @@ from .answer_agent import AnswerAgent, AnswerAgentResult
 from .contracts import VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
+from .open_questions import exploration_question
 from .output_quality import is_unsupported_claim
 from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
 from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
@@ -325,14 +326,35 @@ class IterativeVisualAgent:
 
             if status == "final":
                 final_citations = [str(item) for item in action.get("citations", [])]
-                blocked_reason = _blocked_planner_final_reason(
-                    question=question,
-                    has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                    workspace=self.workspace,
-                    answer=str(action.get("answer", "")),
-                    citations=final_citations,
-                    planner_skill=planner_skill,
-                )
+                if extract_candidate_options(question):
+                    self.workspace.write_trace_event(
+                        "planner_final_answer_agent_takeover",
+                        {
+                            "round": round_number,
+                            "planner_answer": str(action.get("answer", "")),
+                            "planner_citations": final_citations,
+                        },
+                    )
+                    takeover_result = self._try_answer_agent_final(
+                        question=question,
+                        video_path=video_path,
+                        rounds=rounds,
+                        round_number=round_number,
+                        source="planner_final_takeover",
+                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                    )
+                    if takeover_result is not None:
+                        return takeover_result
+                    blocked_reason = "planner_final_requires_answer_agent"
+                else:
+                    blocked_reason = _blocked_planner_final_reason(
+                        question=question,
+                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                        workspace=self.workspace,
+                        answer=str(action.get("answer", "")),
+                        citations=final_citations,
+                        planner_skill=planner_skill,
+                    )
                 if blocked_reason:
                     self.workspace.write_trace_event(
                         "iterative_final_blocked",
@@ -364,13 +386,11 @@ class IterativeVisualAgent:
                         rationale=rationale,
                     )
                     rounds.append(result_round)
-                    self.workspace.write_trace_event(
-                        "iterative_final",
-                        {
-                            "round": round_number,
-                            "answer": str(action.get("answer", "")),
-                            "citations": final_citations,
-                        },
+                    self._write_final_trace(
+                        round_number=round_number,
+                        answer=str(action.get("answer", "")),
+                        citations=final_citations,
+                        source="planner_final",
                     )
                     return IterativeRunResult(
                         question=question,
@@ -487,14 +507,11 @@ class IterativeVisualAgent:
                                 rationale=answer_result.rationale,
                             )
                         )
-                        self.workspace.write_trace_event(
-                            "iterative_final",
-                            {
-                                "round": round_number,
-                                "answer": answer_result.answer,
-                                "citations": list(answer_result.citations),
-                                "source": "answer_agent",
-                            },
+                        self._write_final_trace(
+                            round_number=round_number,
+                            answer=answer_result.answer,
+                            citations=answer_result.citations,
+                            source="answer_agent",
                         )
                         return IterativeRunResult(
                             question=question,
@@ -659,14 +676,11 @@ class IterativeVisualAgent:
                             rationale=answer_result.rationale,
                         )
                     )
-                    self.workspace.write_trace_event(
-                        "iterative_final",
-                        {
-                            "round": round_number,
-                            "answer": answer_result.answer,
-                            "citations": list(answer_result.citations),
-                            "source": "answer_agent",
-                        },
+                    self._write_final_trace(
+                        round_number=round_number,
+                        answer=answer_result.answer,
+                        citations=answer_result.citations,
+                        source="answer_agent",
                     )
                     return IterativeRunResult(
                         question=question,
@@ -817,14 +831,11 @@ class IterativeVisualAgent:
                 observation_ids=observation_ids,
             )
         )
-        self.workspace.write_trace_event(
-            "iterative_final",
-            {
-                "round": round_number,
-                "answer": answer_result.answer,
-                "citations": list(answer_result.citations),
-                "source": source,
-            },
+        self._write_final_trace(
+            round_number=round_number,
+            answer=answer_result.answer,
+            citations=answer_result.citations,
+            source=source,
         )
         return IterativeRunResult(
             question=question,
@@ -1064,17 +1075,14 @@ class IterativeVisualAgent:
                 args["end_sec"] = segment.end_sec
                 if tool_name == "vision_read":
                     args.setdefault("ask_for", args.pop("question", question))
+                    args["ask_for"] = exploration_question(str(args["ask_for"]), route_hint=planner_skill.name if planner_skill else "")
                 else:
                     args.setdefault("question", question)
+                    args["question"] = exploration_question(str(args["question"]), route_hint=planner_skill.name if planner_skill else "")
                 candidate_options = list(extract_candidate_options(question))
                 if candidate_options:
                     if tool_name == "vision_read":
                         args.setdefault("event_label", str(args.get("ask_for", "")))
-                    else:
-                        args["question"] = _append_candidate_options_to_tool_question(
-                            str(args["question"]),
-                            candidate_options=candidate_options,
-                        )
                     if tool_name == "inspect_segment":
                         args["candidate_options"] = candidate_options
                 args.setdefault("nframes", self.budget.default_nframes)
@@ -1435,6 +1443,65 @@ class IterativeVisualAgent:
             options=extract_candidate_options(question),
         )
 
+    def _write_final_trace(
+        self,
+        *,
+        round_number: int,
+        answer: str,
+        citations: Sequence[str],
+        source: str = "",
+        status: str = "final",
+    ) -> None:
+        payload: dict[str, Any] = {
+            "round": round_number,
+            "answer": answer,
+            "citations": list(citations),
+        }
+        if source:
+            payload["source"] = source
+        if status != "final":
+            payload["status"] = status
+        provenance = self._citation_provenance(citations)
+        if provenance:
+            payload["citation_provenance"] = provenance
+        self.workspace.write_trace_event("iterative_final", payload)
+
+    def _citation_provenance(self, citations: Sequence[str]) -> list[dict[str, Any]]:
+        cited = [str(item) for item in citations if str(item)]
+        if not cited:
+            return []
+        table = self.workspace.evidence_table_v2(
+            question="",
+            options=[],
+            include_legacy_worker_votes=True,
+        )
+        rows = table.get("rows", [])
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            return []
+        provenance: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            obs_id = str(row.get("obs_id", ""))
+            evidence_id = str(row.get("evidence_id", ""))
+            matched_citations = [citation for citation in cited if citation in {obs_id, evidence_id}]
+            if not matched_citations:
+                continue
+            for citation in matched_citations:
+                key = (citation, evidence_id, obs_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                provenance.append(
+                    _citation_provenance_from_evidence_row(
+                        citation=citation,
+                        row=row,
+                        scene_index=self.scene_index,
+                    )
+                )
+        return provenance
+
     def _seed_scene_coverage_evidence(self, question: str) -> None:
         route = classify_question_route(question)
         options = extract_candidate_options(question)
@@ -1519,15 +1586,12 @@ class IterativeVisualAgent:
                 observation_ids=observation_ids,
             )
         )
-        self.workspace.write_trace_event(
-            "iterative_final",
-            {
-                "round": round_number,
-                "answer": low_confidence.answer,
-                "citations": list(low_confidence.citations),
-                "source": source,
-                "status": "low_confidence_final",
-            },
+        self._write_final_trace(
+            round_number=round_number,
+            answer=low_confidence.answer,
+            citations=low_confidence.citations,
+            source=source,
+            status="low_confidence_final",
         )
         return IterativeRunResult(
             question=question,
@@ -1696,14 +1760,11 @@ class IterativeVisualAgent:
                         "matched_events": list(timeline_decision["matched_events"]),
                     },
                 )
-                self.workspace.write_trace_event(
-                    "iterative_final",
-                    {
-                        "round": round_number,
-                        "answer": answer,
-                        "citations": citations,
-                        "source": "timeline_temporal_order",
-                    },
+                self._write_final_trace(
+                    round_number=round_number,
+                    answer=answer,
+                    citations=citations,
+                    source="timeline_temporal_order",
                 )
                 return IterativeRunResult(
                     question=question,
@@ -1760,14 +1821,11 @@ class IterativeVisualAgent:
                         "missing_evidence": list(answer_result.missing_evidence),
                     },
                 )
-                self.workspace.write_trace_event(
-                    "iterative_final",
-                    {
-                        "round": round_number,
-                        "answer": answer_result.answer,
-                        "citations": list(answer_result.citations),
-                        "source": "hard_skill_runtime",
-                    },
+                self._write_final_trace(
+                    round_number=round_number,
+                    answer=answer_result.answer,
+                    citations=answer_result.citations,
+                    source="hard_skill_runtime",
                 )
                 return IterativeRunResult(
                     question=question,
@@ -1956,14 +2014,11 @@ class IterativeVisualAgent:
                     "source": "timeline_ordering",
                 },
             )
-            self.workspace.write_trace_event(
-                "iterative_final",
-                {
-                    "round": 1,
-                    "answer": answer,
-                    "citations": citations,
-                    "source": "timeline_ordering",
-                },
+            self._write_final_trace(
+                round_number=1,
+                answer=answer,
+                citations=citations,
+                source="timeline_ordering",
             )
             return IterativeRunResult(
                 question=question,
@@ -2227,6 +2282,7 @@ def _blocked_final_reason(
     if (
         extract_candidate_options(question)
         and not has_inspect_with_candidate_options
+        and not workspace.has_non_navigation_visual_citation(citations)
         and not _indexed_transcript_supports_answer(
             workspace=workspace,
             question=question,
@@ -2310,6 +2366,65 @@ def _indexed_transcript_supports_answer(
         if str(row.get("tool", "")) == "timeline_asr_summary" and str(row.get("grounding_quality", "")) == "indexed_transcript":
             return True
     return False
+
+
+def _scene_segment_provenance(segment: VideoSegment) -> dict[str, Any]:
+    citation_provenance = dict(getattr(segment, "citation_provenance", {}) or {})
+    if getattr(segment, "asr_summary_source", ""):
+        citation_provenance.setdefault("asr_summary_source", str(segment.asr_summary_source))
+    if getattr(segment, "visual_caption_source", ""):
+        citation_provenance.setdefault("visual_caption_source", str(segment.visual_caption_source))
+    return {
+        "source_segment_id": str(getattr(segment, "source_segment_id", "") or segment.segment_id),
+        "raw_asr_ref": getattr(segment, "raw_asr_ref", "") or "",
+        "visual_caption_source": str(getattr(segment, "visual_caption_source", "") or ""),
+        "citation_provenance": citation_provenance,
+    }
+
+
+def _citation_provenance_from_evidence_row(
+    *,
+    citation: str,
+    row: Mapping[str, Any],
+    scene_index: SceneIndex,
+) -> dict[str, Any]:
+    segment_id = str(row.get("segment_id", ""))
+    segment: VideoSegment | None = None
+    if segment_id:
+        try:
+            segment = scene_index.get(segment_id)
+        except ValueError:
+            segment = None
+
+    segment_provenance = _scene_segment_provenance(segment) if segment is not None else {}
+    citation_provenance = row.get("citation_provenance") or segment_provenance.get("citation_provenance") or {}
+    if not isinstance(citation_provenance, Mapping):
+        citation_provenance = {}
+
+    payload: dict[str, Any] = {
+        "citation": citation,
+        "evidence_id": str(row.get("evidence_id", "")),
+        "obs_id": str(row.get("obs_id", "")),
+        "tool": str(row.get("tool", "")),
+        "segment_id": segment_id,
+    }
+    time_range = row.get("time_range")
+    if isinstance(time_range, Sequence) and not isinstance(time_range, (str, bytes)):
+        payload["time_range"] = list(time_range)
+    source_segment_id = str(row.get("source_segment_id") or segment_provenance.get("source_segment_id") or "")
+    if source_segment_id:
+        payload["source_segment_id"] = source_segment_id
+    raw_asr_ref = row.get("raw_asr_ref") or segment_provenance.get("raw_asr_ref", "")
+    if raw_asr_ref:
+        payload["raw_asr_ref"] = raw_asr_ref
+    visual_caption_source = str(
+        row.get("visual_caption_source") or segment_provenance.get("visual_caption_source") or ""
+    )
+    if visual_caption_source:
+        payload["visual_caption_source"] = visual_caption_source
+    if citation_provenance:
+        payload["citation_provenance"] = dict(citation_provenance)
+    return payload
 
 
 _SCENE_RISE_TERMS = {
@@ -2408,6 +2523,7 @@ def _scene_coverage_evidence_rows(
                     "confidence_signal": "indexed transcript coverage",
                     "limitations": "Derived from indexed scene captions/subtitles; verify fine visual details locally when needed.",
                     "artifact": scene_index.video_path,
+                    **_scene_segment_provenance(segment),
                 }
             )
     return [row for row in rows if _scene_row_is_useful_for_full_arc(row, seen_stage_by_option)]
@@ -2489,6 +2605,7 @@ def _scene_order_evidence_rows(
                 "confidence_signal": "indexed transcript order",
                 "limitations": "Derived from indexed scene captions/subtitles; verify fine visual details locally when needed.",
                 "artifact": scene_index.video_path,
+                **_scene_segment_provenance(segment),
             }
         )
     return rows
@@ -2514,6 +2631,8 @@ def _scene_segment_text(segment: VideoSegment) -> str:
     return " ".join(
         part
         for part in [
+            str(getattr(segment, "asr_summary", "")),
+            str(getattr(segment, "visual_caption", "")),
             str(getattr(segment, "low_fps_caption", "")),
             str(getattr(segment, "keyframe_path", "")) if not str(getattr(segment, "low_fps_caption", "")) else "",
         ]

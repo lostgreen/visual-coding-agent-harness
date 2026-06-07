@@ -6,14 +6,27 @@ import re
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 
-SlotName = Literal["task", "navigation", "hypothesis", "evidence", "feedback"]
+SlotName = Literal[
+    "task",
+    "trajectory",
+    "navigation",
+    "hypothesis",
+    "evidence",
+    "scene_index",
+    "feedback",
+    "budget",
+    "tooling",
+]
 
 DEFAULT_SLOT_RATIOS: Dict[SlotName, float] = {
-    "task": 0.10,
-    "navigation": 0.15,
-    "hypothesis": 0.15,
-    "evidence": 0.45,
-    "feedback": 0.15,
+    "task": 0.08,
+    "trajectory": 0.07,
+    "hypothesis": 0.12,
+    "evidence": 0.28,
+    "scene_index": 0.22,
+    "feedback": 0.10,
+    "budget": 0.05,
+    "tooling": 0.08,
 }
 
 
@@ -180,10 +193,14 @@ def default_context_budget_allocator(
 ) -> ContextBudgetAllocator:
     allocator = ContextBudgetAllocator(total_budget_tokens=total_budget_tokens, slot_ratios=slot_ratios)
     allocator.register_strategy("task", TaskSlotCompact())
+    allocator.register_strategy("trajectory", NavLatestWinsCompact())
     allocator.register_strategy("navigation", NavLatestWinsCompact())
     allocator.register_strategy("hypothesis", TaskSlotCompact())
     allocator.register_strategy("evidence", EvidenceTieredCompact())
+    allocator.register_strategy("scene_index", NavLatestWinsCompact())
     allocator.register_strategy("feedback", FeedbackLatestOnlyCompact())
+    allocator.register_strategy("budget", TaskSlotCompact())
+    allocator.register_strategy("tooling", TaskSlotCompact())
     return allocator
 
 

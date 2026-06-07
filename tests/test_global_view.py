@@ -5,6 +5,7 @@ from pathlib import Path
 from visual_coding_agent_harness.agents.distill import distill
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from tests.test_open_questions import MCQ_QUESTION, assert_no_mcq_leak
 
 
 class RecordingBackend(VisionLanguageBackend):
@@ -43,6 +44,23 @@ class GlobalViewToolTest(unittest.TestCase):
         self.assertEqual(result["raw_output"]["candidate_option_relations"], [])
         self.assertEqual(result["regions"][0]["start_sec"], 0.0)
         self.assertEqual(result["regions"][0]["end_sec"], 1896.0)
+
+    def test_global_gist_sanitizes_full_mcq_before_backend_generate(self):
+        from visual_coding_agent_harness.tools.global_view import build_global_view_registry
+
+        backend = RecordingBackend()
+        registry = build_global_view_registry(backend)
+
+        registry.execute(
+            "global_gist",
+            {"video_path": "/videos/long.mp4", "question": MCQ_QUESTION, "duration_sec": 1896.0},
+        )
+
+        request = backend.requests[0]
+        self.assertEqual(request.metadata["original_question"], MCQ_QUESTION)
+        self.assertIn("What is the video mainly about?", request.prompt)
+        self.assertIn("Do not choose an option.", request.prompt)
+        assert_no_mcq_leak(self, request.prompt)
 
     def test_global_gist_is_unassigned_sparse_answer_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:

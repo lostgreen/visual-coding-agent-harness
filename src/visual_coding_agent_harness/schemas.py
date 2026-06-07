@@ -70,6 +70,10 @@ class EvidenceRowV2:
     legacy_worker_vote: bool = False
     limitations: str = ""
     artifact: str = ""
+    source_segment_id: str = ""
+    raw_asr_ref: Any = ""
+    visual_caption_source: str = ""
+    citation_provenance: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
