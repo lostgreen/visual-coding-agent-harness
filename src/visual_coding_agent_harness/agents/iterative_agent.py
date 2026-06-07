@@ -1188,7 +1188,10 @@ class IterativeVisualAgent:
         if (
             active_skill is not None
             and active_skill.name == "timeline_ordering"
-            and tool_name == "caption_segments"
+            and (
+                tool_name == "caption_segments"
+                or (tool_name == "caption_segment" and args.get("segment_ids") and not args.get("segment_id"))
+            )
             and self._has_tool("caption_segment")
         ):
             segment_ids = [

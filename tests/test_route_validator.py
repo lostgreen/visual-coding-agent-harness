@@ -525,6 +525,59 @@ def test_timeline_skill_repairs_batch_caption_segments_to_single_caption_segment
     assert normalized[0]["tool"] == "caption_segment"
     assert normalized[0]["args"]["segment_id"] == "seg_0001"
     assert normalized[0]["args"]["question"] == "Find ordered entities? Do not choose an option. timeline_ordering"
+    assert "segment_ids" not in normalized[0]["args"]
+
+
+def test_timeline_skill_repairs_caption_segment_with_segment_ids_argument(tmp_path: Path):
+    backend = StaticBackend("{}")
+    registry = ToolRegistry()
+
+    @tool(name="caption_segment", description="Caption one segment.")
+    def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str = "", **kwargs):
+        return {
+            "claim": f"{segment_id} caption for {question}",
+            "confidence": 0.75,
+            "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+        }
+
+    registry.register(caption_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_caption_segment_ids_repair")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=24.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0),
+                VideoSegment(segment_id="seg_0002", start_sec=12.0, end_sec=24.0),
+            ],
+        ),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [
+            {
+                "tool": "caption_segment",
+                "args": {
+                    "segment_ids": ["seg_0001", "seg_0002"],
+                    "question": "Find ordered entities.",
+                },
+            }
+        ],
+        question="Which order is shown?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("timeline_ordering"),
+    )
+
+    assert normalized[0]["tool"] == "caption_segment"
+    assert normalized[0]["args"]["segment_id"] == "seg_0001"
+    assert "segment_ids" not in normalized[0]["args"]
 
 
 def test_free_explore_allows_all(tmp_path: Path):
