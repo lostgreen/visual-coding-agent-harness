@@ -1040,7 +1040,7 @@ class IterativeVisualAgent:
                     resolved={"tool": tool_name, "args": args},
                 )
             skill_name_reason = _skill_name_as_tool_reason(tool_name)
-            if skill_name_reason and not self.budget.free_exploration:
+            if skill_name_reason:
                 blocked_route_violation = True
                 next_action = (
                     f"{tool_name} is a skill name, not an executable tool. Put it in the top-level "
@@ -2697,7 +2697,7 @@ def _has_minimum_non_navigation_visual_citations(
     cited = {str(citation) for citation in citations if str(citation)}
     if not cited:
         return False
-    matched_ids: set[str] = set()
+    matched_observation_ids: set[str] = set()
     table = workspace.evidence_table_v2(
         question=question,
         options=extract_candidate_options(question),
@@ -2711,8 +2711,10 @@ def _has_minimum_non_navigation_visual_citations(
             continue
         tool_name = str(row.get("tool", ""))
         if tool_name in workspace.ANSWER_EVIDENCE_TOOLS and tool_name not in workspace.NAVIGATION_TOOLS:
-            matched_ids.update(row_id for row_id in row_ids if row_id and row_id in cited)
-            if len(matched_ids) >= minimum:
+            canonical_id = str(row.get("obs_id", "") or row.get("evidence_id", ""))
+            if canonical_id:
+                matched_observation_ids.add(canonical_id)
+            if len(matched_observation_ids) >= minimum:
                 return True
     return False
 

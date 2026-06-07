@@ -1812,6 +1812,67 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_final_after_answer_agent_abstain", trace)
 
+    def test_planner_final_after_abstain_requires_distinct_visual_citations(self):
+        class OneObservationCitationBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "final", "skill": "main_idea@v1", '
+                            '"answer": "D. the empire rise and fall", '
+                            '"citations": ["obs_0001", "ev_same_obs"], "confidence": 0.71}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "confidence": 0.0}')
+                raise AssertionError(request.task)
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="planner_final_one_distinct_citation")
+            workspace.write_observation(
+                tool_name="vision_read",
+                claim="The video shows the empire's rise and fall as the main arc.",
+                confidence=0.82,
+                regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
+                raw_output={"grounding_quality": "visually_confirmed", "supported_option": "D"},
+            )
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": "ev_same_obs",
+                    "obs_id": "obs_0001",
+                    "tool": "vision_read",
+                    "supported_option": "D",
+                    "claim": "The same observation supports option D.",
+                    "confidence": 0.82,
+                    "grounding_quality": "visually_confirmed",
+                }
+            )
+            agent = IterativeVisualAgent(
+                backend=OneObservationCitationBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+            agent._try_answer_agent_final = lambda *args, **kwargs: None
+
+            result = agent.run(
+                question=(
+                    "What is the video mainly about?\n"
+                    "A. a local battle\n"
+                    "B. a narrow map\n"
+                    "C. a single treaty\n"
+                    "D. the empire rise and fall"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertNotEqual(result.status, "final")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("planner_final_requires_answer_agent", trace)
+
     def test_iterative_agent_indexes_scene_coverage_for_main_idea_mcq(self):
         class SceneCoverageBackend(VisionLanguageBackend):
             def __init__(self):

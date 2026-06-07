@@ -497,6 +497,33 @@ def test_skill_name_tool_step_is_dropped_without_route_violation(tmp_path: Path)
     assert "route_violation" not in trace
 
 
+def test_skill_name_tool_step_is_dropped_in_free_exploration(tmp_path: Path):
+    backend = StaticBackend("{}")
+    workspace = EvidenceWorkspace.create(tmp_path, "skill_name_tool_free_exploration")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=ToolRegistry(),
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, free_exploration=True),
+    )
+
+    normalized = agent._normalize_program(
+        [{"tool": "main_idea@v1", "args": {}}],
+        question="What is the video mainly about?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("main_idea"),
+    )
+
+    assert normalized == []
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "skill_name_as_tool" in trace
+    assert "route_violation" not in trace
+
+
 def test_planner_selected_skill_overrides_fallback_route_for_tool_policy(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(
