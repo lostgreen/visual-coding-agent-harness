@@ -192,6 +192,49 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertIn("Do not choose an option.", request.prompt)
         assert_no_mcq_leak(self, request.prompt)
 
+    def test_caption_segments_extracts_physical_clips_when_enabled(self):
+        backend = CaptionQARecordingBackend()
+        store = VideoMapStore(
+            VideoMap(
+                video_path="/videos/demo.mp4",
+                duration_sec=80.0,
+                segments=[
+                    VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=40.0),
+                    VideoMapSegment(segment_id="seg_0002", start_sec=40.0, end_sec=80.0),
+                ],
+            )
+        )
+        extracted = []
+
+        def fake_clip_extractor(video_path, output_path, start_sec, end_sec):
+            extracted.append((video_path, output_path, start_sec, end_sec))
+            Path(output_path).write_text("fake clip", encoding="utf-8")
+            return output_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="caption_segments_clip")
+            registry = build_video_enrichment_registry(
+                video_map_store=store,
+                backend=backend,
+                workspace=workspace,
+                extract_clips=True,
+                clip_extractor=fake_clip_extractor,
+            )
+
+            result = registry.execute("caption_segments", {"segment_ids": ["seg_0002"], "question": MCQ_QUESTION})
+
+        request = backend.requests[0]
+        self.assertEqual(len(extracted), 1)
+        self.assertEqual(extracted[0][0], "/videos/demo.mp4")
+        self.assertEqual((extracted[0][2], extracted[0][3]), (40.0, 80.0))
+        self.assertNotEqual(request.media_path, "/videos/demo.mp4")
+        self.assertEqual(request.media_path, extracted[0][1])
+        self.assertEqual(request.metadata["source_video_path"], "/videos/demo.mp4")
+        self.assertEqual(request.metadata["clip_path"], extracted[0][1])
+        self.assertEqual(result["input_artifacts"], [extracted[0][1]])
+        self.assertEqual(result["regions"][0]["clip_path"], extracted[0][1])
+        assert_no_mcq_leak(self, request.prompt)
+
     def test_segment_inspector_returns_one_distilled_observation(self):
         backend = CaptionQARecordingBackend()
         registry = build_segment_inspector_registry(backend)

@@ -32,7 +32,15 @@ def build_video_exploration_registry(
     registry.extend(build_video_navigation_registry(video_map_store, workspace=workspace))
     registry.extend(build_query_context_registry(video_map=video_map_store, backend=backend))
     registry.extend(build_global_view_registry(backend))
-    registry.extend(build_video_enrichment_registry(video_map_store=video_map_store, backend=backend))
+    registry.extend(
+        build_video_enrichment_registry(
+            video_map_store=video_map_store,
+            backend=backend,
+            workspace=workspace,
+            extract_clips=extract_clips,
+            clip_extractor=clip_extractor,
+        )
+    )
     registry.extend(build_timeline_registry(workspace=workspace))
     registry.extend(build_workspace_primitives_registry(workspace=workspace))
     registry.extend(build_verification_registry(workspace=workspace))

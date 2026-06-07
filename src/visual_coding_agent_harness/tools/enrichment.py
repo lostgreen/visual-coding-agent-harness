@@ -8,9 +8,18 @@ from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..video_map import VideoMapStore
+from ..workspace import EvidenceWorkspace
+from .segments import ClipExtractor, _clip_output_path, _extract_clip_ffmpeg
 
 
-def build_video_enrichment_registry(*, video_map_store: VideoMapStore, backend: VisionLanguageBackend) -> ToolRegistry:
+def build_video_enrichment_registry(
+    *,
+    video_map_store: VideoMapStore,
+    backend: VisionLanguageBackend,
+    workspace: EvidenceWorkspace | None = None,
+    extract_clips: bool = False,
+    clip_extractor: ClipExtractor | None = None,
+) -> ToolRegistry:
     registry = ToolRegistry()
 
     @tool(name="caption_segments", description="Caption selected VideoMap segments and write captions back into the map.")
@@ -26,6 +35,8 @@ def build_video_enrichment_registry(*, video_map_store: VideoMapStore, backend: 
         prompt_question = exploration_question(question)
         regions = []
         for segment in selected_segments:
+            media_path = video_map_store.current.video_path
+            input_artifact = f"{media_path}#t={float(segment.start_sec):.3f},{float(segment.end_sec):.3f}"
             metadata = {
                 "segment_id": segment.segment_id,
                 "start_sec": segment.start_sec,
@@ -38,6 +49,25 @@ def build_video_enrichment_registry(*, video_map_store: VideoMapStore, backend: 
                 metadata["original_question"] = question
             if fps > 0:
                 metadata["fps"] = float(fps)
+            if extract_clips:
+                if workspace is None:
+                    raise ValueError("extract_clips=True requires an EvidenceWorkspace")
+                output_path = _clip_output_path(
+                    workspace=workspace,
+                    segment_id=segment.segment_id,
+                    start_sec=float(segment.start_sec),
+                    end_sec=float(segment.end_sec),
+                )
+                extractor = clip_extractor or _extract_clip_ffmpeg
+                media_path = extractor(
+                    video_map_store.current.video_path,
+                    str(output_path),
+                    float(segment.start_sec),
+                    float(segment.end_sec),
+                )
+                input_artifact = media_path
+                metadata["source_video_path"] = video_map_store.current.video_path
+                metadata["clip_path"] = media_path
             response = backend.generate(
                 BackendRequest(
                     task="caption_segment",
@@ -47,7 +77,7 @@ def build_video_enrichment_registry(*, video_map_store: VideoMapStore, backend: 
                         end_sec=segment.end_sec,
                         question=prompt_question,
                     ),
-                    media_path=video_map_store.current.video_path,
+                    media_path=media_path,
                     media_type="video",
                     max_new_tokens=192,
                     metadata=metadata,
@@ -63,6 +93,8 @@ def build_video_enrichment_registry(*, video_map_store: VideoMapStore, backend: 
                     "low_fps_caption": updated.low_fps_caption,
                     "nframes": int(nframes),
                     "max_pixels": int(max_pixels),
+                    "input_artifact": input_artifact,
+                    "clip_path": metadata.get("clip_path", ""),
                 }
             )
 
@@ -70,7 +102,7 @@ def build_video_enrichment_registry(*, video_map_store: VideoMapStore, backend: 
         return {
             "claim": f"Captioned {count} segment{'s' if count != 1 else ''} and updated VideoMap low_fps_caption.",
             "confidence": 0.7 if count else 0.0,
-            "input_artifacts": [video_map_store.current.video_path],
+            "input_artifacts": [str(region["input_artifact"]) for region in regions],
             "regions": regions,
             "limitations": "VLM-generated coarse captions; use focused QA or OCR/ASR tools for precise claims.",
         }
