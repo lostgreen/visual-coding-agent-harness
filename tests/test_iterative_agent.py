@@ -1736,6 +1736,82 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("planner_final_answer_agent_takeover", trace)
             self.assertIn("planner_final_requires_answer_agent", trace)
 
+    def test_planner_final_is_used_when_answer_agent_abstains_but_visual_citations_are_valid(self):
+        class AbstainingAnswerBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "final", "skill": "main_idea@v1", '
+                            '"answer": "D. the empire rise and fall", '
+                            '"citations": ["obs_0001", "obs_0002"], "confidence": 0.71}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "need_more_evidence", "missing_evidence": ["more explicit theme"], '
+                            '"citations": [], "confidence": 0.0}'
+                        )
+                    )
+                raise AssertionError(request.task)
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="planner_final_after_answer_abstain")
+            workspace.write_observation(
+                tool_name="vision_read",
+                claim="The video shows the empire's rise and fall as the main arc.",
+                confidence=0.82,
+                regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
+                raw_output={"grounding_quality": "visually_confirmed", "supported_option": "D"},
+            )
+            workspace.write_observation(
+                tool_name="vision_read",
+                claim="The segment connects the empire's collapse to a broad historical narrative.",
+                confidence=0.8,
+                regions=[{"segment_id": "seg_0001", "start_sec": 12.0, "end_sec": 24.0}],
+                raw_output={"grounding_quality": "visually_confirmed", "supported_option": "D"},
+            )
+            agent = IterativeVisualAgent(
+                backend=AbstainingAnswerBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+            original_try_answer_agent_final = agent._try_answer_agent_final
+            takeover_sources = []
+
+            def abstain_from_takeover(*args, **kwargs):
+                takeover_sources.append(str(kwargs.get("source", "")))
+                return None
+
+            agent._try_answer_agent_final = abstain_from_takeover
+
+            result = agent.run(
+                question=(
+                    "What is the video mainly about?\n"
+                    "A. a local battle\n"
+                    "B. a narrow map\n"
+                    "C. a single treaty\n"
+                    "D. the empire rise and fall"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("D"))
+            self.assertEqual(takeover_sources, ["planner_final_takeover"])
+            agent._try_answer_agent_final = original_try_answer_agent_final
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("planner_final_after_answer_agent_abstain", trace)
+
     def test_iterative_agent_indexes_scene_coverage_for_main_idea_mcq(self):
         class SceneCoverageBackend(VisionLanguageBackend):
             def __init__(self):

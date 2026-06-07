@@ -7,6 +7,7 @@ serves both the main agent planner call and VLM-backed tools.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Mapping, Optional
 
 from .base import BackendRequest, BackendResponse
@@ -54,7 +55,7 @@ class QwenVLBackend:
             tokenize=False,
             add_generation_prompt=True,
         )
-        image_inputs, video_inputs = _process_vision_info(messages)
+        image_inputs, video_inputs = _process_vision_info_with_nframes_clamp(messages)
         inputs = self.processor(
             text=[text],
             images=image_inputs,
@@ -127,6 +128,45 @@ def _message_content(request: BackendRequest) -> list[Mapping[str, Any]]:
             content.append({"type": "image", "image": request.media_path})
     content.append({"type": "text", "text": request.prompt})
     return content
+
+
+def _process_vision_info_with_nframes_clamp(messages: list[Mapping[str, Any]]) -> tuple[Any, Any]:
+    try:
+        return _process_vision_info(messages)
+    except ValueError as exc:
+        interval = _nframes_interval_from_error(str(exc))
+        if interval is None or not _clamp_video_nframes(messages, interval=interval):
+            raise
+        return _process_vision_info(messages)
+
+
+def _nframes_interval_from_error(message: str) -> tuple[int, int] | None:
+    match = re.search(r"nframes should in interval \[(\d+),\s*(\d+)\]", str(message))
+    if not match:
+        return None
+    low = int(match.group(1))
+    high = int(match.group(2))
+    if low > high:
+        return None
+    return low, high
+
+
+def _clamp_video_nframes(messages: list[Mapping[str, Any]], *, interval: tuple[int, int]) -> bool:
+    low, high = interval
+    changed = False
+    for message in messages:
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "video" or "nframes" not in item:
+                continue
+            original = int(item["nframes"])
+            clamped = max(low, min(high, original))
+            if clamped != original:
+                item["nframes"] = clamped
+                changed = True
+    return changed
 
 
 def _process_vision_info(messages: list[Mapping[str, Any]]) -> tuple[Any, Any]:

@@ -350,6 +350,7 @@ class IterativeVisualAgent:
 
             if status == "final":
                 final_citations = [str(item) for item in action.get("citations", [])]
+                final_source = "planner_final"
                 if extract_candidate_options(raw_question):
                     self.workspace.write_trace_event(
                         "planner_final_answer_agent_takeover",
@@ -369,7 +370,23 @@ class IterativeVisualAgent:
                     )
                     if takeover_result is not None:
                         return takeover_result
-                    blocked_reason = "planner_final_requires_answer_agent"
+                    if not _has_minimum_non_navigation_visual_citations(
+                        workspace=self.workspace,
+                        question=raw_question,
+                        citations=final_citations,
+                        minimum=2,
+                    ):
+                        blocked_reason = "planner_final_requires_answer_agent"
+                    else:
+                        blocked_reason = _blocked_planner_final_reason(
+                            question=raw_question,
+                            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                            workspace=self.workspace,
+                            answer=str(action.get("answer", "")),
+                            citations=final_citations,
+                            planner_skill=planner_skill,
+                        )
+                    final_source = "planner_final_after_answer_agent_abstain"
                 else:
                     blocked_reason = _blocked_planner_final_reason(
                         question=raw_question,
@@ -414,7 +431,7 @@ class IterativeVisualAgent:
                         round_number=round_number,
                         answer=str(action.get("answer", "")),
                         citations=final_citations,
-                        source="planner_final",
+                        source=final_source,
                     )
                     return IterativeRunResult(
                         question=raw_question,
@@ -1022,6 +1039,30 @@ class IterativeVisualAgent:
                     original={"tool": original_tool_name, "args": original_args},
                     resolved={"tool": tool_name, "args": args},
                 )
+            skill_name_reason = _skill_name_as_tool_reason(tool_name)
+            if skill_name_reason and not self.budget.free_exploration:
+                blocked_route_violation = True
+                next_action = (
+                    f"{tool_name} is a skill name, not an executable tool. Put it in the top-level "
+                    "`skill` field and choose a concrete allowed action from the active skill."
+                )
+                self.workspace.write_trace_event(
+                    "exploration_policy_adjustment",
+                    {
+                        "reason": "skill_name_as_tool",
+                        "skipped_tool": tool_name,
+                        "skill": active_skill.name if active_skill is not None else skill_name_reason,
+                        "next_action": next_action,
+                    },
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=tool_name,
+                    reason="skill_name_as_tool",
+                    original={"tool": tool_name, "args": args},
+                    next_action=next_action,
+                )
+                continue
             exhausted_tools = _exhausted_one_shot_tools(self.workspace) | frozenset(pending_one_shot_tools)
             if tool_name in exhausted_tools and not self.budget.free_exploration:
                 blocked_route_violation = True
@@ -2646,6 +2687,36 @@ def _blocked_planner_final_reason(
     )
 
 
+def _has_minimum_non_navigation_visual_citations(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    citations: Sequence[str],
+    minimum: int,
+) -> bool:
+    cited = {str(citation) for citation in citations if str(citation)}
+    if not cited:
+        return False
+    matched_ids: set[str] = set()
+    table = workspace.evidence_table_v2(
+        question=question,
+        options=extract_candidate_options(question),
+        include_legacy_worker_votes=True,
+    )
+    for row in table.get("rows", []):
+        if not isinstance(row, Mapping):
+            continue
+        row_ids = {str(row.get("obs_id", "")), str(row.get("evidence_id", ""))}
+        if not (row_ids & cited):
+            continue
+        tool_name = str(row.get("tool", ""))
+        if tool_name in workspace.ANSWER_EVIDENCE_TOOLS and tool_name not in workspace.NAVIGATION_TOOLS:
+            matched_ids.update(row_id for row_id in row_ids if row_id and row_id in cited)
+            if len(matched_ids) >= minimum:
+                return True
+    return False
+
+
 def _main_idea_indexed_coverage_supports_answer(
     *,
     workspace: EvidenceWorkspace,
@@ -3666,6 +3737,17 @@ def _tool_budget_limit(*, budget: AgentBudget, tool_class: str) -> int:
 
 def _tool_denied_by_skill(*, tool_name: str, active_skill: SkillSpec | None, free_exploration: bool) -> bool:
     return active_skill is not None and not free_exploration and tool_name not in active_skill.allowed_actions
+
+
+def _skill_name_as_tool_reason(tool_name: str) -> str:
+    normalized = str(tool_name).strip()
+    if not normalized:
+        return ""
+    skill_name = normalized.split("@", 1)[0]
+    for skill in builtin_skill_registry().list():
+        if skill.name == skill_name:
+            return skill.name
+    return ""
 
 
 def _record_skill_deny_list_violation(

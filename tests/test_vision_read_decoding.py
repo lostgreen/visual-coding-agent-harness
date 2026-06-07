@@ -118,3 +118,37 @@ def test_qwen_vl_generate_forwards_decoding_metadata_without_temperature_none(mo
     assert model.generate_kwargs["no_repeat_ngram_size"] == 6
     assert model.generate_kwargs["top_p"] == 0.9
     assert model.generate_kwargs["top_k"] == 50
+
+
+def test_qwen_vl_generate_clamps_nframes_to_backend_interval(monkeypatch):
+    model = FakeModel()
+    processor = FakeProcessor()
+    backend = QwenVLBackend(model=model, processor=processor)
+    seen_nframes = []
+
+    def process_with_dynamic_cap(messages):
+        video_item = messages[0]["content"][0]
+        seen_nframes.append(video_item.get("nframes"))
+        if video_item.get("nframes") == 64:
+            raise ValueError("nframes should in interval [2, 7], but got 64.")
+        return [], ["video-input"]
+
+    monkeypatch.setattr(
+        "visual_coding_agent_harness.backends.qwen_vl._process_vision_info",
+        process_with_dynamic_cap,
+    )
+
+    response = backend.generate(
+        BackendRequest(
+            task="vision_read",
+            prompt="Read visible text.",
+            media_path="/videos/demo.mp4",
+            media_type="video",
+            max_new_tokens=384,
+            metadata={"nframes": 64, "max_pixels": 151200},
+        )
+    )
+
+    assert response.text == "decoded answer"
+    assert seen_nframes == [64, 7]
+    assert processor.messages[0]["content"][0]["nframes"] == 7
