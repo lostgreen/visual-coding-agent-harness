@@ -1109,6 +1109,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the automatic gist_global shortcut so debugging runs capture planner-loop IO.",
     )
+    parser.add_argument(
+        "--disable-mcq-rewrite",
+        action="store_true",
+        help="Disable text-model MCQ-to-open-question rewriting for planner/tool exploration.",
+    )
     parser.add_argument("--enable-query-context", dest="enable_query_context", action="store_true", default=None)
     parser.add_argument("--disable-query-context", dest="enable_query_context", action="store_false")
     parser.add_argument("--enable-followup", dest="enable_followup", action="store_true", default=None)
@@ -1163,10 +1168,13 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             expensive_tool_budget=expensive_tool_budget,
             verifier_tool_budget=args.verifier_tool_budget,
             disable_global_gist_route=args.disable_global_gist_route,
+            rewrite_mcq_for_exploration=not args.disable_mcq_rewrite,
         )
     )
     if args.disable_global_gist_route and budget.free_exploration:
         budget = replace(budget, disable_global_gist_route=True)
+    if budget.free_exploration:
+        budget = replace(budget, rewrite_mcq_for_exploration=not args.disable_mcq_rewrite)
     if args.followup_budget is not None:
         budget = replace(budget, cheap_tool_budget=max(0, int(args.followup_budget)))
     if args.enable_followup is False:
@@ -1179,6 +1187,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         "enable_context_budget": args.enable_context_budget,
         "enable_map_reflux": args.enable_map_reflux,
         "enable_evidence_staging": args.enable_evidence_staging,
+        "enable_mcq_rewrite": not args.disable_mcq_rewrite,
         "contract_nframes": args.contract_nframes,
         "followup_budget": args.followup_budget,
     }

@@ -11,6 +11,7 @@ from .base import BackendRequest, BackendResponse
 TEXT_TASKS = {
     "replan",
     "answer_from_evidence",
+    "rewrite_exploration_question",
     "verify_from_evidence",
     "summarize_subtitle_segment",
 }

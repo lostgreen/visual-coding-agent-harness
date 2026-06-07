@@ -1,6 +1,7 @@
 import unittest
 
-from visual_coding_agent_harness.agents.open_questions import exploration_question
+from visual_coding_agent_harness.agents.open_questions import exploration_question, rewrite_exploration_question_with_model
+from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 
 
 MCQ_QUESTION = (
@@ -49,6 +50,44 @@ class OpenQuestionsTest(unittest.TestCase):
         self.assertIn("Inspect the opening montage.", question)
         self.assertIn("Do not choose an option.", question)
         assert_no_mcq_leak(self, question)
+
+    def test_model_rewrite_returns_option_blind_open_exploration_question(self):
+        class RewriteBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                return BackendResponse(
+                    text=(
+                        '{"exploration_question":"Describe the overall topic and narrative arc of the video. '
+                        'Identify how the Austro-Hungarian Empire is covered, including time span, major stages, '
+                        'and whether it covers origin, growth, stability, decline, collapse, causes, or consequences.",'
+                        '"focus_points":["overall topic","narrative arc"],'
+                        '"target_entities":["Austro-Hungarian Empire"]}'
+                    )
+                )
+
+        backend = RewriteBackend()
+        rewrite = rewrite_exploration_question_with_model(backend, question=MCQ_QUESTION, route_hint="gist_global")
+
+        self.assertTrue(rewrite.used_model)
+        self.assertEqual(backend.requests[0].task, "rewrite_exploration_question")
+        self.assertIn("Austro-Hungarian Empire", rewrite.exploration_question)
+        assert_no_mcq_leak(self, rewrite.exploration_question)
+
+    def test_model_rewrite_falls_back_when_output_copies_option_surface(self):
+        class LeakyBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                return BackendResponse(
+                    text='{"exploration_question":"Compare option B. Why the Austro-Hungarian Empire was divided."}'
+                )
+
+        rewrite = rewrite_exploration_question_with_model(LeakyBackend(), question=MCQ_QUESTION)
+
+        self.assertFalse(rewrite.used_model)
+        self.assertEqual(rewrite.fallback_reason, "rewrite_option_leak")
+        assert_no_mcq_leak(self, rewrite.exploration_question)
 
 
 if __name__ == "__main__":

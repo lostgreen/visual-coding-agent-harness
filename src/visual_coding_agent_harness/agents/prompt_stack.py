@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 
 from ..video_index import SceneIndex
 from .context_budget import ContextBudgetAllocator, ContextBudgetReport, SlotName
-from .question_policy import select_question_playbook
+from .question_policy import QuestionPlaybook, select_question_playbook
 from .skills.specs import skill_catalog_prompt
 
 
@@ -23,6 +23,53 @@ class PromptBlock:
 
 def render_prompt_blocks(blocks: Sequence[PromptBlock]) -> str:
     return "\n".join(block.render() for block in blocks).strip()
+
+
+def _route_playbook_body(playbook: QuestionPlaybook, *, option_blind: bool = False) -> str:
+    if not option_blind:
+        return playbook.to_prompt()
+    if playbook.route == "gist_global":
+        return QuestionPlaybook(
+            name=playbook.name,
+            route=playbook.route,
+            instructions=[
+                "Start with global_gist to get a sparse whole-video topic and coverage hint.",
+                "Use local inspection or indexed transcript evidence to verify full-video coverage.",
+                "Collect factual coverage across the full narrative arc before handing off to AnswerAgent.",
+            ],
+            sufficiency_rules=[
+                "A global_gist observation is a topic hint, not final support.",
+                "Record whether cited facts cover the main entity, time span, and major narrative stages.",
+            ],
+        ).to_prompt()
+    if playbook.route == "temporal_order":
+        return QuestionPlaybook(
+            name=playbook.name,
+            route=playbook.route,
+            instructions=[
+                "Use coarse captions to locate target event/entity segments before focused timestamp reads.",
+                "Inspect the relevant earlier and later windows when order matters.",
+                "Local workers should report facts and presentation order only.",
+            ],
+            sufficiency_rules=[
+                "Citations must include timestamped visual observations for the ordered events.",
+                "Evidence must not conflict with the claimed temporal relation.",
+                "Record the observed order with segment or timestamp evidence before final handoff.",
+            ],
+        ).to_prompt()
+    return QuestionPlaybook(
+        name=playbook.name,
+        route=playbook.route,
+        instructions=[
+            "Use query-conditioned navigation to localize likely evidence.",
+            "Delegate visual reading to vision_read or inspect_segment once a candidate segment is localized.",
+            "Local workers should report facts only.",
+        ],
+        sufficiency_rules=[
+            "Final handoff needs cited non-navigation visual evidence.",
+            "State uncertainty when evidence is incomplete or ambiguous.",
+        ],
+    ).to_prompt()
 
 
 def build_replanning_prompt(
@@ -84,6 +131,7 @@ def compose_replanning_prompt_slots(
     evidence_status_summary: Mapping[str, Any] | None = None,
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
+    option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
     task_blocks = [
         PromptBlock(
             name="base_identity",
@@ -96,7 +144,11 @@ def compose_replanning_prompt_slots(
                 "Do not include step-by-step private reasoning in the JSON response."
             ),
         ),
-        PromptBlock(name="route_playbook", title="Route Playbook", body=playbook.to_prompt()),
+        PromptBlock(
+            name="route_playbook",
+            title="Route Playbook",
+            body=_route_playbook_body(playbook, option_blind=option_blind),
+        ),
         PromptBlock(
             name="skill_catalog",
             title="Skill Catalog",
@@ -110,8 +162,12 @@ def compose_replanning_prompt_slots(
         ),
     ]
     tooling_blocks = [
-        PromptBlock(name="tool_schema", title="Tool Schema", body=_tool_schema_block()),
-        PromptBlock(name="final_gate", title="Final Gate", body=_final_gate_block(final_round_reserved=final_round_reserved)),
+        PromptBlock(name="tool_schema", title="Tool Schema", body=_tool_schema_block(option_blind=option_blind)),
+        PromptBlock(
+            name="final_gate",
+            title="Final Gate",
+            body=_final_gate_block(final_round_reserved=final_round_reserved, option_blind=option_blind),
+        ),
         PromptBlock(
             name="response_contract",
             title="Response Contract",
@@ -173,6 +229,7 @@ def compose_replanning_prompt_blocks(
     evidence_status_summary: Mapping[str, Any] | None = None,
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
+    option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
     blocks = [
         PromptBlock(
             name="base_identity",
@@ -188,7 +245,7 @@ def compose_replanning_prompt_blocks(
         PromptBlock(
             name="route_playbook",
             title="Route Playbook",
-            body=playbook.to_prompt(),
+            body=_route_playbook_body(playbook, option_blind=option_blind),
         ),
         PromptBlock(
             name="skill_catalog",
@@ -275,12 +332,12 @@ def compose_replanning_prompt_blocks(
             PromptBlock(
                 name="tool_schema",
                 title="Tool Schema",
-                body=_tool_schema_block(),
+                body=_tool_schema_block(option_blind=option_blind),
             ),
             PromptBlock(
                 name="final_gate",
                 title="Final Gate",
-                body=_final_gate_block(final_round_reserved=final_round_reserved),
+                body=_final_gate_block(final_round_reserved=final_round_reserved, option_blind=option_blind),
             ),
             PromptBlock(
                 name="response_contract",
@@ -296,7 +353,17 @@ def compose_replanning_prompt_blocks(
     return blocks
 
 
-def _tool_schema_block() -> str:
+def _tool_schema_block(*, option_blind: bool = False) -> str:
+    inspect_schema = (
+        "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
+        if option_blind
+        else "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
+    )
+    verifier_schema = (
+        "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', min_score: float = 0.6, required_citations: list = [])\n"
+        if option_blind
+        else "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
+    )
     return (
         "Available tools:\n"
         "- ground_question(query: str, top_k: int = 5, modalities: list = [])\n"
@@ -309,7 +376,7 @@ def _tool_schema_block() -> str:
         "- caption_segments(segment_ids: list = [], question: str = 'Create a concise search caption for this segment.', nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0, max_segments: int = 3)\n"
         "- ingest_segment_metadata(segment_id: str, low_fps_caption: str = '', asr_text: str = '', ocr_text: str = '', entities: list = [])\n"
         "- summarize_ledger_evidence(max_claims: int = 5)\n"
-        "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
+        f"{verifier_schema}"
         "- view_observation(obs_id: str, line_range: tuple | None = None)\n"
         "- grep_evidence(pattern: str, in_field: str = 'claim')\n"
         "- query_evidence_table(filter: dict)\n"
@@ -317,7 +384,7 @@ def _tool_schema_block() -> str:
         "- read_hypothesis()\n"
         "- update_hypothesis_slot(slot_name: str, status: str, evidence_obs_id: str = '')\n"
         "- vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = '', nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
-        "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
+        f"{inspect_schema}"
         "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
         "- qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
     )
@@ -601,11 +668,22 @@ def _evidence_only_snapshot_block(
     return f"{status_block}Evidence ledger:\n{ledger_text}"
 
 
-def _final_gate_block(*, final_round_reserved: bool) -> str:
+def _final_gate_block(*, final_round_reserved: bool, option_blind: bool = False) -> str:
     final_round_line = (
         "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
         if final_round_reserved
         else ""
+    )
+    option_blind_lines = (
+        "- MCQ choices were rewritten into an option-blind exploration task; do not pass candidate choices or option text to local tools.\n"
+        "- Local workers must answer only the rewritten factual question; the AnswerAgent will compare facts to the original choices later.\n"
+        if option_blind
+        else (
+            "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.\n"
+            "- Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.\n"
+            '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.\n'
+            "- Do not copy quoted option text into JSON string values; refer to option letters instead.\n"
+        )
     )
     return (
         "- Use video_ls first for open-ended description tasks or when the relevant segment is unclear.\n"
@@ -614,11 +692,8 @@ def _final_gate_block(*, final_round_reserved: bool) -> str:
         "- Use navigation output as a map, then delegate localized visual reading to vision_read or inspect_segment on one candidate segment.\n"
         "- Use zoom when a coarse segment is relevant but too long; then call vision_read or inspect_segment with the returned child segment_id and start_sec/end_sec.\n"
         "- Do not spend every round on navigation-only tools; gather visual evidence before finalizing.\n"
-        "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.\n"
-        "- Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.\n"
+        f"{option_blind_lines}"
         "- Main-idea answers must compare whole-video coverage; partial ending-only evidence cannot beat a full rise/stability/fall arc.\n"
-        '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.\n'
-        "- Do not copy quoted option text into JSON string values; refer to option letters instead.\n"
         "- Final answers require at least one non-navigation visual observation from vision_read, inspect_segment, caption_segment, or qa_segment; navigation-only evidence is insufficient.\n"
         "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.\n"
         "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.\n"

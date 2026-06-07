@@ -2,7 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
+from visual_coding_agent_harness.agents.iterative_agent import (
+    AgentBudget,
+    IterativeVisualAgent,
+    _sanitize_option_blind_feedback,
+)
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
@@ -2814,6 +2818,146 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "replan", "answer_from_evidence"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn('"source": "all_segments_inspected"', trace)
+
+    def test_model_rewritten_mcq_is_used_for_planner_and_tools_only(self):
+        raw_question = (
+            "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+            "Question: What's the main idea of the video?\n"
+            "Options:\n"
+            "A. The fall of Rome\n"
+            "B. Why the Austro-Hungarian Empire was divided\n"
+            "C. A battle timeline\n"
+            "D. How the Austro-Hungarian Empire rises and falls.\n"
+            "Select option A, B, C, or D."
+        )
+        raw_option_texts = (
+            "The fall of Rome",
+            "Why the Austro-Hungarian Empire was divided",
+            "A battle timeline",
+            "How the Austro-Hungarian Empire rises and falls.",
+        )
+        rewritten = (
+            "Describe the overall topic and narrative arc of the video. Identify how the Austro-Hungarian Empire "
+            "is covered, including time span, "
+            "major stages, and whether it covers origin, growth, stability, decline, collapse, causes, or consequences."
+        )
+        testcase = self
+
+        class RewriteFlowBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "rewrite_exploration_question":
+                    testcase.assertIn("A. The fall of Rome", request.prompt)
+                    return BackendResponse(
+                        text=(
+                            '{"exploration_question":"'
+                            + rewritten
+                            + '","focus_points":["narrative arc"],"target_entities":["Austro-Hungarian Empire"]}'
+                        )
+                    )
+                if request.task == "replan":
+                    testcase.assertIn(rewritten, request.prompt)
+                    testcase.assertNotIn("Options:", request.prompt)
+                    for label in ("A.", "B.", "C.", "D."):
+                        testcase.assertNotIn(label, request.prompt)
+                    for option_text in raw_option_texts:
+                        testcase.assertNotIn(option_text, request.prompt)
+                    testcase.assertNotIn("candidate_options", request.prompt)
+                    return BackendResponse(
+                        text=(
+                            '{"status":"continue","program":[{"tool":"vision_read","args":{"segment_id":"seg_0001",'
+                            '"ask_for":"Inspect option B. Why the Austro-Hungarian Empire was divided"},'
+                            '"assign":"v1"}]}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    testcase.assertIn("A. The fall of Rome", request.prompt)
+                    testcase.assertIn("D. How the Austro-Hungarian Empire rises and falls.", request.prompt)
+                    return BackendResponse(
+                        text='{"answer":"D. How the Austro-Hungarian Empire rises and falls.","citations":["obs_0001"],"confidence":0.86}'
+                    )
+                raise AssertionError(request.task)
+
+        registry = ToolRegistry()
+        calls = []
+
+        @tool(name="vision_read", description="Read visible facts.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 8,
+        ):
+            calls.append({"ask_for": ask_for, "event_label": event_label})
+            return {
+                "claim": "The segment describes the Austro-Hungarian Empire across formation, stability, decline, and collapse.",
+                "confidence": 0.86,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(vision_read)
+        backend = RewriteFlowBackend()
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="rewrite_mcq_flow")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=2,
+                    reserve_final_round=True,
+                    rewrite_mcq_for_exploration=True,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(question=raw_question, video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("D"))
+            self.assertEqual(result.question, raw_question)
+            self.assertEqual(rewritten, calls[0]["ask_for"])
+            self.assertNotIn("option B", calls[0]["ask_for"])
+            self.assertNotIn("The fall of Rome", calls[0]["ask_for"])
+            self.assertNotIn("Why the Austro-Hungarian Empire was divided", calls[0]["ask_for"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("mcq_exploration_question_rewrite", trace)
+
+    def test_option_blind_answer_feedback_strips_option_labels_and_full_text(self):
+        raw_question = (
+            "Question: What's the main idea?\n"
+            "Options:\n"
+            "A. The fall of Rome\n"
+            "B. Why the Austro-Hungarian Empire was divided\n"
+            "C. A battle timeline\n"
+            "D. How the Austro-Hungarian Empire rises and falls.\n"
+        )
+
+        feedback = _sanitize_option_blind_feedback(
+            [
+                "Need evidence for option B. Why the Austro-Hungarian Empire was divided, not A. The fall of Rome.",
+                "need timestamp evidence",
+            ],
+            raw_question=raw_question,
+        )
+
+        self.assertEqual(feedback[0], "Resolve the remaining evidence gap with factual observations.")
+        self.assertEqual(feedback[1], "need timestamp evidence")
+        joined = "\n".join(feedback)
+        self.assertNotIn("option B", joined)
+        self.assertNotIn("A. The fall of Rome", joined)
+        self.assertNotIn("Why the Austro-Hungarian Empire was divided", joined)
 
     def test_repeated_empty_program_finalizes_from_structured_evidence_before_stopping(self):
         class ShouldNotAnswerBackend(ScriptedPlannerBackend):

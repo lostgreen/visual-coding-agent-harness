@@ -503,6 +503,28 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertTrue(config.budget.disable_global_gist_route)
 
+    def test_videomme_runner_enables_mcq_rewrite_by_default(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args([])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertTrue(config.budget.rewrite_mcq_for_exploration)
+        self.assertTrue(config.ablation_flags["enable_mcq_rewrite"])
+
+    def test_videomme_runner_can_disable_mcq_rewrite(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(["--disable-mcq-rewrite"])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertFalse(config.budget.rewrite_mcq_for_exploration)
+        self.assertFalse(config.ablation_flags["enable_mcq_rewrite"])
+
     def test_max_rounds_raises_default_expensive_tool_budget_for_segment_sweep(self):
         from runs import eval_runner
 
