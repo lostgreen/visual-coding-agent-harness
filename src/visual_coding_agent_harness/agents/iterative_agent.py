@@ -1364,6 +1364,7 @@ class IterativeVisualAgent:
                         question_context=question,
                         forbidden_question=raw_question,
                         option_blind=self.budget.rewrite_mcq_for_exploration,
+                        target_entities=self._exploration_target_entities,
                     )
                 else:
                     args.setdefault("question", question)
@@ -1373,6 +1374,7 @@ class IterativeVisualAgent:
                         question_context=question,
                         forbidden_question=raw_question,
                         option_blind=self.budget.rewrite_mcq_for_exploration,
+                        target_entities=self._exploration_target_entities,
                     )
                 candidate_options = list(extract_candidate_options(question))
                 if candidate_options:
@@ -1409,11 +1411,19 @@ class IterativeVisualAgent:
                     "nframes": self.budget.default_nframes,
                 }
                 if fallback_tool_name == "vision_read":
-                    target_question = _local_fact_question(question=question, planner_skill=active_skill)
+                    target_question = _local_fact_question(
+                        question=question,
+                        planner_skill=active_skill,
+                        target_entities=self._exploration_target_entities,
+                    )
                     fallback_args["ask_for"] = target_question
                     fallback_args["event_label"] = target_question
                 else:
-                    fallback_args["question"] = _local_fact_question(question=question, planner_skill=active_skill)
+                    fallback_args["question"] = _local_fact_question(
+                        question=question,
+                        planner_skill=active_skill,
+                        target_entities=self._exploration_target_entities,
+                    )
                 candidate_options = extract_candidate_options(question)
                 if (
                     candidate_options
@@ -1474,6 +1484,16 @@ class IterativeVisualAgent:
                 },
                 "repair_repeated_main_idea_global_gist_to_vision_read",
             )
+        if (
+            active_skill is not None
+            and active_skill.name in {"timeline_ordering", "grounded_factual_qa", "mutex_fact_qa"}
+            and tool_name == "read_segment"
+            and self._has_tool("read_segment_detail")
+        ):
+            repaired_args = dict(args)
+            if self._exploration_target_entities and not repaired_args.get("targets"):
+                repaired_args["targets"] = list(self._exploration_target_entities)
+            return "read_segment_detail", repaired_args, "repair_read_segment_to_read_segment_detail"
         if (
             active_skill is not None
             and active_skill.name == "mutex_fact_qa"
@@ -1577,7 +1597,11 @@ class IterativeVisualAgent:
             "end_sec": segment.end_sec,
             "nframes": self.budget.default_nframes,
         }
-        target_question = _local_fact_question(question=question, planner_skill=planner_skill)
+        target_question = _local_fact_question(
+            question=question,
+            planner_skill=planner_skill,
+            target_entities=self._exploration_target_entities,
+        )
         if tool_name == "vision_read":
             args["ask_for"] = target_question
             args["event_label"] = target_question
@@ -1628,7 +1652,11 @@ class IterativeVisualAgent:
                 "end_sec": segment.end_sec,
                 "nframes": self.budget.default_nframes,
             }
-            target_question = _local_fact_question(question=question, planner_skill=planner_skill)
+            target_question = _local_fact_question(
+                question=question,
+                planner_skill=planner_skill,
+                target_entities=self._exploration_target_entities,
+            )
             if tool_name == "vision_read":
                 media_args["ask_for"] = target_question
                 media_args["event_label"] = target_question
@@ -2697,7 +2725,12 @@ def _evidence_status_has_strong_option_support(summary: Mapping[str, Any]) -> bo
     return False
 
 
-def _local_fact_question(*, question: str, planner_skill: SkillSpec | None) -> str:
+def _local_fact_question(
+    *,
+    question: str,
+    planner_skill: SkillSpec | None,
+    target_entities: Sequence[str] = (),
+) -> str:
     semantic = _semantic_question_text(question).strip() or question
     if planner_skill is None:
         return semantic
@@ -2707,10 +2740,12 @@ def _local_fact_question(*, question: str, planner_skill: SkillSpec | None) -> s
         else "Report facts only."
     )
     if planner_skill.name == "timeline_ordering":
-        return (
+        return _append_target_attention_block(
             "Openly describe this segment's actual visible artworks, objects, people, scene changes, onscreen text, "
             "and narrated events in presentation order. Include timestamps if possible. "
-            "Focus on concrete observations rather than conclusions."
+            "Focus on concrete observations rather than conclusions. Do not choose an option.",
+            target_entities=target_entities,
+            timeline=True,
         )
     if planner_skill.name == "mutex_fact_qa":
         return (
@@ -3737,15 +3772,18 @@ def _tool_exploration_question(
     question_context: str = "",
     forbidden_question: str = "",
     option_blind: bool = False,
+    target_entities: Sequence[str] = (),
 ) -> str:
     if not option_blind:
         return exploration_question(question, route_hint=route_hint)
     lowered_route = str(route_hint or "").lower()
     if "timeline" in lowered_route or "temporal" in lowered_route:
-        return (
+        return _append_target_attention_block(
             "Openly describe this segment's actual visible artworks, objects, people, scene changes, "
             "onscreen text, and narrated events in presentation order. Include timestamps if possible. "
-            "Focus on concrete observations rather than conclusions."
+            "Focus on concrete observations rather than conclusions. Do not choose an option.",
+            target_entities=target_entities,
+            timeline=True,
         )
     if "main_idea" in lowered_route or "gist" in lowered_route:
         return (
@@ -3763,6 +3801,36 @@ def _tool_exploration_question(
     if extract_candidate_options(question_context) and "choose an option" not in cleaned.lower():
         return f"{cleaned} Do not choose an option.".strip()
     return cleaned
+
+
+def _append_target_attention_block(
+    prompt: str,
+    *,
+    target_entities: Sequence[str],
+    timeline: bool = False,
+) -> str:
+    targets = []
+    seen = set()
+    for target in target_entities:
+        text = " ".join(str(target or "").split()).strip()
+        if not text or text in seen:
+            continue
+        targets.append(text)
+        seen.add(text)
+    if not targets:
+        return prompt
+    lines = [
+        prompt.strip(),
+        "",
+        "Pay special attention to these unordered target artwork names or aliases if they appear:",
+        *[f"- {target}" for target in targets],
+        "",
+        "For each target-like item, report whether it is directly shown, narrated, visible as onscreen text, or only visually similar.",
+    ]
+    if timeline:
+        lines.append("Report local timestamp/order, exact text if present, and visible cues. Also report other artworks/transitions in order.")
+    lines.append("Do not choose or compare options.")
+    return "\n".join(lines)
 
 
 def _sanitize_option_blind_feedback(feedback: Sequence[str], *, raw_question: str) -> list[str]:

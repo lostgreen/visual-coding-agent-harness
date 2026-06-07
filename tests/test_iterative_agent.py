@@ -516,6 +516,65 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(workspace.observation_count(tool_name="read_segment_detail"), 1)
             self.assertEqual(workspace.observation_count(tool_name="vision_read"), 3)
 
+    def test_option_blind_timeline_vision_read_uses_unordered_target_anchors(self):
+        class TargetAwareBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "rewrite_exploration_question":
+                    return BackendResponse(
+                        text=(
+                            '{"exploration_question":"Describe the video segment by segment.",'
+                            '"target_entities":["David","Apollo and Daphne"]}'
+                        )
+                    )
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status":"continue","skill":"timeline_ordering","program":['
+                            '{"tool":"vision_read","args":{"segment_id":"seg_0001","ask_for":"Inspect the artwork ordering."},"assign":"v1"}'
+                            "]}"
+                        )
+                    )
+                if request.task == "vision_read":
+                    return BackendResponse(text="The segment shows a sculpture.")
+                return BackendResponse(text="unexpected")
+
+        backend = TargetAwareBackend([])
+        scene_index = SceneIndex(
+            video_path="/videos/bernini.mp4",
+            duration_sec=30.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="target_aware_prompt")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(scene_index), backend=backend, workspace=workspace),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False, rewrite_mcq_for_exploration=True),
+            )
+
+            agent.run(
+                question=(
+                    "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+                    "Question: Which artwork appears first?\n"
+                    "Options:\n"
+                    "A. David then Apollo and Daphne.\n"
+                    "B. Apollo and Daphne then David."
+                ),
+                video_path="/videos/bernini.mp4",
+            )
+
+            vision_request = next(request for request in backend.requests if request.task == "vision_read")
+            self.assertIn("Pay special attention to these unordered target", vision_request.prompt)
+            self.assertIn("David", vision_request.prompt)
+            self.assertIn("Apollo and Daphne", vision_request.prompt)
+            self.assertNotIn("A. David then Apollo", vision_request.prompt)
+            self.assertNotIn("B. Apollo and Daphne", vision_request.prompt)
+            self.assertNotIn("option letter", vision_request.prompt)
+
     def test_iterative_agent_prompt_puts_scene_evidence_before_tooling(self):
         backend = ScriptedPlannerBackend(
             ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']

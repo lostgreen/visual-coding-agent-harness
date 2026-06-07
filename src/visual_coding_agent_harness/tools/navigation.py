@@ -469,13 +469,23 @@ def _grounding_candidate(result: object) -> Mapping[str, object]:
 
 def _coverage_candidate(result: object) -> Mapping[str, object]:
     segment = getattr(result, "segment")
+    matches = [dict(match) for match in getattr(result, "matches", []) or [] if isinstance(match, Mapping)]
+    best_match = max(
+        matches,
+        key=lambda match: float(match.get("score", 0.0) or 0.0),
+        default={},
+    )
+    best_score = float(best_match.get("score", 0.0) or 0.0)
     return {
         "segment_id": segment.segment_id,
         "start_sec": float(segment.start_sec),
         "end_sec": float(segment.end_sec),
         "score": float(getattr(result, "score", 0.0) or 0.0),
         "matched_fields": [str(field) for field in getattr(result, "matched_fields", []) or []],
-        "matches": [dict(match) for match in getattr(result, "matches", []) or [] if isinstance(match, Mapping)],
+        "matches": matches,
+        "source": str(best_match.get("field") or best_match.get("modality") or ""),
+        "snippet": str(best_match.get("evidence", "")),
+        "directness": _target_directness(best_score),
         "summary": segment.compact_text(),
         "relevance_reason": str(getattr(result, "relevance_reason", "") or ""),
     }

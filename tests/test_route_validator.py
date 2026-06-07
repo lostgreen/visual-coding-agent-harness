@@ -212,6 +212,40 @@ def test_main_idea_allows_video_map_exploration(tmp_path: Path):
     assert "route_violation" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 
+def test_timeline_repairs_read_segment_to_detail_with_targets(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="read_segment_detail", description="Read detailed indexed segment packet.")
+    def read_segment_detail(segment_id: str, targets: list | None = None):
+        return {"claim": f"detail {segment_id}: {targets}", "confidence": 1.0}
+
+    registry.register(read_segment_detail)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_read_segment_to_detail")
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+    agent._exploration_target_entities = ("David", "Apollo and Daphne")
+
+    normalized = agent._normalize_program(
+        [{"tool": "read_segment", "args": {"segment_id": "seg_0001"}}],
+        question="Which artwork appears first?\nA. David\nB. Apollo and Daphne",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("timeline_ordering"),
+    )
+
+    assert normalized[0]["tool"] == "read_segment_detail"
+    assert normalized[0]["args"]["segment_id"] == "seg_0001"
+    assert normalized[0]["args"]["targets"] == ["David", "Apollo and Daphne"]
+    assert "tool_not_in_allowed_actions" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+
 def test_mutex_fact_repairs_planner_inspect_segment_to_vision_read(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = SequenceBackend(
