@@ -2731,6 +2731,90 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("force_uninspected_visual_without_option_support", trace)
 
+    def test_mcq_full_segment_sweep_hands_off_to_answer_agent_before_budget_end(self):
+        class FullSweepAnswerBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.requests = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            '{"tool": "search_segments", "args": {"query": "still searching"}, "assign": "map"}'
+                            "]}"
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(
+                        text=(
+                            '{"answer": "A. red object", "rationale": "obs_0002 has the local visual read.", '
+                            '"citations": ["obs_0002"], "missing_evidence": [], "confidence": 0.84}'
+                        )
+                    )
+                raise AssertionError(request.task)
+
+        registry = ToolRegistry()
+        calls = []
+
+        @tool(name="search_segments", description="Cheap search that adds no answer evidence.")
+        def search_segments(query: str, top_k: int = 5):
+            calls.append(("search_segments", query))
+            return {"claim": f"search only: {query}", "confidence": 1.0}
+
+        @tool(name="vision_read", description="Visual read that creates answer evidence.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 8,
+        ):
+            calls.append(("vision_read", segment_id))
+            return {
+                "claim": "A red object is visible in the only segment.",
+                "confidence": 0.84,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(search_segments)
+        registry.register(vision_read)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=20.0, window_sec=20.0)
+        backend = FullSweepAnswerBackend()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_full_sweep_answer")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=5,
+                    reserve_final_round=True,
+                    max_repeated_programs=0,
+                    answer_probe_rounds_before_final=0,
+                ),
+            )
+
+            result = agent.run(
+                question="Which option is visible?\nA. red object\nB. blue object",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("A"))
+            self.assertEqual(result.citations, ["obs_0002"])
+            self.assertEqual([call[0] for call in calls], ["search_segments", "vision_read"])
+            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "replan", "answer_from_evidence"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"source": "all_segments_inspected"', trace)
+
     def test_repeated_empty_program_finalizes_from_structured_evidence_before_stopping(self):
         class ShouldNotAnswerBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:

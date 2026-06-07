@@ -220,6 +220,7 @@ class IterativeVisualAgent:
         repeated_program_count = 0
         no_evidence_growth_rounds = 0
         last_evidence_table_row_count = self.workspace.evidence_table_row_count()
+        all_segments_answer_attempted = False
 
         for round_number in range(len(rounds) + 1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
@@ -485,6 +486,27 @@ class IterativeVisualAgent:
                             },
                         )
                         program = forced_program
+                if (
+                    extract_candidate_options(question)
+                    and not final_round_reserved
+                    and not all_segments_answer_attempted
+                    and citations
+                    and _all_scene_segments_inspected(self.scene_index, inspected_segment_ids)
+                    and not _program_has_visual_evidence_tool(program)
+                ):
+                    all_segments_answer_attempted = True
+                    sweep_final = self._try_answer_agent_final(
+                        question=question,
+                        video_path=video_path,
+                        rounds=rounds,
+                        round_number=round_number,
+                        source="all_segments_inspected",
+                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                        program=program,
+                        observation_ids=[],
+                    )
+                    if sweep_final is not None:
+                        return sweep_final
             else:
                 program = []
                 last_round_normalization_notes = []
@@ -2269,6 +2291,11 @@ def _program_has_inspect_with_candidate_options(program: Sequence[Mapping[str, A
 
 def _program_has_visual_evidence_tool(program: Sequence[Mapping[str, Any]]) -> bool:
     return any(str(step.get("tool", "")) in _SEGMENT_MEDIA_TOOLS or str(step.get("tool", "")) in _GLOBAL_VIEW_TOOLS for step in program)
+
+
+def _all_scene_segments_inspected(scene_index: SceneIndex, inspected_segment_ids: set[str]) -> bool:
+    segment_ids = {str(segment.segment_id) for segment in scene_index.segments if str(segment.segment_id)}
+    return bool(segment_ids) and segment_ids.issubset({str(item) for item in inspected_segment_ids})
 
 
 def _evidence_status_has_strong_option_support(summary: Mapping[str, Any]) -> bool:
