@@ -122,7 +122,7 @@ class GlobalViewToolTest(unittest.TestCase):
             self.assertEqual(table["rows"], [])
             self.assertEqual(chains, [])
 
-    def test_global_gist_claim_is_hidden_from_planner_working_buffer(self):
+    def test_global_gist_claim_is_exposed_as_one_shot_topic_hint(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = EvidenceWorkspace.create(Path(tmp), run_id="global_context")
             observation = workspace.write_observation(
@@ -149,9 +149,10 @@ class GlobalViewToolTest(unittest.TestCase):
 
             self.assertIn("Context-Only Visual Hints", context)
             self.assertIn("global_gist", context)
-            self.assertIn("sparse topic hint", context)
-            self.assertNotIn("B. Why the Austro-Hungarian Empire was divided", context)
-            self.assertNotIn("ethnic group distribution followed by division", context)
+            self.assertIn("global_gist topic hint (one-shot, already executed)", context)
+            self.assertNotIn("claim hidden from planner", context)
+            self.assertIn("B. Why the Austro-Hungarian Empire was divided", context)
+            self.assertIn("ethnic group distribution followed by division", context)
 
 
 if __name__ == "__main__":

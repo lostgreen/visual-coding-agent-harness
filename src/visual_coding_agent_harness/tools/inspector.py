@@ -191,6 +191,11 @@ def _run_inspector(
         metadata["original_candidate_options"] = list(original_candidate_options)
     if fps > 0:
         metadata["fps"] = float(fps)
+    max_new_tokens = 256
+    if task_name == "vision_read":
+        metadata["repetition_penalty"] = 1.15
+        metadata["no_repeat_ngram_size"] = 6
+        max_new_tokens = 384
 
     media_path = video_path
     input_artifacts = [f"{video_path}#t={float(start_sec):.3f},{float(end_sec):.3f}"]
@@ -240,7 +245,7 @@ def _run_inspector(
             ),
             media_path=media_path,
             media_type="video",
-            max_new_tokens=256,
+            max_new_tokens=max_new_tokens,
             metadata=metadata,
         )
     )

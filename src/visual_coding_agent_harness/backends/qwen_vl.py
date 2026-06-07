@@ -63,12 +63,17 @@ class QwenVLBackend:
             return_tensors="pt",
         )
         inputs = _move_inputs_to_model(inputs, self.model)
-        generated_ids = self.model.generate(
+        generation_kwargs = {
             **inputs,
-            max_new_tokens=request.max_new_tokens,
-            do_sample=request.temperature > 0,
-            temperature=request.temperature if request.temperature > 0 else None,
-        )
+            "max_new_tokens": request.max_new_tokens,
+            "do_sample": request.temperature > 0,
+        }
+        if request.temperature > 0:
+            generation_kwargs["temperature"] = request.temperature
+        for key in ("repetition_penalty", "no_repeat_ngram_size", "top_p", "top_k"):
+            if key in request.metadata:
+                generation_kwargs[key] = request.metadata[key]
+        generated_ids = self.model.generate(**generation_kwargs)
         generated_trimmed = [
             output_ids[len(input_ids) :] for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
         ]

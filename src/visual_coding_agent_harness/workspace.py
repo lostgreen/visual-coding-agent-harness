@@ -2321,14 +2321,17 @@ def _format_compact_entry(entry: Mapping[str, Any]) -> str:
 def _format_context_only_entry(entry: Mapping[str, Any]) -> str:
     limitations = entry.get("limitations") or "-"
     tool_name = str(entry.get("tool", "unknown"))
+    claim = str(entry.get("claim", "")).strip()
     if _tool_emits_candidate_hints_only(tool_name):
+        clipped = (claim[:480] + "...") if len(claim) > 480 else claim
+        marker = f"{tool_name} topic hint (one-shot, already executed)"
         return (
             f"- `{entry['observation_id']}` | tool: `{tool_name}` | "
-            f"sparse topic hint only; not answer support; claim hidden from planner | limitations: {limitations}"
+            f"{marker} | claim: {clipped or '(empty)'} | limitations: {limitations}"
         )
     return (
         f"- `{entry['observation_id']}` | tool: `{tool_name}` | "
-        f"context hint only; not answer support | claim: {entry.get('claim', '')} | limitations: {limitations}"
+        f"context hint only; not answer support | claim: {claim} | limitations: {limitations}"
     )
 
 

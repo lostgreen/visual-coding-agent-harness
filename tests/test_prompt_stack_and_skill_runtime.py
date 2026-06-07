@@ -10,6 +10,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _skill_target_facts,
 )
 from visual_coding_agent_harness.agents.prompt_stack import (
+    _normalization_notes_body,
     build_replanning_prompt,
     compose_replanning_prompt_blocks,
     render_prompt_blocks,
@@ -138,6 +139,41 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("duplicate_observations: 1", prompt)
         self.assertIn("B: strong=2 weak=0 visual=yes", prompt)
         self.assertIn("hypothesis_gaps: entered upper class", prompt)
+
+    def test_prompt_omits_exhausted_global_gist_from_skill_catalog(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        allocator = default_context_budget_allocator(total_budget_tokens=12000)
+
+        prompt, _report = build_replanning_prompt(
+            question="What is the main idea of the video?",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\n(none)",
+            round_number=2,
+            budget=AgentBudget(max_rounds=3),
+            allocator=allocator,
+            exhausted_tools=frozenset({"global_gist"}),
+        )
+
+        catalog_block = prompt.split("# Skill Catalog", 1)[1].split("# ", 1)[0]
+        main_idea_line = next(line for line in catalog_block.splitlines() if line.startswith("- main_idea@"))
+        allowed_actions = main_idea_line.split("allowed_actions=", 1)[1].split(";", 1)[0]
+        self.assertNotIn("global_gist", allowed_actions.split("(", 1)[0])
+        self.assertIn("(global_gist=exhausted)", main_idea_line)
+
+    def test_normalization_next_action_is_rendered_as_do_next(self):
+        rendered = _normalization_notes_body(
+            [
+                {
+                    "tool": "global_gist",
+                    "reason": "repair_repeated_main_idea_global_gist_to_vision_read",
+                    "original": {"tool": "global_gist"},
+                    "resolved": {"tool": "vision_read", "segment_id": "seg_0002"},
+                    "next_action": "Stop requesting global_gist. Read obs_0001.",
+                }
+            ]
+        )
+
+        self.assertIn("DO NEXT: Stop requesting global_gist", rendered)
 
     def test_ground_question_returns_candidate_windows_without_option_vote(self):
         video_map = VideoMap(

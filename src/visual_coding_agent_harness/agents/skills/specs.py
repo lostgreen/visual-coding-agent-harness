@@ -71,14 +71,22 @@ class SkillRegistry:
         return tuple(self._skills.values())
 
 
-def skill_catalog_prompt(*, registry: SkillRegistry | None = None) -> str:
+def skill_catalog_prompt(
+    *,
+    registry: SkillRegistry | None = None,
+    exhausted_tools: frozenset[str] | None = None,
+) -> str:
     resolved_registry = registry or builtin_skill_registry()
+    blocked = frozenset(exhausted_tools or ())
     lines = ["Available skills:"]
     for skill in resolved_registry.list():
         marker_text = ", ".join(skill.trigger.markers) if skill.trigger.markers else "(none)"
+        remaining = sorted(action for action in skill.allowed_actions if action not in blocked)
+        spent = sorted(action for action in skill.allowed_actions if action in blocked)
+        suffix = f" ({', '.join(f'{tool}=exhausted' for tool in spent)})" if spent else ""
         lines.append(
             f"- {skill.name}@v{skill.version}: route={skill.trigger.route}; markers={marker_text}; "
-            f"allowed_actions={', '.join(sorted(skill.allowed_actions)) or '(none)'}; "
+            f"allowed_actions={', '.join(remaining) or '(none)'}{suffix}; "
             f"sufficiency={'; '.join(skill.sufficiency)}"
         )
     return "\n".join(lines)

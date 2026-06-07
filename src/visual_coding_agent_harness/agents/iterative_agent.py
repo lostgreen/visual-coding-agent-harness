@@ -57,6 +57,13 @@ _TOOL_CLASSES = {
     **{tool_name: "expensive" for tool_name in _EXPENSIVE_TOOLS},
     **{tool_name: "verifier" for tool_name in _VERIFIER_TOOLS},
 }
+_ONE_SHOT_TOOLS: frozenset[str] = frozenset({"global_gist"})
+
+
+def _exhausted_one_shot_tools(workspace: Any) -> frozenset[str]:
+    return frozenset(
+        tool_name for tool_name in _ONE_SHOT_TOOLS if workspace.observation_count(tool_name=tool_name) >= 1
+    )
 
 
 @dataclass(frozen=True)
@@ -146,6 +153,7 @@ class NormalizationNote:
     reason: str
     original: Mapping[str, Any] = field(default_factory=dict)
     resolved: Mapping[str, Any] = field(default_factory=dict)
+    next_action: str = ""
 
 
 @dataclass(frozen=True)
@@ -237,6 +245,7 @@ class IterativeVisualAgent:
                 question=raw_question,
                 options=extract_candidate_options(raw_question),
             )
+            exhausted_tools = _exhausted_one_shot_tools(self.workspace)
             planner_prompt, context_report = build_replanning_prompt(
                 question=exploration_question_text,
                 scene_index=self.scene_index,
@@ -252,6 +261,7 @@ class IterativeVisualAgent:
                 hypothesis_text=self.workspace.read_hypothesis_text(),
                 reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
                 evidence_status_summary=evidence_status_summary,
+                exhausted_tools=exhausted_tools,
             )
             self.workspace.write_trace_event("context_budget_report", asdict(context_report))
             self.workspace.write_trace_event(
@@ -979,6 +989,7 @@ class IterativeVisualAgent:
         pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
         active_skill = planner_skill
         blocked_route_violation = False
+        pool_exhausted_logged = False
         for step in program:
             if not isinstance(step, Mapping):
                 raise ValueError("Planner program steps must be objects")
@@ -1010,6 +1021,38 @@ class IterativeVisualAgent:
                     original={"tool": original_tool_name, "args": original_args},
                     resolved={"tool": tool_name, "args": args},
                 )
+            exhausted_tools = _exhausted_one_shot_tools(self.workspace)
+            if tool_name in exhausted_tools and not self.budget.free_exploration:
+                blocked_route_violation = True
+                next_action = (
+                    f"{tool_name} is one-shot and has already executed. Read its claim from the ledger; "
+                    "pick a remaining localized visual tool on an uninspected segment, or verify/finalize."
+                )
+                self.workspace.write_trace_event(
+                    "exploration_policy_adjustment",
+                    {
+                        "reason": f"{tool_name}_one_shot_exhausted",
+                        "skipped_tool": tool_name,
+                        "skill": active_skill.name if active_skill is not None else "",
+                        "next_action": next_action,
+                    },
+                )
+                self.workspace.write_reflection_memory(
+                    route=active_skill.trigger.route if active_skill is not None else classify_question_route(question),
+                    failure_tag=f"{tool_name}_one_shot_exhausted",
+                    rule=(
+                        f"{tool_name} is one-shot and was already executed; read its claim from the ledger "
+                        "and do not request it again."
+                    ),
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=tool_name,
+                    reason=f"{tool_name}_one_shot_exhausted",
+                    original={"tool": tool_name, "args": args},
+                    next_action=next_action,
+                )
+                continue
             repair = self._repair_skill_route_tool(
                 tool_name=tool_name,
                 args=args,
@@ -1037,6 +1080,42 @@ class IterativeVisualAgent:
                     original={"tool": original_tool_name, "args": original_args},
                     resolved={"tool": tool_name, "args": args},
                 )
+            if (
+                active_skill is not None
+                and not self.budget.free_exploration
+                and tool_name not in active_skill.allowed_actions
+            ):
+                blocked_route_violation = True
+                allowed_actions = ", ".join(sorted(active_skill.allowed_actions)) or "(none)"
+                next_action = (
+                    f"{tool_name} is not in the active skill ({active_skill.name}) allowed_actions. "
+                    f"Pick one of: {allowed_actions}."
+                )
+                self.workspace.write_trace_event(
+                    "route_violation",
+                    {
+                        "tool": tool_name,
+                        "error": "tool_not_in_allowed_actions",
+                        "skill": active_skill.name,
+                        "next_action": next_action,
+                    },
+                )
+                self.workspace.write_reflection_memory(
+                    route=active_skill.trigger.route,
+                    failure_tag="tool_not_in_allowed_actions",
+                    rule=(
+                        f"Skill {active_skill.name} only permits: {allowed_actions}. "
+                        f"{tool_name} is denied. Do not request it again."
+                    ),
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=tool_name,
+                    reason="tool_not_in_allowed_actions",
+                    original={"tool": tool_name, "args": args},
+                    next_action=next_action,
+                )
+                continue
             violation = _route_violation(tool_name=tool_name, active_skill=active_skill, free_exploration=self.budget.free_exploration)
             if violation is not None:
                 blocked_route_violation = True
@@ -1142,12 +1221,47 @@ class IterativeVisualAgent:
                     )
                 )
                 if segment is None:
-                    _append_normalization_note(
-                        notes_out,
-                        tool=tool_name,
-                        reason="unresolved_media_segment",
-                        original={"tool": tool_name, "segment_id": str(segment_id or "")},
-                    )
+                    next_free = self._resolve_next_segment_id("", reserved_segment_ids)
+                    if next_free is None:
+                        blocked_route_violation = True
+                        next_action = (
+                            "All scene segments are already inspected. Stop requesting existing segment_ids. "
+                            "Use zoom or expand_window on the most informative segment, or call "
+                            "verify_ledger_answer to finalize."
+                        )
+                        self.workspace.write_trace_event(
+                            "exploration_policy_adjustment",
+                            {
+                                "reason": "segment_pool_exhausted",
+                                "skipped_tool": tool_name,
+                                "segment_id": str(segment_id or ""),
+                                "next_action": next_action,
+                            },
+                        )
+                        _append_normalization_note(
+                            notes_out,
+                            tool=tool_name,
+                            reason="segment_pool_exhausted",
+                            original={"tool": tool_name, "segment_id": str(segment_id or "")},
+                            next_action=next_action,
+                        )
+                        if not pool_exhausted_logged:
+                            self.workspace.write_reflection_memory(
+                                route=classify_question_route(question),
+                                failure_tag="segment_pool_exhausted",
+                                rule=(
+                                    "Scene index segment pool is empty; pivot to zoom/expand_window on a key "
+                                    "segment or call verify_ledger_answer + final."
+                                ),
+                            )
+                            pool_exhausted_logged = True
+                    else:
+                        _append_normalization_note(
+                            notes_out,
+                            tool=tool_name,
+                            reason="unresolved_media_segment",
+                            original={"tool": tool_name, "segment_id": str(segment_id or "")},
+                        )
                     continue
                 if not segment_id:
                     self.workspace.write_trace_event(
@@ -3585,6 +3699,7 @@ def _append_normalization_note(
     reason: str,
     original: Mapping[str, Any],
     resolved: Mapping[str, Any] | None = None,
+    next_action: str = "",
 ) -> None:
     if notes_out is None:
         return
@@ -3594,6 +3709,7 @@ def _append_normalization_note(
             reason=str(reason),
             original=dict(original),
             resolved=dict(resolved or {}),
+            next_action=str(next_action),
         )
     )
 

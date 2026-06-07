@@ -5,6 +5,7 @@ from pathlib import Path
 from visual_coding_agent_harness.agents.iterative_agent import (
     AgentBudget,
     IterativeVisualAgent,
+    _exhausted_one_shot_tools,
     _sanitize_option_blind_feedback,
 )
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
@@ -136,6 +137,20 @@ def build_global_route_test_registry() -> ToolRegistry:
 
 
 class IterativeAgentTest(unittest.TestCase):
+    def test_global_gist_marked_exhausted_after_first_observation(self):
+        class StubWorkspace:
+            def observation_count(self, *, tool_name: str) -> int:
+                return 1 if tool_name == "global_gist" else 0
+
+        self.assertIn("global_gist", _exhausted_one_shot_tools(StubWorkspace()))
+
+    def test_global_gist_not_exhausted_when_unused(self):
+        class StubWorkspace:
+            def observation_count(self, *, tool_name: str) -> int:
+                return 0
+
+        self.assertEqual(_exhausted_one_shot_tools(StubWorkspace()), frozenset())
+
     def test_agent_budget_defaults_to_answer_capable_loop(self):
         budget = AgentBudget()
 
@@ -527,7 +542,7 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("repair_main_idea_vision_read_to_global_gist", trace)
 
-    def test_main_idea_repeated_global_gist_repaired_to_local_read(self):
+    def test_main_idea_repeated_global_gist_is_dropped_with_reflection_memory(self):
         backend = ScriptedPlannerBackend(
             [
                 (
@@ -577,11 +592,113 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             self.assertEqual(workspace.observation_count(tool_name="global_gist"), 1)
-            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 1)
-            self.assertEqual(result.rounds[0].program[0]["tool"], "vision_read")
-            self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
+            self.assertEqual(result.rounds[0].program, [])
+            self.assertTrue(any("global_gist" in entry and "already executed" in entry for entry in workspace.reflection_memory(max_items=10)))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("repair_repeated_main_idea_global_gist_to_vision_read", trace)
+            self.assertIn("global_gist_one_shot_exhausted", trace)
+            self.assertNotIn("repair_repeated_main_idea_global_gist_to_vision_read", trace)
+
+    def test_disallowed_skill_tool_is_dropped_with_imperative_note(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "rationale": "wrong tool", '
+                    '"skill": "main_idea", '
+                    '"program": [{"tool": "ground_question", "args": {"query": "empire"}, "assign": "g"}]}'
+                )
+            ]
+        )
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=120.0, window_sec=60.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="deny_disallowed_tool")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(scene_index), backend=backend),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(
+                    max_rounds=1,
+                    reserve_final_round=False,
+                    disable_global_gist_route=True,
+                ),
+            )
+
+            result = agent.run(question="What is the video mainly about?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.rounds[0].program, [])
+            self.assertTrue(any("ground_question" in entry and "denied" in entry for entry in workspace.reflection_memory(max_items=10)))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("tool_not_in_allowed_actions", trace)
+            self.assertIn("Pick one of", trace)
+
+    def test_segment_pool_exhaustion_is_reported_without_fallback(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "rationale": "inspect all coarse segments", '
+                    '"skill": "timeline_ordering", '
+                    '"program": ['
+                    '{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "first event"}, "assign": "v1"},'
+                    '{"tool": "vision_read", "args": {"segment_id": "seg_0002", "ask_for": "second event"}, "assign": "v2"}'
+                    "]}"
+                ),
+                (
+                    '{"status": "continue", "rationale": "repeat inspected segment", '
+                    '"skill": "timeline_ordering", '
+                    '"program": [{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "order facts"}, "assign": "v"}]}'
+                )
+            ]
+        )
+        registry = ToolRegistry()
+
+        @tool(name="vision_read", description="Read localized facts.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 8,
+        ):
+            return {
+                "claim": f"{segment_id} order fact.",
+                "confidence": 0.82,
+                "input_artifacts": [video_path],
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(vision_read)
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=120.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=60.0),
+                VideoSegment(segment_id="seg_0002", start_sec=60.0, end_sec=120.0),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="pool_exhausted")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=2, reserve_final_round=False),
+            )
+
+            result = agent.run(question="Which event happened first?", video_path="/videos/demo.mp4")
+
+            self.assertEqual([step["args"]["segment_id"] for step in result.rounds[0].program], ["seg_0001", "seg_0002"])
+            self.assertEqual(result.rounds[1].program, [])
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 2)
+            self.assertTrue(any("verify_ledger_answer" in entry or "zoom" in entry for entry in workspace.reflection_memory(max_items=10)))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("segment_pool_exhausted", trace)
 
     def test_normalizes_placeholder_video_path_for_global_tools(self):
         backend = ScriptedPlannerBackend(

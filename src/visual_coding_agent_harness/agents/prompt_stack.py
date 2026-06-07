@@ -88,6 +88,7 @@ def build_replanning_prompt(
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
+    exhausted_tools: frozenset[str] | None = None,
 ) -> tuple[str, ContextBudgetReport]:
     slots = compose_replanning_prompt_slots(
         question=question,
@@ -103,6 +104,7 @@ def build_replanning_prompt(
         hypothesis_text=hypothesis_text,
         reflection_memory=reflection_memory,
         evidence_status_summary=evidence_status_summary,
+        exhausted_tools=exhausted_tools,
     )
     allocated, report = allocator.allocate(
         slots,
@@ -129,6 +131,7 @@ def compose_replanning_prompt_slots(
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
+    exhausted_tools: frozenset[str] | None = None,
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
     option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
@@ -153,11 +156,12 @@ def compose_replanning_prompt_slots(
             name="skill_catalog",
             title="Skill Catalog",
             body=(
-                f"{skill_catalog_prompt()}\n"
+                f"{skill_catalog_prompt(exhausted_tools=exhausted_tools)}\n"
                 "Select the skill that best matches this case in every planner JSON as `skill`. "
                 "Choose from the catalog yourself; the route playbook is guidance, not a skill assignment. "
                 "If no catalog skill fits, omit `skill` and use ordinary tool exploration. "
-                "The harness validates tool calls and final evidence only against a skill you explicitly select."
+                "The harness validates tool calls and final evidence only against a skill you explicitly select. "
+                "Tools listed as `=exhausted` are one-shot and cannot be requested again."
             ),
         ),
     ]
@@ -227,6 +231,7 @@ def compose_replanning_prompt_blocks(
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
+    exhausted_tools: frozenset[str] | None = None,
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
     option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
@@ -251,11 +256,12 @@ def compose_replanning_prompt_blocks(
             name="skill_catalog",
             title="Skill Catalog",
             body=(
-                f"{skill_catalog_prompt()}\n"
+                f"{skill_catalog_prompt(exhausted_tools=exhausted_tools)}\n"
                 "Select the skill that best matches this case in every planner JSON as `skill`. "
                 "Choose from the catalog yourself; the route playbook is guidance, not a skill assignment. "
                 "If no catalog skill fits, omit `skill` and use ordinary tool exploration. "
-                "The harness validates tool calls and final evidence only against a skill you explicitly select."
+                "The harness validates tool calls and final evidence only against a skill you explicitly select. "
+                "Tools listed as `=exhausted` are one-shot and cannot be requested again."
             ),
         ),
         PromptBlock(
@@ -579,12 +585,13 @@ def _feedback_slot(
 
 
 def _normalization_notes_body(notes: Sequence[Any]) -> str:
-    lines = ["Your previous program was modified by the harness:"]
+    lines = ["Your previous program was modified by the harness. Treat each `DO NEXT` line as a hard constraint:"]
     for note in list(notes)[:8]:
         reason = _note_attr(note, "reason")
         tool = _note_attr(note, "tool")
         original = _note_mapping(note, "original")
         resolved = _note_mapping(note, "resolved")
+        next_action = _note_attr(note, "next_action")
         original_tool = str(original.get("tool") or tool)
         resolved_tool = str(resolved.get("tool") or original_tool)
         original_segment = str(original.get("segment_id") or "")
@@ -595,6 +602,8 @@ def _normalization_notes_body(notes: Sequence[Any]) -> str:
             lines.append(f"- {left} -> {right} (reason: {reason})")
         else:
             lines.append(f"- {left} step dropped (reason: {reason})")
+        if next_action:
+            lines.append(f"  DO NEXT: {next_action}")
     return "\n".join(lines)
 
 
