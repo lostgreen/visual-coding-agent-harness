@@ -107,10 +107,10 @@ class SceneIndex:
         lines = []
         for segment in self.segments[:max_segments]:
             parts = []
-            if segment.asr_summary:
-                parts.append(f"ASR: {_bounded_text(segment.asr_summary, max_caption_chars)}")
             if segment.visual_caption:
                 parts.append(f"Visual: {_bounded_text(segment.visual_caption, max_caption_chars)}")
+            if segment.asr_summary:
+                parts.append(f"ASR: {_bounded_text(segment.asr_summary, max_caption_chars)}")
             tags = _unique_texts([*segment.topic_tags, *segment.stage_tags])
             if tags:
                 parts.append(f"Tags: {', '.join(tags)}")

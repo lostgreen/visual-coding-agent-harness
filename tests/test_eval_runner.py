@@ -304,7 +304,7 @@ class EvalRunnerTest(unittest.TestCase):
 
             self.assertEqual(summary["evidence_provenance_completeness"], 0.5)
 
-    def test_agent_v2_uses_subtitle_index(self):
+    def test_agent_v2_uses_subtitle_index_when_explicitly_requested(self):
         from runs import eval_runner
 
         captured = {}
@@ -354,6 +354,7 @@ class EvalRunnerTest(unittest.TestCase):
                 cases=("611-2",),
                 strategies=("agent_v2",),
                 window_sec=300.0,
+                scene_index_mode="subtitle",
                 budget=AgentBudget(),
             )
 
@@ -643,6 +644,7 @@ class EvalRunnerTest(unittest.TestCase):
             config.scene_index_cache_dir,
             Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache"),
         )
+        self.assertEqual(config.scene_index_mode, "dual-source")
 
     def test_build_backend_uses_routed_backend_for_dual_model_config(self):
         from runs import eval_runner
@@ -836,6 +838,7 @@ class EvalRunnerTest(unittest.TestCase):
                 cases=("605-1",),
                 strategies=("agent_v2",),
                 window_sec=300.0,
+                scene_index_mode="subtitle",
                 budget=AgentBudget(),
                 export_training=True,
             )

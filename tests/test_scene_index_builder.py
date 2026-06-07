@@ -142,6 +142,7 @@ def test_summary_uses_dual_source_fields_and_does_not_leak_options() -> None:
 
     assert "ASR: Narrator describes the museum aircraft." in summary
     assert "Visual: A wide shot shows a silver plane in a..." in summary
+    assert summary.index("Visual:") < summary.index("ASR:")
     assert "Tags: museum, wide shot" in summary
     assert "Entities: narrator, aircraft, plane, hangar" in summary
     assert "supported_option" not in summary

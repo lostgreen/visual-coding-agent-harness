@@ -60,7 +60,7 @@ class EvalConfig:
     strategies: Sequence[str]
     planner_model_path: str = PLANNER_MODEL_PATH
     window_sec: float = WINDOW_SEC
-    scene_index_mode: str = "subtitle"
+    scene_index_mode: str = "dual-source"
     scene_index_cache_dir: Path = DEFAULT_SCENE_INDEX_CACHE_DIR
     scene_index_cache_enabled: bool = True
     scene_caption_nframes: int = SEGMENT_NFRAMES
@@ -1079,7 +1079,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--video-dir", type=Path, default=DEFAULT_VIDEO_DIR)
     parser.add_argument("--subtitle-dir", type=Path, default=DEFAULT_SUBTITLE_DIR)
     parser.add_argument("--window-sec", type=float, default=WINDOW_SEC)
-    parser.add_argument("--scene-index-mode", choices=("subtitle", "dual-source"), default="subtitle")
+    parser.add_argument("--scene-index-mode", choices=("subtitle", "dual-source"), default="dual-source")
     parser.add_argument("--scene-index-cache-dir", type=Path, default=DEFAULT_SCENE_INDEX_CACHE_DIR)
     parser.add_argument("--no-scene-index-cache", action="store_true")
     parser.add_argument("--scene-caption-nframes", type=int, default=SEGMENT_NFRAMES)
