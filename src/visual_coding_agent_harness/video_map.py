@@ -85,7 +85,9 @@ class VideoMap:
                     end_sec=segment.end_sec,
                     source=segment.source,
                     keyframe_paths=[segment.keyframe_path] if segment.keyframe_path else [],
-                    low_fps_caption=segment.low_fps_caption,
+                    low_fps_caption=segment.visual_caption or segment.low_fps_caption,
+                    asr_text=segment.asr_summary,
+                    entities=_unique_texts([*segment.entities, *segment.topic_tags, *segment.stage_tags]),
                 )
                 for segment in scene_index.segments
             ],
@@ -388,6 +390,18 @@ def _recommended_next_tools(*, query: str, candidates: Sequence[VideoSearchResul
 
 def _tokens(text: str) -> set[str]:
     return {token.lower() for token in re.findall(r"[A-Za-z0-9]+", text)}
+
+
+def _unique_texts(values: Sequence[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        text = " ".join(str(value or "").split())
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            result.append(text)
+    return result
 
 
 class VideoMapStore:

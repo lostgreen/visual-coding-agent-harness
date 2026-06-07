@@ -5,6 +5,7 @@ from pathlib import Path
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
+from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
@@ -118,6 +119,40 @@ class VideoNavigationTest(unittest.TestCase):
 
         self.assertEqual(result["regions"][0]["segment_id"], "seg_0001")
         self.assertEqual(result["regions"][0]["matched_fields"], ["asr_text"])
+
+    def test_video_map_from_scene_index_indexes_dual_source_asr_and_tags(self):
+        scene_index = SceneIndex(
+            video_path="/videos/goya.mp4",
+            duration_sec=90.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=45.0,
+                    low_fps_caption="A gallery wall is shown.",
+                    visual_caption="Paintings hang in a museum gallery.",
+                    asr_summary="The narration describes Goya's humble birth background and social class transition.",
+                    entities=("Goya",),
+                    topic_tags=("biography",),
+                    stage_tags=("early life",),
+                )
+            ],
+        )
+
+        video_map = VideoMap.from_scene_index(scene_index)
+        segment = video_map.get("seg_0001")
+        asr_results = video_map.search("humble birth background", modalities=["asr"], top_k=1)
+        entity_results = video_map.search("early life biography", modalities=["entities"], top_k=1)
+
+        self.assertEqual(segment.low_fps_caption, "Paintings hang in a museum gallery.")
+        self.assertEqual(segment.asr_text, scene_index.segments[0].asr_summary)
+        self.assertIn("Goya", segment.entities)
+        self.assertIn("biography", segment.entities)
+        self.assertIn("early life", segment.entities)
+        self.assertEqual(asr_results[0].segment.segment_id, "seg_0001")
+        self.assertEqual(asr_results[0].matched_fields, ["asr_text"])
+        self.assertEqual(asr_results[0].matches[0]["modality"], "asr")
+        self.assertEqual(entity_results[0].segment.segment_id, "seg_0001")
 
     def test_navigation_registry_reads_updated_video_map_store(self):
         store = VideoMapStore(demo_video_map())
