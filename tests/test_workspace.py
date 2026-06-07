@@ -93,6 +93,23 @@ def test_answer_evidence_table_prefers_jsonl_artifact(tmp_path: Path):
     assert table["groups"]["D"][0]["obs_id"] == "obs_file_only"
 
 
+def test_compact_ledger_expands_target_coverage_navigation_claim(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "target_coverage_context")
+    observation = workspace.write_observation(
+        tool_name="target_coverage",
+        claim="Target coverage matrix: T1 David: seg_0004; T2 Apollo and Daphne: seg_0005.",
+        confidence=1.0,
+        regions=[],
+    )
+    workspace.write_ledger_entry(observation)
+
+    context = workspace.compact_ledger_text()
+
+    assert "## Navigation Summary" in context
+    assert "obs_0001: target_coverage" in context
+    assert "Target coverage matrix: T1 David: seg_0004; T2 Apollo and Daphne: seg_0005." in context
+
+
 def test_evidence_status_summary_reports_coverage_and_duplicates(tmp_path: Path):
     workspace = EvidenceWorkspace.create(tmp_path, "status_summary")
     first = workspace.write_observation(

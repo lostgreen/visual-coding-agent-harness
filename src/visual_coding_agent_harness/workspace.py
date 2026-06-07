@@ -999,7 +999,7 @@ class EvidenceWorkspace:
         sections.extend(["", "## Navigation Summary"])
         if navigation_entries:
             sections.extend(
-                f"- {entry['observation_id']}: {entry.get('tool', 'unknown')}"
+                _format_navigation_entry(entry)
                 for entry in navigation_entries
             )
         else:
@@ -2335,6 +2335,14 @@ def _format_context_only_entry(entry: Mapping[str, Any]) -> str:
         f"- `{entry['observation_id']}` | tool: `{tool_name}` | "
         f"context hint only; not answer support | claim: {claim} | limitations: {limitations}"
     )
+
+
+def _format_navigation_entry(entry: Mapping[str, Any]) -> str:
+    tool_name = str(entry.get("tool", "unknown"))
+    if tool_name == "target_coverage":
+        claim = _compact_text(str(entry.get("claim", "")), limit=720)
+        return f"- {entry['observation_id']}: {tool_name} | claim: {claim or '(empty)'}"
+    return f"- {entry['observation_id']}: {tool_name}"
 
 
 def _format_rawish_entry(entry: Mapping[str, Any]) -> str:

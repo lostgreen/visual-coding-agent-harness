@@ -366,9 +366,9 @@ def _tool_schema_block(*, option_blind: bool = False) -> str:
         else "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
     )
     verifier_schema = (
-        "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', min_score: float = 0.6, required_citations: list = [])\n"
+        "- verify_ledger_answer(answer: str, question: str = '', min_score: float = 0.6, required_citations: list = [])\n"
         if option_blind
-        else "- verify_ledger_answer(answer: str, ledger_text: str = '', question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
+        else "- verify_ledger_answer(answer: str, question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
     )
     return (
         "Available tools:\n"
@@ -380,8 +380,6 @@ def _tool_schema_block(*, option_blind: bool = False) -> str:
         "- expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0)\n"
         "- zoom(segment_id: str, target_granularity_sec: float = 60.0)\n"
         "- global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)\n"
-        "- caption_segments(segment_ids: list = [], question: str = 'Create a concise search caption for this segment.', nframes: int = 8, max_pixels: int = 151200, fps: float = 0.0, max_segments: int = 3)\n"
-        "- ingest_segment_metadata(segment_id: str, low_fps_caption: str = '', asr_text: str = '', ocr_text: str = '', entities: list = [])\n"
         "- summarize_ledger_evidence(max_claims: int = 5)\n"
         f"{verifier_schema}"
         "- view_observation(obs_id: str, line_range: tuple | None = None)\n"

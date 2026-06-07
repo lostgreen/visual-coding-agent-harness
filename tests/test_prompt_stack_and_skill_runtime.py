@@ -112,6 +112,9 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("target_coverage(targets", prompt)
         self.assertIn("read_segment_detail(segment_id", prompt)
         self.assertNotIn("video_ls(query", prompt)
+        self.assertNotIn("caption_segments(segment_ids", prompt)
+        self.assertIn("verify_ledger_answer(answer: str, question: str", prompt)
+        self.assertNotIn("verify_ledger_answer(answer: str, ledger_text", prompt)
 
     def test_slot_prompt_includes_structured_evidence_status_summary(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)

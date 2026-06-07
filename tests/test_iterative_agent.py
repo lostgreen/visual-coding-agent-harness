@@ -343,9 +343,10 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("expand_window(segment_id", prompt)
             self.assertIn("zoom(segment_id", prompt)
             self.assertIn("inspect_segment(video_path", prompt)
-            self.assertIn("caption_segments(segment_ids", prompt)
-            self.assertIn("ingest_segment_metadata(segment_id", prompt)
+            self.assertNotIn("caption_segments(segment_ids", prompt)
+            self.assertNotIn("ingest_segment_metadata(segment_id", prompt)
             self.assertIn("verify_ledger_answer(answer", prompt)
+            self.assertNotIn("verify_ledger_answer(answer: str, ledger_text", prompt)
             self.assertIn("summarize_ledger_evidence", prompt)
             self.assertIn("vision_read(video_path", prompt)
             self.assertIn("max_pixels", prompt)
@@ -355,6 +356,78 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("Multiple-choice answers must use vision_read or inspect_segment", prompt)
             self.assertIn("non-navigation visual observation", prompt)
             self.assertIn("caption_segments is offline VideoMap cache building", prompt)
+
+    def test_option_blind_mcq_seeds_target_coverage_before_first_planner_round(self):
+        class RewriteThenPlanBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                self.requests.append(request)
+                if request.task == "rewrite_exploration_question":
+                    return BackendResponse(
+                        text=(
+                            '{"exploration_question":"Describe the video segment by segment.",'
+                            '"target_entities":["Aeneas, Anchises, and Ascanius fleeing Troy",'
+                            '"David","The rape of Persephone","Apollo and Daphne"]}'
+                        )
+                    )
+                if request.task == "replan":
+                    return BackendResponse(text='{"status": "final", "answer": "not enough evidence yet", "citations": []}')
+                return BackendResponse(text="unexpected")
+
+        backend = RewriteThenPlanBackend([])
+        scene_index = SceneIndex(
+            video_path="/videos/bernini.mp4",
+            duration_sec=1200.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0004",
+                    start_sec=900.0,
+                    end_sec=1200.0,
+                    map_summary="David and Borghese sculpture comparison.",
+                    visual_caption="Bernini's David sculpture is shown.",
+                    asr_summary="The narration discusses David.",
+                ),
+                VideoSegment(
+                    segment_id="seg_0005",
+                    start_sec=1200.0,
+                    end_sec=1500.0,
+                    map_summary="Apollo and Daphne details.",
+                    visual_caption="Apollo and Daphne is shown.",
+                    asr_summary="The narration discusses Apollo and Daphne.",
+                ),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="auto_target_coverage")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_exploration_registry(video_map=VideoMap.from_scene_index(scene_index), backend=backend),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, rewrite_mcq_for_exploration=True),
+            )
+
+            agent.run(
+                question=(
+                    "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+                    "Question: In what order are the four works shown?\n"
+                    "Options:\n"
+                    "A. David, Apollo and Daphne, The rape of Persephone, Aeneas.\n"
+                    "B. Aeneas, David, The rape of Persephone, Apollo and Daphne."
+                ),
+                video_path="/videos/bernini.mp4",
+            )
+
+            prompt = next(request.prompt for request in backend.requests if request.task == "replan")
+            ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+            self.assertIn("Target coverage matrix", prompt)
+            self.assertIn("David", prompt)
+            self.assertIn("Apollo and Daphne", prompt)
+            self.assertIn("target_coverage", ledger)
+            self.assertIn("target_coverage_seeded", trace)
+            self.assertEqual(workspace.observation_count(tool_name="target_coverage"), 1)
 
     def test_iterative_agent_prompt_puts_scene_evidence_before_tooling(self):
         backend = ScriptedPlannerBackend(
@@ -791,9 +864,11 @@ class IterativeAgentTest(unittest.TestCase):
             ]
         )
         registry = ToolRegistry()
+        received = {}
 
         @tool(name="verify_ledger_answer", description="Verify answer support.")
         def verify_ledger_answer(answer: str, ledger_text: str = ""):
+            received["ledger_text"] = ledger_text
             return {"claim": f"{answer} is checked against {ledger_text}", "confidence": 0.8}
 
         registry.register(verify_ledger_answer)
@@ -820,6 +895,8 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             self.assertEqual(result.rounds[0].program[0]["tool"], "verify_ledger_answer")
+            self.assertNotIn("ledger_text", result.rounds[0].program[0]["args"])
+            self.assertEqual(received["ledger_text"], "")
             self.assertEqual(workspace.observation_count(tool_name="verify_ledger_answer"), 1)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertNotIn('"type": "route_violation"', trace)

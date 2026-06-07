@@ -181,6 +181,7 @@ class IterativeVisualAgent:
         self.workspace = workspace
         self.scene_index = scene_index
         self.budget = budget or AgentBudget()
+        self._exploration_target_entities: tuple[str, ...] = ()
         self.context_allocator = default_context_budget_allocator(
             total_budget_tokens=self.budget.context_budget_tokens,
             slot_ratios=dict(self.budget.context_budget_ratios) if self.budget.context_budget_ratios else None,
@@ -190,6 +191,7 @@ class IterativeVisualAgent:
         raw_question = question
         exploration_question_text = self._question_for_exploration(raw_question)
         self.workspace.ensure_hypothesis(question)
+        self._seed_target_coverage(raw_question)
         if not self.budget.rewrite_mcq_for_exploration:
             self._seed_scene_coverage_evidence(raw_question)
         if (
@@ -890,6 +892,7 @@ class IterativeVisualAgent:
         )
 
     def _question_for_exploration(self, question: str) -> str:
+        self._exploration_target_entities = ()
         if not self.budget.rewrite_mcq_for_exploration or not extract_candidate_options(question):
             return question
         rewrite = rewrite_exploration_question_with_model(
@@ -897,6 +900,7 @@ class IterativeVisualAgent:
             question=question,
             route_hint=classify_question_route(question),
         )
+        self._exploration_target_entities = tuple(rewrite.target_entities)
         self.workspace.write_trace_event(
             "mcq_exploration_question_rewrite",
             {
@@ -1183,6 +1187,24 @@ class IterativeVisualAgent:
                     reason="replace_video_path_placeholder",
                     original={"tool": tool_name, "args": original_args},
                     resolved={"tool": tool_name, "args": args},
+                )
+            if tool_name == "verify_ledger_answer" and "ledger_text" in args:
+                original_args = dict(args)
+                args.pop("ledger_text", None)
+                self.workspace.write_trace_event(
+                    "exploration_policy_adjustment",
+                    {
+                        "reason": "strip_verifier_ledger_text",
+                        "tool": tool_name,
+                    },
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=tool_name,
+                    reason="strip_verifier_ledger_text",
+                    original={"tool": tool_name, "args": original_args},
+                    resolved={"tool": tool_name, "args": args},
+                    next_action="verify_ledger_answer reads the workspace ledger automatically; do not pass ledger_text.",
                 )
             if final_round_reserved and tool_name not in _VERIFIER_TOOLS:
                 self.workspace.write_trace_event(
@@ -1854,6 +1876,31 @@ class IterativeVisualAgent:
                     "obs_ids": [str(row.get("obs_id", "")) for row in rows],
                 },
             )
+
+    def _seed_target_coverage(self, question: str) -> None:
+        if not self.budget.rewrite_mcq_for_exploration or not extract_candidate_options(question):
+            return
+        targets = [str(target).strip() for target in self._exploration_target_entities if str(target).strip()]
+        if not targets or not self._has_tool("target_coverage"):
+            return
+        if self.workspace.observation_count(tool_name="target_coverage") > 0:
+            return
+        result = ProgramInterpreter(self.registry, self.workspace).run(
+            [
+                {
+                    "tool": "target_coverage",
+                    "args": {"targets": targets, "top_k": 3},
+                    "assign": "auto_target_coverage",
+                }
+            ]
+        )
+        self.workspace.write_trace_event(
+            "target_coverage_seeded",
+            {
+                "target_count": len(targets),
+                "observation_ids": list(result.observation_ids),
+            },
+        )
 
     def _has_tool(self, tool_name: str) -> bool:
         try:
