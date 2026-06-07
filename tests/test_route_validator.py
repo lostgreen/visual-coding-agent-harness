@@ -184,11 +184,11 @@ def test_main_idea_allows_local_read_after_global_floor(tmp_path: Path):
 def test_main_idea_allows_video_map_exploration(tmp_path: Path):
     registry = ToolRegistry()
 
-    @tool(name="video_ls", description="List candidate segments.")
-    def video_ls(query: str = "", max_segments: int = 3):
-        return {"claim": f"listed {query}", "confidence": 0.4}
+    @tool(name="target_coverage", description="Build target coverage matrix.")
+    def target_coverage(targets: list, top_k: int = 3):
+        return {"claim": f"covered {targets}", "confidence": 0.4}
 
-    registry.register(video_ls)
+    registry.register(target_coverage)
     workspace = EvidenceWorkspace.create(tmp_path, "main_idea_video_ls_allowed")
     agent = IterativeVisualAgent(
         backend=StaticBackend("{}"),
@@ -199,7 +199,7 @@ def test_main_idea_allows_video_map_exploration(tmp_path: Path):
     )
 
     normalized = agent._normalize_program(
-        [{"tool": "video_ls", "args": {"query": "main topic", "max_segments": 2}}],
+        [{"tool": "target_coverage", "args": {"targets": ["main topic"], "top_k": 2}}],
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
@@ -208,7 +208,7 @@ def test_main_idea_allows_video_map_exploration(tmp_path: Path):
         planner_skill=builtin_skill_registry().get("main_idea"),
     )
 
-    assert normalized[0]["tool"] == "video_ls"
+    assert normalized[0]["tool"] == "target_coverage"
     assert "route_violation" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 

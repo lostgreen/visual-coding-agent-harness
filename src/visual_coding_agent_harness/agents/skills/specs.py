@@ -130,7 +130,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 ),
                 self_check=("global_gist is not an option vote", "decision cites coverage evidence"),
                 allowed_actions=frozenset(
-                    {"global_gist", "query_context", "vision_read", "video_ls", "search_segments"}
+                    {"global_gist", "query_context", "vision_read", "target_coverage", "read_segment_detail", "search_segments"}
                     | {"verify_ledger_answer"}
                 ),
             ),
@@ -173,7 +173,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 recovery={"insufficient": {"action": "need_more_evidence", "target": "mutex distinguishing window"}},
                 self_check=("one vision_read per mutex window",),
                 allowed_actions=frozenset(
-                    {"ground_question", "query_context", "vision_read", "zoom", "video_ls", "search_segments"}
+                    {"ground_question", "query_context", "vision_read", "zoom", "target_coverage", "read_segment_detail", "search_segments"}
                     | {"verify_ledger_answer"}
                 ),
             ),
@@ -213,7 +213,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 recovery={"insufficient": {"action": "need_more_evidence", "target": "distinguishing fact window"}},
                 self_check=("decision.citations all visually_confirmed",),
                 allowed_actions=frozenset(
-                    {"ground_question", "query_context", "vision_read", "zoom", "video_ls", "search_segments"}
+                    {"ground_question", "query_context", "vision_read", "zoom", "target_coverage", "read_segment_detail", "search_segments"}
                     | {"verify_ledger_answer"}
                 ),
             ),
@@ -271,7 +271,8 @@ def builtin_skill_registry() -> SkillRegistry:
                         "query_context",
                         "vision_read",
                         "read_timeline_sorted",
-                        "video_ls",
+                        "target_coverage",
+                        "read_segment_detail",
                         "search_segments",
                         "expand_window",
                         "zoom",

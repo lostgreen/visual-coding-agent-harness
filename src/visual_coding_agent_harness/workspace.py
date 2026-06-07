@@ -170,6 +170,8 @@ class EvidenceWorkspace:
         "search_segments",
         "ground_question",
         "read_segment",
+        "read_segment_detail",
+        "target_coverage",
         "expand_window",
         "zoom",
         "commit_map_proposals",

@@ -109,6 +109,9 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertEqual(report.turn_index, 0)
         self.assertIn("task", report.used_tokens_per_slot)
         self.assertIn("tooling", report.used_tokens_per_slot)
+        self.assertIn("target_coverage(targets", prompt)
+        self.assertIn("read_segment_detail(segment_id", prompt)
+        self.assertNotIn("video_ls(query", prompt)
 
     def test_slot_prompt_includes_structured_evidence_status_summary(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)

@@ -69,6 +69,40 @@ def build_video_navigation_registry(
             ),
         }
 
+    @tool(name="target_coverage", description="Build a target-to-segment coverage matrix from indexed caption/ASR/OCR/entity fields.")
+    def target_coverage(targets: Sequence[str], top_k: int = 3, modalities: Sequence[str] = ()) -> Mapping[str, object]:
+        current = video_map_store.current
+        rows = []
+        for index, target in enumerate([str(item).strip() for item in targets if str(item).strip()], start=1):
+            results = current.search(query=target, top_k=top_k, modalities=modalities)
+            candidates = [_coverage_candidate(result) for result in results]
+            status = "candidate" if candidates else "missing"
+            rows.append(
+                {
+                    "target_id": f"T{index}",
+                    "target": target,
+                    "status": status,
+                    "candidates": candidates,
+                    "missing_confirmation": not bool(candidates),
+                }
+            )
+        summary = "; ".join(
+            f"{row['target_id']} {row['target']}: "
+            + (
+                ", ".join(candidate["segment_id"] for candidate in row["candidates"])
+                if row["candidates"]
+                else "missing"
+            )
+            for row in rows
+        )
+        return {
+            "claim": f"Target coverage matrix: {summary or 'no targets supplied'}.",
+            "confidence": 1.0,
+            "input_artifacts": [current.video_path],
+            "coverage": rows,
+            "limitations": "Index coverage only; use read_segment_detail and visual tools to confirm facts before final answers.",
+        }
+
     @tool(name="ground_question", description="Ground a question or event into candidate video windows without answering.")
     def ground_question(query: str, top_k: int = 5, modalities: Sequence[str] = ()) -> Mapping[str, object]:
         current = video_map_store.current
@@ -111,6 +145,29 @@ def build_video_navigation_registry(
             "confidence": 1.0,
             "input_artifacts": [current.video_path],
             "regions": [segment.to_dict()],
+        }
+
+    @tool(name="read_segment_detail", description="Read full indexed details for one segment, including target hits.")
+    def read_segment_detail(segment_id: str, targets: Sequence[str] = ()) -> Mapping[str, object]:
+        current = video_map_store.current
+        segment = current.get(segment_id)
+        target_hits = [_target_hit_for_segment(segment=segment, target=str(target)) for target in targets if str(target).strip()]
+        return {
+            "claim": _segment_detail_claim(segment, target_hits=target_hits),
+            "confidence": 1.0,
+            "input_artifacts": [current.video_path],
+            "segment_id": segment.segment_id,
+            "start_sec": float(segment.start_sec),
+            "end_sec": float(segment.end_sec),
+            "visual_caption": segment.low_fps_caption,
+            "asr_summary": segment.asr_text,
+            "raw_asr_excerpt": segment.asr_text,
+            "ocr_text": segment.ocr_text,
+            "entities": list(segment.entities),
+            "keyframe_paths": list(segment.keyframe_paths),
+            "target_hits": target_hits,
+            "regions": [segment.to_dict()],
+            "limitations": "Indexed segment detail only; call vision_read or caption_segment for fresh visual evidence.",
         }
 
     @tool(name="expand_window", description="Return a bounded temporal window around a segment.")
@@ -213,8 +270,10 @@ def build_video_navigation_registry(
 
     registry.register(video_ls)
     registry.register(search_segments)
+    registry.register(target_coverage)
     registry.register(ground_question)
     registry.register(read_segment)
+    registry.register(read_segment_detail)
     registry.register(expand_window)
     registry.register(zoom)
     registry.register(commit_map_proposals)
@@ -398,6 +457,20 @@ def _grounding_candidate(result: object) -> Mapping[str, object]:
     }
 
 
+def _coverage_candidate(result: object) -> Mapping[str, object]:
+    segment = getattr(result, "segment")
+    return {
+        "segment_id": segment.segment_id,
+        "start_sec": float(segment.start_sec),
+        "end_sec": float(segment.end_sec),
+        "score": float(getattr(result, "score", 0.0) or 0.0),
+        "matched_fields": [str(field) for field in getattr(result, "matched_fields", []) or []],
+        "matches": [dict(match) for match in getattr(result, "matches", []) or [] if isinstance(match, Mapping)],
+        "summary": segment.compact_text(),
+        "relevance_reason": str(getattr(result, "relevance_reason", "") or ""),
+    }
+
+
 def _relevance_reason(matched_fields: Sequence[str]) -> str:
     fields = [str(field) for field in matched_fields if str(field)]
     if not fields:
@@ -414,3 +487,71 @@ def _segment_claim(segment: VideoMapSegment) -> str:
         f"entities: {', '.join(segment.entities)}" if segment.entities else "",
     ]
     return " ".join(part for part in parts if part)
+
+
+def _segment_detail_claim(segment: VideoMapSegment, *, target_hits: Sequence[Mapping[str, object]]) -> str:
+    hit_targets = [str(hit.get("target")) for hit in target_hits if bool(hit.get("matched"))]
+    parts = [
+        f"{segment.segment_id} detail covers {segment.start_sec:.1f}-{segment.end_sec:.1f}s.",
+        "visual caption available" if segment.low_fps_caption else "",
+        "ASR summary available" if segment.asr_text else "",
+        "OCR available" if segment.ocr_text else "",
+        f"entities: {', '.join(segment.entities)}" if segment.entities else "",
+        f"target hits: {', '.join(hit_targets)}" if hit_targets else "target hits: none",
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _target_hit_for_segment(*, segment: VideoMapSegment, target: str) -> Mapping[str, object]:
+    target_text = str(target).strip()
+    target_terms = _target_tokens(target_text)
+    field_hits = []
+    for field_name, field_value in _detail_search_fields(segment).items():
+        value_terms = _target_tokens(field_value)
+        overlap = target_terms.intersection(value_terms)
+        if not overlap:
+            continue
+        field_hits.append(
+            {
+                "field": field_name,
+                "modality": _detail_field_modality(field_name),
+                "matched_terms": sorted(overlap),
+                "evidence": _detail_evidence_snippet(field_value),
+                "score": round(len(overlap) / max(len(target_terms), 1), 3),
+            }
+        )
+    return {
+        "target": target_text,
+        "matched": bool(field_hits),
+        "fields": [str(hit["field"]) for hit in field_hits],
+        "matches": field_hits,
+    }
+
+
+def _target_tokens(text: str) -> set[str]:
+    return {token.lower() for token in re.findall(r"[A-Za-z0-9]+", str(text or ""))}
+
+
+def _detail_search_fields(segment: VideoMapSegment) -> Mapping[str, str]:
+    return {
+        "low_fps_caption": segment.low_fps_caption,
+        "asr_text": segment.asr_text,
+        "ocr_text": segment.ocr_text,
+        "entities": " ".join(segment.entities),
+    }
+
+
+def _detail_field_modality(field_name: str) -> str:
+    return {
+        "low_fps_caption": "caption",
+        "asr_text": "asr",
+        "ocr_text": "ocr",
+        "entities": "entities",
+    }.get(field_name, field_name)
+
+
+def _detail_evidence_snippet(text: str, max_chars: int = 160) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3].rstrip() + "..."

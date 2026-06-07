@@ -373,9 +373,10 @@ def _tool_schema_block(*, option_blind: bool = False) -> str:
     return (
         "Available tools:\n"
         "- ground_question(query: str, top_k: int = 5, modalities: list = [])\n"
-        "- video_ls(query: str = '', max_segments: int = 16, top_k: int = 5)\n"
+        "- target_coverage(targets: list, top_k: int = 3, modalities: list = [])\n"
         "- search_segments(query: str, top_k: int = 5, modalities: list = [])\n"
         "- read_segment(segment_id: str)\n"
+        "- read_segment_detail(segment_id: str, targets: list = [])\n"
         "- expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0)\n"
         "- zoom(segment_id: str, target_granularity_sec: float = 60.0)\n"
         "- global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)\n"
@@ -684,8 +685,10 @@ def _final_gate_block(*, final_round_reserved: bool, option_blind: bool = False)
         else ""
     )
     option_blind_lines = (
-        "- MCQ choices were rewritten into an option-blind exploration task; do not pass candidate choices or option text to local tools.\n"
-        "- Local workers must answer only the rewritten factual question; the AnswerAgent will compare facts to the original choices later.\n"
+        "- MCQ choices were rewritten into an option-blind exploration task; do not pass option labels or candidate choice text to local tools.\n"
+        "- Use target_coverage for a target-to-segment coverage matrix, then read_segment_detail for selected segments.\n"
+        "- Local VLM tools must openly describe what is visible/narrated in the segment; do not ask them to decide whether target items are present or absent.\n"
+        "- The AnswerAgent will compare cited open facts to the original choices later.\n"
         if option_blind
         else (
             "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.\n"
@@ -695,7 +698,9 @@ def _final_gate_block(*, final_round_reserved: bool, option_blind: bool = False)
         )
     )
     return (
-        "- Use video_ls first for open-ended description tasks or when the relevant segment is unclear.\n"
+        "- The compact scene index is the default map; do not call video_ls for short indexed videos.\n"
+        "- Use target_coverage when MCQ/QA targets need a segment coverage matrix.\n"
+        "- Use read_segment_detail to expand one selected segment before spending VLM budget.\n"
         "- For gist/global questions, use global_gist before local decomposition as a sparse topic hint, not an option vote.\n"
         "- caption_segments is offline VideoMap cache building; avoid it in online reasoning unless the cache/indexes are empty.\n"
         "- Use navigation output as a map, then delegate localized visual reading to vision_read or inspect_segment on one candidate segment.\n"

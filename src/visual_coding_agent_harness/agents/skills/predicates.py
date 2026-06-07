@@ -16,7 +16,15 @@ GROUNDING_WEIGHTS = {
     "external_knowledge": 0.1,
 }
 WEAK_GROUNDING = {"global_sparse", "inferred", "weak", "external_knowledge"}
-NAVIGATION_TOOLS = {"video_ls", "search_segments", "read_segment", "expand_window", "zoom"}
+NAVIGATION_TOOLS = {
+    "video_ls",
+    "search_segments",
+    "target_coverage",
+    "read_segment",
+    "read_segment_detail",
+    "expand_window",
+    "zoom",
+}
 VISUAL_GROUNDING = {"visually_confirmed"}
 
 

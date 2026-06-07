@@ -37,6 +37,8 @@ _CHEAP_TOOLS = {
     "search_segments",
     "ground_question",
     "read_segment",
+    "read_segment_detail",
+    "target_coverage",
     "expand_window",
     "zoom",
     "summarize_ledger_evidence",
@@ -3632,6 +3634,18 @@ def _tool_exploration_question(
 ) -> str:
     if not option_blind:
         return exploration_question(question, route_hint=route_hint)
+    lowered_route = str(route_hint or "").lower()
+    if "timeline" in lowered_route or "temporal" in lowered_route:
+        return (
+            "Openly describe this segment's actual visible artworks, objects, people, scene changes, "
+            "onscreen text, and narrated events in presentation order. Include timestamps if possible. "
+            "Do not answer whether a target list is present or absent; report only observed facts."
+        )
+    if "main_idea" in lowered_route or "gist" in lowered_route:
+        return (
+            "Openly describe this segment's actual visual content and narrated topic. Mention concrete "
+            "entities, setting, stage of the story, and any visible text. Do not choose or compare options."
+        )
     cleaned = " ".join(str(question or "").split()).strip()
     if forbidden_question and _text_has_option_surface(cleaned, raw_question=forbidden_question):
         fallback = " ".join(str(question_context or "").split()).strip()

@@ -293,9 +293,11 @@ class IterativeAgentTest(unittest.TestCase):
             agent.run(question="What happens?", video_path="/videos/demo.mp4")
 
             prompt = backend.requests[0].prompt
-            self.assertIn("video_ls(query", prompt)
+            self.assertNotIn("video_ls(query", prompt)
+            self.assertIn("target_coverage(targets", prompt)
             self.assertIn("search_segments(query", prompt)
             self.assertIn("read_segment(segment_id", prompt)
+            self.assertIn("read_segment_detail(segment_id", prompt)
             self.assertIn("expand_window(segment_id", prompt)
             self.assertIn("zoom(segment_id", prompt)
             self.assertIn("inspect_segment(video_path", prompt)

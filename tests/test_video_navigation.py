@@ -99,6 +99,37 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertIn("inspect_segment", next_tools)
         self.assertIn("zoom", next_tools)
 
+    def test_target_coverage_returns_matrix_with_candidates_and_missing_targets(self):
+        registry = build_video_navigation_registry(demo_video_map())
+
+        coverage = registry.execute(
+            "target_coverage",
+            {"targets": ["blue aircraft", "travel diary", "Persephone"], "top_k": 2},
+        )
+
+        self.assertEqual(coverage["coverage"][0]["target"], "blue aircraft")
+        self.assertEqual(coverage["coverage"][0]["status"], "candidate")
+        self.assertEqual(coverage["coverage"][0]["candidates"][0]["segment_id"], "seg_0002")
+        self.assertIn("low_fps_caption", coverage["coverage"][0]["candidates"][0]["matched_fields"])
+        self.assertEqual(coverage["coverage"][1]["candidates"][0]["segment_id"], "seg_0001")
+        self.assertEqual(coverage["coverage"][2]["status"], "missing")
+        self.assertIn("T1 blue aircraft", coverage["claim"])
+
+    def test_read_segment_detail_returns_full_segment_fields_and_target_hits(self):
+        registry = build_video_navigation_registry(demo_video_map())
+
+        detail = registry.execute(
+            "read_segment_detail",
+            {"segment_id": "seg_0002", "targets": ["blue aircraft", "travel diary"]},
+        )
+
+        self.assertEqual(detail["segment_id"], "seg_0002")
+        self.assertIn("A close view of a blue aircraft", detail["visual_caption"])
+        self.assertIn("AVIATION HISTORY", detail["ocr_text"])
+        self.assertEqual(detail["target_hits"][0]["target"], "blue aircraft")
+        self.assertTrue(detail["target_hits"][0]["matched"])
+        self.assertFalse(detail["target_hits"][1]["matched"])
+
     def test_search_segments_returns_modality_channels_and_evidence_snippets(self):
         registry = build_video_navigation_registry(demo_video_map())
 
