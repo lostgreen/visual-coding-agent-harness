@@ -19,7 +19,13 @@ def test_routed_backend_sends_text_tasks_to_text_backend():
     vl = RecordingBackend("vl")
     backend = RoutedBackend(text_backend=text, vl_backend=vl)
 
-    for task in ["replan", "answer_from_evidence", "verify_from_evidence", "summarize_subtitle_segment"]:
+    for task in [
+        "replan",
+        "answer_from_evidence",
+        "verify_from_evidence",
+        "summarize_subtitle_segment",
+        "summarize_scene_map_segment",
+    ]:
         response = backend.generate(BackendRequest(task=task, prompt="text only"))
         assert response.text == f"text:{task}"
         assert response.raw == {"backend": "text", "route_backend": "text"}
@@ -29,6 +35,7 @@ def test_routed_backend_sends_text_tasks_to_text_backend():
         "answer_from_evidence",
         "verify_from_evidence",
         "summarize_subtitle_segment",
+        "summarize_scene_map_segment",
     ]
     assert vl.requests == []
 

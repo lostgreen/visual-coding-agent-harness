@@ -14,6 +14,7 @@ TEXT_TASKS = {
     "rewrite_exploration_question",
     "verify_from_evidence",
     "summarize_subtitle_segment",
+    "summarize_scene_map_segment",
 }
 
 VISION_TASKS = {

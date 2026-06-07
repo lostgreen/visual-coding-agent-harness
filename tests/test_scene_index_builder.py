@@ -45,6 +45,8 @@ class RecordingBackend:
                     )
                 )
             )
+        if request.task == "summarize_scene_map_segment":
+            return BackendResponse(text=json.dumps({"summary": "Museum aircraft intro with a silver plane in a hangar."}))
         raise AssertionError(f"unexpected task: {request.task}")
 
 
@@ -71,6 +73,7 @@ def test_builder_keeps_asr_and_visual_sources_separate() -> None:
     assert [request.task for request in backend.requests] == [
         "summarize_subtitle_segment",
         "caption_scene_segment",
+        "summarize_scene_map_segment",
     ]
     assert backend.requests[1].metadata["nframes"] == 12
     segment = scene_index.segments[0]
@@ -79,6 +82,7 @@ def test_builder_keeps_asr_and_visual_sources_separate() -> None:
     assert segment.asr_summary_source == "summarize_subtitle_segment:text-mini"
     assert segment.visual_caption == "A wide shot shows a silver plane in a hangar."
     assert segment.visual_caption_source == "caption_scene_segment:vl-mini"
+    assert segment.map_summary == "Museum aircraft intro with a silver plane in a hangar."
     assert segment.raw_asr_ref == "cue-1,cue-2"
     assert segment.stage_tags == ("wide shot",)
     assert segment.entities == ("narrator", "aircraft", "plane", "hangar")
@@ -127,7 +131,7 @@ def test_builder_captions_physical_segment_clips(tmp_path) -> None:
     assert "video_1_seg_0002_10000_20000.mp4" in calls[1][1]
 
 
-def test_summary_uses_dual_source_fields_and_does_not_leak_options() -> None:
+def test_summary_uses_one_line_map_not_full_dual_source_detail() -> None:
     backend = RecordingBackend()
     builder = SceneIndexBuilder(backend=backend, text_model_id="text-mini", vl_model_id="vl-mini")
 
@@ -138,16 +142,47 @@ def test_summary_uses_dual_source_fields_and_does_not_leak_options() -> None:
         subtitle_cues=[SubtitleCue(start_sec=0.0, end_sec=1.0, text="Museum aircraft.", cue_id="cue-1")],
     )
 
-    summary = scene_index.summary(max_caption_chars=40)
+    summary = scene_index.summary(max_caption_chars=80)
 
-    assert "ASR: Narrator describes the museum aircraft." in summary
-    assert "Visual: A wide shot shows a silver plane in a..." in summary
-    assert summary.index("Visual:") < summary.index("ASR:")
-    assert "Tags: museum, wide shot" in summary
-    assert "Entities: narrator, aircraft, plane, hangar" in summary
+    assert "seg_0001 [0.0-30.0s] Museum aircraft intro with a silver plane in a hangar." in summary
+    assert "ASR:" not in summary
+    assert "Visual:" not in summary
+    assert "Tags:" not in summary
+    assert "Entities:" not in summary
     assert "supported_option" not in summary
     assert "answer_option" not in summary
     assert "candidate_option_relations" not in summary
+
+
+class NestedJsonBackend(RecordingBackend):
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        if request.task == "summarize_subtitle_segment":
+            return BackendResponse(text=json.dumps({"summary": json.dumps({"summary": "Clean ASR sentence."})}))
+        if request.task == "caption_scene_segment":
+            return BackendResponse(text=json.dumps({"caption": json.dumps({"caption": "Clean visual sentence."})}))
+        if request.task == "summarize_scene_map_segment":
+            return BackendResponse(text=json.dumps({"summary": "Clean one-line map."}))
+        raise AssertionError(f"unexpected task: {request.task}")
+
+
+def test_builder_unwraps_nested_generated_json_fields() -> None:
+    backend = NestedJsonBackend()
+    builder = SceneIndexBuilder(backend=backend, text_model_id="text-mini", vl_model_id="vl-mini")
+
+    scene_index = builder.build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=[SubtitleCue(start_sec=0.0, end_sec=1.0, text="Museum aircraft.", cue_id="cue-1")],
+    )
+
+    segment = scene_index.segments[0]
+
+    assert segment.asr_summary == "Clean ASR sentence."
+    assert segment.visual_caption == "Clean visual sentence."
+    assert segment.map_summary == "Clean one-line map."
+    assert "summary" not in scene_index.summary()
 
 
 def test_scene_index_cache_avoids_duplicate_backend_calls(tmp_path) -> None:
@@ -165,5 +200,5 @@ def test_scene_index_cache_avoids_duplicate_backend_calls(tmp_path) -> None:
     first = builder.build(video_id="video-1", video_path="/tmp/video-1.mp4", duration_sec=30.0, subtitle_cues=cues)
     second = builder.build(video_id="video-1", video_path="/tmp/video-1.mp4", duration_sec=30.0, subtitle_cues=cues)
 
-    assert len(backend.requests) == 2
+    assert len(backend.requests) == 3
     assert first.to_dict() == second.to_dict()

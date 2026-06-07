@@ -163,6 +163,7 @@ class VideoNavigationTest(unittest.TestCase):
                     low_fps_caption="A gallery wall is shown.",
                     visual_caption="Paintings hang in a museum gallery.",
                     asr_summary="The narration describes Goya's humble birth background and social class transition.",
+                    map_summary="Goya museum gallery and early life context.",
                     entities=("Goya",),
                     topic_tags=("biography",),
                     stage_tags=("early life",),

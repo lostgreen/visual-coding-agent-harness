@@ -19,6 +19,7 @@ class VideoSegment:
     visual_caption_source: str = ""
     asr_summary: str = ""
     asr_summary_source: str = ""
+    map_summary: str = ""
     raw_asr_ref: str = ""
     stage_tags: Sequence[str] = field(default_factory=tuple)
     entities: Sequence[str] = field(default_factory=tuple)
@@ -40,6 +41,7 @@ class VideoSegment:
             "visual_caption_source": self.visual_caption_source,
             "asr_summary": self.asr_summary,
             "asr_summary_source": self.asr_summary_source,
+            "map_summary": self.map_summary,
             "raw_asr_ref": self.raw_asr_ref,
             "stage_tags": list(self.stage_tags),
             "entities": list(self.entities),
@@ -63,6 +65,7 @@ class VideoSegment:
             visual_caption_source=str(value.get("visual_caption_source") or ""),
             asr_summary=str(value.get("asr_summary") or ""),
             asr_summary_source=str(value.get("asr_summary_source") or ""),
+            map_summary=str(value.get("map_summary") or ""),
             raw_asr_ref=str(value.get("raw_asr_ref") or ""),
             stage_tags=tuple(str(item) for item in value.get("stage_tags") or ()),
             entities=tuple(str(item) for item in value.get("entities") or ()),
@@ -106,21 +109,11 @@ class SceneIndex:
 
         lines = []
         for segment in self.segments[:max_segments]:
-            parts = []
-            if segment.visual_caption:
-                parts.append(f"Visual: {_bounded_text(segment.visual_caption, max_caption_chars)}")
-            if segment.asr_summary:
-                parts.append(f"ASR: {_bounded_text(segment.asr_summary, max_caption_chars)}")
-            tags = _unique_texts([*segment.topic_tags, *segment.stage_tags])
-            if tags:
-                parts.append(f"Tags: {', '.join(tags)}")
-            entities = _unique_texts(segment.entities)
-            if entities:
-                parts.append(f"Entities: {', '.join(entities)}")
-            if not parts:
-                caption = segment.low_fps_caption or segment.keyframe_path or "no coarse caption yet"
-                parts.append(_bounded_text(caption, max_caption_chars))
-            lines.append(f"{segment.segment_id} [{segment.start_sec:.1f}-{segment.end_sec:.1f}s] {' | '.join(parts)}")
+            caption = segment.map_summary or segment.low_fps_caption or segment.keyframe_path or "no coarse caption yet"
+            lines.append(
+                f"{segment.segment_id} [{segment.start_sec:.1f}-{segment.end_sec:.1f}s] "
+                f"{_bounded_text(caption, max_caption_chars)}"
+            )
         remaining = len(self.segments) - max_segments
         if remaining > 0:
             lines.append(f"... {remaining} more segments omitted")

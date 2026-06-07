@@ -241,6 +241,48 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("seg_0002", ledger)
             self.assertIn("aircraft history", ledger)
 
+    def test_compact_scene_index_uses_map_summary_not_full_dual_source_detail(self):
+        backend = ScriptedPlannerBackend(
+            ['{"status": "final", "answer": "not enough evidence yet", "citations": []}']
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/bernini.mp4",
+            duration_sec=300.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=300.0,
+                    visual_caption="A long visual caption with detailed descriptions of sketches and paintings.",
+                    asr_summary="A long ASR summary about Bernini biography and narration.",
+                    map_summary="Bernini introduction with sketches, paintings, and biography context.",
+                    entities=("Bernini", "classical painting"),
+                    topic_tags=("biography",),
+                    stage_tags=("intro",),
+                )
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="compact_map")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+            )
+
+            agent.run(question="What is the video about?", video_path="/videos/bernini.mp4")
+
+        prompt = backend.requests[0].prompt
+
+        self.assertIn("seg_0001 [0.0-300.0s] Bernini introduction with sketches", prompt)
+        self.assertNotIn("Visual:", prompt)
+        self.assertNotIn("ASR:", prompt)
+        self.assertNotIn("Entities:", prompt)
+        self.assertNotIn("A long visual caption", prompt)
+        self.assertNotIn("A long ASR summary", prompt)
+
     def test_iterative_agent_planner_is_text_only_by_default(self):
         backend = ScriptedPlannerBackend(
             [

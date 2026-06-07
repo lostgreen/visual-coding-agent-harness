@@ -15,7 +15,7 @@ from ...video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from .scene_index_cache import SceneIndexCache
 
 
-SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dual_source_scene_index_v2"
+SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dual_source_scene_index_v3"
 
 ClipExtractor = Callable[[str, str, float, float], str]
 
@@ -83,11 +83,13 @@ class SceneIndexBuilder:
             segment_cues = _cues_for_segment(cues, segment)
             asr_data = self._summarize_subtitles(segment=segment, cues=segment_cues)
             visual_data = self._caption_scene(video_id=video_id, video_path=video_path, segment=segment)
+            map_summary = self._summarize_scene_map(segment=segment, asr_data=asr_data, visual_data=visual_data)
             segments.append(
                 _merge_segment(
                     segment,
                     asr_data=asr_data,
                     visual_data=visual_data,
+                    map_summary=map_summary,
                     asr_source=f"summarize_subtitle_segment:{self.text_model_id}",
                     visual_source=f"caption_scene_segment:{self.vl_model_id}",
                 )
@@ -149,7 +151,7 @@ class SceneIndexBuilder:
         if not data:
             data = {"summary": response.text}
         return {
-            "summary": _clean_text(data.get("summary") or data.get("asr_summary") or ""),
+            "summary": _clean_generated_text(data.get("summary") or data.get("asr_summary") or "", "summary", "asr_summary"),
             "entities": _clean_list(data.get("entities")),
             "topic_tags": _clean_list(data.get("topic_tags") or data.get("tags")),
             "confidence": _clean_float(data.get("confidence")),
@@ -191,11 +193,43 @@ class SceneIndexBuilder:
         if not data:
             data = {"caption": response.text}
         return {
-            "caption": _clean_text(data.get("caption") or data.get("visual_caption") or ""),
+            "caption": _clean_generated_text(data.get("caption") or data.get("visual_caption") or "", "caption", "visual_caption"),
             "stage_tags": _clean_list(data.get("stage_tags")),
             "entities": _clean_list(data.get("entities")),
             "grounding_quality": _clean_text(data.get("grounding_quality") or ""),
         }
+
+    def _summarize_scene_map(
+        self,
+        *,
+        segment: VideoSegment,
+        asr_data: Mapping[str, Any],
+        visual_data: Mapping[str, Any],
+    ) -> str:
+        response = self.backend.generate(
+            BackendRequest(
+                task="summarize_scene_map_segment",
+                prompt=(
+                    "Create one short planner map line for this fixed video segment. "
+                    "Use the visual caption as the primary signal and subtitle/ASR only as supplementary context. "
+                    "Return JSON with summary only. The summary must be one sentence, under 22 words, "
+                    "and must not mention answer options, candidate answers, Tags, Entities, Visual, or ASR labels.\n"
+                    f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s\n"
+                    f"Visual caption: {_clean_text(visual_data.get('caption') or '')}\n"
+                    f"Subtitle/ASR summary: {_clean_text(asr_data.get('summary') or '')}"
+                ),
+                max_new_tokens=96,
+                metadata={
+                    "segment_id": segment.segment_id,
+                    "start_sec": segment.start_sec,
+                    "end_sec": segment.end_sec,
+                    "model_id": self.text_model_id,
+                },
+            )
+        )
+        data = _parse_lenient_json(response.text)
+        summary = _clean_generated_text(data.get("summary") if data else response.text, "summary", "map_summary")
+        return summary or _fallback_map_summary(asr_data=asr_data, visual_data=visual_data)
 
 
 def subtitle_hash(cues: Sequence[SubtitleCue]) -> str:
@@ -217,10 +251,12 @@ def _merge_segment(
     *,
     asr_data: Mapping[str, Any],
     visual_data: Mapping[str, Any],
+    map_summary: str,
     asr_source: str,
     visual_source: str,
 ) -> VideoSegment:
-    visual_caption = _clean_text(visual_data.get("caption") or "")
+    visual_caption = _clean_generated_text(visual_data.get("caption") or "", "caption", "visual_caption")
+    asr_summary = _clean_generated_text(asr_data.get("summary") or "", "summary", "asr_summary")
     return VideoSegment(
         segment_id=segment.segment_id,
         start_sec=segment.start_sec,
@@ -231,8 +267,9 @@ def _merge_segment(
         source_segment_id=segment.segment_id,
         visual_caption=visual_caption,
         visual_caption_source=visual_source,
-        asr_summary=_clean_text(asr_data.get("summary") or ""),
+        asr_summary=asr_summary,
         asr_summary_source=asr_source,
+        map_summary=_clean_generated_text(map_summary, "summary", "map_summary"),
         raw_asr_ref=_clean_text(asr_data.get("raw_asr_ref") or ""),
         stage_tags=tuple(_clean_list(visual_data.get("stage_tags"))),
         entities=tuple(
@@ -337,6 +374,25 @@ def _coerce_cue(cue: SubtitleCue) -> SubtitleCue:
 
 def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _clean_generated_text(value: Any, *preferred_keys: str) -> str:
+    text = _clean_text(value)
+    if not text or not (text.startswith("{") and text.endswith("}")):
+        return text
+    data = _parse_lenient_json(text)
+    for key in preferred_keys:
+        if key in data:
+            nested = _clean_text(data.get(key))
+            if nested != text:
+                return _clean_generated_text(nested, *preferred_keys)
+    return text
+
+
+def _fallback_map_summary(*, asr_data: Mapping[str, Any], visual_data: Mapping[str, Any]) -> str:
+    visual = _clean_generated_text(visual_data.get("caption") or "", "caption", "visual_caption")
+    asr = _clean_generated_text(asr_data.get("summary") or "", "summary", "asr_summary")
+    return _clean_text(visual or asr or "no coarse caption yet")
 
 
 def _clean_list(value: Any) -> list[str]:
