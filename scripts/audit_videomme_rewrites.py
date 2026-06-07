@@ -185,7 +185,17 @@ def _option_leak(text: str, options: Sequence[str]) -> bool:
     if re.search(r"\b(?:option|choice|answer)\s*[A-H]\b", text, flags=re.IGNORECASE):
         return True
     normalized_text = _normalize(text)
-    return any(_normalize(option) and _normalize(option) in normalized_text for option in options)
+    return any(_normalized_option_leaks(option, normalized_text=normalized_text) for option in options)
+
+
+def _normalized_option_leaks(option: str, *, normalized_text: str) -> bool:
+    normalized_option = _normalize(re.sub(r"^\s*[A-H][\).:-]\s+", "", str(option or ""), flags=re.IGNORECASE))
+    if not normalized_option:
+        return False
+    if normalized_option in normalized_text:
+        return True
+    option_terms = [term for term in normalized_option.split() if len(term) >= 4]
+    return len(option_terms) >= 2 and all(re.search(rf"\b{re.escape(term)}\b", normalized_text) for term in option_terms)
 
 
 def _normalize(text: str) -> str:

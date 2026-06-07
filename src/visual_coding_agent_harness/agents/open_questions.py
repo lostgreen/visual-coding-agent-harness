@@ -146,8 +146,11 @@ def _rewrite_prompt(*, question: str, route_hint: str = "") -> str:
         '{"exploration_question": string, "focus_points": [string], "target_entities": [string]}\n\n'
         "Rules:\n"
         "- Do not include option labels such as A, B, C, D, or words like option/choice/answer.\n"
-        "- Do not copy the choices as alternatives. Extract the discriminative facts, entities, events, attributes, "
-        "and temporal relations that should be observed.\n"
+        "- Do not copy candidate answer values into exploration_question, even paraphrased as alternatives. Put useful "
+        "candidate entities only in target_entities metadata.\n"
+        "- exploration_question must be an open observation request, not a checklist, detector, or comparison among "
+        "candidate answers. Extract the discriminative facts, entities, events, attributes, and temporal relations "
+        "that should be observed.\n"
         "- For main-idea questions, ask for overall topic, main entity, time span, narrative arc, and major stages "
         "such as origin, growth, stability, decline, collapse, causes, or consequences when relevant.\n"
         "- For temporal-order questions, extract the unique events/entities into target_entities metadata, but keep "
@@ -254,7 +257,8 @@ def _leaks_option_surface(rewritten: str, raw_question: str) -> bool:
     if re.search(r"(?m)^\s*[A-H][\).:-]\s+\S+", text):
         return True
     raw_options = _option_texts(raw_question)
-    return any(option and option in text for option in raw_options)
+    normalized_text = _normalized_surface(text)
+    return any(_normalized_option_leaks(option, normalized_text=normalized_text) for option in raw_options)
 
 
 def _option_texts(question: str) -> list[str]:
@@ -264,6 +268,23 @@ def _option_texts(question: str) -> list[str]:
         if match:
             options.append(" ".join(match.group(1).split()).strip())
     return options
+
+
+def _normalized_option_leaks(option: str, *, normalized_text: str) -> bool:
+    normalized_option = _normalized_surface(option)
+    if not normalized_option:
+        return False
+    if normalized_option in normalized_text:
+        return True
+    option_terms = [term for term in normalized_option.split() if len(term) >= 4]
+    if len(option_terms) >= 2 and all(re.search(rf"\b{re.escape(term)}\b", normalized_text) for term in option_terms):
+        return True
+    return False
+
+
+def _normalized_surface(text: str) -> str:
+    normalized = re.sub(r"(?<!^)\b[A-H][\).:-]\s+", " ", str(text or ""), flags=re.IGNORECASE)
+    return re.sub(r"[^a-z0-9]+", " ", normalized.lower()).strip()
 
 
 def _quoted_targets(question: str) -> list[str]:

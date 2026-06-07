@@ -105,6 +105,37 @@ class OpenQuestionsTest(unittest.TestCase):
         self.assertEqual(rewrite.fallback_reason, "rewrite_option_leak")
         assert_no_mcq_leak(self, rewrite.exploration_question)
 
+    def test_model_rewrite_falls_back_when_output_lists_option_values_case_insensitively(self):
+        question = (
+            "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
+            "Question: Which is the best title of the video?\n"
+            "Options:\n"
+            "A. Wild animals\n"
+            "B. Ocean animals\n"
+            "C. Diverse fishes\n"
+            "D. Protect the sea"
+        )
+
+        class CandidateValueBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                return BackendResponse(
+                    text=(
+                        '{"exploration_question":"Determine whether the focus is on wild animals, ocean animals, '
+                        'diverse fishes, or a call to protect the sea.","target_entities":["wild animals",'
+                        '"ocean animals","diverse fishes","protect the sea"]}'
+                    )
+                )
+
+        rewrite = rewrite_exploration_question_with_model(CandidateValueBackend(), question=question)
+
+        self.assertFalse(rewrite.used_model)
+        self.assertEqual(rewrite.fallback_reason, "rewrite_option_leak")
+        lowered = rewrite.exploration_question.lower()
+        self.assertNotIn("wild animals", lowered)
+        self.assertNotIn("ocean animals", lowered)
+        self.assertNotIn("diverse fishes", lowered)
+        self.assertNotIn("protect the sea", lowered)
+
     def test_temporal_rewrite_keeps_targets_as_metadata_not_local_tool_instruction(self):
         class CandidateOrderBackend(VisionLanguageBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
