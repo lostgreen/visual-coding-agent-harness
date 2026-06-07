@@ -503,6 +503,28 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertTrue(config.budget.disable_global_gist_route)
 
+    def test_max_rounds_raises_default_expensive_tool_budget_for_segment_sweep(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(["--max-rounds", "20"])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.budget.max_rounds, 20)
+        self.assertEqual(config.budget.expensive_tool_budget, 20)
+
+    def test_explicit_expensive_tool_budget_is_respected(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(["--max-rounds", "20", "--expensive-tool-budget", "6"])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.budget.max_rounds, 20)
+        self.assertEqual(config.budget.expensive_tool_budget, 6)
+
     def test_context_budget_cli_flags_build_agent_config(self):
         from runs import eval_runner
 

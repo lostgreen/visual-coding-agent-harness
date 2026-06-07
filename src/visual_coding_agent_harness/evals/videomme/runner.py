@@ -1097,7 +1097,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--planner-receives-media", action="store_true")
     parser.add_argument("--no-reserve-final-round", action="store_true")
     parser.add_argument("--cheap-tool-budget", type=int, default=16)
-    parser.add_argument("--expensive-tool-budget", type=int, default=6)
+    parser.add_argument("--expensive-tool-budget", type=int, default=None)
     parser.add_argument("--verifier-tool-budget", type=int, default=2)
     parser.add_argument(
         "--hard-skill-runtime",
@@ -1139,6 +1139,11 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
     context_budget_tokens = args.context_budget_tokens
     if args.enable_context_budget is False:
         context_budget_tokens = 10**9
+    expensive_tool_budget = (
+        int(args.expensive_tool_budget)
+        if args.expensive_tool_budget is not None
+        else max(int(args.max_rounds), AgentBudget().expensive_tool_budget)
+    )
     budget = (
         AgentBudget.free_explore(
             max_rounds=args.free_max_rounds,
@@ -1155,7 +1160,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             planner_receives_media=args.planner_receives_media,
             reserve_final_round=not args.no_reserve_final_round,
             cheap_tool_budget=args.cheap_tool_budget,
-            expensive_tool_budget=args.expensive_tool_budget,
+            expensive_tool_budget=expensive_tool_budget,
             verifier_tool_budget=args.verifier_tool_budget,
             disable_global_gist_route=args.disable_global_gist_route,
         )
