@@ -1021,6 +1021,7 @@ def run_strategy(
             window_sec=config.window_sec,
             caption_nframes=config.scene_caption_nframes,
             cache=cache,
+            clip_root=config.scene_index_cache_dir / "clips",
         )
         scene_index = builder.build(
             video_id=video_id,

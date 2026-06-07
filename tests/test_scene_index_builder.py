@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import (
@@ -86,6 +87,44 @@ def test_builder_keeps_asr_and_visual_sources_separate() -> None:
     assert segment.grounding_quality == "medium"
     assert segment.citation_provenance["asr"] == "subtitle"
     assert segment.citation_provenance["visual"] == "video"
+
+
+def test_builder_captions_physical_segment_clips(tmp_path) -> None:
+    backend = RecordingBackend()
+    calls = []
+
+    def fake_extract(video_path: str, output_path: str, start_sec: float, end_sec: float) -> str:
+        calls.append((video_path, output_path, start_sec, end_sec))
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_text("clip", encoding="utf-8")
+        return output_path
+
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=10.0,
+        clip_root=tmp_path / "clips",
+        clip_extractor=fake_extract,
+    )
+
+    builder.build(
+        video_id="video 1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=25.0,
+        subtitle_cues=[SubtitleCue(start_sec=0.0, end_sec=1.0, text="Museum aircraft.", cue_id="cue-1")],
+    )
+
+    visual_requests = [request for request in backend.requests if request.task == "caption_scene_segment"]
+
+    assert len(visual_requests) == 3
+    assert [(round(call[2], 3), round(call[3], 3)) for call in calls] == [(0.0, 10.0), (10.0, 20.0), (20.0, 25.0)]
+    assert all(call[0] == "/tmp/video-1.mp4" for call in calls)
+    assert all(request.media_path != "/tmp/video-1.mp4" for request in visual_requests)
+    assert [request.media_path for request in visual_requests] == [call[1] for call in calls]
+    assert visual_requests[1].metadata["source_video_path"] == "/tmp/video-1.mp4"
+    assert visual_requests[1].metadata["clip_path"] == calls[1][1]
+    assert "video_1_seg_0002_10000_20000.mp4" in calls[1][1]
 
 
 def test_summary_uses_dual_source_fields_and_does_not_leak_options() -> None:

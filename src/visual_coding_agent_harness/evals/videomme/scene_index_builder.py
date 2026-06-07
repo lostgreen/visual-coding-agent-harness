@@ -5,15 +5,19 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Sequence
+from pathlib import Path
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ...backends.base import BackendRequest, VisionLanguageBackend
 from ...video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from .scene_index_cache import SceneIndexCache
 
 
-SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dual_source_scene_index_v1"
+SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dual_source_scene_index_v2"
+
+ClipExtractor = Callable[[str, str, float, float], str]
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,8 @@ class SceneIndexBuilder:
         window_sec: float = 30.0,
         caption_nframes: int = 8,
         cache: Optional[SceneIndexCache] = None,
+        clip_root: Optional[Path | str] = None,
+        clip_extractor: Optional[ClipExtractor] = None,
         schema_version: str = SCENE_INDEX_BUILDER_SCHEMA_VERSION,
     ) -> None:
         self.backend = backend
@@ -42,6 +48,8 @@ class SceneIndexBuilder:
         self.window_sec = window_sec
         self.caption_nframes = caption_nframes
         self.cache = cache
+        self.clip_root = Path(clip_root) if clip_root is not None else None
+        self.clip_extractor = clip_extractor or _extract_clip_ffmpeg
         self.schema_version = schema_version
 
     def build(
@@ -74,7 +82,7 @@ class SceneIndexBuilder:
         for segment in base.segments:
             segment_cues = _cues_for_segment(cues, segment)
             asr_data = self._summarize_subtitles(segment=segment, cues=segment_cues)
-            visual_data = self._caption_scene(video_path=video_path, segment=segment)
+            visual_data = self._caption_scene(video_id=video_id, video_path=video_path, segment=segment)
             segments.append(
                 _merge_segment(
                     segment,
@@ -105,6 +113,7 @@ class SceneIndexBuilder:
             "duration_sec": round(float(duration_sec), 3),
             "window_sec": round(float(self.window_sec), 3),
             "caption_nframes": int(self.caption_nframes),
+            "visual_clip_policy": "physical_clip" if self.clip_root is not None else "whole_video_metadata",
             "subtitle_hash": subtitle_hash(subtitle_cues),
             "text_model_id": self.text_model_id,
             "vl_model_id": self.vl_model_id,
@@ -149,7 +158,20 @@ class SceneIndexBuilder:
             ),
         }
 
-    def _caption_scene(self, *, video_path: str, segment: VideoSegment) -> Mapping[str, Any]:
+    def _caption_scene(self, *, video_id: str, video_path: str, segment: VideoSegment) -> Mapping[str, Any]:
+        media_path = video_path
+        metadata: dict[str, Any] = {
+            "segment_id": segment.segment_id,
+            "start_sec": segment.start_sec,
+            "end_sec": segment.end_sec,
+            "nframes": int(self.caption_nframes),
+            "model_id": self.vl_model_id,
+        }
+        if self.clip_root is not None:
+            clip_path = _clip_output_path(clip_root=self.clip_root, video_id=video_id, segment=segment)
+            media_path = self.clip_extractor(video_path, str(clip_path), segment.start_sec, segment.end_sec)
+            metadata["source_video_path"] = video_path
+            metadata["clip_path"] = media_path
         response = self.backend.generate(
             BackendRequest(
                 task="caption_scene_segment",
@@ -159,16 +181,10 @@ class SceneIndexBuilder:
                     "Do not include answer options or candidate option relations.\n"
                     f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s"
                 ),
-                media_path=video_path,
+                media_path=media_path,
                 media_type="video",
                 max_new_tokens=256,
-                metadata={
-                    "segment_id": segment.segment_id,
-                    "start_sec": segment.start_sec,
-                    "end_sec": segment.end_sec,
-                    "nframes": int(self.caption_nframes),
-                    "model_id": self.vl_model_id,
-                },
+                metadata=metadata,
             )
         )
         data = _parse_lenient_json(response.text)
@@ -227,6 +243,52 @@ def _merge_segment(
         grounding_quality=_clean_text(visual_data.get("grounding_quality") or ""),
         citation_provenance={"asr": "subtitle", "visual": "video"},
     )
+
+
+def _clip_output_path(*, clip_root: Path, video_id: str, segment: VideoSegment) -> Path:
+    safe_video_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(video_id)).strip("_") or "video"
+    safe_segment_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", segment.segment_id).strip("_") or "segment"
+    start_ms = int(round(segment.start_sec * 1000))
+    end_ms = int(round(segment.end_sec * 1000))
+    return clip_root / safe_video_id / f"{safe_video_id}_{safe_segment_id}_{start_ms}_{end_ms}.mp4"
+
+
+def _extract_clip_ffmpeg(video_path: str, output_path: str, start_sec: float, end_sec: float) -> str:
+    output = Path(output_path)
+    if output.exists() and output.stat().st_size > 0:
+        return str(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    duration = max(0.001, float(end_sec) - float(start_sec))
+    command = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{float(start_sec):.3f}",
+        "-i",
+        video_path,
+        "-t",
+        f"{duration:.3f}",
+        "-map",
+        "0:v:0",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        "28",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError("ffmpeg is required to extract scene-index clips") from exc
+    except subprocess.CalledProcessError as exc:
+        message = (exc.stderr or exc.stdout or "").strip().splitlines()[-3:]
+        raise RuntimeError(f"ffmpeg failed to extract scene-index clip: {' | '.join(message)}") from exc
+    return output_path
 
 
 def _parse_lenient_json(text: str) -> Mapping[str, Any]:
