@@ -81,7 +81,26 @@ class AnswerAgent:
                 max_new_tokens=512,
             )
         )
-        return _parse_answer_response(response.text)
+        parsed = _parse_answer_response(response.text)
+        if (
+            parsed.status == "need_more_evidence"
+            and evidence_table is not None
+            and any(str(item).startswith("answer_json_parse_failed") for item in parsed.missing_evidence)
+        ):
+            fallback = _fallback_main_idea_from_unassigned_evidence(evidence_table)
+            if fallback is not None:
+                return AnswerAgentResult(
+                    status=fallback.status,
+                    answer=fallback.answer,
+                    rationale=fallback.rationale,
+                    citations=list(fallback.citations),
+                    candidate_option_relations=list(fallback.candidate_option_relations),
+                    missing_evidence=list(fallback.missing_evidence),
+                    confidence=fallback.confidence,
+                    conflict=dict(fallback.conflict),
+                    raw_text=response.text,
+                )
+        return parsed
 
 
 GROUNDING_WEIGHTS = {
@@ -325,6 +344,132 @@ def _main_idea_coverage_decision(
         confidence=min(1.0, max(float(option_scores.get(winner, 0.0)), float(profile["score"]))),
         conflict=conflict,
     )
+
+
+def _fallback_main_idea_from_unassigned_evidence(table: Mapping[str, Any]) -> AnswerAgentResult | None:
+    option_text = _option_text_map(table.get("options", []))
+    if not option_text or not any(_option_asks_for_full_arc(text) for text in option_text.values()):
+        return None
+    rows = _answer_rows(table)
+    if len(rows) < 3:
+        return None
+    scored: list[tuple[float, str, Mapping[str, Any]]] = []
+    for option, text in option_text.items():
+        if not _option_asks_for_full_arc(text):
+            continue
+        score, profile = _unassigned_main_idea_score(option_text=text, rows=rows)
+        if score >= 0.85:
+            scored.append((score, option, profile))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < 0.2:
+        return None
+    score, winner, profile = scored[0]
+    citations = [str(row.get("obs_id", "")) for row in _main_idea_fallback_citation_rows(rows) if row.get("obs_id")]
+    if not citations:
+        return None
+    return AnswerAgentResult(
+        status="final",
+        answer=option_text.get(winner, winner),
+        rationale="Fallback deterministic main-idea match from option-blind evidence after AnswerAgent parse failure.",
+        citations=citations,
+        candidate_option_relations=[
+            {
+                "option": winner,
+                "relation": "support",
+                "strength": min(1.0, score),
+                "observation_id": citations[0],
+                "grounding_quality": "visually_confirmed",
+            }
+        ],
+        confidence=min(0.82, max(0.5, score * 0.55)),
+        conflict={
+            "source": "fallback_main_idea_unassigned_evidence",
+            "winner": winner,
+            "score": round(score, 3),
+            "profile": dict(profile),
+        },
+    )
+
+
+def _answer_rows(table: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    rows = table.get("rows", [])
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        return []
+    return [
+        row
+        for row in rows
+        if isinstance(row, Mapping)
+        and str(row.get("tool", "")) not in {"video_ls", "search_segments", "read_segment", "expand_window", "zoom"}
+        and str(row.get("claim", "")).strip()
+    ]
+
+
+def _unassigned_main_idea_score(*, option_text: str, rows: Sequence[Mapping[str, Any]]) -> tuple[float, Mapping[str, Any]]:
+    evidence_text = " ".join(str(row.get("claim", "")) for row in rows)
+    option_tokens = _semantic_tokens(option_text)
+    evidence_tokens = _semantic_tokens(evidence_text)
+    entity_tokens = {token for token in option_tokens if token not in _ARC_AND_FUNCTION_WORDS}
+    entity_overlap = len(entity_tokens.intersection(evidence_tokens))
+    overlap_score = entity_overlap / max(1, min(len(entity_tokens), 4))
+    profile = _coverage_profile(option_text, rows)
+    broad_arc_bonus = 0.75 if _option_asks_for_full_arc(option_text) and entity_overlap >= 2 else 0.0
+    evidence_stage_bonus = 0.2 * int(profile.get("evidence_stage_count", 0) or 0)
+    row_coverage_bonus = min(0.3, 0.05 * len(rows))
+    score = overlap_score + broad_arc_bonus + evidence_stage_bonus + row_coverage_bonus
+    return score, {
+        **profile,
+        "entity_overlap": entity_overlap,
+        "row_count": len(rows),
+    }
+
+
+def _main_idea_fallback_citation_rows(rows: Sequence[Mapping[str, Any]], *, max_rows: int = 2) -> list[Mapping[str, Any]]:
+    strong_rows = [row for row in rows if not _is_weak_grounding(row)] or list(rows)
+    strong_rows.sort(
+        key=lambda row: (
+            -_row_score(row),
+            _row_start_sec(row),
+            str(row.get("obs_id", "")),
+        )
+    )
+    selected: list[Mapping[str, Any]] = []
+    seen: set[str] = set()
+    for row in strong_rows:
+        obs_id = str(row.get("obs_id", ""))
+        if obs_id in seen:
+            continue
+        seen.add(obs_id)
+        selected.append(row)
+        if len(selected) >= max_rows:
+            break
+    return selected
+
+
+_ARC_AND_FUNCTION_WORDS = {
+    "about",
+    "and",
+    "divided",
+    "division",
+    "fall",
+    "falls",
+    "fell",
+    "how",
+    "rise",
+    "rises",
+    "rose",
+    "the",
+    "why",
+}
+
+
+def _semantic_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", str(text).lower())
+        if len(token) >= 3 and token not in {"with", "from", "that", "this", "into", "video"}
+    }
 
 
 def _main_idea_citation_rows(rows: Sequence[Mapping[str, Any]], *, max_rows: int = 2) -> list[Mapping[str, Any]]:

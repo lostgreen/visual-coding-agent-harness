@@ -45,6 +45,51 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.answer, "D. full rise and fall")
         self.assertEqual(result.citations, ["obs_0003"])
 
+    def test_answer_agent_falls_back_to_main_idea_unassigned_evidence_after_parse_failure(self):
+        backend = StaticBackend("I think D because the whole video covers the empire.")
+        table = {
+            "options": [
+                "A. The fall of Rome",
+                "B. Why the Austro-Hungarian Empire was divided",
+                "C. A battle timeline",
+                "D. How the Austro-Hungarian Empire rises and falls",
+            ],
+            "rows": [
+                {
+                    "obs_id": "obs_0002",
+                    "tool": "vision_read",
+                    "claim": "A map of Austria and Hungary appears with historical political regions.",
+                    "confidence": 0.72,
+                    "grounding_quality": "visually_confirmed",
+                },
+                {
+                    "obs_id": "obs_0003",
+                    "tool": "vision_read",
+                    "claim": "A cartoon character stands in front of a map of Austria-Hungary.",
+                    "confidence": 0.78,
+                    "grounding_quality": "visually_confirmed",
+                },
+                {
+                    "obs_id": "obs_0007",
+                    "tool": "vision_read",
+                    "claim": "A map of the Austro-Hungarian Empire shows ethnic groups in 1910.",
+                    "confidence": 0.74,
+                    "grounding_quality": "weak",
+                },
+            ],
+        }
+
+        result = AnswerAgent(backend).run(
+            question="What is the main idea?",
+            evidence_text="- evidence",
+            evidence_table=table,
+        )
+
+        self.assertEqual(result.status, "final")
+        self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rises and falls")
+        self.assertTrue(result.citations)
+        self.assertEqual(result.conflict["source"], "fallback_main_idea_unassigned_evidence")
+
     def test_arbitration_prefers_visually_grounded_support_over_weak_caption(self):
         table = {
             "options": ["A. first order", "D. fourth order"],
