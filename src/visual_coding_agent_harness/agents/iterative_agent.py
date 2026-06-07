@@ -990,6 +990,7 @@ class IterativeVisualAgent:
         active_skill = planner_skill
         blocked_route_violation = False
         pool_exhausted_logged = False
+        pending_one_shot_tools: set[str] = set()
         for step in program:
             if not isinstance(step, Mapping):
                 raise ValueError("Planner program steps must be objects")
@@ -1021,7 +1022,7 @@ class IterativeVisualAgent:
                     original={"tool": original_tool_name, "args": original_args},
                     resolved={"tool": tool_name, "args": args},
                 )
-            exhausted_tools = _exhausted_one_shot_tools(self.workspace)
+            exhausted_tools = _exhausted_one_shot_tools(self.workspace) | frozenset(pending_one_shot_tools)
             if tool_name in exhausted_tools and not self.budget.free_exploration:
                 blocked_route_violation = True
                 next_action = (
@@ -1080,40 +1081,36 @@ class IterativeVisualAgent:
                     original={"tool": original_tool_name, "args": original_args},
                     resolved={"tool": tool_name, "args": args},
                 )
-            if (
-                active_skill is not None
-                and not self.budget.free_exploration
-                and tool_name not in active_skill.allowed_actions
-            ):
+            segment_id = args.get("segment_id")
+            if segment_id and tool_name == "read_segment":
+                segment = _scene_segment_or_none(self.scene_index, str(segment_id))
+                if segment is not None and not _segment_has_index_text(segment):
+                    original_tool_name = tool_name
+                    self.workspace.write_trace_event(
+                        "exploration_policy_adjustment",
+                        {
+                            "reason": "upgrade_empty_read_segment_to_caption",
+                            "requested_tool": "read_segment",
+                            "resolved_tool": "caption_segment",
+                            "segment_id": segment.segment_id,
+                        },
+                    )
+                    tool_name = "caption_segment"
+                    _append_normalization_note(
+                        notes_out,
+                        tool=original_tool_name,
+                        reason="upgrade_empty_read_segment_to_caption",
+                        original={"tool": original_tool_name, "segment_id": segment.segment_id},
+                        resolved={"tool": tool_name, "segment_id": segment.segment_id},
+                    )
+            if _tool_denied_by_skill(tool_name=tool_name, active_skill=active_skill, free_exploration=self.budget.free_exploration):
                 blocked_route_violation = True
-                allowed_actions = ", ".join(sorted(active_skill.allowed_actions)) or "(none)"
-                next_action = (
-                    f"{tool_name} is not in the active skill ({active_skill.name}) allowed_actions. "
-                    f"Pick one of: {allowed_actions}."
-                )
-                self.workspace.write_trace_event(
-                    "route_violation",
-                    {
-                        "tool": tool_name,
-                        "error": "tool_not_in_allowed_actions",
-                        "skill": active_skill.name,
-                        "next_action": next_action,
-                    },
-                )
-                self.workspace.write_reflection_memory(
-                    route=active_skill.trigger.route,
-                    failure_tag="tool_not_in_allowed_actions",
-                    rule=(
-                        f"Skill {active_skill.name} only permits: {allowed_actions}. "
-                        f"{tool_name} is denied. Do not request it again."
-                    ),
-                )
-                _append_normalization_note(
-                    notes_out,
-                    tool=tool_name,
-                    reason="tool_not_in_allowed_actions",
-                    original={"tool": tool_name, "args": args},
-                    next_action=next_action,
+                _record_skill_deny_list_violation(
+                    workspace=self.workspace,
+                    notes_out=notes_out,
+                    tool_name=tool_name,
+                    args=args,
+                    active_skill=active_skill,
                 )
                 continue
             violation = _route_violation(tool_name=tool_name, active_skill=active_skill, free_exploration=self.budget.free_exploration)
@@ -1159,29 +1156,6 @@ class IterativeVisualAgent:
                     original={"tool": tool_name, "args": args},
                 )
                 continue
-
-            segment_id = args.get("segment_id")
-            if segment_id and tool_name == "read_segment":
-                segment = _scene_segment_or_none(self.scene_index, str(segment_id))
-                if segment is not None and not _segment_has_index_text(segment):
-                    original_tool_name = tool_name
-                    self.workspace.write_trace_event(
-                        "exploration_policy_adjustment",
-                        {
-                            "reason": "upgrade_empty_read_segment_to_caption",
-                            "requested_tool": "read_segment",
-                            "resolved_tool": "caption_segment",
-                            "segment_id": segment.segment_id,
-                        },
-                    )
-                    tool_name = "caption_segment"
-                    _append_normalization_note(
-                        notes_out,
-                        tool=original_tool_name,
-                        reason="upgrade_empty_read_segment_to_caption",
-                        original={"tool": original_tool_name, "segment_id": segment.segment_id},
-                        resolved={"tool": tool_name, "segment_id": segment.segment_id},
-                    )
 
             if not _tool_budget_available(
                 budget=self.budget,
@@ -1331,10 +1305,12 @@ class IterativeVisualAgent:
                 normalized_step["assign"] = str(step["assign"])
             normalized.append(normalized_step)
             pending_tool_class_counts[_tool_class(tool_name)] += 1
+            if tool_name in _ONE_SHOT_TOOLS:
+                pending_one_shot_tools.add(tool_name)
 
         if not normalized and not final_round_reserved and not blocked_route_violation:
             fallback_segment_id = self._resolve_next_segment_id("", reserved_segment_ids)
-            fallback_tool_name = self._fallback_visual_tool_name()
+            fallback_tool_name = self._fallback_visual_tool_name_for_skill(active_skill)
             if fallback_segment_id is not None and fallback_tool_name is not None and _tool_budget_available(
                 budget=self.budget,
                 tool_name=fallback_tool_name,
@@ -3686,6 +3662,51 @@ def _tool_budget_limit(*, budget: AgentBudget, tool_class: str) -> int:
     if tool_class == "verifier":
         return budget.verifier_tool_budget
     return budget.cheap_tool_budget
+
+
+def _tool_denied_by_skill(*, tool_name: str, active_skill: SkillSpec | None, free_exploration: bool) -> bool:
+    return active_skill is not None and not free_exploration and tool_name not in active_skill.allowed_actions
+
+
+def _record_skill_deny_list_violation(
+    *,
+    workspace: EvidenceWorkspace,
+    notes_out: list[NormalizationNote] | None,
+    tool_name: str,
+    args: Mapping[str, Any],
+    active_skill: SkillSpec | None,
+) -> None:
+    if active_skill is None:
+        return
+    allowed_actions = ", ".join(sorted(active_skill.allowed_actions)) or "(none)"
+    next_action = (
+        f"{tool_name} is not in the active skill ({active_skill.name}) allowed_actions. "
+        f"Pick one of: {allowed_actions}."
+    )
+    workspace.write_trace_event(
+        "route_violation",
+        {
+            "tool": tool_name,
+            "error": "tool_not_in_allowed_actions",
+            "skill": active_skill.name,
+            "next_action": next_action,
+        },
+    )
+    workspace.write_reflection_memory(
+        route=active_skill.trigger.route,
+        failure_tag="tool_not_in_allowed_actions",
+        rule=(
+            f"Skill {active_skill.name} only permits: {allowed_actions}. "
+            f"{tool_name} is denied. Do not request it again."
+        ),
+    )
+    _append_normalization_note(
+        notes_out,
+        tool=tool_name,
+        reason="tool_not_in_allowed_actions",
+        original={"tool": tool_name, "args": dict(args)},
+        next_action=next_action,
+    )
 
 
 def _tool_class(tool_name: str) -> str:

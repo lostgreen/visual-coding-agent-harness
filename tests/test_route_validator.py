@@ -362,6 +362,114 @@ def test_timeline_ordering_allows_window_expansion(tmp_path: Path):
     assert "route_violation" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 
+def test_timeline_skill_upgrades_empty_read_segment_before_deny_list(tmp_path: Path):
+    backend = StaticBackend("{}")
+    registry = ToolRegistry()
+
+    @tool(name="caption_segment", description="Caption one segment.")
+    def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str = "", **kwargs):
+        return {"claim": f"caption {segment_id}", "confidence": 0.75}
+
+    registry.register(caption_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_read_upgrade_before_deny")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=24.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
+        ),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [{"tool": "read_segment", "args": {"segment_id": "seg_0001"}}],
+        question="Which order is shown?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("timeline_ordering"),
+    )
+
+    assert normalized[0]["tool"] == "caption_segment"
+    assert normalized[0]["args"]["segment_id"] == "seg_0001"
+    assert "tool_not_in_allowed_actions" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+
+def test_skill_aware_empty_program_fallback_uses_allowed_visual_tool(tmp_path: Path):
+    backend = StaticBackend("{}")
+    registry = ToolRegistry()
+
+    @tool(name="inspect_segment", description="Registered but not allowed for timeline skill.")
+    def inspect_segment(**kwargs):
+        return {"claim": "should not be selected", "confidence": 0.1}
+
+    @tool(name="caption_segment", description="Allowed timeline fallback.")
+    def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str = "", **kwargs):
+        return {"claim": f"caption {segment_id}", "confidence": 0.75}
+
+    registry.register(inspect_segment)
+    registry.register(caption_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "skill_aware_fallback")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [],
+        question="Which order is shown?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("timeline_ordering"),
+    )
+
+    assert normalized[0]["tool"] == "caption_segment"
+    assert normalized[0]["args"]["segment_id"] == "seg_0001"
+
+
+def test_same_round_duplicate_global_gist_is_dropped(tmp_path: Path):
+    backend = StaticBackend("{}")
+    registry = ToolRegistry()
+
+    @tool(name="global_gist", description="Read sparse global evidence.")
+    def global_gist(video_path: str, question: str, duration_sec: float):
+        return {"claim": "global", "confidence": 0.7}
+
+    registry.register(global_gist)
+    workspace = EvidenceWorkspace.create(tmp_path, "same_round_one_shot")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=2, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [
+            {"tool": "global_gist", "args": {"question": "main idea", "duration_sec": 12.0}},
+            {"tool": "global_gist", "args": {"question": "main idea again", "duration_sec": 12.0}},
+        ],
+        question="What is the video mainly about?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("main_idea"),
+    )
+
+    assert [step["tool"] for step in normalized] == ["global_gist"]
+
+
 def test_planner_selected_skill_overrides_fallback_route_for_tool_policy(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(
