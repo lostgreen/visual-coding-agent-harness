@@ -84,6 +84,10 @@ def test_builder_keeps_asr_and_visual_sources_separate() -> None:
     assert segment.visual_caption_source == "caption_scene_segment:vl-mini"
     assert segment.map_summary == "Museum aircraft intro with a silver plane in a hangar."
     assert segment.raw_asr_ref == "cue-1,cue-2"
+    assert segment.asr_sentences == (
+        {"cue_id": "cue-1", "start_sec": 0.0, "end_sec": 4.0, "text": "Welcome to the aircraft museum."},
+        {"cue_id": "cue-2", "start_sec": 8.0, "end_sec": 9.0, "text": "This plane is silver."},
+    )
     assert segment.stage_tags == ("wide shot",)
     assert segment.entities == ("narrator", "aircraft", "plane", "hangar")
     assert segment.topic_tags == ("museum",)

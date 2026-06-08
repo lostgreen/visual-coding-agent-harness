@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Mapping, Optional, Sequence
 
@@ -146,8 +147,87 @@ def build_segment_inspector_registry(
                 ]
         return result
 
+    @tool(name="verify_segment_anchors", description="Verify text-located target anchors with a focused visual read.")
+    def verify_segment_anchors(
+        video_path: str,
+        segment_id: str,
+        anchors: Sequence[Mapping[str, object]],
+        question: str = "",
+        targets: Sequence[str] = (),
+        start_sec: float = 0.0,
+        end_sec: float = 0.0,
+        nframes: int | None = 8,
+        max_pixels: int = 360 * 420,
+        fps: float = 0.0,
+    ) -> Mapping[str, object]:
+        anchor_list = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)]
+        window_start, window_end = _anchor_union_window(
+            anchors=anchor_list,
+            fallback_start=float(start_sec),
+            fallback_end=float(end_sec),
+        )
+        prompt = _verify_segment_anchors_prompt(
+            segment_id=segment_id,
+            anchors=anchor_list,
+            question=question,
+            targets=targets,
+        )
+        raw_result = dict(
+            _run_inspector(
+                backend=backend,
+                video_path=video_path,
+                segment_id=segment_id,
+                start_sec=window_start,
+                end_sec=window_end,
+                question=question or "Verify target anchors.",
+                candidate_options=(),
+                nframes=nframes,
+                max_pixels=max_pixels,
+                fps=fps,
+                workspace=workspace,
+                extract_clips=extract_clips,
+                clip_extractor=clip_extractor,
+                task_name="verify_segment_anchors",
+                prompt_style="vision_read",
+                prompt_override=prompt,
+                max_new_tokens=768,
+                nframes_tool_cap=8,
+            )
+        )
+        parsed = _parse_anchor_verification(raw_result.get("claim", ""))
+        confirmations = parsed["confirmations"]
+        rejections = parsed["rejections"]
+        timeline_rows = _timeline_rows_from_confirmations(
+            confirmations=confirmations,
+            segment_id=segment_id,
+            fallback_window=[window_start, window_end],
+        )
+        claim = (
+            f"verify_segment_anchors({segment_id}, {len(anchor_list)} anchors): "
+            f"confirmed {len(confirmations)} / rejected {len(rejections)}."
+        )
+        if timeline_rows:
+            claim += " Confirmed targets: " + ", ".join(str(row["entity"]) for row in timeline_rows) + "."
+        raw_result.update(
+            {
+                "claim": claim,
+                "confidence": 0.82 if confirmations else 0.45,
+                "confirmations": confirmations,
+                "rejections": rejections,
+                "timeline_rows": timeline_rows,
+                "anchors": anchor_list,
+                "targets": list(targets),
+                "grounding_quality": "visually_confirmed" if confirmations else "inferred",
+                "limitations": (
+                    "Focused VLM verification over locator-proposed anchors; use confirmations, not rejected targets, as evidence."
+                ),
+            }
+        )
+        return raw_result
+
     registry.register(inspect_segment)
     registry.register(vision_read)
+    registry.register(verify_segment_anchors)
     return registry
 
 
@@ -171,8 +251,10 @@ def _run_inspector(
     prompt_override: str = "",
     original_question: str | None = None,
     original_candidate_options: Sequence[str] = (),
+    max_new_tokens: int = 512,
+    nframes_tool_cap: int | None = None,
 ) -> Mapping[str, object]:
-    resolved_nframes, _ = resolve_nframes(nframes)
+    resolved_nframes, _ = resolve_nframes(nframes, tool_cap=nframes_tool_cap)
     metadata_candidate_options = list(original_candidate_options or candidate_options)
     metadata = {
         "tool_role": "segment_inspector",
@@ -307,6 +389,127 @@ def _vision_read_prompt(
         f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]\n"
         f"Ask for: {ask_for}"
     )
+
+
+def _verify_segment_anchors_prompt(
+    *,
+    segment_id: str,
+    anchors: Sequence[Mapping[str, object]],
+    question: str,
+    targets: Sequence[str],
+) -> str:
+    lines = [
+        "You are a focused visual verifier for target anchors in one video segment.",
+        "Inspect only the supplied anchor windows. Use the anchor reason only as a hint, not as proof.",
+        "Confirm targets only when visible, narrated, OCR-visible, or visually identifiable in this window.",
+        "Return JSON only with keys confirmations and rejections.",
+        "Each confirmation should include target, relative_sec if possible, observed_at_sec if possible, and evidence.",
+        "Each rejection should include target and reason.",
+        "Use relative seconds within each anchor when possible; do not choose or compare multiple-choice options.",
+        f"Segment: {segment_id}",
+    ]
+    if question:
+        lines.append(f"Question context: {question}")
+    if targets:
+        lines.append("Unordered target names: " + "; ".join(str(target) for target in targets))
+    lines.append("Anchors:")
+    for index, anchor in enumerate(anchors, start=1):
+        anchor_targets = anchor.get("targets", [])
+        target_text = (
+            "; ".join(str(target) for target in anchor_targets)
+            if isinstance(anchor_targets, Sequence) and not isinstance(anchor_targets, (str, bytes))
+            else str(anchor_targets)
+        )
+        lines.append(
+            f"- A{index}: id={anchor.get('anchor_id', '')} "
+            f"[{float(anchor.get('start_sec', 0.0) or 0.0):.3f}s, {float(anchor.get('end_sec', 0.0) or 0.0):.3f}s]; "
+            f"targets={target_text}; reason={anchor.get('reason', '')}"
+        )
+    return "\n".join(lines)
+
+
+def _anchor_union_window(
+    *,
+    anchors: Sequence[Mapping[str, object]],
+    fallback_start: float,
+    fallback_end: float,
+) -> tuple[float, float]:
+    starts = [float(anchor.get("start_sec", 0.0) or 0.0) for anchor in anchors]
+    ends = [float(anchor.get("end_sec", 0.0) or 0.0) for anchor in anchors]
+    starts = [value for value in starts if value > 0 or fallback_start <= 0]
+    ends = [value for value in ends if value > 0]
+    start = min(starts) if starts else float(fallback_start)
+    end = max(ends) if ends else float(fallback_end or start)
+    if end < start:
+        end = start
+    return start, end
+
+
+def _parse_anchor_verification(text: object) -> dict[str, list[dict[str, object]]]:
+    parsed = _json_object_from_text(str(text or ""))
+    confirmations = parsed.get("confirmations", []) if isinstance(parsed, Mapping) else []
+    rejections = parsed.get("rejections", []) if isinstance(parsed, Mapping) else []
+    return {
+        "confirmations": [dict(item) for item in confirmations if isinstance(item, Mapping)],
+        "rejections": [dict(item) for item in rejections if isinstance(item, Mapping)],
+    }
+
+
+def _json_object_from_text(text: str) -> Mapping[str, object]:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return {}
+    try:
+        loaded = json.loads(stripped)
+        return loaded if isinstance(loaded, Mapping) else {}
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start == -1 or end <= start:
+            return {}
+        try:
+            loaded = json.loads(stripped[start : end + 1])
+            return loaded if isinstance(loaded, Mapping) else {}
+        except json.JSONDecodeError:
+            return {}
+
+
+def _timeline_rows_from_confirmations(
+    *,
+    confirmations: Sequence[Mapping[str, object]],
+    segment_id: str,
+    fallback_window: Sequence[float],
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for confirmation in confirmations:
+        target = str(confirmation.get("target", "")).strip()
+        if not target:
+            continue
+        observed_at = _optional_float(confirmation.get("observed_at_sec"))
+        if observed_at is None:
+            relative = _optional_float(confirmation.get("relative_sec"))
+            if relative is not None and fallback_window:
+                observed_at = float(fallback_window[0]) + relative
+        rows.append(
+            {
+                "segment_id": segment_id,
+                "entity": target,
+                "observed_at_sec": observed_at,
+                "window": [float(fallback_window[0]), float(fallback_window[1])] if len(fallback_window) >= 2 else [],
+                "confidence_signal": "visually_confirmed",
+                "claim": str(confirmation.get("evidence") or confirmation.get("claim") or ""),
+            }
+        )
+    return rows
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sanitize_vision_read_ask_for(ask_for: str) -> str:

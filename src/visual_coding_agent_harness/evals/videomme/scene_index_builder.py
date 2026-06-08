@@ -15,7 +15,7 @@ from ...video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from .scene_index_cache import SceneIndexCache
 
 
-SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dual_source_scene_index_v3"
+SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dual_source_scene_index_v4"
 
 ClipExtractor = Callable[[str, str, float, float], str]
 
@@ -158,6 +158,7 @@ class SceneIndexBuilder:
             "raw_asr_ref": _clean_text(
                 data.get("raw_asr_ref") or ",".join(cue.cue_id for cue in cues if cue.cue_id)
             ),
+            "asr_sentences": _cue_sentence_rows(cues),
         }
 
     def _caption_scene(self, *, video_id: str, video_path: str, segment: VideoSegment) -> Mapping[str, Any]:
@@ -279,6 +280,7 @@ def _merge_segment(
         confidence=_clean_float(asr_data.get("confidence")),
         grounding_quality=_clean_text(visual_data.get("grounding_quality") or ""),
         citation_provenance={"asr": "subtitle", "visual": "video"},
+        asr_sentences=tuple(dict(item) for item in asr_data.get("asr_sentences") or ()),
     )
 
 
@@ -369,6 +371,19 @@ def _coerce_cue(cue: SubtitleCue) -> SubtitleCue:
         end_sec=float(getattr(cue, "end_sec", getattr(cue, "start_sec"))),
         text=str(getattr(cue, "text")),
         cue_id=str(getattr(cue, "cue_id", "") or ""),
+    )
+
+
+def _cue_sentence_rows(cues: Sequence[SubtitleCue]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {
+            "cue_id": str(cue.cue_id),
+            "start_sec": float(cue.start_sec),
+            "end_sec": float(cue.end_sec),
+            "text": _clean_text(cue.text),
+        }
+        for cue in cues
+        if _clean_text(cue.text)
     )
 
 

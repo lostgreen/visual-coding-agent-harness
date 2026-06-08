@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
@@ -27,6 +28,9 @@ class VideoSegment:
     confidence: Optional[float] = None
     grounding_quality: str = ""
     citation_provenance: Mapping[str, str] = field(default_factory=dict)
+    asr_sentences: Sequence[Mapping[str, object]] = field(default_factory=tuple)
+    ocr_frames: Sequence[Mapping[str, object]] = field(default_factory=tuple)
+    limitations: Sequence[str] = field(default_factory=tuple)
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -49,6 +53,9 @@ class VideoSegment:
             "confidence": self.confidence,
             "grounding_quality": self.grounding_quality,
             "citation_provenance": dict(self.citation_provenance),
+            "asr_sentences": [dict(item) for item in self.asr_sentences],
+            "ocr_frames": [dict(item) for item in self.ocr_frames],
+            "limitations": list(self.limitations),
         }
 
     @classmethod
@@ -73,6 +80,9 @@ class VideoSegment:
             confidence=float(value["confidence"]) if value.get("confidence") is not None else None,
             grounding_quality=str(value.get("grounding_quality") or ""),
             citation_provenance={str(k): str(v) for k, v in dict(value.get("citation_provenance") or {}).items()},
+            asr_sentences=tuple(dict(item) for item in value.get("asr_sentences") or ()),
+            ocr_frames=tuple(dict(item) for item in value.get("ocr_frames") or ()),
+            limitations=tuple(str(item) for item in value.get("limitations") or ()),
         )
 
 
@@ -103,7 +113,12 @@ class SceneIndex:
             segments=[VideoSegment.from_dict(item) for item in value.get("segments", [])],
         )
 
-    def summary(self, max_segments: int = 16, max_caption_chars: int = 240) -> str:
+    def summary(
+        self,
+        max_segments: int = 16,
+        max_caption_chars: int = 240,
+        target_hints: Sequence[str] = (),
+    ) -> str:
         if not self.segments:
             return "(no segments indexed)"
 
@@ -114,6 +129,9 @@ class SceneIndex:
                 f"{segment.segment_id} [{segment.start_sec:.1f}-{segment.end_sec:.1f}s] "
                 f"{_bounded_text(caption, max_caption_chars)}"
             )
+            mentions = _target_asr_mentions(segment=segment, targets=target_hints)
+            if mentions:
+                lines.append("  asr mentions: " + ", ".join(mentions))
         remaining = len(self.segments) - max_segments
         if remaining > 0:
             lines.append(f"... {remaining} more segments omitted")
@@ -159,6 +177,34 @@ def _bounded_text(value: str, limit: int) -> str:
     if limit <= 3:
         return value[:limit]
     return value[: limit - 3].rstrip() + "..."
+
+
+def _target_asr_mentions(*, segment: VideoSegment, targets: Sequence[str]) -> list[str]:
+    mentions: list[str] = []
+    for target in [str(item).strip() for item in targets if str(item).strip()]:
+        for sentence in segment.asr_sentences:
+            if not isinstance(sentence, Mapping):
+                continue
+            if not _target_phrase_in_text(target=target, text=str(sentence.get("text") or "")):
+                continue
+            timestamp = float(sentence.get("start_sec", segment.start_sec) or segment.start_sec)
+            mentions.append(f"{target} @ ~{timestamp:.1f}s")
+            break
+    return mentions
+
+
+def _target_phrase_in_text(*, target: str, text: str) -> bool:
+    tokens = [token.lower() for token in re.findall(r"[A-Za-z0-9]+", str(target or ""))]
+    if not tokens:
+        return False
+    patterns = [tokens]
+    if tokens[0] == "the" and len(tokens) > 1:
+        patterns.append(tokens[1:])
+    for pattern_tokens in patterns:
+        regex = r"\b" + r"[\W_]+".join(re.escape(token) for token in pattern_tokens) + r"\b"
+        if re.search(regex, str(text or ""), flags=re.IGNORECASE):
+            return True
+    return False
 
 
 def _unique_texts(values: Sequence[str]) -> list[str]:

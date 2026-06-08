@@ -159,6 +159,104 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(detail["recommended_next_tools"][0]["tool"], "vision_read")
         self.assertEqual(detail["recommended_next_tools"][0]["args"]["segment_id"], "seg_0002")
 
+    def test_read_segment_detail_navigation_summary_surfaces_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="detail_digest")
+            registry = build_video_navigation_registry(demo_video_map(), workspace=workspace)
+            ProgramInterpreter(registry=registry, workspace=workspace).run(
+                [
+                    {
+                        "tool": "read_segment_detail",
+                        "args": {"segment_id": "seg_0002", "targets": ["blue aircraft"]},
+                    }
+                ]
+            )
+
+            compact = workspace.compact_ledger_text()
+
+        self.assertIn("read_segment_detail", compact)
+        self.assertIn("blue aircraft", compact)
+        self.assertIn("A close view of a blue aircraft", compact)
+        self.assertIn("AVIATION HISTORY", compact)
+
+    def test_locate_targets_in_segment_returns_text_anchors_without_evidence(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=600.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    low_fps_caption="Bernini sculptures are discussed.",
+                    asr_text=(
+                        "Apollo appears in a mythological aside. The narration later lists "
+                        "Aeneas, Anchises, and Ascanius fleeing Troy, David, The Rape of Persephone, "
+                        "and Apollo and Daphne."
+                    ),
+                    asr_sentences=[
+                        {
+                            "start_sec": 410.0,
+                            "end_sec": 416.0,
+                            "text": "Apollo appears in a mythological aside.",
+                        },
+                        {
+                            "start_sec": 430.0,
+                            "end_sec": 448.0,
+                            "text": (
+                                "The narration later lists Aeneas, Anchises, and Ascanius fleeing Troy, "
+                                "David, The Rape of Persephone, and Apollo and Daphne."
+                            ),
+                        },
+                    ],
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="locate_targets")
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            result = ProgramInterpreter(registry=registry, workspace=workspace).run(
+                [
+                    {
+                        "tool": "locate_targets_in_segment",
+                        "args": {
+                            "segment_id": "seg_0002",
+                            "targets": [
+                                "Aeneas, Anchises, and Ascanius fleeing Troy",
+                                "David",
+                                "The rape of Persephone",
+                                "Apollo and Daphne",
+                            ],
+                        },
+                    }
+                ]
+            )
+            observation = workspace.read_observations(tool_name="locate_targets_in_segment")[0]
+
+        raw = observation.raw_output
+        self.assertEqual(result.observation_ids, ["obs_0001"])
+        self.assertEqual([candidate["target"] for candidate in raw["candidates"]], [
+            "Aeneas, Anchises, and Ascanius fleeing Troy",
+            "David",
+            "The rape of Persephone",
+            "Apollo and Daphne",
+        ])
+        self.assertTrue(all(candidate["source"] == "asr_sentence" for candidate in raw["candidates"]))
+        self.assertTrue(all(candidate["start_sec"] == 430.0 for candidate in raw["candidates"]))
+        self.assertEqual(len(raw["anchors_for_vlm"]), 1)
+        self.assertEqual(raw["anchors_for_vlm"][0]["targets"], [
+            "Aeneas, Anchises, and Ascanius fleeing Troy",
+            "David",
+            "The rape of Persephone",
+            "Apollo and Daphne",
+        ])
+        self.assertLess(raw["anchors_for_vlm"][0]["start_sec"], 430.0)
+        self.assertGreater(raw["anchors_for_vlm"][0]["end_sec"], 448.0)
+        self.assertIn("verify_segment_anchors", raw["limitations"])
+        self.assertEqual(raw["recommended_next_tools"][0]["tool"], "verify_segment_anchors")
+        self.assertEqual(workspace.evidence_table_row_count(), 0)
+
     def test_search_segments_returns_modality_channels_and_evidence_snippets(self):
         registry = build_video_navigation_registry(demo_video_map())
 
@@ -192,6 +290,14 @@ class VideoNavigationTest(unittest.TestCase):
                     low_fps_caption="A gallery wall is shown.",
                     visual_caption="Paintings hang in a museum gallery.",
                     asr_summary="The narration describes Goya's humble birth background and social class transition.",
+                    asr_sentences=(
+                        {
+                            "cue_id": "cue-1",
+                            "start_sec": 3.0,
+                            "end_sec": 8.0,
+                            "text": "The narration describes Goya's humble birth background.",
+                        },
+                    ),
                     map_summary="Goya museum gallery and early life context.",
                     entities=("Goya",),
                     topic_tags=("biography",),
@@ -207,6 +313,7 @@ class VideoNavigationTest(unittest.TestCase):
 
         self.assertEqual(segment.low_fps_caption, "Paintings hang in a museum gallery.")
         self.assertEqual(segment.asr_text, scene_index.segments[0].asr_summary)
+        self.assertEqual(segment.asr_sentences, scene_index.segments[0].asr_sentences)
         self.assertIn("Goya", segment.entities)
         self.assertIn("biography", segment.entities)
         self.assertIn("early life", segment.entities)
@@ -214,6 +321,33 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(asr_results[0].matched_fields, ["asr_text"])
         self.assertEqual(asr_results[0].matches[0]["modality"], "asr")
         self.assertEqual(entity_results[0].segment.segment_id, "seg_0001")
+
+    def test_scene_index_summary_renders_target_asr_mentions(self):
+        scene_index = SceneIndex(
+            video_path="/videos/bernini.mp4",
+            duration_sec=600.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    map_summary="Bernini discusses Borghese sculptures.",
+                    asr_sentences=(
+                        {
+                            "start_sec": 430.0,
+                            "end_sec": 448.0,
+                            "text": "The narration lists David and Apollo and Daphne.",
+                        },
+                    ),
+                )
+            ],
+        )
+
+        summary = scene_index.summary(target_hints=["David", "Apollo and Daphne", "Persephone"])
+
+        self.assertIn("seg_0002 [300.0-600.0s] Bernini discusses Borghese sculptures.", summary)
+        self.assertIn("asr mentions: David @ ~430.0s, Apollo and Daphne @ ~430.0s", summary)
+        self.assertNotIn("Persephone", summary)
 
     def test_navigation_registry_reads_updated_video_map_store(self):
         store = VideoMapStore(demo_video_map())

@@ -21,6 +21,9 @@ class VideoMapSegment:
     ocr_text: str = ""
     entities: Sequence[str] = field(default_factory=list)
     embedding_refs: Sequence[str] = field(default_factory=list)
+    asr_sentences: Sequence[Mapping[str, object]] = field(default_factory=tuple)
+    ocr_frames: Sequence[Mapping[str, object]] = field(default_factory=tuple)
+    limitations: Sequence[str] = field(default_factory=tuple)
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -34,6 +37,9 @@ class VideoMapSegment:
             "ocr_text": self.ocr_text,
             "entities": list(self.entities),
             "embedding_refs": list(self.embedding_refs),
+            "asr_sentences": [dict(item) for item in self.asr_sentences],
+            "ocr_frames": [dict(item) for item in self.ocr_frames],
+            "limitations": list(self.limitations),
         }
 
     def compact_text(self) -> str:
@@ -87,6 +93,9 @@ class VideoMap:
                     keyframe_paths=[segment.keyframe_path] if segment.keyframe_path else [],
                     low_fps_caption=segment.visual_caption or segment.low_fps_caption,
                     asr_text=segment.asr_summary,
+                    asr_sentences=tuple(dict(item) for item in segment.asr_sentences),
+                    ocr_frames=tuple(dict(item) for item in segment.ocr_frames),
+                    limitations=tuple(str(item) for item in segment.limitations),
                     entities=_unique_texts([*segment.entities, *segment.topic_tags, *segment.stage_tags]),
                 )
                 for segment in scene_index.segments

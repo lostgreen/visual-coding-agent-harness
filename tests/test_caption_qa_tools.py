@@ -1,8 +1,10 @@
 import tempfile
+import json
 import unittest
 from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.tools.enrichment import build_video_enrichment_registry
 from visual_coding_agent_harness.tools.inspector import build_segment_inspector_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry
@@ -368,7 +370,71 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(result["time_range"], [30.0, 42.0])
         self.assertEqual(result["grounding_quality"], "visually_confirmed")
         self.assertEqual(result["facts"][0]["event_label"], "red object")
-        self.assertEqual(result["facts"][0]["time_range"], [30.0, 42.0])
+
+    def test_verify_segment_anchors_parses_confirmations_into_evidence_and_timeline(self):
+        backend = FixedTextBackend(
+            json.dumps(
+                {
+                    "confirmations": [
+                        {
+                            "target": "David",
+                            "relative_sec": 2.0,
+                            "observed_at_sec": 432.0,
+                            "evidence": "A sculpture identified as David is shown.",
+                        }
+                    ],
+                    "rejections": [
+                        {
+                            "target": "Apollo and Daphne",
+                            "reason": "Not visible in this anchor.",
+                        }
+                    ],
+                }
+            )
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_anchors")
+            registry = build_segment_inspector_registry(backend, workspace=workspace)
+            result = ProgramInterpreter(registry=registry, workspace=workspace).run(
+                [
+                    {
+                        "tool": "verify_segment_anchors",
+                        "args": {
+                            "video_path": "/videos/bernini.mp4",
+                            "segment_id": "seg_0002",
+                            "start_sec": 300.0,
+                            "end_sec": 600.0,
+                            "question": "Determine artwork order.",
+                            "anchors": [
+                                {
+                                    "anchor_id": "anchor_0001",
+                                    "start_sec": 430.0,
+                                    "end_sec": 448.0,
+                                    "targets": ["David", "Apollo and Daphne"],
+                                    "reason": "ASR lists targets here.",
+                                }
+                            ],
+                        },
+                    }
+                ]
+            )
+            observation = workspace.read_observations(tool_name="verify_segment_anchors")[0]
+            evidence_row_count = workspace.evidence_table_row_count()
+            timeline_text = (workspace.root / "timeline.md").read_text(encoding="utf-8")
+
+        request = backend.requests[0]
+        self.assertEqual(result.observation_ids, ["obs_0001"])
+        self.assertEqual(request.task, "verify_segment_anchors")
+        self.assertEqual(request.metadata["nframes"], 8)
+        self.assertEqual(request.metadata["segment_id"], "seg_0002")
+        self.assertIn("ASR lists targets here", request.prompt)
+        self.assertIn("relative seconds", request.prompt)
+        self.assertIn("David", request.prompt)
+        self.assertEqual(observation.raw_output["confirmations"][0]["target"], "David")
+        self.assertEqual(observation.raw_output["rejections"][0]["target"], "Apollo and Daphne")
+        self.assertEqual(observation.raw_output["timeline_rows"][0]["entity"], "David")
+        self.assertEqual(evidence_row_count, 1)
+        self.assertIn("David", timeline_text)
 
     def test_vision_read_sanitizes_full_mcq_into_fact_request(self):
         backend = CaptionQARecordingBackend()

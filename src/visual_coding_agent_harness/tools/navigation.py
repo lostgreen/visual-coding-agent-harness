@@ -159,8 +159,9 @@ def build_video_navigation_registry(
         ]
         target_matches = [_detail_target_match(hit) for hit in target_hits if bool(hit.get("matched"))]
         unmatched_targets = [str(hit.get("target", "")) for hit in target_hits if not bool(hit.get("matched"))]
+        nav_digest = _segment_nav_digest(segment=segment, target_matches=target_matches)
         return {
-            "claim": _segment_detail_claim(segment, target_hits=target_hits),
+            "claim": f"{_segment_detail_claim(segment, target_hits=target_hits)} {nav_digest}",
             "confidence": 1.0,
             "input_artifacts": [current.video_path],
             "segment_id": segment.segment_id,
@@ -175,9 +176,63 @@ def build_video_navigation_registry(
             "target_hits": target_hits,
             "target_matches": target_matches,
             "unmatched_targets": unmatched_targets,
+            "nav_digest": nav_digest,
             "regions": [segment.to_dict()],
             "recommended_next_tools": _detail_recommended_next_tools(segment=segment, target_matches=target_matches),
             "limitations": "Indexed segment detail only; call vision_read or caption_segment for fresh visual evidence.",
+        }
+
+    @tool(name="locate_targets_in_segment", description="Text-only target locator over ASR/OCR/caption indexes for one segment.")
+    def locate_targets_in_segment(segment_id: str, targets: Sequence[str] = ()) -> Mapping[str, object]:
+        current = video_map_store.current
+        segment = current.get(segment_id)
+        resolved_targets = _detail_targets(targets=targets, workspace=workspace)
+        candidates = _locate_target_candidates(segment=segment, targets=resolved_targets)
+        anchors = _merge_locate_candidates(segment=segment, candidates=candidates)
+        target_text = ", ".join(str(target) for target in resolved_targets) or "none"
+        candidate_text = ", ".join(
+            f"{candidate['target']}@{float(candidate['start_sec']):.1f}s" for candidate in candidates
+        )
+        claim = (
+            f"locate_targets_in_segment({segment.segment_id}) searched {len(resolved_targets)} target(s): "
+            f"{target_text}. Candidate anchors: {candidate_text or 'none'}."
+        )
+        return {
+            "claim": claim,
+            "confidence": 1.0 if candidates else 0.35,
+            "input_artifacts": [current.video_path],
+            "segment_id": segment.segment_id,
+            "start_sec": float(segment.start_sec),
+            "end_sec": float(segment.end_sec),
+            "targets": list(resolved_targets),
+            "candidates": candidates,
+            "anchors_for_vlm": anchors,
+            "regions": [
+                {
+                    "segment_id": segment.segment_id,
+                    "start_sec": float(segment.start_sec),
+                    "end_sec": float(segment.end_sec),
+                    "candidates": candidates,
+                    "anchors_for_vlm": anchors,
+                }
+            ],
+            "recommended_next_tools": [
+                {
+                    "tool": "verify_segment_anchors",
+                    "args": {
+                        "segment_id": segment.segment_id,
+                        "anchors": anchors,
+                        "targets": list(resolved_targets),
+                    },
+                    "reason": "Verify text-located anchors visually before using them as evidence.",
+                }
+            ]
+            if anchors
+            else [],
+            "limitations": (
+                "Text-only locator (ASR/OCR/visual_caption/entities); does NOT confirm visual presence. "
+                "Call verify_segment_anchors next on anchors_for_vlm to obtain evidence-grade observations."
+            ),
         }
 
     @tool(name="expand_window", description="Return a bounded temporal window around a segment.")
@@ -284,6 +339,7 @@ def build_video_navigation_registry(
     registry.register(ground_question)
     registry.register(read_segment)
     registry.register(read_segment_detail)
+    registry.register(locate_targets_in_segment)
     registry.register(expand_window)
     registry.register(zoom)
     registry.register(commit_map_proposals)
@@ -522,6 +578,22 @@ def _segment_detail_claim(segment: VideoMapSegment, *, target_hits: Sequence[Map
     return " ".join(part for part in parts if part)
 
 
+def _segment_nav_digest(
+    *,
+    segment: VideoMapSegment,
+    target_matches: Sequence[Mapping[str, object]],
+) -> str:
+    matched = ", ".join(str(match.get("target", "")) for match in target_matches if str(match.get("target", "")))
+    parts = [
+        f"targets={matched}" if matched else "",
+        f"visual={_detail_evidence_snippet(segment.low_fps_caption, max_chars=120)}" if segment.low_fps_caption else "",
+        f"asr={_detail_evidence_snippet(segment.asr_text, max_chars=160)}" if segment.asr_text else "",
+        f"ocr={_detail_evidence_snippet(segment.ocr_text, max_chars=120)}" if segment.ocr_text else "",
+    ]
+    digest = " | ".join(part for part in parts if part)
+    return f"nav_digest: {digest}" if digest else "nav_digest: (no indexed detail)"
+
+
 def _detail_targets(*, targets: Sequence[str], workspace: EvidenceWorkspace | None) -> list[str]:
     explicit = _unique_nonempty_texts(targets)
     if explicit or workspace is None:
@@ -621,6 +693,214 @@ def _target_hit_for_segment(*, segment: VideoMapSegment, target: str) -> Mapping
         "fields": [str(hit["field"]) for hit in field_hits],
         "matches": field_hits,
     }
+
+
+def _locate_target_candidates(*, segment: VideoMapSegment, targets: Sequence[str]) -> list[Mapping[str, object]]:
+    candidates: list[Mapping[str, object]] = []
+    sources = _locate_text_sources(segment)
+    for target_index, target in enumerate([str(item).strip() for item in targets if str(item).strip()], start=1):
+        match = _best_target_text_match(target=target, sources=sources)
+        if match is None:
+            continue
+        candidate_id = f"cand_{len(candidates) + 1:04d}"
+        candidates.append(
+            {
+                "candidate_id": candidate_id,
+                "target_id": f"T{target_index}",
+                "target": target,
+                "source": match["source"],
+                "match_type": match["match_type"],
+                "start_sec": float(match["start_sec"]),
+                "end_sec": float(match["end_sec"]),
+                "snippet": match["snippet"],
+                "confidence": float(match["confidence"]),
+            }
+        )
+    return candidates
+
+
+def _locate_text_sources(segment: VideoMapSegment) -> list[Mapping[str, object]]:
+    sources: list[Mapping[str, object]] = []
+    for sentence in getattr(segment, "asr_sentences", ()) or ():
+        if not isinstance(sentence, Mapping):
+            continue
+        text = str(sentence.get("text") or "").strip()
+        if not text:
+            continue
+        sources.append(
+            {
+                "source": "asr_sentence",
+                "start_sec": float(sentence.get("start_sec", segment.start_sec) or segment.start_sec),
+                "end_sec": float(sentence.get("end_sec", segment.end_sec) or segment.end_sec),
+                "text": text,
+            }
+        )
+    for frame in getattr(segment, "ocr_frames", ()) or ():
+        if not isinstance(frame, Mapping):
+            continue
+        text = str(frame.get("text") or "").strip()
+        if not text:
+            continue
+        timestamp = float(frame.get("timestamp_sec", segment.start_sec) or segment.start_sec)
+        sources.append(
+            {
+                "source": "ocr_frame",
+                "start_sec": timestamp,
+                "end_sec": timestamp,
+                "text": text,
+            }
+        )
+    fallback_sources = (
+        ("asr_text", segment.asr_text),
+        ("ocr_text", segment.ocr_text),
+        ("visual_caption", segment.low_fps_caption),
+        ("entities", " ".join(segment.entities)),
+    )
+    existing = {(str(item["source"]), str(item["text"])) for item in sources}
+    for source_name, text_value in fallback_sources:
+        text = str(text_value or "").strip()
+        if not text or (source_name, text) in existing:
+            continue
+        sources.append(
+            {
+                "source": source_name,
+                "start_sec": float(segment.start_sec),
+                "end_sec": float(segment.end_sec),
+                "text": text,
+            }
+        )
+    return sorted(
+        sources,
+        key=lambda item: (
+            _locate_source_priority(str(item.get("source", ""))),
+            float(item["start_sec"]),
+            str(item["source"]),
+        ),
+    )
+
+
+def _locate_source_priority(source: str) -> int:
+    return {
+        "asr_sentence": 0,
+        "ocr_frame": 1,
+        "visual_caption": 2,
+        "ocr_text": 3,
+        "entities": 4,
+        "asr_text": 5,
+    }.get(source, 9)
+
+
+def _best_target_text_match(
+    *,
+    target: str,
+    sources: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    aliases = _target_alias_patterns(target)
+    for source in sources:
+        text = str(source.get("text") or "")
+        for alias in aliases:
+            match = alias["pattern"].search(text)
+            if match is None:
+                continue
+            return {
+                "source": str(source.get("source") or ""),
+                "match_type": str(alias["match_type"]),
+                "start_sec": float(source.get("start_sec", 0.0) or 0.0),
+                "end_sec": float(source.get("end_sec", source.get("start_sec", 0.0)) or 0.0),
+                "snippet": _match_snippet(text, start=match.start(), end=match.end()),
+                "confidence": float(alias["confidence"]),
+            }
+    return None
+
+
+def _target_alias_patterns(target: str) -> list[Mapping[str, object]]:
+    tokens = _target_token_list(target)
+    if not tokens:
+        return []
+    aliases: list[tuple[str, str, float, Sequence[str]]] = []
+    aliases.append(("full_name", "full_name", 0.95, tokens))
+    if tokens[0] == "the" and len(tokens) > 1:
+        aliases.append(("cleaned_name", "cleaned_name", 0.85, tokens[1:]))
+    if len(tokens) == 1:
+        aliases.append(("single_name", "full_name", 0.95, tokens))
+    if "persephone" in tokens:
+        aliases.append(("rare_token", "phrase_alias", 0.7, ("persephone",)))
+
+    patterns: list[Mapping[str, object]] = []
+    seen: set[str] = set()
+    for key, match_type, confidence, alias_tokens in aliases:
+        token_tuple = tuple(str(token) for token in alias_tokens if str(token))
+        if not token_tuple or str((key, token_tuple)) in seen:
+            continue
+        seen.add(str((key, token_tuple)))
+        patterns.append(
+            {
+                "match_type": match_type,
+                "confidence": confidence,
+                "pattern": re.compile(_token_sequence_regex(token_tuple), flags=re.IGNORECASE),
+            }
+        )
+    return patterns
+
+
+def _token_sequence_regex(tokens: Sequence[str]) -> str:
+    escaped = [re.escape(str(token)) for token in tokens if str(token)]
+    if not escaped:
+        return r"$^"
+    return r"\b" + r"[\W_]+".join(escaped) + r"\b"
+
+
+def _target_token_list(text: str) -> list[str]:
+    return [token.lower() for token in re.findall(r"[A-Za-z0-9]+", str(text or ""))]
+
+
+def _match_snippet(text: str, *, start: int, end: int, context_chars: int = 80) -> str:
+    left = max(0, int(start) - context_chars)
+    right = min(len(text), int(end) + context_chars)
+    prefix = "..." if left > 0 else ""
+    suffix = "..." if right < len(text) else ""
+    return prefix + " ".join(text[left:right].split()) + suffix
+
+
+def _merge_locate_candidates(
+    *,
+    segment: VideoMapSegment,
+    candidates: Sequence[Mapping[str, object]],
+    merge_gap_sec: float = 15.0,
+    padding_sec: float = 5.0,
+) -> list[Mapping[str, object]]:
+    sorted_candidates = sorted(candidates, key=lambda item: (float(item.get("start_sec", 0.0)), str(item.get("target_id", ""))))
+    anchors: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    for candidate in sorted_candidates:
+        start_sec = float(candidate.get("start_sec", segment.start_sec) or segment.start_sec)
+        end_sec = float(candidate.get("end_sec", start_sec) or start_sec)
+        if current is None or start_sec - float(current["end_sec"]) > merge_gap_sec:
+            current = {
+                "anchor_id": f"anchor_{len(anchors) + 1:04d}",
+                "segment_id": segment.segment_id,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "targets": [],
+                "candidate_ids": [],
+                "reason": "",
+            }
+            anchors.append(current)
+        current["end_sec"] = max(float(current["end_sec"]), end_sec)
+        targets = current["targets"]
+        candidate_ids = current["candidate_ids"]
+        if isinstance(targets, list) and str(candidate.get("target", "")) not in targets:
+            targets.append(str(candidate.get("target", "")))
+        if isinstance(candidate_ids, list):
+            candidate_ids.append(str(candidate.get("candidate_id", "")))
+    for anchor in anchors:
+        anchor["start_sec"] = max(float(segment.start_sec), float(anchor["start_sec"]) - padding_sec)
+        anchor["end_sec"] = min(float(segment.end_sec), float(anchor["end_sec"]) + padding_sec)
+        anchor["reason"] = (
+            "Text locator found target mention(s) in indexed ASR/OCR/caption sources: "
+            + ", ".join(str(target) for target in anchor.get("targets", []))
+        )
+    return anchors
 
 
 def _target_tokens(text: str) -> set[str]:

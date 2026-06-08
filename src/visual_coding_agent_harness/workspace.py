@@ -153,6 +153,7 @@ class EvidenceWorkspace:
         "qa_segment",
         "inspect_segment",
         "vision_read",
+        "verify_segment_anchors",
     }
     LOCAL_WORKER_EVIDENCE_TOOLS = {
         "caption_image",
@@ -171,6 +172,7 @@ class EvidenceWorkspace:
         "ground_question",
         "read_segment",
         "read_segment_detail",
+        "locate_targets_in_segment",
         "target_coverage",
         "expand_window",
         "zoom",
@@ -487,6 +489,29 @@ class EvidenceWorkspace:
         return row
 
     def append_timeline_from_observation(self, observation: Observation) -> dict[str, Any] | None:
+        if observation.tool == "verify_segment_anchors":
+            raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+            rows = raw_output.get("timeline_rows", [])
+            appended = []
+            if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
+                for row in rows:
+                    if not isinstance(row, Mapping):
+                        continue
+                    appended.append(
+                        self.append_to_timeline(
+                            obs_id=observation.observation_id,
+                            entity=str(row.get("entity", "")),
+                            observed_at_sec=(
+                                None
+                                if row.get("observed_at_sec") is None
+                                else float(row.get("observed_at_sec", 0.0) or 0.0)
+                            ),
+                            window=row.get("window", []),
+                            confidence_signal=str(row.get("confidence_signal", "") or observation.confidence_signal),
+                            claim=str(row.get("claim", "") or observation.claim),
+                        )
+                    )
+            return appended[0] if appended else None
         if observation.tool not in {"vision_read", "inspect_segment", "caption_segment"}:
             return None
         if is_unsupported_claim(observation.claim):
@@ -2347,7 +2372,7 @@ def _format_context_only_entry(entry: Mapping[str, Any]) -> str:
 
 def _format_navigation_entry(entry: Mapping[str, Any]) -> str:
     tool_name = str(entry.get("tool", "unknown"))
-    if tool_name == "target_coverage":
+    if tool_name in {"target_coverage", "read_segment_detail", "search_segments", "ground_question", "locate_targets_in_segment"}:
         claim = _compact_text(str(entry.get("claim", "")), limit=720)
         return f"- {entry['observation_id']}: {tool_name} | claim: {claim or '(empty)'}"
     return f"- {entry['observation_id']}: {tool_name}"

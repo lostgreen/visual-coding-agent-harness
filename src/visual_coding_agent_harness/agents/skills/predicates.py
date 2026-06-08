@@ -22,6 +22,7 @@ NAVIGATION_TOOLS = {
     "target_coverage",
     "read_segment",
     "read_segment_detail",
+    "locate_targets_in_segment",
     "expand_window",
     "zoom",
 }
