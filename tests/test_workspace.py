@@ -110,6 +110,46 @@ def test_compact_ledger_expands_target_coverage_navigation_claim(tmp_path: Path)
     assert "Target coverage matrix: T1 David: seg_0004; T2 Apollo and Daphne: seg_0005." in context
 
 
+def test_compact_ledger_exposes_locator_verify_call_args(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "locator_verify_args_context")
+    verify_args = {
+        "segment_id": "seg_0002",
+        "anchors": [
+            {
+                "anchor_id": "anchor_0002",
+                "segment_id": "seg_0002",
+                "start_sec": 504.4,
+                "end_sec": 544.097,
+                "targets": ["David", "The rape of Persephone", "Apollo and Daphne"],
+            }
+        ],
+        "targets": ["David", "The rape of Persephone", "Apollo and Daphne"],
+    }
+    observation = workspace.write_observation(
+        tool_name="locate_targets_in_segment",
+        claim="locate_targets_in_segment(seg_0002) found anchors.",
+        confidence=1.0,
+        raw_output={
+            "verify_call_args": verify_args,
+            "recommended_next_tools": [
+                {
+                    "tool": "verify_segment_anchors",
+                    "args": verify_args,
+                    "reason": "Verify text-located anchors visually.",
+                }
+            ],
+        },
+    )
+    workspace.write_ledger_entry(observation)
+
+    context = workspace.compact_ledger_text()
+
+    assert "verify_segment_anchors" in context
+    assert "verify_call_args" in context
+    assert '"anchor_id":"anchor_0002"' in context
+    assert '"start_sec":504.4' in context
+
+
 def test_evidence_status_summary_reports_coverage_and_duplicates(tmp_path: Path):
     workspace = EvidenceWorkspace.create(tmp_path, "status_summary")
     first = workspace.write_observation(

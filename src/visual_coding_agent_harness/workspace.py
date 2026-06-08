@@ -995,6 +995,10 @@ class EvidenceWorkspace:
         entries = _parse_ledger_entries(raw_ledger)
         if not entries:
             return raw_ledger
+        entries = _attach_observation_payloads(
+            entries,
+            observations=self._read_observation_dicts(),
+        )
 
         visual_entries = [
             entry for entry in entries if str(entry.get("tool", "")) in self.ANSWER_EVIDENCE_TOOLS
@@ -2374,8 +2378,55 @@ def _format_navigation_entry(entry: Mapping[str, Any]) -> str:
     tool_name = str(entry.get("tool", "unknown"))
     if tool_name in {"target_coverage", "read_segment_detail", "search_segments", "ground_question", "locate_targets_in_segment"}:
         claim = _compact_text(str(entry.get("claim", "")), limit=720)
-        return f"- {entry['observation_id']}: {tool_name} | claim: {claim or '(empty)'}"
+        suffix = _navigation_entry_suffix(entry)
+        return f"- {entry['observation_id']}: {tool_name} | claim: {claim or '(empty)'}{suffix}"
     return f"- {entry['observation_id']}: {tool_name}"
+
+
+def _attach_observation_payloads(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    observations: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    by_id = {str(observation.get("observation_id", "")): observation for observation in observations}
+    enriched = []
+    for entry in entries:
+        observation = by_id.get(str(entry.get("observation_id", "")))
+        if observation is None:
+            enriched.append(dict(entry))
+            continue
+        merged = dict(entry)
+        raw_output = observation.get("raw_output", {})
+        if isinstance(raw_output, Mapping):
+            merged["raw_output"] = dict(raw_output)
+        regions = observation.get("regions", [])
+        if isinstance(regions, Sequence) and not isinstance(regions, (str, bytes)):
+            merged["regions"] = list(regions)
+        enriched.append(merged)
+    return enriched
+
+
+def _navigation_entry_suffix(entry: Mapping[str, Any]) -> str:
+    if str(entry.get("tool", "")) != "locate_targets_in_segment":
+        return ""
+    raw_output = entry.get("raw_output", {})
+    if not isinstance(raw_output, Mapping):
+        return ""
+    verify_args = raw_output.get("verify_call_args")
+    if not isinstance(verify_args, Mapping) or not verify_args:
+        return ""
+    compact_args = _compact_json(verify_args, limit=900)
+    if not compact_args:
+        return ""
+    return f" | next: verify_segment_anchors verify_call_args={compact_args}"
+
+
+def _compact_json(value: Any, *, limit: int = 900) -> str:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except TypeError:
+        return ""
+    return _compact_text(encoded, limit=limit)
 
 
 def _format_rawish_entry(entry: Mapping[str, Any]) -> str:

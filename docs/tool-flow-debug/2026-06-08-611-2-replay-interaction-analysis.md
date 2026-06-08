@@ -170,6 +170,105 @@ in what order ... four masterpieces ... in a single scene
 
 ## 建议修改
 
+## 已实施修复
+
+本节记录 2026-06-08 后续开发已落地的修复，避免后续把旧问题和新问题混在一起。
+
+### 1. locator 输出可执行 verifier 参数
+
+`locate_targets_in_segment` 现在在顶层返回：
+
+```json
+{
+  "verify_call_args": {
+    "segment_id": "seg_0002",
+    "anchors": ["..."],
+    "targets": ["..."]
+  }
+}
+```
+
+`recommended_next_tools[0].args` 复用同一个 `verify_call_args`，避免 raw 输出和推荐调用不一致。
+
+### 2. compact ledger 暴露 `verify_call_args`
+
+`compact_ledger_text()` 会用 `observations.jsonl` 回填 navigation observation 的 `raw_output`，并在 `locate_targets_in_segment` 的 Navigation Summary 里显示：
+
+```text
+next: verify_segment_anchors verify_call_args={...}
+```
+
+planner 不再只能看到 `Candidate anchors: target@time` 的自然语言摘要。
+
+### 3. timeline route 重复 locator 自动修到 verifier
+
+当 active skill 是 `timeline_ordering`，且 planner 在已有 locator anchor 后再次请求同一个 `locate_targets_in_segment`，runtime 会把该 tool call normalize 成：
+
+```text
+verify_segment_anchors(...)
+```
+
+trace reason：
+
+```text
+repair_repeated_locator_to_verify_segment_anchors
+```
+
+这直接针对 replay 中 R03-R05 反复 locate、不进入 verify 的空转。
+
+### 4. locator 增加 ordered-list navigation candidate
+
+locator 现在会检查相邻 ASR/OCR 文本窗口。如果同一短窗口内出现 3 个以上 target，会生成：
+
+```json
+{
+  "match_type": "ordered_list_mention",
+  "ordered_targets": ["..."]
+}
+```
+
+对 611-2，`530.0-546.0s` 这种字幕清单会成为高优先级导航候选，而不是被拆成若干 earliest mention。
+
+### 5. target set 自动补全
+
+如果 planner 传入了局部 targets，但 workspace 里已有 `target_coverage` 的完整 T1-T4，`locate_targets_in_segment` 会把显式 targets 与 coverage targets 取并集。
+
+这修复了当前 replay 中 `seg_0002` locate 漏掉 `Aeneas, Anchises, and Ascanius fleeing Troy` 的问题。
+
+### 6. planner final 的自然语言顺序可映射回 MCQ
+
+如果 planner final 没有以 A/B/C/D 开头，但答案文本里的实体顺序唯一匹配某个选项，runtime 会把 final answer 改写成：
+
+```text
+D. <原自然语言顺序答案>
+```
+
+该 fallback 很保守：必须能从答案文本中找到完整事件序列，且只能唯一匹配一个选项。
+
+### 当前验证
+
+本地全量测试：
+
+```text
+PYTHONPATH=src:. pytest -q
+386 passed
+```
+
+新增/覆盖测试：
+
+- locator 输出 `verify_call_args`；
+- locator 自动并入 target coverage；
+- compact ledger 暴露 `verify_call_args`；
+- timeline 重复 locator 自动 repair 到 `verify_segment_anchors`；
+- 自然语言 temporal answer 唯一映射回 MCQ option；
+- ordered-list candidate 识别同窗口 target 顺序。
+
+### 仍需观察
+
+这轮没有把 `locate_targets_in_segment` 本身升级成 answer evidence。它仍然是 navigation-only。
+
+原因：保持边界清楚，避免 text locator 候选直接变成最终证据。若新版 611-2 replay 仍卡在“字幕清单顺序无法被 verifier/AnswerAgent 使用”，下一步应单独增加 `timeline_asr_summary / indexed_transcript` 证据写入，而不是让 locator 偷渡 evidence。
+
 ### A. 让 locator 输出可执行 verifier 参数
 
 `locate_targets_in_segment` 的 planner-visible claim/nav_digest 里应该包含短 JSON：

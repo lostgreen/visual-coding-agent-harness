@@ -236,14 +236,18 @@ class VideoNavigationTest(unittest.TestCase):
 
         raw = observation.raw_output
         self.assertEqual(result.observation_ids, ["obs_0001"])
-        self.assertEqual([candidate["target"] for candidate in raw["candidates"]], [
+        target_candidates = [
+            candidate for candidate in raw["candidates"]
+            if candidate["match_type"] != "ordered_list_mention"
+        ]
+        self.assertEqual([candidate["target"] for candidate in target_candidates], [
             "Aeneas, Anchises, and Ascanius fleeing Troy",
             "David",
             "The rape of Persephone",
             "Apollo and Daphne",
         ])
-        self.assertTrue(all(candidate["source"] == "asr_sentence" for candidate in raw["candidates"]))
-        self.assertTrue(all(candidate["start_sec"] == 430.0 for candidate in raw["candidates"]))
+        self.assertTrue(all(candidate["source"] == "asr_sentence" for candidate in target_candidates))
+        self.assertTrue(all(candidate["start_sec"] == 430.0 for candidate in target_candidates))
         self.assertEqual(len(raw["anchors_for_vlm"]), 1)
         self.assertEqual(raw["anchors_for_vlm"][0]["targets"], [
             "Aeneas, Anchises, and Ascanius fleeing Troy",
@@ -253,9 +257,79 @@ class VideoNavigationTest(unittest.TestCase):
         ])
         self.assertLess(raw["anchors_for_vlm"][0]["start_sec"], 430.0)
         self.assertGreater(raw["anchors_for_vlm"][0]["end_sec"], 448.0)
+        self.assertEqual(raw["verify_call_args"]["segment_id"], "seg_0002")
+        self.assertEqual(raw["verify_call_args"]["anchors"], raw["anchors_for_vlm"])
+        self.assertEqual(raw["recommended_next_tools"][0]["args"], raw["verify_call_args"])
+        ordered_candidates = [
+            candidate for candidate in raw["candidates"]
+            if candidate["match_type"] == "ordered_list_mention"
+        ]
+        self.assertEqual(len(ordered_candidates), 1)
+        self.assertEqual(ordered_candidates[0]["ordered_targets"], [
+            "Aeneas, Anchises, and Ascanius fleeing Troy",
+            "David",
+            "The rape of Persephone",
+            "Apollo and Daphne",
+        ])
         self.assertIn("verify_segment_anchors", raw["limitations"])
         self.assertEqual(raw["recommended_next_tools"][0]["tool"], "verify_segment_anchors")
         self.assertEqual(workspace.evidence_table_row_count(), 0)
+
+    def test_locate_targets_in_segment_unions_explicit_targets_with_target_coverage(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=600.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    asr_sentences=[
+                        {
+                            "start_sec": 530.0,
+                            "end_sec": 546.0,
+                            "text": (
+                                "Borghese commissioned Aeneas, Anchises, and Ascanius fleeing Troy, "
+                                "David, The rape of Persephone, and Apollo and Daphne."
+                            ),
+                        },
+                    ],
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="locator_target_union")
+            workspace.write_observation(
+                tool_name="target_coverage",
+                claim="coverage",
+                confidence=1.0,
+                raw_output={
+                    "coverage": [
+                        {"target": "Aeneas, Anchises, and Ascanius fleeing Troy"},
+                        {"target": "David"},
+                        {"target": "The rape of Persephone"},
+                        {"target": "Apollo and Daphne"},
+                    ]
+                },
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            located = registry.execute(
+                "locate_targets_in_segment",
+                {
+                    "segment_id": "seg_0002",
+                    "targets": ["David", "The rape of Persephone", "Apollo and Daphne"],
+                },
+            )
+
+        self.assertEqual(located["targets"], [
+            "David",
+            "The rape of Persephone",
+            "Apollo and Daphne",
+            "Aeneas, Anchises, and Ascanius fleeing Troy",
+        ])
+        self.assertIn("Aeneas, Anchises, and Ascanius fleeing Troy", located["claim"])
+        self.assertIn("Aeneas, Anchises, and Ascanius fleeing Troy", located["anchors_for_vlm"][0]["targets"])
 
     def test_locate_targets_keeps_multiple_matches_per_target(self):
         video_map = VideoMap(

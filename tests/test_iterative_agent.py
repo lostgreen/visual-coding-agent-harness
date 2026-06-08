@@ -5,6 +5,7 @@ from pathlib import Path
 from visual_coding_agent_harness.agents.iterative_agent import (
     AgentBudget,
     IterativeVisualAgent,
+    _answer_option_from_temporal_answer,
     _exhausted_one_shot_tools,
     _sanitize_option_blind_feedback,
 )
@@ -31,6 +32,35 @@ class ScriptedPlannerBackend(VisionLanguageBackend):
         if not self.responses:
             return BackendResponse(text='{"status": "final", "answer": "No more scripted responses.", "citations": []}')
         return BackendResponse(text=self.responses.pop(0))
+
+
+def test_temporal_answer_sequence_maps_to_unique_mcq_option():
+    question = (
+        "VideoMME multiple-choice question. Answer with exactly one option letter (A/B/C/D) first.\n"
+        "Question: As depicted in the video, in what order does the author present Bernini's four masterpieces?\n"
+        "Options:\n"
+        'A. "The rape of Persephone", "Apollo and Daphne", "David" and "Aeneas, Anchises, and Ascanius fleeing Troy".\n'
+        'B. "David", "Aeneas, Anchises, and Ascanius fleeing Troy", "Apollo and Daphne" and "The rape of Persephone".\n'
+        'C. "Apollo and Daphne", "Aeneas, Anchises, and Ascanius fleeing Troy", "David" and "The rape of Persephone".\n'
+        'D. "Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The rape of Persephone" and "Apollo and Daphne".'
+    )
+    answer = (
+        "The author lists the works as Aeneas, Anchises, and Ascanius fleeing Troy, "
+        "then David, then The rape of Persephone, and finally Apollo and Daphne."
+    )
+
+    assert _answer_option_from_temporal_answer(question=question, answer=answer) == "D"
+
+
+def test_temporal_answer_sequence_does_not_map_partial_order():
+    question = (
+        "Question: order?\n"
+        "Options:\n"
+        "A. red, blue and green.\n"
+        "B. blue, red and green."
+    )
+
+    assert _answer_option_from_temporal_answer(question=question, answer="The clip mentions red and blue.") is None
 
 
 def build_segment_test_registry() -> ToolRegistry:

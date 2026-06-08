@@ -312,6 +312,10 @@ class IterativeVisualAgent:
 
             if status == "final":
                 final_citations = [str(item) for item in action.get("citations", [])]
+                final_answer = _planner_final_answer_with_option(
+                    question=raw_question,
+                    answer=str(action.get("answer", "")),
+                )
                 final_source = "planner_final"
                 if extract_candidate_options(raw_question):
                     self.workspace.write_trace_event(
@@ -319,6 +323,7 @@ class IterativeVisualAgent:
                         {
                             "round": round_number,
                             "planner_answer": str(action.get("answer", "")),
+                            "mapped_planner_answer": final_answer,
                             "planner_citations": final_citations,
                         },
                     )
@@ -344,7 +349,7 @@ class IterativeVisualAgent:
                             question=raw_question,
                             has_inspect_with_candidate_options=has_inspect_with_candidate_options,
                             workspace=self.workspace,
-                            answer=str(action.get("answer", "")),
+                            answer=final_answer,
                             citations=final_citations,
                             planner_skill=planner_skill,
                         )
@@ -354,7 +359,7 @@ class IterativeVisualAgent:
                         question=raw_question,
                         has_inspect_with_candidate_options=has_inspect_with_candidate_options,
                         workspace=self.workspace,
-                        answer=str(action.get("answer", "")),
+                        answer=final_answer,
                         citations=final_citations,
                         planner_skill=planner_skill,
                     )
@@ -364,7 +369,7 @@ class IterativeVisualAgent:
                         {
                             "round": round_number,
                             "reason": blocked_reason,
-                            "answer": str(action.get("answer", "")),
+                            "answer": final_answer,
                             "citations": final_citations,
                         },
                     )
@@ -391,14 +396,14 @@ class IterativeVisualAgent:
                     rounds.append(result_round)
                     self._write_final_trace(
                         round_number=round_number,
-                        answer=str(action.get("answer", "")),
+                        answer=final_answer,
                         citations=final_citations,
                         source=final_source,
                     )
                     return IterativeRunResult(
                         question=raw_question,
                         video_path=video_path,
-                        answer=str(action.get("answer", "")),
+                        answer=final_answer,
                         status="final",
                         citations=final_citations,
                         confidence=float(action.get("confidence", 0.0)),
@@ -1407,6 +1412,19 @@ class IterativeVisualAgent:
             )
         if (
             active_skill is not None
+            and active_skill.name == "timeline_ordering"
+            and tool_name == "locate_targets_in_segment"
+            and self._has_tool("verify_segment_anchors")
+        ):
+            verify_args = self._latest_locator_verify_args(segment_id=str(args.get("segment_id") or ""))
+            if verify_args:
+                return (
+                    "verify_segment_anchors",
+                    verify_args,
+                    "repair_repeated_locator_to_verify_segment_anchors",
+                )
+        if (
+            active_skill is not None
             and active_skill.name in {"timeline_ordering", "grounded_factual_qa", "mutex_fact_qa"}
             and tool_name in {"zoom", "expand_window"}
             and self._has_tool("locate_targets_in_segment")
@@ -1489,6 +1507,22 @@ class IterativeVisualAgent:
             if targets:
                 return targets
         return []
+
+    def _latest_locator_verify_args(self, *, segment_id: str = "") -> dict[str, Any]:
+        requested = str(segment_id or "").strip()
+        for observation in reversed(self.workspace.read_observations(tool_name="locate_targets_in_segment")):
+            raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+            verify_args = raw_output.get("verify_call_args")
+            if not isinstance(verify_args, Mapping) or not verify_args:
+                continue
+            located_segment = str(verify_args.get("segment_id") or raw_output.get("segment_id") or "").strip()
+            if requested and located_segment and located_segment != requested:
+                continue
+            anchors = verify_args.get("anchors")
+            if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes)) or not anchors:
+                continue
+            return dict(verify_args)
+        return {}
 
     def _fallback_inspector_program(
         self,
@@ -3554,6 +3588,61 @@ def _missing_confirmed_timeline_entities(
 def _answer_option_letter(answer: str) -> str | None:
     match = re.match(r"\s*([A-H])(?:[.)]\s*|\s+|$)", str(answer), flags=re.IGNORECASE)
     return match.group(1).upper() if match else None
+
+
+def _planner_final_answer_with_option(*, question: str, answer: str) -> str:
+    if _answer_option_letter(answer) or not extract_candidate_options(question):
+        return str(answer)
+    option = _answer_option_from_temporal_answer(question=question, answer=answer)
+    if not option:
+        return str(answer)
+    return f"{option}. {str(answer).strip()}"
+
+
+def _answer_option_from_temporal_answer(*, question: str, answer: str) -> str | None:
+    options = extract_candidate_options(question)
+    if len(options) < 2:
+        return None
+    candidates = []
+    for index, option_text in enumerate(options):
+        events = _option_temporal_events(option_text)
+        if len(events) < 2:
+            continue
+        positions = [_fact_position_in_text(text=answer, fact=event) for event in events]
+        if any(position is None for position in positions):
+            continue
+        numeric_positions = [int(position) for position in positions if position is not None]
+        if numeric_positions != sorted(numeric_positions):
+            continue
+        candidates.append(_option_letter(option_text, index=index))
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
+def _fact_position_in_text(*, text: str, fact: str) -> int | None:
+    target_tokens = _target_fact_key(fact).split()
+    if not target_tokens:
+        return None
+    haystack = [
+        (match.group(0).lower(), match.start())
+        for match in re.finditer(r"[A-Za-z0-9]+", str(text or ""))
+        if match.group(0).lower() not in _TARGET_STOPWORDS
+    ]
+    if not haystack:
+        return None
+    for index, (token, position) in enumerate(haystack):
+        if token != target_tokens[0]:
+            continue
+        target_index = 1
+        for candidate_token, _ in haystack[index + 1 :]:
+            if target_index >= len(target_tokens):
+                break
+            if candidate_token == target_tokens[target_index]:
+                target_index += 1
+        if target_index >= len(target_tokens):
+            return int(position)
+    return None
 
 
 def _timeline_temporal_decision(

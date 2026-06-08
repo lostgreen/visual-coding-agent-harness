@@ -197,9 +197,14 @@ def build_video_navigation_registry(
             top_k_per_target=top_k_per_target,
         )
         anchors = _merge_locate_candidates(segment=segment, candidates=candidates)
+        verify_call_args = {
+            "segment_id": segment.segment_id,
+            "anchors": anchors,
+            "targets": list(resolved_targets),
+        } if anchors else {}
         target_text = ", ".join(str(target) for target in resolved_targets) or "none"
         candidate_text = ", ".join(
-            f"{candidate['target']}@{float(candidate['start_sec']):.1f}s" for candidate in candidates
+            _locate_candidate_label(candidate) for candidate in candidates
         )
         claim = (
             f"locate_targets_in_segment({segment.segment_id}) searched {len(resolved_targets)} target(s): "
@@ -215,6 +220,7 @@ def build_video_navigation_registry(
             "targets": list(resolved_targets),
             "candidates": candidates,
             "anchors_for_vlm": anchors,
+            "verify_call_args": verify_call_args,
             "regions": [
                 {
                     "segment_id": segment.segment_id,
@@ -222,16 +228,13 @@ def build_video_navigation_registry(
                     "end_sec": float(segment.end_sec),
                     "candidates": candidates,
                     "anchors_for_vlm": anchors,
+                    "verify_call_args": verify_call_args,
                 }
             ],
             "recommended_next_tools": [
                 {
                     "tool": "verify_segment_anchors",
-                    "args": {
-                        "segment_id": segment.segment_id,
-                        "anchors": anchors,
-                        "targets": list(resolved_targets),
-                    },
+                    "args": verify_call_args,
                     "reason": "Verify text-located anchors visually before using them as evidence.",
                 }
             ]
@@ -604,8 +607,15 @@ def _segment_nav_digest(
 
 def _detail_targets(*, targets: Sequence[str], workspace: EvidenceWorkspace | None) -> list[str]:
     explicit = _unique_nonempty_texts(targets)
-    if explicit or workspace is None:
+    if workspace is None:
         return explicit
+    inherited = _coverage_targets(workspace)
+    if explicit:
+        return _unique_nonempty_texts([*explicit, *inherited])
+    return inherited
+
+
+def _coverage_targets(workspace: EvidenceWorkspace) -> list[str]:
     for observation in reversed(workspace.read_observations(tool_name="target_coverage")):
         coverage = observation.raw_output.get("coverage", [])
         if not isinstance(coverage, Sequence) or isinstance(coverage, (str, bytes)):
@@ -759,6 +769,11 @@ def _locate_target_candidates(
                     ),
                 }
             )
+    for ordered in _ordered_list_candidates(segment=segment, sources=sources, targets=targets):
+        candidate_id = f"cand_{len(candidates) + 1:04d}"
+        ordered_candidate = dict(ordered)
+        ordered_candidate["candidate_id"] = candidate_id
+        candidates.append(ordered_candidate)
     return candidates
 
 
@@ -897,6 +912,120 @@ def _find_target_text_matches(
     return ranked[: max(1, int(top_k or 1))]
 
 
+def _ordered_list_candidates(
+    *,
+    segment: VideoMapSegment,
+    sources: Sequence[Mapping[str, object]],
+    targets: Sequence[str],
+    max_gap_sec: float = 3.0,
+    max_window_sec: float = 45.0,
+) -> list[Mapping[str, object]]:
+    target_list = [str(target).strip() for target in targets if str(target).strip()]
+    if len(target_list) < 3:
+        return []
+    candidates: list[dict[str, object]] = []
+    for start_index, first in enumerate(sources):
+        pieces = []
+        window_start = float(first.get("start_sec", segment.start_sec) or segment.start_sec)
+        window_end = float(first.get("end_sec", window_start) or window_start)
+        previous_end = window_end
+        source_names: list[str] = []
+        for source in sources[start_index:]:
+            source_start = float(source.get("start_sec", segment.start_sec) or segment.start_sec)
+            source_end = float(source.get("end_sec", source_start) or source_start)
+            if pieces and source_start - previous_end > max_gap_sec:
+                break
+            if source_end - window_start > max_window_sec:
+                break
+            text = str(source.get("text") or "").strip()
+            if not text:
+                continue
+            pieces.append(text)
+            source_name = str(source.get("source") or "")
+            if source_name and source_name not in source_names:
+                source_names.append(source_name)
+            window_end = max(window_end, source_end)
+            previous_end = source_end
+            combined = " ".join(pieces)
+            ordered_targets = _targets_in_text_order(combined, target_list)
+            if len(ordered_targets) < min(3, len(target_list)):
+                continue
+            candidates.append(
+                {
+                    "candidate_id": "",
+                    "target_id": "ordered_list",
+                    "target": "ordered target list",
+                    "source": "+".join(source_names) or str(first.get("source") or ""),
+                    "match_type": "ordered_list_mention",
+                    "start_sec": window_start,
+                    "end_sec": window_end,
+                    "snippet": _detail_evidence_snippet(combined, max_chars=240),
+                    "confidence": 0.98 if len(ordered_targets) == len(target_list) else 0.82,
+                    "temporal_density": float(len(ordered_targets)),
+                    "directness": "ordered_list_navigation",
+                    "ordered_targets": ordered_targets,
+                }
+            )
+    return _dedupe_ordered_list_candidates(candidates, target_count=len(target_list))
+
+
+def _targets_in_text_order(text: str, targets: Sequence[str]) -> list[str]:
+    positioned: list[tuple[int, str]] = []
+    for target in targets:
+        position = _target_first_position(text=text, target=target)
+        if position is not None:
+            positioned.append((position, str(target)))
+    return [target for _, target in sorted(positioned, key=lambda item: item[0])]
+
+
+def _target_first_position(*, text: str, target: str) -> int | None:
+    positions = []
+    for alias in _target_alias_patterns(target):
+        pattern = alias["pattern"]
+        if not hasattr(pattern, "finditer"):
+            continue
+        for match in pattern.finditer(text):
+            token_tuple = tuple(str(token) for token in alias.get("tokens", ()) if str(token))
+            if bool(alias.get("requires_context")) and not _single_token_context_allowed(
+                target_token=token_tuple[0] if token_tuple else str(target).lower(),
+                text=text,
+                start=match.start(),
+                end=match.end(),
+            ):
+                continue
+            positions.append(int(match.start()))
+    return min(positions) if positions else None
+
+
+def _dedupe_ordered_list_candidates(
+    candidates: Sequence[Mapping[str, object]],
+    *,
+    target_count: int,
+) -> list[Mapping[str, object]]:
+    ranked = sorted(
+        [dict(candidate) for candidate in candidates],
+        key=lambda candidate: (
+            -len(candidate.get("ordered_targets", []) if isinstance(candidate.get("ordered_targets"), list) else []),
+            float(candidate.get("start_sec", 0.0) or 0.0),
+            float(candidate.get("end_sec", 0.0) or 0.0),
+        ),
+    )
+    kept: list[dict[str, object]] = []
+    seen: set[tuple[float, tuple[str, ...]]] = set()
+    for candidate in ranked:
+        ordered_targets = candidate.get("ordered_targets", [])
+        if not isinstance(ordered_targets, list):
+            continue
+        key = (round(float(candidate.get("start_sec", 0.0) or 0.0), 3), tuple(str(item) for item in ordered_targets))
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(candidate)
+        if len(ordered_targets) == target_count:
+            break
+    return sorted(kept, key=lambda candidate: float(candidate.get("start_sec", 0.0) or 0.0))
+
+
 def _dedupe_locate_matches(matches: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
     ranked = sorted(
         [dict(match) for match in matches],
@@ -1004,6 +1133,8 @@ def _single_token_context_allowed(*, target_token: str, text: str, start: int, e
 
 
 def _locate_match_directness(*, match_type: str, confidence: float) -> str:
+    if match_type == "ordered_list_mention":
+        return "ordered_list_navigation"
     if match_type == "contextual_single_name":
         return "routing_only_low_confidence"
     if confidence >= 0.75:
@@ -1059,8 +1190,11 @@ def _merge_locate_candidates(
         current["end_sec"] = max(float(current["end_sec"]), end_sec)
         targets = current["targets"]
         candidate_ids = current["candidate_ids"]
-        if isinstance(targets, list) and str(candidate.get("target", "")) not in targets:
-            targets.append(str(candidate.get("target", "")))
+        candidate_targets = _candidate_anchor_targets(candidate)
+        if isinstance(targets, list):
+            for target in candidate_targets:
+                if target and target not in targets:
+                    targets.append(target)
         if isinstance(candidate_ids, list):
             candidate_ids.append(str(candidate.get("candidate_id", "")))
     for anchor in anchors:
@@ -1071,6 +1205,21 @@ def _merge_locate_candidates(
             + ", ".join(str(target) for target in anchor.get("targets", []))
         )
     return anchors
+
+
+def _candidate_anchor_targets(candidate: Mapping[str, object]) -> list[str]:
+    ordered_targets = candidate.get("ordered_targets")
+    if isinstance(ordered_targets, Sequence) and not isinstance(ordered_targets, (str, bytes)):
+        return _unique_nonempty_texts(str(target) for target in ordered_targets)
+    return _unique_nonempty_texts([str(candidate.get("target", ""))])
+
+
+def _locate_candidate_label(candidate: Mapping[str, object]) -> str:
+    if str(candidate.get("match_type", "")) == "ordered_list_mention":
+        ordered_targets = candidate.get("ordered_targets", [])
+        if isinstance(ordered_targets, Sequence) and not isinstance(ordered_targets, (str, bytes)):
+            return f"ordered_list({len(ordered_targets)} targets)@{float(candidate['start_sec']):.1f}s"
+    return f"{candidate['target']}@{float(candidate['start_sec']):.1f}s"
 
 
 def _target_tokens(text: str) -> set[str]:

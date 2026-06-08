@@ -395,6 +395,69 @@ def test_timeline_ordering_rewrites_window_expansion_to_locator(tmp_path: Path):
     assert "route_violation" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 
+def test_timeline_ordering_repairs_repeated_locator_to_verify_anchors(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(segment_id: str, targets: list | None = None):
+        return {"claim": f"located {segment_id}: {targets}", "confidence": 0.4}
+
+    @tool(name="verify_segment_anchors", description="Verify anchors.")
+    def verify_segment_anchors(segment_id: str, anchors: list, targets: list | None = None, question: str = ""):
+        return {
+            "claim": f"verified {segment_id}",
+            "confidence": 0.8,
+            "regions": [{"segment_id": segment_id, "anchors": anchors}],
+        }
+
+    registry.register(locate_targets_in_segment)
+    registry.register(verify_segment_anchors)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_repeated_locate_to_verify")
+    verify_args = {
+        "segment_id": "seg_0001",
+        "anchors": [
+            {
+                "anchor_id": "anchor_0001",
+                "segment_id": "seg_0001",
+                "start_sec": 2.0,
+                "end_sec": 8.0,
+                "targets": ["David", "Apollo and Daphne"],
+            }
+        ],
+        "targets": ["David", "Apollo and Daphne"],
+    }
+    workspace.write_observation(
+        tool_name="locate_targets_in_segment",
+        claim="locate_targets_in_segment(seg_0001) found anchors.",
+        confidence=1.0,
+        raw_output={"segment_id": "seg_0001", "verify_call_args": verify_args},
+    )
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["David"]}}],
+        question="Which order is shown?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("timeline_ordering"),
+    )
+
+    assert normalized[0]["tool"] == "verify_segment_anchors"
+    assert normalized[0]["args"]["segment_id"] == verify_args["segment_id"]
+    assert normalized[0]["args"]["anchors"] == verify_args["anchors"]
+    assert normalized[0]["args"]["targets"] == verify_args["targets"]
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "repair_repeated_locator_to_verify_segment_anchors" in trace
+    assert "route_violation" not in trace
+
+
 def test_timeline_skill_upgrades_empty_read_segment_before_deny_list(tmp_path: Path):
     backend = StaticBackend("{}")
     registry = ToolRegistry()
