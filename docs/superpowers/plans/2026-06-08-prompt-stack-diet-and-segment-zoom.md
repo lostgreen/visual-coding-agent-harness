@@ -22,7 +22,7 @@
 | Task 6c：`verify_segment_anchors` | 完成 | 新增 focused VLM verifier，confirmed rows 写入 evidence table 与 `timeline.md`。 |
 | Task 6：旧 scan 占位 | 跳过 | 已被 Task 6a/6b/6c 替代；`scan_segment` 不作为执行路径。 |
 | Task 7：写入 skill allowed_actions | 完成 | 三个 needle/timeline skill 已允许 `locate_targets_in_segment` 与 `verify_segment_anchors`。 |
-| Task 8：611-2 trajectory replay | 未完成 / 待 KML | 本地端到端单测未新增，KML 611-2 复跑未在本轮执行；下一步单独跑远端 trajectory。 |
+| Task 8：611-2 trajectory replay | 已挂起 / 待结果 | KML 611-2 replay 已以 detached job 启动；等待后续读取 trajectory 验证真实 planner 是否走 `locate -> verify -> timeline/final`。 |
 | Task 9：弃用旧工具 | 完成 | planner schema 不再暴露 `zoom` / `expand_window`；runtime 对旧调用软重写到 locator。 |
 
 ### 2026-06-08 review follow-up
@@ -33,7 +33,14 @@
 - 常见 single-token target（例如 `David` / `Apollo`）不再走裸 `full_name` 强命中；只有带 `Bernini` / `Borghese` / `statue` / `sculpture` / `shown` 等上下文时才形成 `contextual_single_name` 候选，且标记为 `routing_only_low_confidence`。rare proper noun（如 `Persephone` / `Anchises` / `Aeneas`）仍可作为低/中置信 route hint。
 - `verify_segment_anchors` 不再无条件把多个 anchors union 成一个长窗口；当 union window 超过 45s 时，按 anchor 拆成多次 focused VLM request，并把 `verify_windows` 写回 raw output。
 
-仍未完成：Task 8 的真实 611-2 trajectory replay 需要在 KML 上验证 planner 是否实际走 `SceneIndex ASR mentions -> locate_targets_in_segment -> verify_segment_anchors -> read_timeline_sorted/final`。
+Task 8 当前状态：真实 611-2 trajectory replay 已在 KML 挂起，但尚未读取结果；后续需要验证 planner 是否实际走 `SceneIndex ASR mentions -> locate_targets_in_segment -> verify_segment_anchors -> read_timeline_sorted/final`。
+
+KML replay job：
+
+- run root：`/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_anchor_hardened_611_2_5c87449_20260608`
+- pid path：`/tmp/videomme_agent_anchor_hardened_611_2_5c87449_20260608.pid`
+- log path：`/tmp/videomme_agent_anchor_hardened_611_2_5c87449_20260608.log`
+- code commit：`5c87449`
 
 **Architecture:** 改动全部在 `src/visual_coding_agent_harness/`，对外契约（`IterativeVisualAgent.run` 入口、ReAct `continue/final` JSON、skill 路由）保持不变。五个手术点：
 - (0) `agents/iterative_agent.py` + `prompt_stack.py`：删除 `_CHEAP_TOOLS` / `_EXPENSIVE_TOOLS` / `_VERIFIER_TOOLS` 常量、`AgentBudget.cheap_tool_budget` / `expensive_tool_budget` / `verifier_tool_budget` / `free_exploration` 字段、`_tool_budget_available` 检查、`_budget_snapshot_block` 中的"cheap=X expensive=Y verifier=Z"行、`reflection_memory` 中 `tool_budget_exhausted` 规则。保留 `max_rounds` + `max_tool_calls_per_round`。
