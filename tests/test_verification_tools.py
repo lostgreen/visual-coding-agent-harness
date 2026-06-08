@@ -281,6 +281,35 @@ class VerificationToolsTest(unittest.TestCase):
             self.assertIn("temporal order contradicts evidence", gate["reasons"])
             self.assertEqual(gate["temporal_order_verdict"], "Contradict")
 
+    def test_verify_ledger_answer_rejects_mcq_answer_without_option_letter(self):
+        registry = build_verification_registry()
+
+        result = registry.execute(
+            "verify_ledger_answer",
+            {
+                "answer": "The video segment order is seg_0001, seg_0002, seg_0003, and seg_0004.",
+                "ledger_text": (
+                    "- `obs_0001` | tool: `caption_segment` | confidence: 0.80 | "
+                    "claim: The video segment order is seg_0001, seg_0002, seg_0003, and seg_0004."
+                ),
+                "question": (
+                    "Which order is shown?\n"
+                    "A. Apollo and Daphne then David\n"
+                    "B. David then Apollo and Daphne"
+                ),
+                "candidate_options": [
+                    "A. Apollo and Daphne then David",
+                    "B. David then Apollo and Daphne",
+                ],
+                "min_score": 0.0,
+                "requires_visual_evidence": False,
+            },
+        )
+
+        gate = result["regions"][0]["evidence_gate"]
+        self.assertEqual(result["regions"][0]["verdict"], "insufficient")
+        self.assertIn("MCQ answer must begin with option letter", gate["reasons"])
+
     def test_summarize_ledger_evidence_extracts_compact_claims(self):
         registry = build_verification_registry()
 

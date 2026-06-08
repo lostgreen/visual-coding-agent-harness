@@ -12,6 +12,13 @@
 - segment evidence pack：`/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_anchor_hardened_611_2_5c87449_20260608/analysis/segment_evidence`
 - 本地总览图：`/Users/lostgreen/Downloads/611-2_all_segments_sheet_20260608.jpg`
 
+后续验证 replay：
+
+- run root：`/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_locator_verify_611_2_0417b13_20260608`
+- commit：`0417b13 fix(video): route locator anchors into verifier`
+- 状态：`max_rounds_reached`
+- summary：`choice=""`, `selected_option=None`, `correct=False`
+
 旧的无 hard-skill / open-rewrite trajectory 只作为历史对照；本分析以当前 run 为准。
 
 ## Replay 摘要
@@ -168,6 +175,63 @@ in what order ... four masterpieces ... in a single scene
 
 这说明 300s 长 clip caption 仍然不适合做 target absence evidence。它可以当开放描述，但不应该作为“没有目标项”的强证据进入 timeline。
 
+## 最新 replay 进一步确认的问题
+
+`0417b13` 已经解决“locator 不进入 verifier”的一部分问题，但 replay 显示新的关键失败点属实。
+
+### 6. anchor-bound verifier 被 state machine 换段
+
+Round 4 的调用是正确的：
+
+```text
+verify_segment_anchors(seg_0002)
+anchors.segment_id = seg_0002
+```
+
+但后续 round 因为 `avoid_repeated_segment / segment_pool_exhausted`，runtime 把 planner 期望继续验证的 seg_0002 anchor 改派到其他 segment：
+
+```text
+verify_segment_anchors(seg_0005)
+anchors.segment_id = seg_0002
+window = 395-417s / 492-544s
+
+verify_segment_anchors(seg_0006)
+anchors.segment_id = seg_0002
+
+verify_segment_anchors(seg_0007)
+anchors.segment_id = seg_0002
+```
+
+这些调用拿 seg_0002 的字幕/时间窗去看 seg_0005/6/7，必然产出假 negative。然后系统又把这些失败当成“目标没有确认”，进一步耗尽 segment pool。
+
+结论：`verify_segment_anchors` 是 anchor-bound tool，不应进入普通 media segment 替换逻辑。anchor 自带 `segment_id` 后，只能在该 segment 验证。
+
+### 7. ordered-list 仍未升级成可排序证据
+
+`seg_0002` 的 ASR 在一个短窗口内列出完整四项，实际已经足够支持 MCQ D。但当前 locator 的 `ordered_list_navigation` 仍主要停留在 navigation 层，后续 VLM verifier 又以视觉确认方式拆成多个 target 做 yes/no。
+
+这会导致：
+
+- ASR 清单顺序没有 materialize 成 timeline rows；
+- `read_timeline_sorted` 早期读到空 timeline；
+- AnswerAgent/ledger verifier 看不到“同一 transcript span 的 ordered list”这种证据形态。
+
+### 8. ledger verifier 支持了无关答案
+
+后半段多次 `verify_ledger_answer` 支持类似答案：
+
+```text
+The video segment order is seg_0001, seg_0002, ...
+```
+
+这不是原题要求的 A/B/C/D，也不是四件作品顺序。其 lexical score 可到 0.62，但：
+
+- `temporal_order_verdict` 是 Neutral；
+- `option_relations` 为空；
+- `selected_option` 仍是 None。
+
+结论：MCQ verifier 必须拒绝非选项答案。否则会把“片段顺序描述”误判成 supported。
+
 ## 建议修改
 
 ## 已实施修复
@@ -251,7 +315,14 @@ D. <原自然语言顺序答案>
 
 ```text
 PYTHONPATH=src:. pytest -q
-386 passed
+390 passed
+```
+
+本轮相关模块回归：
+
+```text
+PYTHONPATH=src:. pytest -q tests/test_route_validator.py tests/test_video_navigation.py tests/test_caption_qa_tools.py tests/test_verification_tools.py tests/test_timeline.py tests/test_iterative_agent.py
+154 passed
 ```
 
 新增/覆盖测试：
@@ -262,12 +333,75 @@ PYTHONPATH=src:. pytest -q
 - timeline 重复 locator 自动 repair 到 `verify_segment_anchors`；
 - 自然语言 temporal answer 唯一映射回 MCQ option；
 - ordered-list candidate 识别同窗口 target 顺序。
+- anchor-bound verifier 不再被 `avoid_repeated_segment` 换段；
+- ordered-list ASR 写入 confirmed indexed transcript timeline rows；
+- interactive loop 可从 ordered-list timeline 直接 final；
+- MCQ ledger verifier 拒绝非选项答案。
 
-### 仍需观察
+### 7. anchor-bound verifier 不再替换 segment
 
-这轮没有把 `locate_targets_in_segment` 本身升级成 answer evidence。它仍然是 navigation-only。
+`verify_segment_anchors` 现在走单独的 normalize 分支，不再进入普通 `_resolve_media_segment()` 的 `avoid_repeated_segment` 替换逻辑。
 
-原因：保持边界清楚，避免 text locator 候选直接变成最终证据。若新版 611-2 replay 仍卡在“字幕清单顺序无法被 verifier/AnswerAgent 使用”，下一步应单独增加 `timeline_asr_summary / indexed_transcript` 证据写入，而不是让 locator 偷渡 evidence。
+规则：
+
+- anchor 带 `segment_id` 时，以 anchor 的 `segment_id` 为准；
+- planner 传错 `segment_id` 时，runtime 修回 anchor segment，并记录 `repair_verify_anchor_segment_id_from_anchor`；
+- anchors 来自多个 segment 时，该调用被拒绝，要求按 source segment 分开验证；
+- tool 层也增加硬校验：`verify_segment_anchors(seg_0005, anchors from seg_0002)` 会直接抛出 mismatch。
+
+### 8. ordered-list ASR 升级为 indexed transcript timeline
+
+`locate_targets_in_segment` 仍然是 navigation-only，不写 answer evidence table。但当它发现同一短 ASR/OCR 窗口包含 ordered target list 时，会额外返回：
+
+```json
+"ordered_list_timeline_rows": [
+  {
+    "entity": "Aeneas, Anchises, and Ascanius fleeing Troy",
+    "observed_at_sec": 529.0,
+    "confidence_signal": "confirmed",
+    "grounding_quality": "indexed_transcript"
+  }
+]
+```
+
+workspace 会把这些 rows 写入 `timeline.md`。这条路径的含义是：
+
+- locator 仍不直接支持最终答案；
+- ordered ASR/OCR list 可以作为可排序 transcript timeline；
+- VLM verifier 后续只负责补视觉确认，不负责否定 ASR list。
+
+### 9. interactive loop 可直接使用 timeline 决策
+
+普通 planner loop 在工具执行后会检查 `read_timeline_sorted()`。若 confirmed timeline rows 唯一匹配某个 MCQ temporal option，会直接 final：
+
+```text
+iterative_timeline_temporal_decision
+source = interactive_loop
+answer = D
+```
+
+同时修复了两个匹配细节：
+
+- 同一个 observation 可以写多条 timeline rows，不能再用 `obs_id` 去重阻止四项清单匹配；
+- 选项中引号包裹的艺术品名按整体事件处理，避免逗号切碎 `Aeneas, Anchises, and Ascanius fleeing Troy`。
+
+### 10. MCQ verifier 拒绝非选项答案
+
+`verify_ledger_answer` 现在在 MCQ 场景下要求 answer 能解析出选项字母。否则返回：
+
+```text
+insufficient: MCQ answer must begin with option letter
+```
+
+runtime 也会给 answer-facing verifier 注入原始 question / candidate_options，保证它能识别 MCQ 约束。
+
+## 历史建议对照
+
+以下 A-F 是本轮实施前整理的设计建议，保留作对照：
+
+- A-D 已由 `verify_call_args`、重复 locator repair、ordered-list candidate、target set 自动补全覆盖；
+- F 已由 planner final option mapping 和 MCQ verifier gate 覆盖；
+- E 仍作为后续质量约束：长段 caption 的 absence claim 不应升级为强反证。
 
 ### A. 让 locator 输出可执行 verifier 参数
 
@@ -369,20 +503,21 @@ final answer must begin with exactly one option letter A/B/C/D
 
 ## 结论
 
-611-2 的主要失败不是 target extraction 已经完全错，也不是 locator 完全没找到证据；当前失败点是交互协议：
+611-2 的主要失败不是 target extraction 已经完全错，也不是 locator 完全没找到证据；失败点是交互协议和证据升级：
 
 ```text
 locator candidates 找到了
--> anchor JSON 没有 planner-visible / referenceable
--> verifier 没被调用
--> planner 反复 navigation
--> 最后用 earliest mention 做自然语言排序
--> 没有转成 MCQ option
+-> 旧版：anchor JSON 不可复制，planner 反复 navigation
+-> 0417b13：进入 verifier，但 anchor 被换到错误 segment
+-> ordered-list ASR 没有成为 timeline evidence
+-> ledger verifier 支持了非 MCQ option 的片段顺序答案
 ```
 
-下一步应优先修：
+本轮已完成：
 
-1. locator 输出 `verify_call_args` 或 `anchor_ref`；
-2. timeline route 下 locate 后强制/偏置进入 verifier；
-3. locator 增加 ordered-list candidate；
-4. final gate 把自然语言顺序映射回 A/B/C/D。
+1. `verify_segment_anchors` anchor-bound，不再被 `avoid_repeated_segment` 换段；
+2. ordered-list ASR 写入 confirmed indexed transcript timeline rows；
+3. ordinary interactive loop 可从 timeline 唯一匹配 MCQ option 后直接 final；
+4. `verify_ledger_answer` 拒绝非选项 MCQ answer。
+
+下一步只需要挂新版 611-2 replay，观察是否能从 `seg_0002` 的 ordered ASR list 直接收敛到 D。

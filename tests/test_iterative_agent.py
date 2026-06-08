@@ -14,6 +14,7 @@ from visual_coding_agent_harness.backends.base import BackendRequest, BackendRes
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
+from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry
 from visual_coding_agent_harness.video_index import VideoSegment, SceneIndex, fixed_window_scene_index
 from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore
@@ -3024,6 +3025,74 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "final")
             self.assertEqual(result.answer, "B")
             self.assertEqual(result.citations, ["obs_0007", "obs_0008"])
+
+    def test_interactive_timeline_decides_from_ordered_asr_locator_rows(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=600.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    asr_sentences=[
+                        {
+                            "start_sec": 529.0,
+                            "end_sec": 539.0,
+                            "text": (
+                                "The author presents Aeneas, Anchises, and Ascanius fleeing Troy, "
+                                "David, The rape of Persephone, and Apollo and Daphne."
+                            ),
+                        }
+                    ],
+                )
+            ],
+        )
+        question = (
+            "Which order is shown?\n"
+            'A. "Apollo and Daphne", "David", "The rape of Persephone", "Aeneas, Anchises, and Ascanius fleeing Troy"\n'
+            'B. "David", "Aeneas, Anchises, and Ascanius fleeing Troy", "Apollo and Daphne", "The rape of Persephone"\n'
+            'C. "The rape of Persephone", "Apollo and Daphne", "David", "Aeneas, Anchises, and Ascanius fleeing Troy"\n'
+            'D. "Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The rape of Persephone", "Apollo and Daphne"'
+        )
+
+        class OrderedLocatorBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status":"continue","skill":"timeline_ordering","rationale":"read ASR list",'
+                            '"program":[{"tool":"locate_targets_in_segment","args":{"segment_id":"seg_0002",'
+                            '"targets":["Aeneas, Anchises, and Ascanius fleeing Troy","David",'
+                            '"The rape of Persephone","Apollo and Daphne"]}}]}'
+                        )
+                    )
+                return BackendResponse(
+                    text='{"answer":"need_more_evidence","citations":[],"missing_evidence":["should decide from timeline"]}'
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="interactive_ordered_asr")
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+            agent = IterativeVisualAgent(
+                backend=OrderedLocatorBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=SceneIndex(
+                    video_path="/videos/bernini.mp4",
+                    duration_sec=600.0,
+                    segments=[VideoSegment(segment_id="seg_0002", start_sec=300.0, end_sec=600.0)],
+                ),
+                budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=2, reserve_final_round=False),
+            )
+
+            result = agent.run(question=question, video_path="/videos/bernini.mp4")
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "D")
+            self.assertEqual(result.citations, ["obs_0001", "obs_0001", "obs_0001", "obs_0001"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_timeline_temporal_decision", trace)
 
     def test_timeline_ordering_uses_caption_pass_before_focused_reads(self):
         registry = ToolRegistry()

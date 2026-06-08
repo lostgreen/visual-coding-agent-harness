@@ -684,6 +684,49 @@ class IterativeVisualAgent:
             inspected_segment_ids.update(_segment_ids_from_program(program))
             if _program_has_inspect_with_candidate_options(program):
                 has_inspect_with_candidate_options = True
+            timeline_decision = (
+                _timeline_temporal_decision(question=raw_question, timeline=self.workspace.read_timeline_sorted())
+                if classify_question_route(raw_question) == "temporal_order"
+                else None
+            )
+            if timeline_decision is not None:
+                answer = str(timeline_decision["answer"])
+                timeline_citations = [str(obs_id) for obs_id in timeline_decision["citations"]]
+                self.workspace.write_trace_event(
+                    "iterative_timeline_temporal_decision",
+                    {
+                        "round": round_number,
+                        "answer": answer,
+                        "citations": timeline_citations,
+                        "matched_events": list(timeline_decision["matched_events"]),
+                        "source": "interactive_loop",
+                    },
+                )
+                rounds.append(
+                    IterativeRound(
+                        round_number=round_number,
+                        status="final",
+                        planner_text=planner_response.text,
+                        rationale=rationale,
+                        program=program,
+                        observation_ids=observation_ids,
+                    )
+                )
+                self._write_final_trace(
+                    round_number=round_number,
+                    answer=answer,
+                    citations=timeline_citations,
+                    source="timeline_temporal_order",
+                )
+                return IterativeRunResult(
+                    question=raw_question,
+                    video_path=video_path,
+                    answer=answer,
+                    status="final",
+                    citations=timeline_citations,
+                    confidence=float(timeline_decision.get("confidence", 0.9) or 0.9),
+                    rounds=rounds,
+                )
             current_evidence_table_row_count = self.workspace.evidence_table_row_count()
             if current_evidence_table_row_count <= last_evidence_table_row_count:
                 no_evidence_growth_rounds += 1
@@ -1180,6 +1223,17 @@ class IterativeVisualAgent:
                     resolved={"tool": tool_name, "args": args},
                     next_action="verify_ledger_answer reads the workspace ledger automatically; do not pass ledger_text.",
                 )
+            if tool_name == "verify_ledger_answer":
+                verifier_question = raw_question or question
+                if verifier_question and self._tool_accepts_argument(tool_name, "question") and not args.get("question"):
+                    args["question"] = verifier_question
+                candidate_options = extract_candidate_options(verifier_question)
+                if (
+                    candidate_options
+                    and self._tool_accepts_argument(tool_name, "candidate_options")
+                    and not args.get("candidate_options")
+                ):
+                    args["candidate_options"] = list(candidate_options)
             if final_round_reserved and tool_name != "verify_ledger_answer":
                 self.workspace.write_trace_event(
                     "exploration_policy_adjustment",
@@ -1194,6 +1248,24 @@ class IterativeVisualAgent:
                     reason="reserve_final_round",
                     original={"tool": tool_name, "args": args},
                 )
+                continue
+
+            if tool_name == "verify_segment_anchors":
+                normalized_verify_args = self._normalize_verify_segment_anchors_args(
+                    args=args,
+                    question=question,
+                    raw_question=raw_question,
+                    video_path=video_path,
+                    planner_skill=planner_skill,
+                    notes_out=notes_out,
+                )
+                if normalized_verify_args is None:
+                    blocked_route_violation = True
+                    continue
+                normalized_step = {"tool": tool_name, "args": normalized_verify_args}
+                if "assign" in step:
+                    normalized_step["assign"] = str(step["assign"])
+                normalized.append(normalized_step)
                 continue
 
             if tool_name in _SEGMENT_MEDIA_TOOLS:
@@ -1924,6 +1996,108 @@ class IterativeVisualAgent:
         except ToolError:
             return False
 
+    def _normalize_verify_segment_anchors_args(
+        self,
+        *,
+        args: Mapping[str, Any],
+        question: str,
+        raw_question: str,
+        video_path: str,
+        planner_skill: SkillSpec | None,
+        notes_out: list[NormalizationNote] | None,
+    ) -> dict[str, Any] | None:
+        normalized_args = dict(args)
+        original_args = dict(args)
+        anchor_segment_ids = _anchor_segment_ids(normalized_args.get("anchors", []))
+        if len(anchor_segment_ids) > 1:
+            next_action = (
+                "verify_segment_anchors received anchors from multiple segments. "
+                "Call it once per source segment using the exact verify_call_args from locate_targets_in_segment."
+            )
+            self.workspace.write_trace_event(
+                "exploration_policy_adjustment",
+                {
+                    "reason": "invalid_verify_anchor_segment_mismatch",
+                    "tool": "verify_segment_anchors",
+                    "anchor_segment_ids": anchor_segment_ids,
+                    "next_action": next_action,
+                },
+            )
+            _append_normalization_note(
+                notes_out,
+                tool="verify_segment_anchors",
+                reason="invalid_verify_anchor_segment_mismatch",
+                original={"tool": "verify_segment_anchors", "args": original_args},
+                next_action=next_action,
+            )
+            return None
+
+        requested_segment_id = str(normalized_args.get("segment_id", "") or "").strip()
+        if anchor_segment_ids:
+            anchor_segment_id = anchor_segment_ids[0]
+            if requested_segment_id and requested_segment_id != anchor_segment_id:
+                self.workspace.write_trace_event(
+                    "route_tool_repaired",
+                    {
+                        "skill": planner_skill.name if planner_skill is not None else "",
+                        "requested_tool": "verify_segment_anchors",
+                        "resolved_tool": "verify_segment_anchors",
+                        "reason": "repair_verify_anchor_segment_id_from_anchor",
+                        "requested_segment_id": requested_segment_id,
+                        "anchor_segment_id": anchor_segment_id,
+                    },
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool="verify_segment_anchors",
+                    reason="repair_verify_anchor_segment_id_from_anchor",
+                    original={"tool": "verify_segment_anchors", "args": original_args},
+                    resolved={"tool": "verify_segment_anchors", "segment_id": anchor_segment_id},
+                )
+            normalized_args["segment_id"] = anchor_segment_id
+        elif not requested_segment_id:
+            next_action = (
+                "verify_segment_anchors needs anchors with segment_id or an explicit segment_id. "
+                "Use locate_targets_in_segment verify_call_args."
+            )
+            _append_normalization_note(
+                notes_out,
+                tool="verify_segment_anchors",
+                reason="missing_verify_anchor_segment_id",
+                original={"tool": "verify_segment_anchors", "args": original_args},
+                next_action=next_action,
+            )
+            return None
+
+        segment_id = str(normalized_args.get("segment_id", "") or "").strip()
+        scene_segment = _scene_segment_or_none(self.scene_index, segment_id)
+        start_sec, end_sec = _anchor_args_window(
+            normalized_args.get("anchors", []),
+            fallback_start=float(normalized_args.get("start_sec", 0.0) or 0.0),
+            fallback_end=float(normalized_args.get("end_sec", 0.0) or 0.0),
+        )
+        if scene_segment is not None:
+            normalized_args["start_sec"] = scene_segment.start_sec
+            normalized_args["end_sec"] = scene_segment.end_sec
+        elif start_sec or end_sec:
+            normalized_args.setdefault("start_sec", start_sec)
+            normalized_args.setdefault("end_sec", end_sec)
+        if self._tool_accepts_argument("verify_segment_anchors", "video_path"):
+            normalized_args["video_path"] = video_path
+        if self._tool_accepts_argument("verify_segment_anchors", "question"):
+            normalized_args.setdefault("question", question)
+            normalized_args["question"] = _tool_exploration_question(
+                str(normalized_args["question"]),
+                route_hint=planner_skill.name if planner_skill else "",
+                question_context=question,
+                forbidden_question=raw_question,
+                option_blind=self.budget.rewrite_mcq_for_exploration,
+                target_entities=self._exploration_target_entities,
+            )
+        if self._tool_accepts_argument("verify_segment_anchors", "nframes"):
+            normalized_args.setdefault("nframes", self.budget.default_nframes)
+        return normalized_args
+
     def _repair_tool_alias(self, *, tool_name: str, args: Mapping[str, Any]) -> tuple[str, dict[str, Any], str] | None:
         aliases = {"verify": "verify_ledger_answer"}
         resolved_tool = aliases.get(tool_name)
@@ -2582,6 +2756,38 @@ def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[
         if isinstance(args, Mapping) and args.get("segment_id"):
             segment_ids.append(str(args["segment_id"]))
     return segment_ids
+
+
+def _anchor_segment_ids(anchors: Any) -> list[str]:
+    if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes)):
+        return []
+    segment_ids: list[str] = []
+    for anchor in anchors:
+        if not isinstance(anchor, Mapping):
+            continue
+        segment_id = str(anchor.get("segment_id", "") or "").strip()
+        if segment_id and segment_id not in segment_ids:
+            segment_ids.append(segment_id)
+    return segment_ids
+
+
+def _anchor_args_window(anchors: Any, *, fallback_start: float, fallback_end: float) -> tuple[float, float]:
+    if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes)):
+        return float(fallback_start), float(fallback_end)
+    starts = []
+    ends = []
+    for anchor in anchors:
+        if not isinstance(anchor, Mapping):
+            continue
+        if anchor.get("start_sec") is not None:
+            starts.append(float(anchor.get("start_sec", 0.0) or 0.0))
+        if anchor.get("end_sec") is not None:
+            ends.append(float(anchor.get("end_sec", 0.0) or 0.0))
+    start_sec = min(starts) if starts else float(fallback_start)
+    end_sec = max(ends) if ends else float(fallback_end)
+    if end_sec < start_sec:
+        end_sec = start_sec
+    return start_sec, end_sec
 
 
 def _followup_route_for_skill(skill_name: str) -> FollowupRoute:
@@ -3662,12 +3868,12 @@ def _timeline_temporal_decision(
         if len(expected_events) < 2:
             continue
         matched = []
-        used_obs_ids = set()
+        used_row_keys = set()
         for event in expected_events:
-            match = _match_timeline_row(event, confirmed, used_obs_ids=used_obs_ids)
+            match = _match_timeline_row(event, confirmed, used_row_keys=used_row_keys)
             if match is None:
                 break
-            used_obs_ids.add(str(match.get("obs_id", "")))
+            used_row_keys.add(_timeline_row_match_key(match))
             matched.append(
                 {
                     "expected": event,
@@ -3709,6 +3915,14 @@ def _confirmed_timeline_rows(timeline: Sequence[Mapping[str, Any]]) -> list[Mapp
 
 
 def _option_temporal_events(option_text: str) -> list[str]:
+    quoted_events = [
+        _clean_target_fact(match.group(1))
+        for match in re.finditer(r"[\"“]([^\"”]+)[\"”]", str(option_text))
+    ]
+    quoted_events = [event for event in quoted_events if _informative_target_fact(event)]
+    if len(quoted_events) >= 2:
+        return quoted_events
+
     events = []
     for part in _split_option_fact_text(_strip_option_prefix(option_text)):
         event = _clean_target_fact(part)
@@ -3721,15 +3935,17 @@ def _match_timeline_row(
     event: str,
     rows: Sequence[Mapping[str, Any]],
     *,
-    used_obs_ids: set[str],
+    used_row_keys: set[str] | None = None,
+    used_obs_ids: set[str] | None = None,
 ) -> Mapping[str, Any] | None:
+    used_keys = used_row_keys or used_obs_ids or set()
     event_tokens = set(_target_fact_key(event).split())
     if not event_tokens:
         return None
     best: tuple[float, Mapping[str, Any]] | None = None
     for row in rows:
-        obs_id = str(row.get("obs_id", ""))
-        if obs_id in used_obs_ids:
+        row_key = _timeline_row_match_key(row)
+        if row_key in used_keys:
             continue
         row_tokens = set(_target_fact_key(str(row.get("entity", ""))).split())
         if not row_tokens:
@@ -3745,6 +3961,16 @@ def _match_timeline_row(
         if best is None or score > best[0]:
             best = (score, row)
     return best[1] if best is not None else None
+
+
+def _timeline_row_match_key(row: Mapping[str, Any]) -> str:
+    return "|".join(
+        [
+            str(row.get("obs_id", "")),
+            str(row.get("entity", "")),
+            str(row.get("observed_at_sec", "")),
+        ]
+    )
 
 
 def _option_letter(option_text: str, *, index: int) -> str:

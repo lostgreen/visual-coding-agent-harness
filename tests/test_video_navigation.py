@@ -233,6 +233,7 @@ class VideoNavigationTest(unittest.TestCase):
                 ]
             )
             observation = workspace.read_observations(tool_name="locate_targets_in_segment")[0]
+            timeline_rows = workspace.read_timeline_sorted()
 
         raw = observation.raw_output
         self.assertEqual(result.observation_ids, ["obs_0001"])
@@ -273,6 +274,14 @@ class VideoNavigationTest(unittest.TestCase):
         ])
         self.assertIn("verify_segment_anchors", raw["limitations"])
         self.assertEqual(raw["recommended_next_tools"][0]["tool"], "verify_segment_anchors")
+        self.assertEqual([row["entity"] for row in timeline_rows], [
+            "Aeneas, Anchises, and Ascanius fleeing Troy",
+            "David",
+            "The rape of Persephone",
+            "Apollo and Daphne",
+        ])
+        self.assertTrue(all(row["confidence_signal"] == "confirmed" for row in timeline_rows))
+        self.assertTrue(all(row["obs_id"] == "obs_0001" for row in timeline_rows))
         self.assertEqual(workspace.evidence_table_row_count(), 0)
 
     def test_locate_targets_in_segment_unions_explicit_targets_with_target_coverage(self):

@@ -164,6 +164,7 @@ def build_segment_inspector_registry(
         fps: float = 0.0,
     ) -> Mapping[str, object]:
         anchor_list = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)]
+        _validate_anchor_segment_ids(segment_id=segment_id, anchors=anchor_list)
         anchor_groups = _anchor_verify_groups(
             anchors=anchor_list,
             fallback_start=float(start_sec),
@@ -499,6 +500,30 @@ def _anchor_union_window(
     if end < start:
         end = start
     return start, end
+
+
+def _validate_anchor_segment_ids(*, segment_id: str, anchors: Sequence[Mapping[str, object]]) -> None:
+    requested_segment_id = str(segment_id or "").strip()
+    if not requested_segment_id:
+        return
+    mismatches = []
+    for anchor in anchors:
+        anchor_segment_id = str(anchor.get("segment_id", "") or "").strip()
+        if anchor_segment_id and anchor_segment_id != requested_segment_id:
+            mismatches.append(
+                {
+                    "anchor_id": str(anchor.get("anchor_id", "") or ""),
+                    "anchor_segment_id": anchor_segment_id,
+                }
+            )
+    if not mismatches:
+        return
+    details = ", ".join(
+        f"{item['anchor_id'] or '<unnamed>'}:{item['anchor_segment_id']}" for item in mismatches
+    )
+    raise ValueError(
+        f"verify_segment_anchors anchor segment_id mismatch for {requested_segment_id}: {details}"
+    )
 
 
 def _anchor_verify_groups(

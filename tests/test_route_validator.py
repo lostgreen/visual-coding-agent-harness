@@ -458,6 +458,70 @@ def test_timeline_ordering_repairs_repeated_locator_to_verify_anchors(tmp_path: 
     assert "route_violation" not in trace
 
 
+def test_verify_segment_anchors_does_not_avoid_repeated_anchor_segment(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="verify_segment_anchors", description="Verify anchors.")
+    def verify_segment_anchors(
+        video_path: str,
+        segment_id: str,
+        anchors: list,
+        targets: list | None = None,
+        question: str = "",
+        start_sec: float = 0.0,
+        end_sec: float = 0.0,
+    ):
+        return {
+            "claim": f"verified {segment_id}",
+            "confidence": 0.8,
+            "regions": [{"segment_id": segment_id, "anchors": anchors}],
+        }
+
+    registry.register(verify_segment_anchors)
+    workspace = EvidenceWorkspace.create(tmp_path, "verify_anchor_no_segment_swap")
+    scene_index = SceneIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=1500.0,
+        segments=[
+            VideoSegment(segment_id="seg_0002", start_sec=300.0, end_sec=600.0),
+            VideoSegment(segment_id="seg_0005", start_sec=1200.0, end_sec=1500.0),
+        ],
+    )
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=scene_index,
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+    anchors = [
+        {
+            "anchor_id": "anchor_0001",
+            "segment_id": "seg_0002",
+            "start_sec": 492.0,
+            "end_sec": 544.0,
+            "targets": ["The rape of Persephone", "Apollo and Daphne"],
+        }
+    ]
+
+    normalized = agent._normalize_program(
+        [{"tool": "verify_segment_anchors", "args": {"segment_id": "seg_0002", "anchors": anchors}}],
+        question="Which order is shown?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids={"seg_0002"},
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("timeline_ordering"),
+    )
+
+    assert normalized[0]["tool"] == "verify_segment_anchors"
+    assert normalized[0]["args"]["segment_id"] == "seg_0002"
+    assert normalized[0]["args"]["anchors"] == anchors
+    assert normalized[0]["args"]["video_path"] == "/videos/demo.mp4"
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "avoid_repeated_segment" not in trace
+    assert "seg_0005" not in trace
+
+
 def test_timeline_skill_upgrades_empty_read_segment_before_deny_list(tmp_path: Path):
     backend = StaticBackend("{}")
     registry = ToolRegistry()

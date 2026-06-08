@@ -197,6 +197,10 @@ def build_video_navigation_registry(
             top_k_per_target=top_k_per_target,
         )
         anchors = _merge_locate_candidates(segment=segment, candidates=candidates)
+        ordered_list_timeline_rows = _ordered_list_timeline_rows(
+            segment=segment,
+            candidates=candidates,
+        )
         verify_call_args = {
             "segment_id": segment.segment_id,
             "anchors": anchors,
@@ -220,6 +224,7 @@ def build_video_navigation_registry(
             "targets": list(resolved_targets),
             "candidates": candidates,
             "anchors_for_vlm": anchors,
+            "ordered_list_timeline_rows": ordered_list_timeline_rows,
             "verify_call_args": verify_call_args,
             "regions": [
                 {
@@ -228,6 +233,7 @@ def build_video_navigation_registry(
                     "end_sec": float(segment.end_sec),
                     "candidates": candidates,
                     "anchors_for_vlm": anchors,
+                    "ordered_list_timeline_rows": ordered_list_timeline_rows,
                     "verify_call_args": verify_call_args,
                 }
             ],
@@ -947,7 +953,11 @@ def _ordered_list_candidates(
             window_end = max(window_end, source_end)
             previous_end = source_end
             combined = " ".join(pieces)
-            ordered_targets = _targets_in_text_order(combined, target_list)
+            ordered_targets = _targets_in_text_order(
+                combined,
+                target_list,
+                allow_list_context=True,
+            )
             if len(ordered_targets) < min(3, len(target_list)):
                 continue
             candidates.append(
@@ -969,16 +979,25 @@ def _ordered_list_candidates(
     return _dedupe_ordered_list_candidates(candidates, target_count=len(target_list))
 
 
-def _targets_in_text_order(text: str, targets: Sequence[str]) -> list[str]:
+def _targets_in_text_order(
+    text: str,
+    targets: Sequence[str],
+    *,
+    allow_list_context: bool = False,
+) -> list[str]:
     positioned: list[tuple[int, str]] = []
     for target in targets:
-        position = _target_first_position(text=text, target=target)
+        position = _target_first_position(
+            text=text,
+            target=target,
+            allow_list_context=allow_list_context,
+        )
         if position is not None:
             positioned.append((position, str(target)))
     return [target for _, target in sorted(positioned, key=lambda item: item[0])]
 
 
-def _target_first_position(*, text: str, target: str) -> int | None:
+def _target_first_position(*, text: str, target: str, allow_list_context: bool = False) -> int | None:
     positions = []
     for alias in _target_alias_patterns(target):
         pattern = alias["pattern"]
@@ -986,11 +1005,15 @@ def _target_first_position(*, text: str, target: str) -> int | None:
             continue
         for match in pattern.finditer(text):
             token_tuple = tuple(str(token) for token in alias.get("tokens", ()) if str(token))
-            if bool(alias.get("requires_context")) and not _single_token_context_allowed(
-                target_token=token_tuple[0] if token_tuple else str(target).lower(),
-                text=text,
-                start=match.start(),
-                end=match.end(),
+            if (
+                bool(alias.get("requires_context"))
+                and not allow_list_context
+                and not _single_token_context_allowed(
+                    target_token=token_tuple[0] if token_tuple else str(target).lower(),
+                    text=text,
+                    start=match.start(),
+                    end=match.end(),
+                )
             ):
                 continue
             positions.append(int(match.start()))
@@ -1024,6 +1047,45 @@ def _dedupe_ordered_list_candidates(
         if len(ordered_targets) == target_count:
             break
     return sorted(kept, key=lambda candidate: float(candidate.get("start_sec", 0.0) or 0.0))
+
+
+def _ordered_list_timeline_rows(
+    *,
+    segment: VideoMapSegment,
+    candidates: Sequence[Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    rows: list[dict[str, object]] = []
+    for candidate in candidates:
+        if str(candidate.get("match_type", "")) != "ordered_list_mention":
+            continue
+        ordered_targets = candidate.get("ordered_targets", [])
+        if not isinstance(ordered_targets, Sequence) or isinstance(ordered_targets, (str, bytes)):
+            continue
+        targets = [str(target).strip() for target in ordered_targets if str(target).strip()]
+        if len(targets) < 2:
+            continue
+        start_sec = float(candidate.get("start_sec", segment.start_sec) or segment.start_sec)
+        end_sec = float(candidate.get("end_sec", start_sec) or start_sec)
+        span = max(0.0, end_sec - start_sec)
+        step_sec = span / max(1, len(targets) - 1) if span else 0.001
+        claim = (
+            f"Indexed transcript ordered list in {segment.segment_id} mentions targets in order: "
+            + " -> ".join(targets)
+        )
+        for index, target in enumerate(targets):
+            rows.append(
+                {
+                    "entity": target,
+                    "observed_at_sec": round(start_sec + index * step_sec, 3),
+                    "window": [start_sec, end_sec],
+                    "confidence_signal": "confirmed",
+                    "claim": claim,
+                    "grounding_quality": "indexed_transcript",
+                    "source": str(candidate.get("source", "")),
+                    "candidate_id": str(candidate.get("candidate_id", "")),
+                }
+            )
+    return rows
 
 
 def _dedupe_locate_matches(matches: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:

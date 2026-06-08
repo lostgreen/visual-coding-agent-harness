@@ -2,6 +2,7 @@ import tempfile
 import json
 import unittest
 from pathlib import Path
+import pytest
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
@@ -492,6 +493,30 @@ class CaptionQAToolsTest(unittest.TestCase):
         )
         self.assertEqual(len(observation.raw_output["verify_windows"]), 2)
         self.assertIn("split", observation.raw_output["limitations"])
+
+    def test_verify_segment_anchors_rejects_cross_segment_anchors(self):
+        backend = FixedTextBackend('{"confirmations": [], "rejections": []}')
+        registry = build_segment_inspector_registry(backend)
+
+        with pytest.raises(ValueError, match="anchor segment_id"):
+            registry.execute(
+                "verify_segment_anchors",
+                {
+                    "video_path": "/videos/bernini.mp4",
+                    "segment_id": "seg_0005",
+                    "start_sec": 1200.0,
+                    "end_sec": 1500.0,
+                    "anchors": [
+                        {
+                            "anchor_id": "anchor_0001",
+                            "segment_id": "seg_0002",
+                            "start_sec": 492.0,
+                            "end_sec": 544.0,
+                            "targets": ["The rape of Persephone", "Apollo and Daphne"],
+                        }
+                    ],
+                },
+            )
 
     def test_vision_read_sanitizes_full_mcq_into_fact_request(self):
         backend = CaptionQARecordingBackend()

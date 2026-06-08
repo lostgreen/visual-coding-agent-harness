@@ -17,7 +17,13 @@ from ..agents.skills.predicates import (
 )
 
 
-_VISUAL_EVIDENCE_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read"}
+_VISUAL_EVIDENCE_TOOLS = {
+    "caption_segment",
+    "qa_segment",
+    "inspect_segment",
+    "vision_read",
+    "verify_segment_anchors",
+}
 _GROUNDING_WEIGHTS = {
     "global_sparse": 0.35,
     "visually_confirmed": 1.0,
@@ -62,6 +68,13 @@ def build_verification_registry(*, workspace: Optional[EvidenceWorkspace] = None
             gate_reasons.append("no non-navigation visual evidence")
         if score < min_score:
             gate_reasons.append("low lexical support")
+        gate_reasons.extend(
+            _mcq_answer_gate(
+                answer=answer,
+                question=question,
+                candidate_options=candidate_options,
+            )
+        )
         option_gate = _option_conflict_gate(
             workspace=workspace,
             answer=answer,
@@ -325,6 +338,21 @@ def _answer_option(answer: str) -> str:
         return match.group(1).upper()
     match = re.search(r"\b(?:answer|choice|option)\s*(?:is|:)?\s*([A-H])\b", answer, flags=re.IGNORECASE)
     return match.group(1).upper() if match else ""
+
+
+def _mcq_answer_gate(*, answer: str, question: str, candidate_options: Sequence[str]) -> list[str]:
+    if not _question_has_mcq_options(question=question, candidate_options=candidate_options):
+        return []
+    if _answer_option(answer):
+        return []
+    return ["MCQ answer must begin with option letter"]
+
+
+def _question_has_mcq_options(*, question: str, candidate_options: Sequence[str]) -> bool:
+    if len([option for option in candidate_options if str(option).strip()]) >= 2:
+        return True
+    option_lines = re.findall(r"(?m)^\s*[A-H][\.)]\s+\S+", str(question or ""))
+    return len(option_lines) >= 2
 
 
 def _selected_option_text(*, answer: str, candidate_options: Sequence[str]) -> str:

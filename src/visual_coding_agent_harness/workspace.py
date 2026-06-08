@@ -489,9 +489,13 @@ class EvidenceWorkspace:
         return row
 
     def append_timeline_from_observation(self, observation: Observation) -> dict[str, Any] | None:
-        if observation.tool == "verify_segment_anchors":
+        if observation.tool in {"verify_segment_anchors", "locate_targets_in_segment"}:
             raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
-            rows = raw_output.get("timeline_rows", [])
+            rows = (
+                raw_output.get("ordered_list_timeline_rows", [])
+                if observation.tool == "locate_targets_in_segment"
+                else raw_output.get("timeline_rows", [])
+            )
             appended = []
             if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
                 for row in rows:
