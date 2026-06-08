@@ -2,7 +2,8 @@
 
 Date: 2026-06-08
 Branch: `codex/agent-ownership-context-redesign`
-Commit: `28c778a fix(video): keep answer suggestions planner-owned`
+Code commit: `28c778a fix(video): keep answer suggestions planner-owned`
+Handoff doc: pushed on top of the code commit in the same branch.
 Source plan: `/Users/lostgreen/Downloads/2026-06-08-agent-ownership-and-context-redesign.md`
 
 ## Current Status
@@ -33,8 +34,8 @@ Source plan: `/Users/lostgreen/Downloads/2026-06-08-agent-ownership-and-context-
 
 Current evidence:
 
-- Local branch `codex/agent-ownership-context-redesign` is clean and synced to GitHub at `28c778a`.
-- KML repo `/home/xuboshen/zgw/visual-coding-agent-harness` is clean and synced to the same GitHub commit `28c778a`.
+- Local branch `codex/agent-ownership-context-redesign` is clean and synced to GitHub. Code changes are in `28c778a`; handoff updates are doc-only commits after that.
+- KML repo `/home/xuboshen/zgw/visual-coding-agent-harness` is clean and synced to code commit `28c778a`. It was not advanced to the doc-only handoff commit while the real eval was running.
 - KML uses conda env `/home/xuboshen/Anaconda/envs/visual-agent-harness`; default `/usr/bin/python3` and Anaconda base do not have pytest.
 - KML proxy needed for git/eval commands:
   `http_proxy=http://oversea-squid1.jp.txyun:11080 https_proxy=http://oversea-squid1.jp.txyun:11080 no_proxy=localhost,127.0.0.1,localaddress,localdomain.com,internal,corp.kuaishou.com,test.gifshow.com,staging.kuaishou.com`
