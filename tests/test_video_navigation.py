@@ -300,7 +300,7 @@ class VideoNavigationTest(unittest.TestCase):
                             "end_sec": 539.097,
                             "text": (
                                 "The detail of the corpulent Cardinal's button is a classic Bernini touch. "
-                                "It is the same attention to detail that we will see with Apollo and Daphne. "
+                                'It is the same attention to detail that we will see with "Apollo and Daphne". '
                                 'Then the narration lists radical and colossal marble statues "Aeneas, Anchises, and Ascanius fleeing Troy", '
                                 '"David", "The rape of Persephone",'
                             ),

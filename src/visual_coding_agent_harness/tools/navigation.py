@@ -1008,19 +1008,9 @@ def _ordered_list_candidates(
 
 def _preferred_ordered_list_match(text: str, targets: Sequence[str]) -> Mapping[str, object] | None:
     quoted_mentions = _quoted_target_mentions(text=text, targets=targets)
-    if len(quoted_mentions) >= min(3, len(targets)):
-        ordered_targets = _unique_ordered_targets(quoted_mentions)
-        if ordered_targets:
-            start_char = int(quoted_mentions[0]["start"])
-            end_char = int(quoted_mentions[-1]["end"])
-            return {
-                "ordered_targets": ordered_targets,
-                "start_char": start_char,
-                "end_char": end_char,
-                "quoted_target_count": len(quoted_mentions),
-                "target_span_chars": max(0, end_char - start_char),
-                "order_source": "quoted_list",
-            }
+    quoted_window = _best_quoted_target_window(quoted_mentions, target_count=len(targets))
+    if quoted_window is not None:
+        return quoted_window
 
     positioned: list[tuple[int, int, str]] = []
     for target in targets:
@@ -1044,6 +1034,40 @@ def _preferred_ordered_list_match(text: str, targets: Sequence[str]) -> Mapping[
         "target_span_chars": max(0, int(positioned[-1][1]) - int(positioned[0][0])),
         "order_source": "text_first_position",
     }
+
+
+def _best_quoted_target_window(
+    mentions: Sequence[Mapping[str, object]],
+    *,
+    target_count: int,
+) -> Mapping[str, object] | None:
+    min_unique = min(3, int(target_count))
+    if len(mentions) < min_unique:
+        return None
+    best: tuple[tuple[int, int, int, int], Mapping[str, object]] | None = None
+    for start_index in range(len(mentions)):
+        for end_index in range(start_index, len(mentions)):
+            window = mentions[start_index : end_index + 1]
+            ordered_targets = _unique_ordered_targets(window)
+            unique_count = len(ordered_targets)
+            if unique_count < min_unique:
+                continue
+            start_char = int(window[0]["start"])
+            end_char = int(window[-1]["end"])
+            span = max(0, end_char - start_char)
+            duplicate_count = max(0, len(window) - unique_count)
+            rank = (-unique_count, span, duplicate_count, start_char)
+            candidate = {
+                "ordered_targets": ordered_targets,
+                "start_char": start_char,
+                "end_char": end_char,
+                "quoted_target_count": len(window),
+                "target_span_chars": span,
+                "order_source": "quoted_list",
+            }
+            if best is None or rank < best[0]:
+                best = (rank, candidate)
+    return best[1] if best is not None else None
 
 
 def _quoted_target_mentions(*, text: str, targets: Sequence[str]) -> list[Mapping[str, object]]:

@@ -28,6 +28,15 @@
 - 工具序列：`read_timeline_sorted`, `read_timeline_sorted`, `caption_segment`, `locate_targets_in_segment(seg_0002)`, `locate_targets_in_segment(seg_0003)`
 - 新失败指纹：已经定位到 `seg_0002`，但 ordered-list timeline 把 509s 的 `Apollo and Daphne` 预告句排到四件作品清单前面，导致 runtime timeline decision 直接 final 为 C。
 
+复测 replay：
+
+- run root：`/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_quoted_ordered_asr_611_2_ffd0002_20260608`
+- commit：`ffd0002 fix(video): prefer quoted ordered lists for ASR timelines`
+- 状态：`final`
+- summary：`choice="C"`, `ground_truth="D"`, `correct=False`, `rounds=3`
+- 工具序列：同样是 `read_timeline_sorted`, `read_timeline_sorted`, `caption_segment`, `locate_targets_in_segment(seg_0002)`, `locate_targets_in_segment(seg_0003)`
+- 失败指纹：`list_order_source="quoted_list"` 已生效，但 quoted target mention 里出现了重复的 `"Apollo and Daphne"`；旧逻辑按“第一次出现的唯一 target”去重，拿了前置 Apollo，忽略了清单末尾 Apollo。
+
 旧的无 hard-skill / open-rewrite trajectory 只作为历史对照；本分析以当前 run 为准。
 
 ## Replay 摘要
@@ -466,6 +475,54 @@ PYTHONPATH=src:. pytest -q tests/test_video_navigation.py tests/test_iterative_a
 155 passed
 ```
 
+### 12. 重复 quoted target 时选择最紧凑完整子序列
+
+`ffd0002` replay 继续失败后，问题进一步收窄：不是没有进入 quoted list，而是 quoted mentions 内部有重复 target。
+
+真实形态接近：
+
+```text
+... we will see with "Apollo and Daphne".
+... statues "Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The rape of Persephone",
+and "Apollo and Daphne".
+```
+
+旧逻辑对 quoted mentions 做“按第一次出现去重”：
+
+```text
+["Apollo and Daphne", "Aeneas...", "David", "The rape of Persephone", "Apollo and Daphne"]
+-> Apollo -> Aeneas -> David -> Persephone
+```
+
+这就是这轮仍然选 C 的直接原因。
+
+当前修复：quoted-list detector 不再直接用全部 quoted mentions 的 first-unique 顺序，而是在 quoted mentions 上枚举连续窗口，按以下 rank 选最可信清单：
+
+```text
+1. 覆盖 unique targets 越多越好；
+2. target span 越紧凑越好；
+3. duplicate target 越少越好；
+4. 再用较早起点打平。
+```
+
+这样同一段会选择：
+
+```text
+"Aeneas..." -> "David" -> "The rape of Persephone" -> "Apollo and Daphne"
+```
+
+而不是前置预告里的 `"Apollo and Daphne"`。
+
+当前验证：
+
+```text
+PYTHONPATH=src:. pytest -q
+391 passed
+
+PYTHONPATH=src:. pytest -q tests/test_video_navigation.py tests/test_iterative_agent.py tests/test_timeline.py tests/test_route_validator.py tests/test_caption_qa_tools.py tests/test_verification_tools.py
+155 passed
+```
+
 ## 历史建议对照
 
 以下 A-F 是本轮实施前整理的设计建议，保留作对照：
@@ -581,6 +638,7 @@ locator candidates 找到了
 -> 旧版：anchor JSON 不可复制，planner 反复 navigation
 -> 0417b13：进入 verifier，但 anchor 被换到错误 segment
 -> e44f79b：anchor-bound 和 timeline evidence 生效，但 ordered-list detector 把长 ASR 句里的前置 Apollo 预告当作清单第一项
+-> ffd0002：quoted-list source 生效，但重复 quoted Apollo 仍用 first-unique 去重，继续把前置 Apollo 当第一项
 ```
 
 本轮已完成：
@@ -590,5 +648,6 @@ locator candidates 找到了
 3. ordinary interactive loop 可从 timeline 唯一匹配 MCQ option 后直接 final；
 4. `verify_ledger_answer` 拒绝非选项 MCQ answer。
 5. ordered-list detector 优先按 quoted list 子串排序，不再把 unquoted 前置预告句混入清单顺序。
+6. quoted-list detector 在重复 target 时选择最紧凑完整 quoted 子序列，避免前置预告项覆盖清单末尾项。
 
 下一步挂新版 611-2 replay，观察是否能从 `seg_0002` 的 quoted ordered ASR list 直接收敛到 D。
