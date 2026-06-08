@@ -423,7 +423,7 @@ def _tool_schema_signatures(*, option_blind: bool = False) -> tuple[str, ...]:
         "search_segments(query: str, top_k: int = 5, modalities: list = [])",
         "read_segment(segment_id: str)",
         "read_segment_detail(segment_id: str, targets: list = [])",
-        "locate_targets_in_segment(segment_id: str, targets: list = [])",
+        "locate_targets_in_segment(segment_id: str, targets: list = [], top_k_per_target: int = 3)",
         "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [])",
         "global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)",
         "summarize_ledger_evidence(max_claims: int = 5)",

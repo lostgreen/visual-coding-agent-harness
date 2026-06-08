@@ -23,9 +23,10 @@
 - Layer 0：`Compact scene index` 仍是每轮默认地图，但当 MCQ rewrite 提供 `target_entities` 时，会额外渲染 `asr mentions: target @ ~T`，用于段级定位提示；它不是答案证据。
 - Layer 1：`locate_targets_in_segment(segment_id, targets)` 只读 ASR sentence / OCR / visual caption / entities，输出 `candidates` 与 `anchors_for_vlm`，属于 navigation candidate，不写 evidence table。
 - Layer 2：`verify_segment_anchors(segment_id, anchors, targets)` 对 Layer 1 anchor 做 focused VLM 验证，解析 `confirmations` / `rejections` / `timeline_rows`；只有确认项写入 `timeline.md` 与 evidence table。
+- review follow-up 已补：locator 默认每 target 保留 top-k 候选；`David` / `Apollo` 这类 common single-token target 需要上下文才形成低置信 route hint；`verify_segment_anchors` 在 anchor union 超过 45s 时会拆分为多个 focused VLM request。
 - `read_segment_detail` 现在是真正的 cheap/index detail pack，并通过 `nav_digest` 回流到 compact ledger；planner 后续轮次能直接看到 target、visual caption、ASR/OCR 摘要，而不是只看到 `obs_xxx: read_segment_detail`。
 - AnswerAgent / sufficiency predicates 已把 `locate_targets_in_segment` 明确排除为导航提示，最终答案必须引用 `vision_read` / `inspect_segment` / `caption_segment` / `qa_segment` / `verify_segment_anchors` 等 evidence-grade 工具。
-- 当前本地验证：`PYTHONPATH=src:. pytest -q` -> `378 passed`。
+- 当前本地验证：`PYTHONPATH=src:. pytest -q` -> `381 passed`。
 
 配套工具流程文档：
 

@@ -78,7 +78,8 @@ planner 调用：
   "tool": "locate_targets_in_segment",
   "args": {
     "segment_id": "seg_0005",
-    "targets": ["Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The rape of Persephone", "Apollo and Daphne"]
+    "targets": ["Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The rape of Persephone", "Apollo and Daphne"],
+    "top_k_per_target": 3
   }
 }
 ```
@@ -123,6 +124,9 @@ planner 调用：
 - 它是文本 locator，不读像素，不做 yes/no 视觉验证。
 - 它写入 navigation candidate 桶，不进入 AnswerAgent 的最终证据集合。
 - 匹配使用严格 token/word-boundary 逻辑，避免把作品名中的逗号拆成多个事件。
+- 每个 target 默认保留最多 3 个候选；如果同一作品在 intro、比较段、正式展示段都出现，locator 会保留多个 candidate，而不是只取 first/best。
+- `David` / `Apollo` 这类 common single-token target 需要艺术/展示上下文才会命中，并标成 `routing_only_low_confidence`；`Persephone` / `Anchises` / `Aeneas` 等 rare proper noun 可作为低/中置信 route hint。
+- 当句级 ASR/OCR 已经命中时，段级 fallback `asr_text` 不会重复制造候选。
 
 ## Layer 2：verify_segment_anchors
 
@@ -144,6 +148,8 @@ local VLM prompt 语义：
 - 使用 anchor 的 reason 作为上下文，但不让 local VLM 选择 A/B/C/D。
 - 要求输出实际可见/旁白/字幕/OCR 的确认与拒绝。
 - 默认 8 帧 focused read，而不是对整段 300s 做粗 caption。
+- 如果多个 anchors 的 union window 不超过 45s，可以合并成一个 shared-scene verification。
+- 如果 union window 超过 45s，会按 anchor 拆分成多次 focused VLM request，并在 raw output 中记录 `verify_windows`。
 
 解析后的输出字段：
 

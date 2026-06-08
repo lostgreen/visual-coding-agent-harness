@@ -183,11 +183,19 @@ def build_video_navigation_registry(
         }
 
     @tool(name="locate_targets_in_segment", description="Text-only target locator over ASR/OCR/caption indexes for one segment.")
-    def locate_targets_in_segment(segment_id: str, targets: Sequence[str] = ()) -> Mapping[str, object]:
+    def locate_targets_in_segment(
+        segment_id: str,
+        targets: Sequence[str] = (),
+        top_k_per_target: int = 3,
+    ) -> Mapping[str, object]:
         current = video_map_store.current
         segment = current.get(segment_id)
         resolved_targets = _detail_targets(targets=targets, workspace=workspace)
-        candidates = _locate_target_candidates(segment=segment, targets=resolved_targets)
+        candidates = _locate_target_candidates(
+            segment=segment,
+            targets=resolved_targets,
+            top_k_per_target=top_k_per_target,
+        )
         anchors = _merge_locate_candidates(segment=segment, candidates=candidates)
         target_text = ", ".join(str(target) for target in resolved_targets) or "none"
         candidate_text = ", ".join(
@@ -695,27 +703,62 @@ def _target_hit_for_segment(*, segment: VideoMapSegment, target: str) -> Mapping
     }
 
 
-def _locate_target_candidates(*, segment: VideoMapSegment, targets: Sequence[str]) -> list[Mapping[str, object]]:
+_RARE_SINGLE_TOKEN_TARGETS = {"aeneas", "anchises", "ascanius", "persephone"}
+_COMMON_SINGLE_TOKEN_TARGETS = {"apollo", "david"}
+_SINGLE_TOKEN_CONTEXT_TERMS = {
+    "artwork",
+    "artworks",
+    "bernini",
+    "borghese",
+    "card",
+    "collection",
+    "displayed",
+    "gallery",
+    "marble",
+    "masterpiece",
+    "masterpieces",
+    "museum",
+    "sculptor",
+    "sculpture",
+    "sculptures",
+    "shown",
+    "statue",
+    "statues",
+    "title",
+}
+
+
+def _locate_target_candidates(
+    *,
+    segment: VideoMapSegment,
+    targets: Sequence[str],
+    top_k_per_target: int = 3,
+) -> list[Mapping[str, object]]:
     candidates: list[Mapping[str, object]] = []
     sources = _locate_text_sources(segment)
+    per_target_limit = max(1, int(top_k_per_target or 1))
     for target_index, target in enumerate([str(item).strip() for item in targets if str(item).strip()], start=1):
-        match = _best_target_text_match(target=target, sources=sources)
-        if match is None:
-            continue
-        candidate_id = f"cand_{len(candidates) + 1:04d}"
-        candidates.append(
-            {
-                "candidate_id": candidate_id,
-                "target_id": f"T{target_index}",
-                "target": target,
-                "source": match["source"],
-                "match_type": match["match_type"],
-                "start_sec": float(match["start_sec"]),
-                "end_sec": float(match["end_sec"]),
-                "snippet": match["snippet"],
-                "confidence": float(match["confidence"]),
-            }
-        )
+        matches = _find_target_text_matches(target=target, sources=sources, top_k=per_target_limit)
+        for match in matches:
+            candidate_id = f"cand_{len(candidates) + 1:04d}"
+            candidates.append(
+                {
+                    "candidate_id": candidate_id,
+                    "target_id": f"T{target_index}",
+                    "target": target,
+                    "source": match["source"],
+                    "match_type": match["match_type"],
+                    "start_sec": float(match["start_sec"]),
+                    "end_sec": float(match["end_sec"]),
+                    "snippet": match["snippet"],
+                    "confidence": float(match["confidence"]),
+                    "temporal_density": float(match.get("temporal_density", 0.0) or 0.0),
+                    "directness": _locate_match_directness(
+                        match_type=str(match["match_type"]),
+                        confidence=float(match["confidence"]),
+                    ),
+                }
+            )
     return candidates
 
 
@@ -795,40 +838,122 @@ def _best_target_text_match(
     target: str,
     sources: Sequence[Mapping[str, object]],
 ) -> Mapping[str, object] | None:
+    matches = _find_target_text_matches(target=target, sources=sources, top_k=1)
+    return matches[0] if matches else None
+
+
+def _find_target_text_matches(
+    *,
+    target: str,
+    sources: Sequence[Mapping[str, object]],
+    top_k: int = 3,
+) -> list[Mapping[str, object]]:
     aliases = _target_alias_patterns(target)
+    matches: list[dict[str, object]] = []
     for source in sources:
         text = str(source.get("text") or "")
         for alias in aliases:
-            match = alias["pattern"].search(text)
-            if match is None:
+            pattern = alias["pattern"]
+            if not hasattr(pattern, "finditer"):
                 continue
-            return {
-                "source": str(source.get("source") or ""),
-                "match_type": str(alias["match_type"]),
-                "start_sec": float(source.get("start_sec", 0.0) or 0.0),
-                "end_sec": float(source.get("end_sec", source.get("start_sec", 0.0)) or 0.0),
-                "snippet": _match_snippet(text, start=match.start(), end=match.end()),
-                "confidence": float(alias["confidence"]),
-            }
-    return None
+            for match in pattern.finditer(text):
+                token_tuple = tuple(str(token) for token in alias.get("tokens", ()) if str(token))
+                if bool(alias.get("requires_context")) and not _single_token_context_allowed(
+                    target_token=token_tuple[0] if token_tuple else str(target).lower(),
+                    text=text,
+                    start=match.start(),
+                    end=match.end(),
+                ):
+                    continue
+                matches.append(
+                    {
+                        "source": str(source.get("source") or ""),
+                        "source_priority": _locate_source_priority(str(source.get("source") or "")),
+                        "match_type": str(alias["match_type"]),
+                        "match_priority": _locate_match_priority(str(alias["match_type"])),
+                        "match_start": int(match.start()),
+                        "match_end": int(match.end()),
+                        "start_sec": float(source.get("start_sec", 0.0) or 0.0),
+                        "end_sec": float(source.get("end_sec", source.get("start_sec", 0.0)) or 0.0),
+                        "snippet": _match_snippet(text, start=match.start(), end=match.end()),
+                        "confidence": float(alias["confidence"]),
+                    }
+                )
+    matches = _dedupe_locate_matches(matches)
+    if any(int(match.get("source_priority", 9)) <= 1 for match in matches):
+        matches = [match for match in matches if int(match.get("source_priority", 9)) <= 1]
+    for match in matches:
+        match["temporal_density"] = _temporal_density(match=match, matches=matches)
+    ranked = sorted(
+        matches,
+        key=lambda item: (
+            int(item.get("source_priority", 9)),
+            int(item.get("match_priority", 9)),
+            -float(item.get("temporal_density", 0.0) or 0.0),
+            -float(item.get("confidence", 0.0) or 0.0),
+            float(item.get("start_sec", 0.0) or 0.0),
+        ),
+    )
+    return ranked[: max(1, int(top_k or 1))]
+
+
+def _dedupe_locate_matches(matches: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    ranked = sorted(
+        [dict(match) for match in matches],
+        key=lambda item: (
+            int(item.get("source_priority", 9)),
+            float(item.get("start_sec", 0.0) or 0.0),
+            int(item.get("match_start", 0)),
+            int(item.get("match_priority", 9)),
+            -float(item.get("confidence", 0.0) or 0.0),
+        ),
+    )
+    kept: list[dict[str, object]] = []
+    for match in ranked:
+        overlaps_existing = False
+        for existing in kept:
+            if str(match.get("source")) != str(existing.get("source")):
+                continue
+            if float(match.get("start_sec", 0.0) or 0.0) != float(existing.get("start_sec", 0.0) or 0.0):
+                continue
+            if _ranges_overlap(
+                int(match.get("match_start", 0)),
+                int(match.get("match_end", 0)),
+                int(existing.get("match_start", 0)),
+                int(existing.get("match_end", 0)),
+            ):
+                overlaps_existing = True
+                break
+        if not overlaps_existing:
+            kept.append(match)
+    return kept
+
+
+def _ranges_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
+    return max(start_a, start_b) < min(end_a, end_b)
 
 
 def _target_alias_patterns(target: str) -> list[Mapping[str, object]]:
     tokens = _target_token_list(target)
     if not tokens:
         return []
-    aliases: list[tuple[str, str, float, Sequence[str]]] = []
-    aliases.append(("full_name", "full_name", 0.95, tokens))
+    aliases: list[tuple[str, str, float, Sequence[str], bool]] = []
+    if len(tokens) > 1:
+        aliases.append(("full_name", "full_name", 0.95, tokens, False))
     if tokens[0] == "the" and len(tokens) > 1:
-        aliases.append(("cleaned_name", "cleaned_name", 0.85, tokens[1:]))
+        aliases.append(("cleaned_name", "cleaned_name", 0.85, tokens[1:], False))
     if len(tokens) == 1:
-        aliases.append(("single_name", "full_name", 0.95, tokens))
+        token = tokens[0]
+        if token in _RARE_SINGLE_TOKEN_TARGETS:
+            aliases.append(("rare_token", "phrase_alias", 0.7, tokens, False))
+        else:
+            aliases.append(("contextual_single_name", "contextual_single_name", 0.55, tokens, True))
     if "persephone" in tokens:
-        aliases.append(("rare_token", "phrase_alias", 0.7, ("persephone",)))
+        aliases.append(("rare_token", "phrase_alias", 0.7, ("persephone",), False))
 
     patterns: list[Mapping[str, object]] = []
     seen: set[str] = set()
-    for key, match_type, confidence, alias_tokens in aliases:
+    for key, match_type, confidence, alias_tokens, requires_context in aliases:
         token_tuple = tuple(str(token) for token in alias_tokens if str(token))
         if not token_tuple or str((key, token_tuple)) in seen:
             continue
@@ -837,10 +962,55 @@ def _target_alias_patterns(target: str) -> list[Mapping[str, object]]:
             {
                 "match_type": match_type,
                 "confidence": confidence,
+                "tokens": token_tuple,
+                "requires_context": requires_context,
                 "pattern": re.compile(_token_sequence_regex(token_tuple), flags=re.IGNORECASE),
             }
         )
     return patterns
+
+
+def _locate_match_priority(match_type: str) -> int:
+    return {
+        "full_name": 0,
+        "cleaned_name": 1,
+        "phrase_alias": 2,
+        "contextual_single_name": 3,
+    }.get(str(match_type), 9)
+
+
+def _temporal_density(*, match: Mapping[str, object], matches: Sequence[Mapping[str, object]], radius_sec: float = 20.0) -> float:
+    start = float(match.get("start_sec", 0.0) or 0.0)
+    return float(
+        sum(
+            1
+            for other in matches
+            if abs(float(other.get("start_sec", 0.0) or 0.0) - start) <= radius_sec
+        )
+    )
+
+
+def _single_token_context_allowed(*, target_token: str, text: str, start: int, end: int, context_chars: int = 120) -> bool:
+    token = str(target_token or "").lower()
+    left = max(0, int(start) - context_chars)
+    right = min(len(text), int(end) + context_chars)
+    context = " ".join(str(text[left:right]).lower().split())
+    context_tokens = set(re.findall(r"[a-z0-9]+", context))
+    if token == "david" and "michelangelo" in context_tokens and not {"bernini", "borghese"}.intersection(context_tokens):
+        return False
+    if token in _COMMON_SINGLE_TOKEN_TARGETS:
+        return bool(_SINGLE_TOKEN_CONTEXT_TERMS.intersection(context_tokens))
+    return bool(_SINGLE_TOKEN_CONTEXT_TERMS.intersection(context_tokens))
+
+
+def _locate_match_directness(*, match_type: str, confidence: float) -> str:
+    if match_type == "contextual_single_name":
+        return "routing_only_low_confidence"
+    if confidence >= 0.75:
+        return "direct_mention"
+    if confidence >= 0.4:
+        return "possible_mention"
+    return "weak_overlap"
 
 
 def _token_sequence_regex(tokens: Sequence[str]) -> str:

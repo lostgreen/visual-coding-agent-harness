@@ -15,6 +15,9 @@ from ..workspace import EvidenceWorkspace
 from .segments import ClipExtractor, _clip_output_path, _extract_clip_ffmpeg
 
 
+_MAX_VERIFY_ANCHOR_UNION_SEC = 45.0
+
+
 def build_segment_inspector_registry(
     backend: VisionLanguageBackend,
     *,
@@ -161,54 +164,105 @@ def build_segment_inspector_registry(
         fps: float = 0.0,
     ) -> Mapping[str, object]:
         anchor_list = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)]
-        window_start, window_end = _anchor_union_window(
+        anchor_groups = _anchor_verify_groups(
             anchors=anchor_list,
             fallback_start=float(start_sec),
             fallback_end=float(end_sec),
+            max_union_sec=_MAX_VERIFY_ANCHOR_UNION_SEC,
         )
-        prompt = _verify_segment_anchors_prompt(
-            segment_id=segment_id,
-            anchors=anchor_list,
-            question=question,
-            targets=targets,
-        )
-        raw_result = dict(
-            _run_inspector(
-                backend=backend,
-                video_path=video_path,
-                segment_id=segment_id,
-                start_sec=window_start,
-                end_sec=window_end,
-                question=question or "Verify target anchors.",
-                candidate_options=(),
-                nframes=nframes,
-                max_pixels=max_pixels,
-                fps=fps,
-                workspace=workspace,
-                extract_clips=extract_clips,
-                clip_extractor=clip_extractor,
-                task_name="verify_segment_anchors",
-                prompt_style="vision_read",
-                prompt_override=prompt,
-                max_new_tokens=768,
-                nframes_tool_cap=8,
+        raw_results: list[dict[str, object]] = []
+        confirmations: list[dict[str, object]] = []
+        rejections: list[dict[str, object]] = []
+        timeline_rows: list[dict[str, object]] = []
+        verify_windows: list[dict[str, object]] = []
+        for anchor_group in anchor_groups:
+            window_start, window_end = _anchor_union_window(
+                anchors=anchor_group,
+                fallback_start=float(start_sec),
+                fallback_end=float(end_sec),
             )
-        )
-        parsed = _parse_anchor_verification(raw_result.get("claim", ""))
-        confirmations = parsed["confirmations"]
-        rejections = parsed["rejections"]
-        timeline_rows = _timeline_rows_from_confirmations(
-            confirmations=confirmations,
-            segment_id=segment_id,
-            fallback_window=[window_start, window_end],
-        )
+            prompt = _verify_segment_anchors_prompt(
+                segment_id=segment_id,
+                anchors=anchor_group,
+                question=question,
+                targets=targets,
+            )
+            raw_result = dict(
+                _run_inspector(
+                    backend=backend,
+                    video_path=video_path,
+                    segment_id=segment_id,
+                    start_sec=window_start,
+                    end_sec=window_end,
+                    question=question or "Verify target anchors.",
+                    candidate_options=(),
+                    nframes=nframes,
+                    max_pixels=max_pixels,
+                    fps=fps,
+                    workspace=workspace,
+                    extract_clips=extract_clips,
+                    clip_extractor=clip_extractor,
+                    task_name="verify_segment_anchors",
+                    prompt_style="vision_read",
+                    prompt_override=prompt,
+                    max_new_tokens=768,
+                    nframes_tool_cap=8,
+                )
+            )
+            raw_results.append(raw_result)
+            parsed = _parse_anchor_verification(raw_result.get("claim", ""))
+            group_confirmations = parsed["confirmations"]
+            confirmations.extend(group_confirmations)
+            rejections.extend(parsed["rejections"])
+            timeline_rows.extend(
+                _timeline_rows_from_confirmations(
+                    confirmations=group_confirmations,
+                    segment_id=segment_id,
+                    fallback_window=[window_start, window_end],
+                )
+            )
+            verify_windows.append(
+                {
+                    "start_sec": window_start,
+                    "end_sec": window_end,
+                    "anchor_ids": [
+                        str(anchor.get("anchor_id", ""))
+                        for anchor in anchor_group
+                        if str(anchor.get("anchor_id", ""))
+                    ],
+                    "targets": _anchor_group_targets(anchor_group),
+                }
+            )
+        merged_result = dict(raw_results[0]) if raw_results else {
+            "input_artifacts": [video_path],
+            "regions": [],
+            "raw_backend": {},
+        }
+        merged_result["input_artifacts"] = [
+            artifact
+            for result in raw_results
+            for artifact in result.get("input_artifacts", [])
+            if isinstance(artifact, str)
+        ]
+        merged_result["regions"] = [
+            region
+            for result in raw_results
+            for region in result.get("regions", [])
+            if isinstance(region, Mapping)
+        ]
+        merged_result["raw_backend"] = [dict(result.get("raw_backend", {})) for result in raw_results]
         claim = (
             f"verify_segment_anchors({segment_id}, {len(anchor_list)} anchors): "
             f"confirmed {len(confirmations)} / rejected {len(rejections)}."
         )
         if timeline_rows:
             claim += " Confirmed targets: " + ", ".join(str(row["entity"]) for row in timeline_rows) + "."
-        raw_result.update(
+        split_note = (
+            f" split {len(anchor_groups)} anchor windows because union exceeded {_MAX_VERIFY_ANCHOR_UNION_SEC:.0f}s."
+            if len(anchor_groups) > 1
+            else ""
+        )
+        merged_result.update(
             {
                 "claim": claim,
                 "confidence": 0.82 if confirmations else 0.45,
@@ -217,13 +271,15 @@ def build_segment_inspector_registry(
                 "timeline_rows": timeline_rows,
                 "anchors": anchor_list,
                 "targets": list(targets),
+                "verify_windows": verify_windows,
                 "grounding_quality": "visually_confirmed" if confirmations else "inferred",
                 "limitations": (
                     "Focused VLM verification over locator-proposed anchors; use confirmations, not rejected targets, as evidence."
+                    + split_note
                 ),
             }
         )
-        return raw_result
+        return merged_result
 
     registry.register(inspect_segment)
     registry.register(vision_read)
@@ -443,6 +499,40 @@ def _anchor_union_window(
     if end < start:
         end = start
     return start, end
+
+
+def _anchor_verify_groups(
+    *,
+    anchors: Sequence[Mapping[str, object]],
+    fallback_start: float,
+    fallback_end: float,
+    max_union_sec: float,
+) -> list[list[Mapping[str, object]]]:
+    anchor_list = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)]
+    if not anchor_list:
+        return [[{"start_sec": fallback_start, "end_sec": fallback_end, "targets": [], "reason": "fallback window"}]]
+    union_start, union_end = _anchor_union_window(
+        anchors=anchor_list,
+        fallback_start=fallback_start,
+        fallback_end=fallback_end,
+    )
+    if union_end - union_start <= float(max_union_sec):
+        return [anchor_list]
+    return [[anchor] for anchor in sorted(anchor_list, key=lambda item: float(item.get("start_sec", fallback_start) or fallback_start))]
+
+
+def _anchor_group_targets(anchors: Sequence[Mapping[str, object]]) -> list[str]:
+    targets: list[str] = []
+    for anchor in anchors:
+        anchor_targets = anchor.get("targets", [])
+        if isinstance(anchor_targets, Sequence) and not isinstance(anchor_targets, (str, bytes)):
+            values = [str(target).strip() for target in anchor_targets]
+        else:
+            values = [str(anchor_targets).strip()]
+        for value in values:
+            if value and value not in targets:
+                targets.append(value)
+    return targets
 
 
 def _parse_anchor_verification(text: object) -> dict[str, list[dict[str, object]]]:

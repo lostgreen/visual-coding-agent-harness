@@ -204,7 +204,7 @@ class VideoNavigationTest(unittest.TestCase):
                             "start_sec": 430.0,
                             "end_sec": 448.0,
                             "text": (
-                                "The narration later lists Aeneas, Anchises, and Ascanius fleeing Troy, "
+                                "The narration later lists Bernini's Borghese sculptures: Aeneas, Anchises, and Ascanius fleeing Troy, "
                                 "David, The Rape of Persephone, and Apollo and Daphne."
                             ),
                         },
@@ -256,6 +256,76 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertIn("verify_segment_anchors", raw["limitations"])
         self.assertEqual(raw["recommended_next_tools"][0]["tool"], "verify_segment_anchors")
         self.assertEqual(workspace.evidence_table_row_count(), 0)
+
+    def test_locate_targets_keeps_multiple_matches_per_target(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=600.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    asr_sentences=[
+                        {
+                            "start_sec": 320.0,
+                            "end_sec": 326.0,
+                            "text": "The narrator previews Apollo and Daphne before the main Borghese sequence.",
+                        },
+                        {
+                            "start_sec": 470.0,
+                            "end_sec": 482.0,
+                            "text": "The Borghese sculptures conclude with Apollo and Daphne shown in detail.",
+                        },
+                    ],
+                )
+            ],
+        )
+        registry = build_video_navigation_registry(video_map)
+
+        located = registry.execute(
+            "locate_targets_in_segment",
+            {"segment_id": "seg_0002", "targets": ["Apollo and Daphne"]},
+        )
+
+        apollo_candidates = [candidate for candidate in located["candidates"] if candidate["target"] == "Apollo and Daphne"]
+        self.assertEqual([candidate["start_sec"] for candidate in apollo_candidates], [320.0, 470.0])
+        self.assertEqual(len(located["anchors_for_vlm"]), 2)
+
+    def test_locate_targets_requires_context_for_common_single_token_names(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=600.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    asr_sentences=[
+                        {
+                            "start_sec": 330.0,
+                            "end_sec": 336.0,
+                            "text": "The lecture compares Michelangelo's David with Renaissance ideals.",
+                        },
+                        {
+                            "start_sec": 430.0,
+                            "end_sec": 438.0,
+                            "text": "Bernini's David statue in the Borghese collection is shown next.",
+                        },
+                    ],
+                )
+            ],
+        )
+        registry = build_video_navigation_registry(video_map)
+
+        located = registry.execute(
+            "locate_targets_in_segment",
+            {"segment_id": "seg_0002", "targets": ["David"]},
+        )
+
+        self.assertEqual(len(located["candidates"]), 1)
+        self.assertEqual(located["candidates"][0]["start_sec"], 430.0)
+        self.assertEqual(located["candidates"][0]["match_type"], "contextual_single_name")
 
     def test_search_segments_returns_modality_channels_and_evidence_snippets(self):
         registry = build_video_navigation_registry(demo_video_map())

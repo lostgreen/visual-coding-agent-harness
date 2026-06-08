@@ -436,6 +436,63 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(evidence_row_count, 1)
         self.assertIn("David", timeline_text)
 
+    def test_verify_segment_anchors_splits_long_anchor_unions(self):
+        backend = FixedTextBackend(
+            json.dumps(
+                {
+                    "confirmations": [
+                        {
+                            "target": "David",
+                            "relative_sec": 1.0,
+                            "evidence": "A target artwork is visible.",
+                        }
+                    ],
+                    "rejections": [],
+                }
+            )
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_anchor_split")
+            registry = build_segment_inspector_registry(backend, workspace=workspace)
+            ProgramInterpreter(registry=registry, workspace=workspace).run(
+                [
+                    {
+                        "tool": "verify_segment_anchors",
+                        "args": {
+                            "video_path": "/videos/bernini.mp4",
+                            "segment_id": "seg_0002",
+                            "start_sec": 300.0,
+                            "end_sec": 600.0,
+                            "anchors": [
+                                {
+                                    "anchor_id": "anchor_0001",
+                                    "start_sec": 315.0,
+                                    "end_sec": 325.0,
+                                    "targets": ["Aeneas"],
+                                    "reason": "Early ASR mention.",
+                                },
+                                {
+                                    "anchor_id": "anchor_0002",
+                                    "start_sec": 475.0,
+                                    "end_sec": 485.0,
+                                    "targets": ["Apollo and Daphne"],
+                                    "reason": "Late ASR mention.",
+                                },
+                            ],
+                        },
+                    }
+                ]
+            )
+            observation = workspace.read_observations(tool_name="verify_segment_anchors")[0]
+
+        self.assertEqual(len(backend.requests), 2)
+        self.assertEqual(
+            [(request.metadata["start_sec"], request.metadata["end_sec"]) for request in backend.requests],
+            [(315.0, 325.0), (475.0, 485.0)],
+        )
+        self.assertEqual(len(observation.raw_output["verify_windows"]), 2)
+        self.assertIn("split", observation.raw_output["limitations"])
+
     def test_vision_read_sanitizes_full_mcq_into_fact_request(self):
         backend = CaptionQARecordingBackend()
         registry = build_segment_inspector_registry(backend)

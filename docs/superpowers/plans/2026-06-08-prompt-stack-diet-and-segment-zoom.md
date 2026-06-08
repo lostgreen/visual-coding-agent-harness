@@ -4,7 +4,7 @@
 
 **Goal:** 让 4B 文本 planner 在 VideoMME 长问 (`temporal_order` / `needle_local`) 上能像 Claude Code 一样有效地探索视频证据：(0) 取消"cheap / expensive / verifier"三类预算的计费机制，只保留 `max_rounds` + `max_tool_calls_per_round` 两个硬限制——把工具选择的成本权衡彻底交给 planner 自己的 ReAct 推理；(1) 把每轮 prompt 中 ~70 行不变的样板压成 skill/route 感知的精简版；(2) 把工具调用关键结果（尤其是 `read_segment_detail` 的 `visual_caption` / `asr_summary`）回流到 ledger 让 planner 真的看到；(3) **把"段内目标定位"重设计成 Layer 0/1/2 三层流水线**：Layer 0 在 Compact Scene Index 直接渲染每段的 "asr mentions @ timestamp" 让 planner 一眼选段而不必调任何工具；Layer 1 新工具 `locate_targets_in_segment` 在指定段内用严格 alias + word-boundary 匹配跑 ASR/OCR/visual_caption 文本扫描，输出带时间戳的 candidates + 合并后的 anchor windows（**纯文本，零 VLM**）；Layer 2 新工具 `verify_segment_anchors` 只对 Layer 1 给出的 anchor 跑 focused VLM，确认后才写入 timeline.md 与 evidence_table。candidate（routing 候选）与 evidence（已确认事实）严格分桶，AnswerAgent 只看 evidence 桶。
 
-> 2026-06-08 执行状态：Task 0 / prompt schema focus / `read_segment_detail` ledger digest / Layer 0 ASR mentions / Layer 1 `locate_targets_in_segment` / Layer 2 `verify_segment_anchors` / legacy `zoom` + `expand_window` soft rewrite 已落地。本计划中的 `scan_segment` 仅保留在 Background / archeology 段落里，不是执行目标。当前验证：`PYTHONPATH=src:. pytest -q` -> `378 passed`。
+> 2026-06-08 执行状态：Task 0 / prompt schema focus / `read_segment_detail` ledger digest / Layer 0 ASR mentions / Layer 1 `locate_targets_in_segment` / Layer 2 `verify_segment_anchors` / legacy `zoom` + `expand_window` soft rewrite 已落地。本计划中的 `scan_segment` 仅保留在 Background / archeology 段落里，不是执行目标。当前验证：`PYTHONPATH=src:. pytest -q` -> `381 passed`。
 
 ## 2026-06-08 Task 执行状态总览
 
@@ -24,6 +24,16 @@
 | Task 7：写入 skill allowed_actions | 完成 | 三个 needle/timeline skill 已允许 `locate_targets_in_segment` 与 `verify_segment_anchors`。 |
 | Task 8：611-2 trajectory replay | 未完成 / 待 KML | 本地端到端单测未新增，KML 611-2 复跑未在本轮执行；下一步单独跑远端 trajectory。 |
 | Task 9：弃用旧工具 | 完成 | planner schema 不再暴露 `zoom` / `expand_window`；runtime 对旧调用软重写到 locator。 |
+
+### 2026-06-08 review follow-up
+
+这轮根据 code review 又补了三个证据质量风险：
+
+- `locate_targets_in_segment` 不再每个 target 只取一个 best/first match；默认 `top_k_per_target=3`，同一 target 的多次 ASR/OCR/visual-caption 命中会保留为多个候选，再合并成 anchor windows。
+- 常见 single-token target（例如 `David` / `Apollo`）不再走裸 `full_name` 强命中；只有带 `Bernini` / `Borghese` / `statue` / `sculpture` / `shown` 等上下文时才形成 `contextual_single_name` 候选，且标记为 `routing_only_low_confidence`。rare proper noun（如 `Persephone` / `Anchises` / `Aeneas`）仍可作为低/中置信 route hint。
+- `verify_segment_anchors` 不再无条件把多个 anchors union 成一个长窗口；当 union window 超过 45s 时，按 anchor 拆成多次 focused VLM request，并把 `verify_windows` 写回 raw output。
+
+仍未完成：Task 8 的真实 611-2 trajectory replay 需要在 KML 上验证 planner 是否实际走 `SceneIndex ASR mentions -> locate_targets_in_segment -> verify_segment_anchors -> read_timeline_sorted/final`。
 
 **Architecture:** 改动全部在 `src/visual_coding_agent_harness/`，对外契约（`IterativeVisualAgent.run` 入口、ReAct `continue/final` JSON、skill 路由）保持不变。五个手术点：
 - (0) `agents/iterative_agent.py` + `prompt_stack.py`：删除 `_CHEAP_TOOLS` / `_EXPENSIVE_TOOLS` / `_VERIFIER_TOOLS` 常量、`AgentBudget.cheap_tool_budget` / `expensive_tool_budget` / `verifier_tool_budget` / `free_exploration` 字段、`_tool_budget_available` 检查、`_budget_snapshot_block` 中的"cheap=X expensive=Y verifier=Z"行、`reflection_memory` 中 `tool_budget_exhausted` 规则。保留 `max_rounds` + `max_tool_calls_per_round`。
