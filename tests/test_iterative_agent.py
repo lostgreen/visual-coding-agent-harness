@@ -2945,6 +2945,63 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("prefinal_probe", trace)
             self.assertIn("reserved_final", trace)
 
+    def test_prefinal_answer_final_is_planner_visible_suggestion(self):
+        class PrefinalFinalBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.replan_calls = 0
+                self.answer_calls = 0
+                self.round3_prompt = ""
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    self.replan_calls += 1
+                    if self.replan_calls == 3:
+                        self.round3_prompt = request.prompt
+                    segment_id = f"seg_000{self.replan_calls}"
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "program": ['
+                            f'{{"tool": "inspect_segment", "args": {{"segment_id": "{segment_id}", '
+                            '"question": "Inspect candidate evidence", '
+                            '"candidate_options": ["A. first", "B. second", "C. third", "D. fourth"]}}, '
+                            f'"assign": "s{self.replan_calls}"}}'
+                            "]}"
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    self.answer_calls += 1
+                    return BackendResponse(
+                        text='{"answer": "D", "rationale": "observations support D", '
+                        '"citations": ["obs_0001"], "missing_evidence": [], "confidence": 0.86}'
+                    )
+                return BackendResponse(text="unexpected")
+
+        backend = PrefinalFinalBackend()
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=120.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="prefinal_final_suggestion")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=4, reserve_final_round=True, answer_probe_rounds_before_final=2),
+            )
+
+            result = agent.run(
+                question="Which option is correct?\nA. first\nB. second\nC. third\nD. fourth",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "D")
+            self.assertIn("AnswerAgent suggestion from prefinal_probe", backend.round3_prompt)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_answer_suggestion", trace)
+            self.assertIn('"source": "prefinal_probe"', trace)
+            self.assertIn('"source": "reserved_final"', trace)
+
     def test_temporal_ordering_uses_timeline_for_unique_option(self):
         registry = ToolRegistry()
 
@@ -3428,7 +3485,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("door opens", result.answer)
             self.assertIn("timeline_ordering_missing_entity", (workspace.root / "trace.jsonl").read_text(encoding="utf-8"))
 
-    def test_no_evidence_growth_forces_low_confidence(self):
+    def test_no_evidence_growth_defers_low_confidence_until_budget(self):
         planner_responses = [
             '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "first pass"}, "assign": "map1"}]}',
             '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "second pass"}, "assign": "map2"}]}',
@@ -3485,9 +3542,10 @@ class IterativeAgentTest(unittest.TestCase):
 
             self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual(result.answer, "A")
-            self.assertEqual(len(result.rounds), 2)
+            self.assertGreaterEqual(len(result.rounds), 5)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("evidence_table_no_growth", trace)
+            self.assertIn("iterative_answer_suggestion", trace)
 
     def test_no_evidence_growth_appends_visual_read_to_navigation_only_plan(self):
         planner_responses = [

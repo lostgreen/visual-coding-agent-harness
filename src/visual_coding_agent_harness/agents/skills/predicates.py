@@ -322,6 +322,8 @@ def _top_option(table: Mapping[str, Any]) -> str:
 
 
 def _row_score(row: Mapping[str, Any]) -> float:
+    if _requires_visual_verification(row):
+        return 0.0
     return float(row.get("confidence", 0.0) or 0.0) * GROUNDING_WEIGHTS.get(
         str(row.get("grounding_quality", "weak")),
         0.2,
@@ -329,7 +331,12 @@ def _row_score(row: Mapping[str, Any]) -> float:
 
 
 def _is_weak_grounding(row: Mapping[str, Any]) -> bool:
-    return str(row.get("grounding_quality", "weak")) in WEAK_GROUNDING
+    return _requires_visual_verification(row) or str(row.get("grounding_quality", "weak")) in WEAK_GROUNDING
+
+
+def _requires_visual_verification(row: Mapping[str, Any]) -> bool:
+    confidence_signal = str(row.get("confidence_signal", "")).strip().lower()
+    return bool(row.get("requires_visual_verification")) or confidence_signal in {"text_inferred", "unverified"}
 
 
 def _is_global_floor_row(row: Mapping[str, Any]) -> bool:
@@ -347,7 +354,9 @@ def _confirmed_timestamped_events(table: Mapping[str, Any]) -> list[Mapping[str,
 
     observed = []
     for row in _rows(table):
-        if str(row.get("grounding_quality", "")) not in {"visually_confirmed", "indexed_transcript"}:
+        if _requires_visual_verification(row):
+            continue
+        if str(row.get("grounding_quality", "")) not in VISUAL_GROUNDING:
             continue
         event = str(row.get("event_label", "")).strip()
         if not event:

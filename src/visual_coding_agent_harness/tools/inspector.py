@@ -130,6 +130,9 @@ def build_segment_inspector_registry(
         )
         if confidence_signal:
             result["confidence_signal"] = confidence_signal
+        ordered_visible = _ordered_visible_from_verification_text(str(result.get("claim", "")), {})
+        if ordered_visible:
+            result["ordered_visible_in_window"] = ordered_visible
         if mutex_group_id:
             result["mutex_group_id"] = str(mutex_group_id)
         if mutex_prompt:
@@ -452,6 +455,7 @@ def _vision_read_prompt(
     return (
         "You are a v4 VisionAgent reading one localized long-video window.\n"
         "Return typed visual facts only: fact, event label if present, polarity, timestamp, and limitation.\n"
+        "If multiple requested items are visibly confirmed in this window, add ORDERED_VISIBLE: item1 -> item2 -> item3 using first-visible order.\n"
         "Do not choose an option. Do not emit supported_option, answer_option, or final_answer.\n"
         "Do not use outside video context or external knowledge.\n"
         f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]\n"

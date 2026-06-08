@@ -41,7 +41,15 @@ def _exhausted_one_shot_tools(workspace: Any) -> frozenset[str]:
     )
 
 
-_ANSWER_AGENT_AUTO_FINAL_SOURCES = frozenset({"planner_final_takeover", "budget_exhausted"})
+_ANSWER_AGENT_AUTO_FINAL_SOURCES = frozenset(
+    {
+        "planner_final_takeover",
+        "reserved_final",
+        "budget_exhausted",
+        "prefinal_probe_budget_exhausted",
+        "hard_skill_budget_exhausted",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -556,6 +564,7 @@ class IterativeVisualAgent:
                         has_inspect_with_candidate_options=has_inspect_with_candidate_options,
                         program=program,
                         observation_ids=[],
+                        pending_inferences_out=pending_inferences,
                     )
                     if sweep_final is not None:
                         return sweep_final
@@ -666,6 +675,7 @@ class IterativeVisualAgent:
                     has_inspect_with_candidate_options=has_inspect_with_candidate_options,
                     program=program,
                     observation_ids=[],
+                    pending_inferences_out=pending_inferences,
                 )
                 if guard_final is not None:
                     return guard_final
@@ -744,6 +754,10 @@ class IterativeVisualAgent:
                 )
                 if low_confidence_result is not None:
                     return low_confidence_result
+                if answer_result.status == "final" or answer_result.has_partial_support():
+                    pending_inferences = [
+                        _answer_result_pending_inference(answer_result, source="evidence_table_no_growth")
+                    ]
             if _should_run_answer_probe(
                 budget=self.budget,
                 question=raw_question,
@@ -788,30 +802,19 @@ class IterativeVisualAgent:
                         )
                         answer_feedback = [blocked_reason]
                         continue
-                    rounds.append(
-                        IterativeRound(
-                            round_number=round_number,
-                            status="final",
-                            planner_text=answer_result.raw_text,
-                            rationale=answer_result.rationale,
-                        )
+                    pending_inferences = [_answer_result_pending_inference(answer_result, source="prefinal_probe")]
+                    self.workspace.write_trace_event(
+                        "iterative_answer_suggestion",
+                        {
+                            "round": round_number,
+                            "source": "prefinal_probe",
+                            "answer": answer_result.answer,
+                            "citations": list(answer_result.citations),
+                            "confidence": answer_result.confidence,
+                            "recommended_to_planner": True,
+                        },
                     )
-                    self._write_final_trace(
-                        round_number=round_number,
-                        answer=answer_result.answer,
-                        citations=answer_result.citations,
-                        source="answer_agent",
-                    )
-                    return IterativeRunResult(
-                        question=raw_question,
-                        video_path=video_path,
-                        answer=answer_result.answer,
-                        status="final",
-                        citations=list(answer_result.citations),
-                        confidence=answer_result.confidence,
-                        rounds=rounds,
-                    )
-                if round_number >= self.budget.max_rounds:
+                elif round_number >= self.budget.max_rounds:
                     low_confidence_result = self._try_low_confidence_final(
                         answer_result=answer_result,
                         question=raw_question,
@@ -926,6 +929,7 @@ class IterativeVisualAgent:
         has_inspect_with_candidate_options: bool,
         program: Sequence[Mapping[str, Any]] = (),
         observation_ids: Sequence[str] = (),
+        pending_inferences_out: list[str] | None = None,
     ) -> IterativeRunResult | None:
         if not extract_candidate_options(question):
             return None
@@ -967,6 +971,8 @@ class IterativeVisualAgent:
             )
             return None
         if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES:
+            if pending_inferences_out is not None:
+                pending_inferences_out.append(_answer_result_pending_inference(answer_result, source=source))
             self.workspace.write_trace_event(
                 "iterative_answer_suggestion",
                 {
@@ -2117,6 +2123,20 @@ class IterativeVisualAgent:
             return None
         low_confidence = answer_result.as_low_confidence_final()
         if low_confidence.status != "low_confidence_final":
+            return None
+        if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES:
+            self.workspace.write_trace_event(
+                "iterative_answer_suggestion",
+                {
+                    "round": round_number,
+                    "source": source,
+                    "answer": low_confidence.answer,
+                    "citations": list(low_confidence.citations),
+                    "confidence": low_confidence.confidence,
+                    "status": low_confidence.status,
+                    "recommended_to_planner": True,
+                },
+            )
             return None
         if not self.workspace.has_non_navigation_visual_citation(low_confidence.citations):
             self.workspace.write_trace_event(
@@ -3970,6 +3990,29 @@ def _timeline_decision_pending_inference(decision: Mapping[str, Any]) -> str:
         f"{evidence_summary}. This is a pending inference, not an automatic final; decide whether to "
         "finalize with citations or gather more visual evidence."
     )
+
+
+def _answer_result_pending_inference(answer_result: AnswerAgentResult, *, source: str) -> str:
+    answer = str(answer_result.answer or "unknown").strip()
+    citations = ", ".join(str(citation) for citation in list(answer_result.citations)[:5] if str(citation))
+    citation_text = f" with citations {citations}" if citations else ""
+    if answer_result.status == "final":
+        return (
+            f"AnswerAgent suggestion from {source}: option/answer {answer}{citation_text} "
+            f"(confidence {answer_result.confidence:.2f}). This is suggestion-only; planner must decide "
+            "whether to finalize or gather more evidence."
+        )
+    if answer_result.has_partial_support():
+        low_confidence = answer_result.as_low_confidence_final()
+        partial_citations = ", ".join(str(citation) for citation in list(low_confidence.citations)[:5] if str(citation))
+        citation_text = f" with partial citations {partial_citations}" if partial_citations else ""
+        return (
+            f"AnswerAgent partial-support suggestion from {source}: option/answer {low_confidence.answer}"
+            f"{citation_text} (confidence {low_confidence.confidence:.2f}). This is not a final; "
+            "resolve the missing evidence before finalizing."
+        )
+    missing = "; ".join(str(item) for item in list(answer_result.missing_evidence)[:3] if str(item))
+    return f"AnswerAgent from {source} needs more evidence: {missing or answer_result.rationale or 'targeted follow-up needed'}."
 
 
 def _confirmed_timeline_rows(timeline: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:

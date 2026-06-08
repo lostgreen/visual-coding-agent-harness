@@ -649,6 +649,8 @@ def _has_option_support(table: Mapping[str, Any]) -> bool:
 
 
 def _row_score(row: Mapping[str, Any]) -> float:
+    if _requires_visual_verification(row):
+        return 0.0
     return float(row.get("confidence", 0.0) or 0.0) * GROUNDING_WEIGHTS.get(
         str(row.get("grounding_quality", "weak")),
         0.2,
@@ -846,7 +848,12 @@ def _sorted_option_rows(table: Mapping[str, Any], option: str) -> list[Mapping[s
 
 
 def _is_weak_grounding(row: Mapping[str, Any]) -> bool:
-    return str(row.get("grounding_quality", "weak")) in WEAK_GROUNDING
+    return _requires_visual_verification(row) or str(row.get("grounding_quality", "weak")) in WEAK_GROUNDING
+
+
+def _requires_visual_verification(row: Mapping[str, Any]) -> bool:
+    confidence_signal = str(row.get("confidence_signal", "")).strip().lower()
+    return bool(row.get("requires_visual_verification")) or confidence_signal in {"text_inferred", "unverified"}
 
 
 def _option_text_map(options: Any) -> dict[str, str]:

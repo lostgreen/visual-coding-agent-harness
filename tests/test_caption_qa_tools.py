@@ -364,6 +364,7 @@ class CaptionQAToolsTest(unittest.TestCase):
         request = backend.requests[0]
         self.assertEqual(request.task, "vision_read")
         self.assertIn("Return typed visual facts", request.prompt)
+        self.assertIn("ORDERED_VISIBLE", request.prompt)
         self.assertNotIn("supported option if any", request.prompt)
         self.assertNotIn("supported_option", result)
         self.assertNotIn("answer_option", result)
@@ -371,6 +372,25 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(result["time_range"], [30.0, 42.0])
         self.assertEqual(result["grounding_quality"], "visually_confirmed")
         self.assertEqual(result["facts"][0]["event_label"], "red object")
+
+    def test_vision_read_parses_ordered_visible_output(self):
+        backend = FixedTextBackend("Visible targets are c, then a, then b.\nORDERED_VISIBLE: c -> a -> b")
+        registry = build_segment_inspector_registry(backend)
+
+        result = registry.execute(
+            "vision_read",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0004",
+                "start_sec": 30.0,
+                "end_sec": 42.0,
+                "ask_for": "visible order of c, a, b",
+                "nframes": 20,
+            },
+        )
+
+        self.assertIn("ORDERED_VISIBLE", backend.requests[0].prompt)
+        self.assertEqual(result["ordered_visible_in_window"], ["c", "a", "b"])
 
     def test_verify_segment_anchors_parses_confirmations_into_evidence_and_timeline(self):
         backend = FixedTextBackend(

@@ -45,6 +45,63 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.answer, "D. full rise and fall")
         self.assertEqual(result.citations, ["obs_0003"])
 
+    def test_text_inferred_indexed_transcript_cannot_final_without_visual_verification(self):
+        table = {
+            "options": [
+                "A. Apollo then Aeneas",
+                "C. Apollo and Daphne, Aeneas, David, Persephone",
+            ],
+            "groups": {
+                "C": [
+                    {
+                        "obs_id": "obs_0007",
+                        "tool": "locate_targets_in_segment",
+                        "claim": "Text order suggests Apollo and Daphne, Aeneas, David, Persephone.",
+                        "confidence": 0.97,
+                        "confidence_signal": "text_inferred",
+                        "grounding_quality": "indexed_transcript",
+                        "requires_visual_verification": True,
+                        "candidate_option_relations": [
+                            {"option": "C", "relation": "support", "strength": 0.97}
+                        ],
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table)
+
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertIn("targeted follow-up", result.rationale)
+
+    def test_visual_confirmation_can_final_equivalent_order(self):
+        table = {
+            "options": [
+                "A. Apollo then Aeneas",
+                "D. Aeneas, David, Persephone, Apollo and Daphne",
+            ],
+            "groups": {
+                "D": [
+                    {
+                        "obs_id": "obs_0011",
+                        "tool": "verify_segment_anchors",
+                        "claim": "Visible order is Aeneas, David, Persephone, Apollo and Daphne.",
+                        "confidence": 0.9,
+                        "confidence_signal": "visually_confirmed",
+                        "grounding_quality": "visually_confirmed",
+                        "candidate_option_relations": [
+                            {"option": "D", "relation": "support", "strength": 0.9}
+                        ],
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table)
+
+        self.assertEqual(result.status, "final")
+        self.assertEqual(result.answer, "D. Aeneas, David, Persephone, Apollo and Daphne")
+
     def test_answer_agent_falls_back_to_main_idea_unassigned_evidence_after_parse_failure(self):
         backend = StaticBackend("I think D because the whole video covers the empire.")
         table = {
