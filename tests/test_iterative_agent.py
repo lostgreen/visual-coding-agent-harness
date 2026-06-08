@@ -3037,19 +3037,26 @@ class IterativeAgentTest(unittest.TestCase):
                     end_sec=600.0,
                     asr_sentences=[
                         {
-                            "start_sec": 529.0,
-                            "end_sec": 539.0,
+                            "start_sec": 497.12,
+                            "end_sec": 539.097,
                             "text": (
-                                "The author presents Aeneas, Anchises, and Ascanius fleeing Troy, "
-                                "David, The rape of Persephone, and Apollo and Daphne."
+                                "The detail of the corpulent Cardinal's button is a classic Bernini touch. "
+                                "It is the same attention to detail that we will see with Apollo and Daphne. "
+                                'Then the narration lists radical and colossal marble statues "Aeneas, Anchises, and Ascanius fleeing Troy", '
+                                '"David", "The rape of Persephone",'
                             ),
-                        }
+                        },
+                        {
+                            "start_sec": 539.3,
+                            "end_sec": 546.0,
+                            "text": 'and "Apollo and Daphne".',
+                        },
                     ],
                 )
             ],
         )
         question = (
-            "Which order is shown?\n"
+            "As depicted in the video, in what order does the author present Bernini's four masterpieces created for Borghese in a single scene?\n"
             'A. "Apollo and Daphne", "David", "The rape of Persephone", "Aeneas, Anchises, and Ascanius fleeing Troy"\n'
             'B. "David", "Aeneas, Anchises, and Ascanius fleeing Troy", "Apollo and Daphne", "The rape of Persephone"\n'
             'C. "The rape of Persephone", "Apollo and Daphne", "David", "Aeneas, Anchises, and Ascanius fleeing Troy"\n'

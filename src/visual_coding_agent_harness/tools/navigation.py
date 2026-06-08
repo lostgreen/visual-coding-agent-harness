@@ -932,6 +932,7 @@ def _ordered_list_candidates(
     candidates: list[dict[str, object]] = []
     for start_index, first in enumerate(sources):
         pieces = []
+        piece_spans: list[Mapping[str, object]] = []
         window_start = float(first.get("start_sec", segment.start_sec) or segment.start_sec)
         window_end = float(first.get("end_sec", window_start) or window_start)
         previous_end = window_end
@@ -941,25 +942,48 @@ def _ordered_list_candidates(
             source_end = float(source.get("end_sec", source_start) or source_start)
             if pieces and source_start - previous_end > max_gap_sec:
                 break
-            if source_end - window_start > max_window_sec:
+            effective_window_start = _ordered_list_effective_start_sec(
+                text=" ".join(pieces),
+                source_spans=piece_spans,
+                targets=target_list,
+                fallback_sec=window_start,
+            )
+            if source_end - effective_window_start > max_window_sec:
                 break
             text = str(source.get("text") or "").strip()
             if not text:
                 continue
+            combined_start = sum(len(piece) + 1 for piece in pieces)
             pieces.append(text)
+            piece_spans.append(
+                {
+                    "combined_start": combined_start,
+                    "combined_end": combined_start + len(text),
+                    "source_start_sec": source_start,
+                    "source_end_sec": source_end,
+                    "source_text_len": len(text),
+                }
+            )
             source_name = str(source.get("source") or "")
             if source_name and source_name not in source_names:
                 source_names.append(source_name)
             window_end = max(window_end, source_end)
             previous_end = source_end
             combined = " ".join(pieces)
-            ordered_targets = _targets_in_text_order(
-                combined,
-                target_list,
-                allow_list_context=True,
-            )
+            list_match = _preferred_ordered_list_match(combined, target_list)
+            ordered_targets = list(list_match.get("ordered_targets", [])) if list_match else []
             if len(ordered_targets) < min(3, len(target_list)):
                 continue
+            list_start_sec = _combined_char_time(
+                int(list_match.get("start_char", 0)),
+                source_spans=piece_spans,
+                fallback_sec=window_start,
+            )
+            list_end_sec = _combined_char_time(
+                int(list_match.get("end_char", len(combined))),
+                source_spans=piece_spans,
+                fallback_sec=window_end,
+            )
             candidates.append(
                 {
                     "candidate_id": "",
@@ -967,16 +991,134 @@ def _ordered_list_candidates(
                     "target": "ordered target list",
                     "source": "+".join(source_names) or str(first.get("source") or ""),
                     "match_type": "ordered_list_mention",
-                    "start_sec": window_start,
-                    "end_sec": window_end,
+                    "start_sec": round(list_start_sec, 3),
+                    "end_sec": round(max(list_start_sec, list_end_sec), 3),
                     "snippet": _detail_evidence_snippet(combined, max_chars=240),
                     "confidence": 0.98 if len(ordered_targets) == len(target_list) else 0.82,
                     "temporal_density": float(len(ordered_targets)),
                     "directness": "ordered_list_navigation",
                     "ordered_targets": ordered_targets,
+                    "quoted_target_count": int(list_match.get("quoted_target_count", 0)),
+                    "target_span_chars": int(list_match.get("target_span_chars", 0)),
+                    "list_order_source": str(list_match.get("order_source", "text")),
                 }
             )
     return _dedupe_ordered_list_candidates(candidates, target_count=len(target_list))
+
+
+def _preferred_ordered_list_match(text: str, targets: Sequence[str]) -> Mapping[str, object] | None:
+    quoted_mentions = _quoted_target_mentions(text=text, targets=targets)
+    if len(quoted_mentions) >= min(3, len(targets)):
+        ordered_targets = _unique_ordered_targets(quoted_mentions)
+        if ordered_targets:
+            start_char = int(quoted_mentions[0]["start"])
+            end_char = int(quoted_mentions[-1]["end"])
+            return {
+                "ordered_targets": ordered_targets,
+                "start_char": start_char,
+                "end_char": end_char,
+                "quoted_target_count": len(quoted_mentions),
+                "target_span_chars": max(0, end_char - start_char),
+                "order_source": "quoted_list",
+            }
+
+    positioned: list[tuple[int, int, str]] = []
+    for target in targets:
+        position = _target_first_position(
+            text=text,
+            target=target,
+            allow_list_context=True,
+        )
+        if position is None:
+            continue
+        end = position + len(str(target))
+        positioned.append((position, end, str(target)))
+    if not positioned:
+        return None
+    positioned = sorted(positioned, key=lambda item: item[0])
+    return {
+        "ordered_targets": [target for _, _, target in positioned],
+        "start_char": int(positioned[0][0]),
+        "end_char": int(positioned[-1][1]),
+        "quoted_target_count": 0,
+        "target_span_chars": max(0, int(positioned[-1][1]) - int(positioned[0][0])),
+        "order_source": "text_first_position",
+    }
+
+
+def _quoted_target_mentions(*, text: str, targets: Sequence[str]) -> list[Mapping[str, object]]:
+    target_by_key = {
+        _target_text_key(target): str(target).strip()
+        for target in targets
+        if str(target).strip()
+    }
+    mentions: list[Mapping[str, object]] = []
+    for match in re.finditer(r"[\"“]([^\"”]+)[\"”]", str(text or "")):
+        quoted_key = _target_text_key(match.group(1))
+        target = target_by_key.get(quoted_key)
+        if not target:
+            continue
+        mentions.append(
+            {
+                "start": int(match.start(1)),
+                "end": int(match.end(1)),
+                "target": target,
+            }
+        )
+    return sorted(mentions, key=lambda item: int(item["start"]))
+
+
+def _unique_ordered_targets(mentions: Sequence[Mapping[str, object]]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for mention in mentions:
+        target = str(mention.get("target", "")).strip()
+        key = _target_text_key(target)
+        if not target or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(target)
+    return ordered
+
+
+def _ordered_list_effective_start_sec(
+    *,
+    text: str,
+    source_spans: Sequence[Mapping[str, object]],
+    targets: Sequence[str],
+    fallback_sec: float,
+) -> float:
+    mentions = _quoted_target_mentions(text=text, targets=targets)
+    if len(mentions) < min(2, len(targets)):
+        return float(fallback_sec)
+    return _combined_char_time(
+        int(mentions[0]["start"]),
+        source_spans=source_spans,
+        fallback_sec=fallback_sec,
+    )
+
+
+def _combined_char_time(
+    char_index: int,
+    *,
+    source_spans: Sequence[Mapping[str, object]],
+    fallback_sec: float,
+) -> float:
+    for span in source_spans:
+        combined_start = int(span.get("combined_start", 0))
+        combined_end = int(span.get("combined_end", combined_start))
+        if not (combined_start <= int(char_index) <= combined_end):
+            continue
+        source_start = float(span.get("source_start_sec", fallback_sec) or fallback_sec)
+        source_end = float(span.get("source_end_sec", source_start) or source_start)
+        source_len = max(1, int(span.get("source_text_len", combined_end - combined_start) or 1))
+        offset = min(max(0, int(char_index) - combined_start), source_len)
+        return source_start + (source_end - source_start) * (offset / source_len)
+    return float(fallback_sec)
+
+
+def _target_text_key(text: str) -> str:
+    return " ".join(_target_token_list(text))
 
 
 def _targets_in_text_order(
@@ -1029,6 +1171,8 @@ def _dedupe_ordered_list_candidates(
         [dict(candidate) for candidate in candidates],
         key=lambda candidate: (
             -len(candidate.get("ordered_targets", []) if isinstance(candidate.get("ordered_targets"), list) else []),
+            -int(candidate.get("quoted_target_count", 0) or 0),
+            float(candidate.get("target_span_chars", 0) or 0),
             float(candidate.get("start_sec", 0.0) or 0.0),
             float(candidate.get("end_sec", 0.0) or 0.0),
         ),

@@ -19,6 +19,15 @@
 - 状态：`max_rounds_reached`
 - summary：`choice=""`, `selected_option=None`, `correct=False`
 
+最新验证 replay：
+
+- run root：`/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_anchor_bound_ordered_asr_611_2_e44f79b_20260608`
+- commit：`e44f79b fix(video): keep target anchors segment-bound`
+- 状态：`final`
+- summary：`choice="C"`, `ground_truth="D"`, `correct=False`, `rounds=3`
+- 工具序列：`read_timeline_sorted`, `read_timeline_sorted`, `caption_segment`, `locate_targets_in_segment(seg_0002)`, `locate_targets_in_segment(seg_0003)`
+- 新失败指纹：已经定位到 `seg_0002`，但 ordered-list timeline 把 509s 的 `Apollo and Daphne` 预告句排到四件作品清单前面，导致 runtime timeline decision 直接 final 为 C。
+
 旧的无 hard-skill / open-rewrite trajectory 只作为历史对照；本分析以当前 run 为准。
 
 ## Replay 摘要
@@ -395,6 +404,68 @@ insufficient: MCQ answer must begin with option letter
 
 runtime 也会给 answer-facing verifier 注入原始 question / candidate_options，保证它能识别 MCQ 约束。
 
+### 11. ordered-list 只按清单子串排序，不吃前置预告句
+
+`e44f79b` replay 证明上一版 `ordered_list_timeline_rows` 太激进：它确实把 ASR 清单升级成 timeline evidence，但排序来源仍是长 ASR sentence 的全文首次出现位置。
+
+真实错误形态：
+
+```text
+497.1-539.1s:
+... same attention to detail that we will see with Apollo and Daphne.
+... radical and colossal marble statues "Aeneas...", "David", "The rape of Persephone",
+
+539.3-546.0s:
+and "Apollo and Daphne".
+```
+
+旧逻辑把第一句的 unquoted `Apollo and Daphne` 当成 ordered list 的第一项，得到：
+
+```text
+Apollo and Daphne -> Aeneas -> David -> The rape of Persephone
+```
+
+但题目问的是：
+
+```text
+four masterpieces created for Borghese in a single scene
+```
+
+更强证据是 quoted list 子串：
+
+```text
+"Aeneas...", "David", "The rape of Persephone", and "Apollo and Daphne"
+```
+
+因此 ordered-list detector 现在：
+
+- 优先从引号内目标标题抽取顺序；
+- 用第一个 quoted target 的估计时间作为 list window 起点，而不是长 ASR sentence 的 497s 起点；
+- 若已有 quoted list 子串，允许继续合并紧邻字幕里的最后一个 quoted target；
+- 候选排序优先 `quoted_target_count` 和紧凑 target span，再考虑起始时间；
+- fallback 才使用全文 target 首次出现顺序。
+
+这让 611-2 的 indexed transcript timeline 恢复为：
+
+```text
+Aeneas, Anchises, and Ascanius fleeing Troy
+David
+The rape of Persephone
+Apollo and Daphne
+```
+
+对应选项 D。
+
+当前验证：
+
+```text
+PYTHONPATH=src:. pytest -q
+391 passed
+
+PYTHONPATH=src:. pytest -q tests/test_video_navigation.py tests/test_iterative_agent.py tests/test_timeline.py tests/test_route_validator.py tests/test_caption_qa_tools.py tests/test_verification_tools.py
+155 passed
+```
+
 ## 历史建议对照
 
 以下 A-F 是本轮实施前整理的设计建议，保留作对照：
@@ -509,8 +580,7 @@ final answer must begin with exactly one option letter A/B/C/D
 locator candidates 找到了
 -> 旧版：anchor JSON 不可复制，planner 反复 navigation
 -> 0417b13：进入 verifier，但 anchor 被换到错误 segment
--> ordered-list ASR 没有成为 timeline evidence
--> ledger verifier 支持了非 MCQ option 的片段顺序答案
+-> e44f79b：anchor-bound 和 timeline evidence 生效，但 ordered-list detector 把长 ASR 句里的前置 Apollo 预告当作清单第一项
 ```
 
 本轮已完成：
@@ -519,5 +589,6 @@ locator candidates 找到了
 2. ordered-list ASR 写入 confirmed indexed transcript timeline rows；
 3. ordinary interactive loop 可从 timeline 唯一匹配 MCQ option 后直接 final；
 4. `verify_ledger_answer` 拒绝非选项 MCQ answer。
+5. ordered-list detector 优先按 quoted list 子串排序，不再把 unquoted 前置预告句混入清单顺序。
 
-下一步只需要挂新版 611-2 replay，观察是否能从 `seg_0002` 的 ordered ASR list 直接收敛到 D。
+下一步挂新版 611-2 replay，观察是否能从 `seg_0002` 的 quoted ordered ASR list 直接收敛到 D。
