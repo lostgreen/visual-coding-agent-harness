@@ -92,6 +92,18 @@ def skill_catalog_prompt(
     return "\n".join(lines)
 
 
+def allowed_actions_for_skill(skill_id: str) -> frozenset[str]:
+    """Return allowed tool actions for a built-in skill id or short skill name."""
+    normalized = str(skill_id).strip()
+    if not normalized:
+        return frozenset()
+    short_name = normalized.split("@", 1)[0]
+    for skill in builtin_skill_registry().list():
+        if skill.name == short_name or f"{skill.name}@v{skill.version}" == normalized:
+            return frozenset(skill.allowed_actions)
+    return frozenset()
+
+
 def builtin_skill_registry() -> SkillRegistry:
     return SkillRegistry(
         [
@@ -173,7 +185,16 @@ def builtin_skill_registry() -> SkillRegistry:
                 recovery={"insufficient": {"action": "need_more_evidence", "target": "mutex distinguishing window"}},
                 self_check=("one vision_read per mutex window",),
                 allowed_actions=frozenset(
-                    {"ground_question", "query_context", "vision_read", "zoom", "target_coverage", "read_segment_detail", "search_segments"}
+                    {
+                        "ground_question",
+                        "query_context",
+                        "vision_read",
+                        "target_coverage",
+                        "read_segment_detail",
+                        "locate_targets_in_segment",
+                        "verify_segment_anchors",
+                        "search_segments",
+                    }
                     | {"verify_ledger_answer"}
                 ),
             ),
@@ -213,7 +234,16 @@ def builtin_skill_registry() -> SkillRegistry:
                 recovery={"insufficient": {"action": "need_more_evidence", "target": "distinguishing fact window"}},
                 self_check=("decision.citations all visually_confirmed",),
                 allowed_actions=frozenset(
-                    {"ground_question", "query_context", "vision_read", "zoom", "target_coverage", "read_segment_detail", "search_segments"}
+                    {
+                        "ground_question",
+                        "query_context",
+                        "vision_read",
+                        "target_coverage",
+                        "read_segment_detail",
+                        "locate_targets_in_segment",
+                        "verify_segment_anchors",
+                        "search_segments",
+                    }
                     | {"verify_ledger_answer"}
                 ),
             ),
@@ -278,9 +308,9 @@ def builtin_skill_registry() -> SkillRegistry:
                         "read_timeline_sorted",
                         "target_coverage",
                         "read_segment_detail",
+                        "locate_targets_in_segment",
+                        "verify_segment_anchors",
                         "search_segments",
-                        "expand_window",
-                        "zoom",
                     }
                     | {"verify_ledger_answer"}
                 ),

@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 from ..video_index import SceneIndex
 from .context_budget import ContextBudgetAllocator, ContextBudgetReport, SlotName
 from .question_policy import QuestionPlaybook, select_question_playbook
-from .skills.specs import skill_catalog_prompt
+from .skills.specs import allowed_actions_for_skill, skill_catalog_prompt
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,9 @@ def build_replanning_prompt(
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
     exhausted_tools: frozenset[str] | None = None,
+    active_skill: str | None = None,
+    route: str | None = None,
+    target_hints: Sequence[str] = (),
 ) -> tuple[str, ContextBudgetReport]:
     slots = compose_replanning_prompt_slots(
         question=question,
@@ -97,7 +100,6 @@ def build_replanning_prompt(
         round_number=round_number,
         budget=budget,
         inspected_segment_ids=inspected_segment_ids,
-        tool_class_counts=tool_class_counts,
         final_round_reserved=final_round_reserved,
         answer_feedback=answer_feedback,
         normalization_notes=normalization_notes,
@@ -105,6 +107,9 @@ def build_replanning_prompt(
         reflection_memory=reflection_memory,
         evidence_status_summary=evidence_status_summary,
         exhausted_tools=exhausted_tools,
+        active_skill=active_skill,
+        route=route,
+        target_hints=target_hints,
     )
     allocated, report = allocator.allocate(
         slots,
@@ -132,8 +137,12 @@ def compose_replanning_prompt_slots(
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
     exhausted_tools: frozenset[str] | None = None,
+    active_skill: str | None = None,
+    route: str | None = None,
+    target_hints: Sequence[str] = (),
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
+    resolved_route = route or playbook.route
     option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
     task_blocks = [
         PromptBlock(
@@ -166,11 +175,23 @@ def compose_replanning_prompt_slots(
         ),
     ]
     tooling_blocks = [
-        PromptBlock(name="tool_schema", title="Tool Schema", body=_tool_schema_block(option_blind=option_blind)),
+        PromptBlock(
+            name="tool_schema",
+            title="Tool Schema",
+            body=_tool_schema_block(
+                option_blind=option_blind,
+                active_skill=active_skill,
+                exhausted=exhausted_tools or frozenset(),
+            ),
+        ),
         PromptBlock(
             name="final_gate",
             title="Final Gate",
-            body=_final_gate_block(final_round_reserved=final_round_reserved, option_blind=option_blind),
+            body=_final_gate_block(
+                final_round_reserved=final_round_reserved,
+                option_blind=option_blind,
+                route=resolved_route,
+            ),
         ),
         PromptBlock(
             name="response_contract",
@@ -200,6 +221,7 @@ def compose_replanning_prompt_slots(
             question=question,
             scene_index=scene_index,
             inspected_segment_ids=inspected_segment_ids,
+            target_hints=target_hints,
         ),
         "feedback": _feedback_slot(
             answer_feedback=answer_feedback,
@@ -209,7 +231,6 @@ def compose_replanning_prompt_slots(
         "budget": _budget_snapshot_block(
             round_number=round_number,
             budget=budget,
-            tool_class_counts=tool_class_counts,
             final_round_reserved=final_round_reserved,
         ),
         "tooling": render_prompt_blocks(tooling_blocks),
@@ -232,8 +253,12 @@ def compose_replanning_prompt_blocks(
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
     exhausted_tools: frozenset[str] | None = None,
+    active_skill: str | None = None,
+    route: str | None = None,
+    target_hints: Sequence[str] = (),
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
+    resolved_route = route or playbook.route
     option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
     blocks = [
         PromptBlock(
@@ -293,6 +318,7 @@ def compose_replanning_prompt_blocks(
                 question=question,
                 scene_index=scene_index,
                 inspected_segment_ids=inspected_segment_ids,
+                target_hints=target_hints,
             ),
         ),
     ]
@@ -331,19 +357,26 @@ def compose_replanning_prompt_blocks(
                 body=_budget_snapshot_block(
                     round_number=round_number,
                     budget=budget,
-                    tool_class_counts=tool_class_counts,
                     final_round_reserved=final_round_reserved,
                 ),
             ),
             PromptBlock(
                 name="tool_schema",
                 title="Tool Schema",
-                body=_tool_schema_block(option_blind=option_blind),
+                body=_tool_schema_block(
+                    option_blind=option_blind,
+                    active_skill=active_skill,
+                    exhausted=exhausted_tools or frozenset(),
+                ),
             ),
             PromptBlock(
                 name="final_gate",
                 title="Final Gate",
-                body=_final_gate_block(final_round_reserved=final_round_reserved, option_blind=option_blind),
+                body=_final_gate_block(
+                    final_round_reserved=final_round_reserved,
+                    option_blind=option_blind,
+                    route=resolved_route,
+                ),
             ),
             PromptBlock(
                 name="response_contract",
@@ -359,40 +392,62 @@ def compose_replanning_prompt_blocks(
     return blocks
 
 
-def _tool_schema_block(*, option_blind: bool = False) -> str:
+def _tool_schema_block(
+    *,
+    option_blind: bool = False,
+    active_skill: str | None = None,
+    exhausted: frozenset[str] = frozenset(),
+) -> str:
+    signatures = list(_tool_schema_signatures(option_blind=option_blind))
+    allowed = allowed_actions_for_skill(active_skill or "") if active_skill else frozenset()
+    if allowed:
+        signatures = [signature for signature in signatures if _tool_name_from_signature(signature) in allowed]
+    rendered = [_maybe_mark_exhausted(signature, exhausted) for signature in signatures]
+    return "Available tools:\n" + "\n".join(f"- {signature}" for signature in rendered)
+
+
+def _tool_schema_signatures(*, option_blind: bool = False) -> tuple[str, ...]:
     inspect_schema = (
-        "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
+        "inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
         if option_blind
-        else "- inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
+        else "inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
     )
     verifier_schema = (
-        "- verify_ledger_answer(answer: str, question: str = '', min_score: float = 0.6, required_citations: list = [])\n"
+        "verify_ledger_answer(answer: str, question: str = '', min_score: float = 0.6, required_citations: list = [])"
         if option_blind
-        else "- verify_ledger_answer(answer: str, question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])\n"
+        else "verify_ledger_answer(answer: str, question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])"
     )
     return (
-        "Available tools:\n"
-        "- ground_question(query: str, top_k: int = 5, modalities: list = [])\n"
-        "- target_coverage(targets: list, top_k: int = 3, modalities: list = [])\n"
-        "- search_segments(query: str, top_k: int = 5, modalities: list = [])\n"
-        "- read_segment(segment_id: str)\n"
-        "- read_segment_detail(segment_id: str, targets: list = [])\n"
-        "- expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0)\n"
-        "- zoom(segment_id: str, target_granularity_sec: float = 60.0)\n"
-        "- global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)\n"
-        "- summarize_ledger_evidence(max_claims: int = 5)\n"
-        f"{verifier_schema}"
-        "- view_observation(obs_id: str, line_range: tuple | None = None)\n"
-        "- grep_evidence(pattern: str, in_field: str = 'claim')\n"
-        "- query_evidence_table(filter: dict)\n"
-        "- read_timeline_sorted()\n"
-        "- read_hypothesis()\n"
-        "- update_hypothesis_slot(slot_name: str, status: str, evidence_obs_id: str = '')\n"
-        "- vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = '', nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
-        f"{inspect_schema}"
-        "- caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)\n"
-        "- qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
+        "ground_question(query: str, top_k: int = 5, modalities: list = [])",
+        "target_coverage(targets: list, top_k: int = 3, modalities: list = [])",
+        "search_segments(query: str, top_k: int = 5, modalities: list = [])",
+        "read_segment(segment_id: str)",
+        "read_segment_detail(segment_id: str, targets: list = [])",
+        "locate_targets_in_segment(segment_id: str, targets: list = [])",
+        "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [])",
+        "global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)",
+        "summarize_ledger_evidence(max_claims: int = 5)",
+        verifier_schema,
+        "view_observation(obs_id: str, line_range: tuple | None = None)",
+        "grep_evidence(pattern: str, in_field: str = 'claim')",
+        "query_evidence_table(filter: dict)",
+        "read_timeline_sorted()",
+        "read_hypothesis()",
+        "update_hypothesis_slot(slot_name: str, status: str, evidence_obs_id: str = '')",
+        "vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = '', nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
+        inspect_schema,
+        "caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
+        "qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
     )
+
+
+def _tool_name_from_signature(signature: str) -> str:
+    return signature.split("(", 1)[0]
+
+
+def _maybe_mark_exhausted(signature: str, exhausted: frozenset[str]) -> str:
+    tool_name = _tool_name_from_signature(signature)
+    return f"{signature}  =exhausted" if tool_name in exhausted else signature
 
 
 def _join_slots(slots: Mapping[SlotName, str]) -> str:
@@ -456,16 +511,6 @@ def _navigation_snapshot_block(
 ) -> str:
     inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
     uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
-    counts = tool_class_counts or {}
-    remaining_budget_line = (
-        "free exploration mode; no per-class tool budget, only emergency round/tool-call caps"
-        if getattr(budget, "free_exploration", False)
-        else (
-            f"cheap={max(0, int(getattr(budget, 'cheap_tool_budget', 0)) - int(counts.get('cheap', 0)))}, "
-            f"expensive={max(0, int(getattr(budget, 'expensive_tool_budget', 0)) - int(counts.get('expensive', 0)))}, "
-            f"verifier={max(0, int(getattr(budget, 'verifier_tool_budget', 0)) - int(counts.get('verifier', 0)))}"
-        )
-    )
     final_round_line = (
         "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
         if final_round_reserved
@@ -477,9 +522,6 @@ def _navigation_snapshot_block(
         f"Already inspected segments: {inspected_line}\n"
         f"Uninspected segment candidates: {uninspected_line}\n"
         f"Request at most {getattr(budget, 'max_tool_calls_per_round', 1)} new tool call(s) this round.\n"
-        "Cheap navigation tools and expensive VLM tools have separate budgets unless free exploration mode is active.\n"
-        "In free exploration mode, prioritize answer quality: keep using tools until evidence is sufficient, then finalize with citations.\n"
-        f"Remaining tool budgets: {remaining_budget_line}.\n"
         f"{final_round_line}"
         "Scene index:\n"
         f"{scene_index.summary(max_segments=64)}"
@@ -504,13 +546,14 @@ def _scene_index_snapshot_block(
     question: str,
     scene_index: SceneIndex,
     inspected_segment_ids: Sequence[str],
+    target_hints: Sequence[str] = (),
 ) -> str:
     uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
     return (
         f"Question: {question}\n"
         f"Uninspected segment candidates: {uninspected_line}\n"
         "Compact scene index:\n"
-        f"{scene_index.summary(max_segments=64)}"
+        f"{scene_index.summary(max_segments=64, target_hints=target_hints)}"
     )
 
 
@@ -518,19 +561,8 @@ def _budget_snapshot_block(
     *,
     round_number: int,
     budget: Any,
-    tool_class_counts: Mapping[str, int] | None,
     final_round_reserved: bool,
 ) -> str:
-    counts = tool_class_counts or {}
-    remaining_budget_line = (
-        "free exploration mode; no per-class tool budget, only emergency round/tool-call caps"
-        if getattr(budget, "free_exploration", False)
-        else (
-            f"cheap={max(0, int(getattr(budget, 'cheap_tool_budget', 0)) - int(counts.get('cheap', 0)))}, "
-            f"expensive={max(0, int(getattr(budget, 'expensive_tool_budget', 0)) - int(counts.get('expensive', 0)))}, "
-            f"verifier={max(0, int(getattr(budget, 'verifier_tool_budget', 0)) - int(counts.get('verifier', 0)))}"
-        )
-    )
     final_round_line = (
         "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
         if final_round_reserved
@@ -539,9 +571,6 @@ def _budget_snapshot_block(
     return (
         f"Round: {round_number}/{getattr(budget, 'max_rounds', '?')}\n"
         f"Request at most {getattr(budget, 'max_tool_calls_per_round', 1)} new tool call(s) this round.\n"
-        "Cheap navigation tools and expensive VLM tools have separate budgets unless free exploration mode is active.\n"
-        "In free exploration mode, prioritize answer quality: keep using tools until evidence is sufficient, then finalize with citations.\n"
-        f"Remaining tool budgets: {remaining_budget_line}.\n"
         f"{final_round_line}"
     )
 
@@ -631,16 +660,6 @@ def _evidence_snapshot_block(
 ) -> str:
     inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
     uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
-    counts = tool_class_counts or {}
-    remaining_budget_line = (
-        "free exploration mode; no per-class tool budget, only emergency round/tool-call caps"
-        if getattr(budget, "free_exploration", False)
-        else (
-            f"cheap={max(0, int(getattr(budget, 'cheap_tool_budget', 0)) - int(counts.get('cheap', 0)))}, "
-            f"expensive={max(0, int(getattr(budget, 'expensive_tool_budget', 0)) - int(counts.get('expensive', 0)))}, "
-            f"verifier={max(0, int(getattr(budget, 'verifier_tool_budget', 0)) - int(counts.get('verifier', 0)))}"
-        )
-    )
     final_round_line = (
         "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
         if final_round_reserved
@@ -654,9 +673,6 @@ def _evidence_snapshot_block(
         f"Already inspected segments: {inspected_line}\n"
         f"Uninspected segment candidates: {uninspected_line}\n"
         f"Request at most {getattr(budget, 'max_tool_calls_per_round', 1)} new tool call(s) this round.\n"
-        "Cheap navigation tools and expensive VLM tools have separate budgets unless free exploration mode is active.\n"
-        "In free exploration mode, prioritize answer quality: keep using tools until evidence is sufficient, then finalize with citations.\n"
-        f"Remaining tool budgets: {remaining_budget_line}.\n"
         f"{final_round_line}"
         "Scene index:\n"
         f"{scene_index.summary(max_segments=64)}\n"
@@ -676,44 +692,71 @@ def _evidence_only_snapshot_block(
     return f"{status_block}Evidence ledger:\n{ledger_text}"
 
 
-def _final_gate_block(*, final_round_reserved: bool, option_blind: bool = False) -> str:
+_ROUTE_AGNOSTIC_FINAL_RULES = (
+    "- The compact scene index is the default map; do not call video_ls for short indexed videos.",
+    "- Use target_coverage when MCQ/QA targets need a segment coverage matrix.",
+    "- Use read_segment_detail to expand one selected segment before spending VLM calls.",
+    "- Use navigation output as a map, then delegate localized visual reading to one focused evidence tool on one candidate segment.",
+    "- Do not spend every round on navigation-only tools; gather evidence-grade visual observations before finalizing.",
+    "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.",
+    "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.",
+    "- Continue when evidence is missing, ambiguous, or too coarse.",
+    "- Use verify_ledger_answer before finalizing when answer support is uncertain.",
+    "- Final answers must cite observation ids from the ledger.",
+)
+
+_ROUTE_SPECIFIC_FINAL_RULES: dict[str, tuple[str, ...]] = {
+    "gist_global": (
+        "- For gist/global questions, use global_gist before local decomposition as a sparse topic hint, not an option vote.",
+        "- Main-idea answers must compare whole-video coverage; partial ending-only evidence cannot beat a full rise/stability/fall arc.",
+    ),
+    "temporal_order": (
+        "- For order/sequence questions, use target_coverage or scene-index ASR hints to pick a candidate segment, then call locate_targets_in_segment(segment_id, targets=[...]).",
+        "- After locate_targets_in_segment returns anchors_for_vlm, call verify_segment_anchors on those anchors before relying on them as evidence.",
+        "- After one verify_segment_anchors observation you can call read_timeline_sorted to read the materialized event order.",
+    ),
+    "needle_local": (
+        "- For needle questions, use target_coverage + read_segment_detail to localize the candidate segment.",
+        "- When target locations inside a long segment are needed, call locate_targets_in_segment followed by verify_segment_anchors.",
+        "- Distinguishing facts should come from one focused visual observation; do not fan out caption_segment over every segment.",
+    ),
+}
+
+_OPTION_BLIND_FINAL_RULES = (
+    "- MCQ choices were rewritten into an option-blind exploration task; do not pass option labels or candidate choice text to local tools.",
+    "- Use target_coverage for a target-to-segment coverage matrix, then read_segment_detail / locate_targets_in_segment for selected segments.",
+    "- Local VLM tools must openly describe visible/narrated segment content as concrete observations.",
+    "- The AnswerAgent will compare cited open facts to the original choices later.",
+)
+
+_OPTION_LABELED_FINAL_RULES = (
+    "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.",
+    "- Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.",
+    '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.',
+    "- Do not copy quoted option text into JSON string values; refer to option letters instead.",
+)
+
+
+def _final_gate_block(
+    *,
+    final_round_reserved: bool,
+    option_blind: bool = False,
+    route: str | None = None,
+) -> str:
     final_round_line = (
         "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
         if final_round_reserved
         else ""
     )
-    option_blind_lines = (
-        "- MCQ choices were rewritten into an option-blind exploration task; do not pass option labels or candidate choice text to local tools.\n"
-        "- Use target_coverage for a target-to-segment coverage matrix, then read_segment_detail for selected segments.\n"
-        "- Local VLM tools must openly describe visible/narrated segment content as concrete observations.\n"
-        "- The AnswerAgent will compare cited open facts to the original choices later.\n"
-        if option_blind
-        else (
-            "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.\n"
-            "- Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.\n"
-            '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.\n'
-            "- Do not copy quoted option text into JSON string values; refer to option letters instead.\n"
-        )
+    lines = list(_ROUTE_AGNOSTIC_FINAL_RULES)
+    lines.extend(_ROUTE_SPECIFIC_FINAL_RULES.get(str(route or ""), ()))
+    lines.extend(_OPTION_BLIND_FINAL_RULES if option_blind else _OPTION_LABELED_FINAL_RULES)
+    lines.append(
+        "- Final answers require at least one evidence-grade visual observation from vision_read, inspect_segment, caption_segment, verify_segment_anchors, or qa_segment; navigation-only evidence and locate candidates are insufficient."
     )
-    return (
-        "- The compact scene index is the default map; do not call video_ls for short indexed videos.\n"
-        "- Use target_coverage when MCQ/QA targets need a segment coverage matrix.\n"
-        "- Use read_segment_detail to expand one selected segment before spending VLM budget.\n"
-        "- For gist/global questions, use global_gist before local decomposition as a sparse topic hint, not an option vote.\n"
-        "- caption_segments is offline VideoMap cache building; avoid it in online reasoning unless the cache/indexes are empty.\n"
-        "- Use navigation output as a map, then delegate localized visual reading to vision_read or inspect_segment on one candidate segment.\n"
-        "- Use zoom when a coarse segment is relevant but too long; then call vision_read or inspect_segment with the returned child segment_id and start_sec/end_sec.\n"
-        "- Do not spend every round on navigation-only tools; gather visual evidence before finalizing.\n"
-        f"{option_blind_lines}"
-        "- Main-idea answers must compare whole-video coverage; partial ending-only evidence cannot beat a full rise/stability/fall arc.\n"
-        "- Final answers require at least one non-navigation visual observation from vision_read, inspect_segment, caption_segment, or qa_segment; navigation-only evidence is insufficient.\n"
-        "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.\n"
-        "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.\n"
-        "- Continue when evidence is missing, ambiguous, or too coarse.\n"
-        "- Use verify_ledger_answer before finalizing when answer support is uncertain.\n"
-        "- Final answers must cite observation ids from the ledger.\n"
-        f"{final_round_line}"
-    )
+    if final_round_line:
+        lines.append(final_round_line.strip())
+    return "\n".join(lines) + "\n"
 
 
 def _uninspected_segment_summary(*, scene_index: SceneIndex, inspected_segment_ids: Sequence[str]) -> str:

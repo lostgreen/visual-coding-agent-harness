@@ -488,7 +488,6 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(config.strategies, ("agent_v2",))
         self.assertEqual(config.cases, ("611-2",))
-        self.assertTrue(config.budget.free_exploration)
         self.assertEqual(config.budget.max_rounds, 24)
         self.assertEqual(config.budget.max_tool_calls_per_round, 4)
         self.assertFalse(config.budget.reserve_final_round)
@@ -526,7 +525,7 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertFalse(config.budget.rewrite_mcq_for_exploration)
         self.assertFalse(config.ablation_flags["enable_mcq_rewrite"])
 
-    def test_max_rounds_raises_default_expensive_tool_budget_for_segment_sweep(self):
+    def test_max_rounds_raises_repeated_program_guard_for_segment_sweep(self):
         from runs import eval_runner
 
         parser = eval_runner.build_arg_parser()
@@ -535,10 +534,9 @@ class EvalRunnerTest(unittest.TestCase):
         config = eval_runner.config_from_args(args)
 
         self.assertEqual(config.budget.max_rounds, 20)
-        self.assertEqual(config.budget.expensive_tool_budget, 20)
         self.assertEqual(config.budget.max_repeated_programs, 20)
 
-    def test_explicit_expensive_tool_budget_is_respected(self):
+    def test_legacy_expensive_tool_budget_flag_is_accepted_but_ignored(self):
         from runs import eval_runner
 
         parser = eval_runner.build_arg_parser()
@@ -547,7 +545,7 @@ class EvalRunnerTest(unittest.TestCase):
         config = eval_runner.config_from_args(args)
 
         self.assertEqual(config.budget.max_rounds, 20)
-        self.assertEqual(config.budget.expensive_tool_budget, 6)
+        self.assertFalse(hasattr(config.budget, "expensive_tool_budget"))
 
     def test_context_budget_cli_flags_build_agent_config(self):
         from runs import eval_runner
@@ -708,7 +706,7 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.ablation_flags["contract_nframes"], 128)
         self.assertEqual(config.ablation_flags["followup_budget"], 3)
         self.assertEqual(config.budget.default_nframes, 128)
-        self.assertEqual(config.budget.cheap_tool_budget, 3)
+        self.assertFalse(hasattr(config.budget, "cheap_tool_budget"))
         self.assertFalse(config.budget.hard_skill_runtime)
 
     def test_run_loop_exports_longvideoagent_trajectory(self):

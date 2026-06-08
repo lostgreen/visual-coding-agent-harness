@@ -10,7 +10,9 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _skill_target_facts,
 )
 from visual_coding_agent_harness.agents.prompt_stack import (
+    _final_gate_block,
     _normalization_notes_body,
+    _tool_schema_block,
     build_replanning_prompt,
     compose_replanning_prompt_blocks,
     render_prompt_blocks,
@@ -85,7 +87,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertNotIn("Recommended fallback skill", prompt)
         self.assertIn("timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
-        self.assertIn("Final answers require at least one non-navigation visual observation", prompt)
+        self.assertIn("Final answers require at least one evidence-grade visual observation", prompt)
 
     def test_slot_prompt_contains_all_four_sections_and_budget_report(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
@@ -115,6 +117,58 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertNotIn("caption_segments(segment_ids", prompt)
         self.assertIn("verify_ledger_answer(answer: str, question: str", prompt)
         self.assertNotIn("verify_ledger_answer(answer: str, ledger_text", prompt)
+
+    def test_tool_schema_filters_to_active_skill_allowed_actions(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="timeline_ordering@v1",
+            exhausted=frozenset(),
+        )
+
+        self.assertIn("caption_segment(", rendered)
+        self.assertIn("read_segment_detail(", rendered)
+        self.assertIn("locate_targets_in_segment(", rendered)
+        self.assertIn("verify_segment_anchors(", rendered)
+        self.assertIn("read_timeline_sorted(", rendered)
+        self.assertNotIn("commit_map_proposals(", rendered)
+        self.assertNotIn("update_hypothesis_slot(", rendered)
+        self.assertNotIn("grep_evidence(", rendered)
+        self.assertNotIn("zoom(", rendered)
+        self.assertNotIn("expand_window(", rendered)
+        self.assertNotIn("read_segment(", rendered)
+
+    def test_tool_schema_marks_exhausted_tools_inline(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="main_idea@v1",
+            exhausted=frozenset({"global_gist"}),
+        )
+
+        self.assertIn("global_gist(", rendered)
+        self.assertIn("=exhausted", rendered)
+
+    def test_final_gate_guides_temporal_route_to_locate_then_verify(self):
+        body = _final_gate_block(
+            final_round_reserved=False,
+            option_blind=True,
+            route="temporal_order",
+        )
+
+        self.assertIn("locate_targets_in_segment", body)
+        self.assertIn("verify_segment_anchors", body)
+        self.assertNotIn("Main-idea answers", body)
+        self.assertNotIn("scan_segment", body)
+        self.assertNotIn("Use zoom", body)
+        self.assertIn("Do not repeat already inspected segments", body)
+
+    def test_final_gate_keeps_main_idea_rule_for_gist_route(self):
+        body = _final_gate_block(
+            final_round_reserved=False,
+            option_blind=True,
+            route="gist_global",
+        )
+
+        self.assertIn("Main-idea answers", body)
 
     def test_slot_prompt_includes_structured_evidence_status_summary(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)

@@ -30,35 +30,8 @@ from .skills.predicates import (
 from .skills.specs import SkillSpec, builtin_skill_registry, select_skill
 
 
-_SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read"}
+_SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read", "verify_segment_anchors"}
 _GLOBAL_VIEW_TOOLS = {"global_gist"}
-_CHEAP_TOOLS = {
-    "video_ls",
-    "search_segments",
-    "ground_question",
-    "read_segment",
-    "read_segment_detail",
-    "target_coverage",
-    "expand_window",
-    "zoom",
-    "summarize_ledger_evidence",
-}
-_EXPENSIVE_TOOLS = {
-    "global_gist",
-    "inspect_segment",
-    "vision_read",
-    "caption_segment",
-    "qa_segment",
-    "caption_segments",
-    "caption_region",
-    "qa_region",
-}
-_VERIFIER_TOOLS = {"verify_ledger_answer"}
-_TOOL_CLASSES = {
-    **{tool_name: "cheap" for tool_name in _CHEAP_TOOLS},
-    **{tool_name: "expensive" for tool_name in _EXPENSIVE_TOOLS},
-    **{tool_name: "verifier" for tool_name in _VERIFIER_TOOLS},
-}
 _ONE_SHOT_TOOLS: frozenset[str] = frozenset({"global_gist"})
 
 
@@ -76,11 +49,7 @@ class AgentBudget:
     high_fps_nframes: int = 32
     planner_receives_media: bool = False
     reserve_final_round: bool = True
-    cheap_tool_budget: int = 16
-    expensive_tool_budget: int = 6
-    verifier_tool_budget: int = 2
     answer_probe_rounds_before_final: int = 0
-    free_exploration: bool = False
     persist_planner_io: bool = True
     planner_io_max_chars: int = 200_000
     context_budget_tokens: int = 12000
@@ -90,20 +59,6 @@ class AgentBudget:
     reflection_memory_max_items: int = 5
     disable_global_gist_route: bool = False
     rewrite_mcq_for_exploration: bool = False
-
-    @classmethod
-    def free_explore(cls, *, max_rounds: int = 24, max_tool_calls_per_round: int = 4) -> "AgentBudget":
-        """Disable policy budgets while keeping emergency safety caps."""
-        return cls(
-            max_rounds=max_rounds,
-            max_tool_calls_per_round=max_tool_calls_per_round,
-            reserve_final_round=False,
-            cheap_tool_budget=0,
-            expensive_tool_budget=0,
-            verifier_tool_budget=0,
-            answer_probe_rounds_before_final=0,
-            free_exploration=True,
-        )
 
 
 @dataclass(frozen=True)
@@ -230,7 +185,6 @@ class IterativeVisualAgent:
             for round_item in rounds
             for segment_id in _segment_ids_from_program(round_item.program)
         }
-        tool_class_counts = _tool_class_counts_for_rounds(rounds)
         has_inspect_with_candidate_options = any(
             _program_has_inspect_with_candidate_options(round_item.program) for round_item in rounds
         )
@@ -241,6 +195,7 @@ class IterativeVisualAgent:
         no_evidence_growth_rounds = 0
         last_evidence_table_row_count = self.workspace.evidence_table_row_count()
         all_segments_answer_attempted = False
+        last_selected_skill_id: str | None = None
 
         for round_number in range(len(rounds) + 1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
@@ -258,7 +213,6 @@ class IterativeVisualAgent:
                 budget=self.budget,
                 allocator=self.context_allocator,
                 inspected_segment_ids=sorted(inspected_segment_ids),
-                tool_class_counts=tool_class_counts,
                 final_round_reserved=final_round_reserved,
                 answer_feedback=answer_feedback,
                 normalization_notes=last_round_normalization_notes,
@@ -266,6 +220,9 @@ class IterativeVisualAgent:
                 reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
                 evidence_status_summary=evidence_status_summary,
                 exhausted_tools=exhausted_tools,
+                active_skill=last_selected_skill_id,
+                route=classify_question_route(raw_question),
+                target_hints=self._exploration_target_entities,
             )
             self.workspace.write_trace_event("context_budget_report", asdict(context_report))
             self.workspace.write_trace_event(
@@ -326,6 +283,7 @@ class IterativeVisualAgent:
             planned_program: Any = action.get("program", [])
             planner_skill, skill_status = _planner_selected_skill(action)
             if skill_status["status"] == "selected":
+                last_selected_skill_id = f"{planner_skill.name}@v{planner_skill.version}"
                 self.workspace.write_trace_event(
                     "planner_skill_selection",
                     {
@@ -455,7 +413,6 @@ class IterativeVisualAgent:
                     raw_question=raw_question,
                     video_path=video_path,
                     inspected_segment_ids=inspected_segment_ids,
-                    tool_class_counts=tool_class_counts,
                     final_round_reserved=final_round_reserved,
                     planner_skill=planner_skill,
                     notes_out=normalization_notes,
@@ -489,7 +446,6 @@ class IterativeVisualAgent:
                         question=exploration_question_text,
                         video_path=video_path,
                         inspected_segment_ids=inspected_segment_ids,
-                        tool_class_counts=tool_class_counts,
                         planner_skill=planner_skill,
                     )
                     if forced_program:
@@ -520,7 +476,6 @@ class IterativeVisualAgent:
                         program=program,
                         question=exploration_question_text,
                         video_path=video_path,
-                        tool_class_counts=tool_class_counts,
                         planner_skill=planner_skill,
                     )
                     if forced_program:
@@ -552,7 +507,6 @@ class IterativeVisualAgent:
                         question=exploration_question_text,
                         video_path=video_path,
                         inspected_segment_ids=inspected_segment_ids,
-                        tool_class_counts=tool_class_counts,
                         planner_skill=planner_skill,
                     )
                     if forced_program:
@@ -723,7 +677,6 @@ class IterativeVisualAgent:
             observation_ids = [str(observation_id) for observation_id in program_result.observation_ids]
             citations.extend(observation_ids)
             inspected_segment_ids.update(_segment_ids_from_program(program))
-            _update_tool_class_counts(tool_class_counts, program)
             if _program_has_inspect_with_candidate_options(program):
                 has_inspect_with_candidate_options = True
             current_evidence_table_row_count = self.workspace.evidence_table_row_count()
@@ -1016,7 +969,6 @@ class IterativeVisualAgent:
         question: str,
         video_path: str,
         inspected_segment_ids: set[str],
-        tool_class_counts: Mapping[str, int],
         final_round_reserved: bool,
         planner_skill: SkillSpec | None = None,
         notes_out: list[NormalizationNote] | None = None,
@@ -1027,7 +979,6 @@ class IterativeVisualAgent:
 
         normalized = []
         reserved_segment_ids = set(inspected_segment_ids)
-        pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
         active_skill = planner_skill
         blocked_route_violation = False
         pool_exhausted_logged = False
@@ -1088,7 +1039,7 @@ class IterativeVisualAgent:
                 )
                 continue
             exhausted_tools = _exhausted_one_shot_tools(self.workspace) | frozenset(pending_one_shot_tools)
-            if tool_name in exhausted_tools and not self.budget.free_exploration:
+            if tool_name in exhausted_tools:
                 blocked_route_violation = True
                 next_action = (
                     f"{tool_name} is one-shot and has already executed. Read its claim from the ledger; "
@@ -1168,7 +1119,7 @@ class IterativeVisualAgent:
                         original={"tool": original_tool_name, "segment_id": segment.segment_id},
                         resolved={"tool": tool_name, "segment_id": segment.segment_id},
                     )
-            if _tool_denied_by_skill(tool_name=tool_name, active_skill=active_skill, free_exploration=self.budget.free_exploration):
+            if _tool_denied_by_skill(tool_name=tool_name, active_skill=active_skill):
                 blocked_route_violation = True
                 _record_skill_deny_list_violation(
                     workspace=self.workspace,
@@ -1178,7 +1129,7 @@ class IterativeVisualAgent:
                     active_skill=active_skill,
                 )
                 continue
-            violation = _route_violation(tool_name=tool_name, active_skill=active_skill, free_exploration=self.budget.free_exploration)
+            violation = _route_violation(tool_name=tool_name, active_skill=active_skill)
             if violation is not None:
                 blocked_route_violation = True
                 self.workspace.write_trace_event(
@@ -1224,7 +1175,7 @@ class IterativeVisualAgent:
                     resolved={"tool": tool_name, "args": args},
                     next_action="verify_ledger_answer reads the workspace ledger automatically; do not pass ledger_text.",
                 )
-            if final_round_reserved and tool_name not in _VERIFIER_TOOLS:
+            if final_round_reserved and tool_name != "verify_ledger_answer":
                 self.workspace.write_trace_event(
                     "exploration_policy_adjustment",
                     {
@@ -1237,28 +1188,6 @@ class IterativeVisualAgent:
                     tool=tool_name,
                     reason="reserve_final_round",
                     original={"tool": tool_name, "args": args},
-                )
-                continue
-
-            if not _tool_budget_available(
-                budget=self.budget,
-                tool_name=tool_name,
-                tool_class_counts=tool_class_counts,
-                pending_tool_class_counts=pending_tool_class_counts,
-            ):
-                self.workspace.write_trace_event(
-                    "exploration_policy_adjustment",
-                    {
-                        "reason": "tool_budget_exhausted",
-                        "skipped_tool": tool_name,
-                        "tool_class": _tool_class(tool_name),
-                    },
-                )
-                _append_normalization_note(
-                    notes_out,
-                    tool=tool_name,
-                    reason="tool_budget_exhausted",
-                    original={"tool": tool_name, "args": args, "tool_class": _tool_class(tool_name)},
                 )
                 continue
 
@@ -1389,19 +1318,13 @@ class IterativeVisualAgent:
             if "assign" in step:
                 normalized_step["assign"] = str(step["assign"])
             normalized.append(normalized_step)
-            pending_tool_class_counts[_tool_class(tool_name)] += 1
             if tool_name in _ONE_SHOT_TOOLS:
                 pending_one_shot_tools.add(tool_name)
 
         if not normalized and not final_round_reserved and not blocked_route_violation:
             fallback_segment_id = self._resolve_next_segment_id("", reserved_segment_ids)
             fallback_tool_name = self._fallback_visual_tool_name_for_skill(active_skill)
-            if fallback_segment_id is not None and fallback_tool_name is not None and _tool_budget_available(
-                budget=self.budget,
-                tool_name=fallback_tool_name,
-                tool_class_counts=tool_class_counts,
-                pending_tool_class_counts=pending_tool_class_counts,
-            ):
+            if fallback_segment_id is not None and fallback_tool_name is not None:
                 segment = self.scene_index.get(fallback_segment_id)
                 fallback_args: dict[str, Any] = {
                     "video_path": video_path,
@@ -1449,8 +1372,6 @@ class IterativeVisualAgent:
         question: str,
         video_path: str,
     ) -> tuple[str, dict[str, Any], str] | None:
-        if self.budget.free_exploration:
-            return None
         is_main_idea_route = active_skill is not None and active_skill.name == "main_idea"
         if is_main_idea_route and tool_name == "vision_read" and self._has_tool("global_gist"):
             if self.workspace.observation_count(tool_name="global_gist") >= 1:
@@ -1484,6 +1405,17 @@ class IterativeVisualAgent:
                 },
                 "repair_repeated_main_idea_global_gist_to_vision_read",
             )
+        if (
+            active_skill is not None
+            and active_skill.name in {"timeline_ordering", "grounded_factual_qa", "mutex_fact_qa"}
+            and tool_name in {"zoom", "expand_window"}
+            and self._has_tool("locate_targets_in_segment")
+        ):
+            repaired_args = {
+                "segment_id": args.get("segment_id"),
+                "targets": self._inherited_locator_targets(),
+            }
+            return "locate_targets_in_segment", repaired_args, f"repair_{tool_name}_to_locate_targets_in_segment"
         if (
             active_skill is not None
             and active_skill.name in {"timeline_ordering", "grounded_factual_qa", "mutex_fact_qa"}
@@ -1542,6 +1474,22 @@ class IterativeVisualAgent:
             )
         return None
 
+    def _inherited_locator_targets(self) -> list[str]:
+        if self._exploration_target_entities:
+            return list(self._exploration_target_entities)
+        for observation in reversed(self.workspace.read_observations(tool_name="target_coverage")):
+            coverage = observation.raw_output.get("coverage", [])
+            if not isinstance(coverage, Sequence) or isinstance(coverage, (str, bytes)):
+                continue
+            targets = [
+                str(row.get("target", "")).strip()
+                for row in coverage
+                if isinstance(row, Mapping) and str(row.get("target", "")).strip()
+            ]
+            if targets:
+                return targets
+        return []
+
     def _fallback_inspector_program(
         self,
         *,
@@ -1572,7 +1520,6 @@ class IterativeVisualAgent:
         question: str,
         video_path: str,
         inspected_segment_ids: set[str],
-        tool_class_counts: Mapping[str, int],
         planner_skill: SkillSpec | None,
     ) -> list[dict[str, Any]]:
         segment_id = self._resolve_next_segment_id("", inspected_segment_ids)
@@ -1580,14 +1527,6 @@ class IterativeVisualAgent:
             return []
         tool_name = self._fallback_visual_tool_name_for_skill(planner_skill)
         if tool_name is None:
-            return []
-        pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
-        if not _tool_budget_available(
-            budget=self.budget,
-            tool_name=tool_name,
-            tool_class_counts=tool_class_counts,
-            pending_tool_class_counts=pending_tool_class_counts,
-        ):
             return []
         segment = self.scene_index.get(segment_id)
         args: dict[str, Any] = {
@@ -1618,13 +1557,11 @@ class IterativeVisualAgent:
         program: Sequence[Mapping[str, Any]],
         question: str,
         video_path: str,
-        tool_class_counts: Mapping[str, int],
         planner_skill: SkillSpec | None,
     ) -> list[dict[str, Any]]:
         tool_name = "vision_read" if self._has_tool("vision_read") else self._fallback_visual_tool_name_for_skill(planner_skill)
         if tool_name is None:
             return []
-        pending_tool_class_counts = {"cheap": 0, "expensive": 0, "verifier": 0}
         forced: list[dict[str, Any]] = []
         for step in program:
             if len(forced) >= self.budget.max_tool_calls_per_round:
@@ -1638,13 +1575,6 @@ class IterativeVisualAgent:
             segment = _scene_segment_or_none(self.scene_index, segment_id)
             if segment is None:
                 continue
-            if not _tool_budget_available(
-                budget=self.budget,
-                tool_name=tool_name,
-                tool_class_counts=tool_class_counts,
-                pending_tool_class_counts=pending_tool_class_counts,
-            ):
-                break
             media_args: dict[str, Any] = {
                 "video_path": video_path,
                 "segment_id": segment.segment_id,
@@ -1669,11 +1599,10 @@ class IterativeVisualAgent:
                     "assign": f"forced_navigation_visual_{segment.segment_id}_{len(forced) + 1}",
                 }
             )
-            pending_tool_class_counts[_tool_class(tool_name)] += 1
         return forced
 
     def _fallback_visual_tool_name_for_skill(self, planner_skill: SkillSpec | None) -> str | None:
-        if planner_skill is not None and not self.budget.free_exploration:
+        if planner_skill is not None:
             if planner_skill.name == "timeline_ordering":
                 preferences = ["caption_segment", "vision_read", "qa_segment", "inspect_segment"]
             elif planner_skill.name in {"mutex_fact_qa", "grounded_factual_qa"}:
@@ -2564,7 +2493,6 @@ def _replanning_prompt(
         round_number=round_number,
         budget=budget,
         inspected_segment_ids=inspected_segment_ids,
-        tool_class_counts=tool_class_counts,
         final_round_reserved=final_round_reserved,
         answer_feedback=answer_feedback,
         normalization_notes=normalization_notes,
@@ -2620,16 +2548,6 @@ def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[
         if isinstance(args, Mapping) and args.get("segment_id"):
             segment_ids.append(str(args["segment_id"]))
     return segment_ids
-
-
-def _tool_class_counts_for_rounds(rounds: Sequence[IterativeRound]) -> dict[str, int]:
-    counts = {"cheap": 0, "expensive": 0, "verifier": 0}
-    for round_item in rounds:
-        for step in round_item.program:
-            tool_class = _TOOL_CLASSES.get(str(step.get("tool", "")))
-            if tool_class in counts:
-                counts[tool_class] += 1
-    return counts
 
 
 def _followup_route_for_skill(skill_name: str) -> FollowupRoute:
@@ -3892,41 +3810,12 @@ def _append_candidate_options_to_tool_question(question: str, *, candidate_optio
     return f"{question}\n\nOptions:\n{options_text}"
 
 
-def _update_tool_class_counts(tool_class_counts: dict[str, int], program: Sequence[Mapping[str, Any]]) -> None:
-    for step in program:
-        tool_class = _tool_class(str(step.get("tool", "")))
-        tool_class_counts[tool_class] = tool_class_counts.get(tool_class, 0) + 1
-
-
 def _program_signature(program: Sequence[Mapping[str, Any]]) -> str:
     return json.dumps(list(program), ensure_ascii=True, sort_keys=True, default=str)
 
 
-def _tool_budget_available(
-    *,
-    budget: AgentBudget,
-    tool_name: str,
-    tool_class_counts: Mapping[str, int],
-    pending_tool_class_counts: Mapping[str, int],
-) -> bool:
-    if budget.free_exploration:
-        return True
-    tool_class = _tool_class(tool_name)
-    limit = _tool_budget_limit(budget=budget, tool_class=tool_class)
-    used = int(tool_class_counts.get(tool_class, 0)) + int(pending_tool_class_counts.get(tool_class, 0))
-    return used < limit
-
-
-def _tool_budget_limit(*, budget: AgentBudget, tool_class: str) -> int:
-    if tool_class == "expensive":
-        return budget.expensive_tool_budget
-    if tool_class == "verifier":
-        return budget.verifier_tool_budget
-    return budget.cheap_tool_budget
-
-
-def _tool_denied_by_skill(*, tool_name: str, active_skill: SkillSpec | None, free_exploration: bool) -> bool:
-    return active_skill is not None and not free_exploration and tool_name not in active_skill.allowed_actions
+def _tool_denied_by_skill(*, tool_name: str, active_skill: SkillSpec | None) -> bool:
+    return active_skill is not None and tool_name not in active_skill.allowed_actions
 
 
 def _skill_name_as_tool_reason(tool_name: str) -> str:
@@ -3979,10 +3868,6 @@ def _record_skill_deny_list_violation(
         original={"tool": tool_name, "args": dict(args)},
         next_action=next_action,
     )
-
-
-def _tool_class(tool_name: str) -> str:
-    return _TOOL_CLASSES.get(tool_name, "cheap")
 
 
 def _append_normalization_note(
@@ -4065,8 +3950,8 @@ def _content_words(text: str) -> list[str]:
     ]
 
 
-def _route_violation(*, tool_name: str, active_skill: SkillSpec | None, free_exploration: bool) -> str | None:
-    if free_exploration or active_skill is None or not active_skill.allowed_actions:
+def _route_violation(*, tool_name: str, active_skill: SkillSpec | None) -> str | None:
+    if active_skill is None or not active_skill.allowed_actions:
         return None
     if tool_name in active_skill.allowed_actions:
         return None

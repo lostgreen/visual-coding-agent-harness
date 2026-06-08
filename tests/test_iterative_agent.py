@@ -157,21 +157,7 @@ class IterativeAgentTest(unittest.TestCase):
         self.assertEqual(budget.max_rounds, 8)
         self.assertEqual(budget.max_tool_calls_per_round, 2)
         self.assertTrue(budget.reserve_final_round)
-        self.assertGreaterEqual(budget.cheap_tool_budget, budget.max_rounds)
-        self.assertGreaterEqual(budget.expensive_tool_budget, 4)
-        self.assertGreaterEqual(budget.verifier_tool_budget, 1)
         self.assertEqual(budget.answer_probe_rounds_before_final, 0)
-
-    def test_free_exploration_budget_disables_policy_budgets_but_keeps_safety_caps(self):
-        budget = AgentBudget.free_explore(max_rounds=24, max_tool_calls_per_round=4)
-
-        self.assertTrue(budget.free_exploration)
-        self.assertEqual(budget.max_rounds, 24)
-        self.assertEqual(budget.max_tool_calls_per_round, 4)
-        self.assertFalse(budget.reserve_final_round)
-        self.assertEqual(budget.cheap_tool_budget, 0)
-        self.assertEqual(budget.expensive_tool_budget, 0)
-        self.assertEqual(budget.verifier_tool_budget, 0)
 
     def test_fixed_window_scene_index_creates_addressable_segments(self):
         index = fixed_window_scene_index(video_path="demo.mp4", duration_sec=65.0, window_sec=30.0)
@@ -340,8 +326,10 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("search_segments(query", prompt)
             self.assertIn("read_segment(segment_id", prompt)
             self.assertIn("read_segment_detail(segment_id", prompt)
-            self.assertIn("expand_window(segment_id", prompt)
-            self.assertIn("zoom(segment_id", prompt)
+            self.assertIn("locate_targets_in_segment(segment_id", prompt)
+            self.assertIn("verify_segment_anchors(segment_id", prompt)
+            self.assertNotIn("expand_window(segment_id", prompt)
+            self.assertNotIn("zoom(segment_id", prompt)
             self.assertIn("inspect_segment(video_path", prompt)
             self.assertNotIn("caption_segments(segment_ids", prompt)
             self.assertNotIn("ingest_segment_metadata(segment_id", prompt)
@@ -351,11 +339,11 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("vision_read(video_path", prompt)
             self.assertIn("max_pixels", prompt)
             self.assertIn("fps", prompt)
-            self.assertIn("delegate localized visual reading to vision_read or inspect_segment", prompt)
+            self.assertIn("delegate localized visual reading to one focused evidence tool", prompt)
             self.assertIn("Do not spend every round on navigation-only tools", prompt)
             self.assertIn("Multiple-choice answers must use vision_read or inspect_segment", prompt)
-            self.assertIn("non-navigation visual observation", prompt)
-            self.assertIn("caption_segments is offline VideoMap cache building", prompt)
+            self.assertIn("navigation-only evidence and locate candidates are insufficient", prompt)
+            self.assertIn("non-navigation visual evidence", prompt)
 
     def test_option_blind_mcq_seeds_target_coverage_before_first_planner_round(self):
         class RewriteThenPlanBackend(ScriptedPlannerBackend):
@@ -1168,7 +1156,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
             self.assertEqual(result.rounds[0].observation_ids, ["obs_0001"])
 
-    def test_iterative_agent_gates_expensive_tools_by_budget(self):
+    def test_iterative_agent_allows_multiple_visual_tools_within_round_cap(self):
         backend = ScriptedPlannerBackend(
             [
                 (
@@ -1189,16 +1177,17 @@ class IterativeAgentTest(unittest.TestCase):
                 registry=build_segment_test_registry(),
                 workspace=workspace,
                 scene_index=scene_index,
-                budget=AgentBudget(max_tool_calls_per_round=2, expensive_tool_budget=1, reserve_final_round=False),
+                budget=AgentBudget(max_tool_calls_per_round=2, reserve_final_round=False),
             )
 
             result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
 
-            self.assertEqual([step["tool"] for step in result.rounds[0].program], ["inspect_segment"])
+            self.assertEqual([step["tool"] for step in result.rounds[0].program], ["inspect_segment", "inspect_segment"])
             self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
-            self.assertEqual(result.rounds[0].observation_ids, ["obs_0001"])
+            self.assertEqual(result.rounds[0].program[1]["args"]["segment_id"], "seg_0002")
+            self.assertEqual(result.rounds[0].observation_ids, ["obs_0001", "obs_0002"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("tool_budget_exhausted", trace)
+            self.assertNotIn("tool_budget_exhausted", trace)
 
     def test_iterative_agent_avoids_repeated_segments_with_fallback(self):
         backend = ScriptedPlannerBackend(

@@ -1096,9 +1096,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--planner-receives-media", action="store_true")
     parser.add_argument("--no-reserve-final-round", action="store_true")
-    parser.add_argument("--cheap-tool-budget", type=int, default=16)
-    parser.add_argument("--expensive-tool-budget", type=int, default=None)
-    parser.add_argument("--verifier-tool-budget", type=int, default=2)
+    parser.add_argument("--cheap-tool-budget", type=int, default=16, help=argparse.SUPPRESS)
+    parser.add_argument("--expensive-tool-budget", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--verifier-tool-budget", type=int, default=2, help=argparse.SUPPRESS)
     parser.add_argument(
         "--hard-skill-runtime",
         action="store_true",
@@ -1128,7 +1128,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--free-explore",
         action="store_true",
-        help="Disable per-class and reserved-final policy budgets; keep only emergency safety caps.",
+        help="Legacy alias: use the free max-round/tool-call caps and disable the reserved final round.",
     )
     parser.add_argument("--free-max-rounds", type=int, default=24)
     parser.add_argument("--free-max-tool-calls-per-round", type=int, default=4)
@@ -1144,40 +1144,22 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
     context_budget_tokens = args.context_budget_tokens
     if args.enable_context_budget is False:
         context_budget_tokens = 10**9
-    expensive_tool_budget = (
-        int(args.expensive_tool_budget)
-        if args.expensive_tool_budget is not None
-        else max(int(args.max_rounds), AgentBudget().expensive_tool_budget)
+    max_rounds = int(args.free_max_rounds if args.free_explore else args.max_rounds)
+    max_tool_calls = int(args.free_max_tool_calls_per_round if args.free_explore else args.max_tool_calls_per_round)
+    reserve_final_round = False if args.free_explore else not args.no_reserve_final_round
+    budget = AgentBudget(
+        max_rounds=max_rounds,
+        max_tool_calls_per_round=max_tool_calls,
+        default_nframes=default_nframes,
+        high_fps_nframes=args.high_fps_nframes,
+        context_budget_tokens=context_budget_tokens,
+        context_budget_ratios=context_budget_ratios,
+        planner_receives_media=args.planner_receives_media,
+        reserve_final_round=reserve_final_round,
+        max_repeated_programs=max(max_rounds, AgentBudget().max_repeated_programs),
+        disable_global_gist_route=args.disable_global_gist_route,
+        rewrite_mcq_for_exploration=not args.disable_mcq_rewrite,
     )
-    budget = (
-        AgentBudget.free_explore(
-            max_rounds=args.free_max_rounds,
-            max_tool_calls_per_round=args.free_max_tool_calls_per_round,
-        )
-        if args.free_explore
-        else AgentBudget(
-            max_rounds=args.max_rounds,
-            max_tool_calls_per_round=args.max_tool_calls_per_round,
-            default_nframes=default_nframes,
-            high_fps_nframes=args.high_fps_nframes,
-            context_budget_tokens=context_budget_tokens,
-            context_budget_ratios=context_budget_ratios,
-            planner_receives_media=args.planner_receives_media,
-            reserve_final_round=not args.no_reserve_final_round,
-            cheap_tool_budget=args.cheap_tool_budget,
-            expensive_tool_budget=expensive_tool_budget,
-            verifier_tool_budget=args.verifier_tool_budget,
-            max_repeated_programs=max(args.max_rounds, AgentBudget().max_repeated_programs),
-            disable_global_gist_route=args.disable_global_gist_route,
-            rewrite_mcq_for_exploration=not args.disable_mcq_rewrite,
-        )
-    )
-    if args.disable_global_gist_route and budget.free_exploration:
-        budget = replace(budget, disable_global_gist_route=True)
-    if budget.free_exploration:
-        budget = replace(budget, rewrite_mcq_for_exploration=not args.disable_mcq_rewrite)
-    if args.followup_budget is not None:
-        budget = replace(budget, cheap_tool_budget=max(0, int(args.followup_budget)))
     if args.enable_followup is False:
         budget = replace(budget, hard_skill_runtime=False)
     elif args.hard_skill_runtime or args.enable_followup is True:

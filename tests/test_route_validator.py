@@ -172,7 +172,6 @@ def test_main_idea_allows_local_read_after_global_floor(tmp_path: Path):
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("main_idea"),
     )
@@ -203,7 +202,6 @@ def test_main_idea_allows_video_map_exploration(tmp_path: Path):
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("main_idea"),
     )
@@ -235,7 +233,6 @@ def test_timeline_repairs_read_segment_to_detail_with_targets(tmp_path: Path):
         question="Which artwork appears first?\nA. David\nB. Apollo and Daphne",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("timeline_ordering"),
     )
@@ -361,19 +358,19 @@ def test_timeline_ordering_allows_verify_ledger_answer(tmp_path: Path):
     assert "route_violation" not in trace
 
 
-def test_timeline_ordering_allows_window_expansion(tmp_path: Path):
+def test_timeline_ordering_rewrites_window_expansion_to_locator(tmp_path: Path):
     registry = ToolRegistry()
 
-    @tool(name="expand_window", description="Expand a candidate segment.")
-    def expand_window(segment_id: str, before_sec: float = 0.0, after_sec: float = 0.0):
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(segment_id: str, targets: list | None = None):
         return {
-            "claim": f"expanded {segment_id}",
+            "claim": f"located {segment_id}: {targets}",
             "confidence": 0.4,
-            "regions": [{"segment_id": segment_id, "start_sec": 0.0, "end_sec": 12.0}],
+            "regions": [{"segment_id": segment_id, "targets": targets or []}],
         }
 
-    registry.register(expand_window)
-    workspace = EvidenceWorkspace.create(tmp_path, "timeline_expand_allowed")
+    registry.register(locate_targets_in_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "timeline_expand_to_locate")
     agent = IterativeVisualAgent(
         backend=StaticBackend("{}"),
         registry=registry,
@@ -381,18 +378,20 @@ def test_timeline_ordering_allows_window_expansion(tmp_path: Path):
         scene_index=_scene_index(),
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
+    agent._exploration_target_entities = ("David", "Apollo and Daphne")
 
     normalized = agent._normalize_program(
         [{"tool": "expand_window", "args": {"segment_id": "seg_0001", "before_sec": 2.0, "after_sec": 3.0}}],
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("timeline_ordering"),
     )
 
-    assert normalized[0]["tool"] == "expand_window"
+    assert normalized[0]["tool"] == "locate_targets_in_segment"
+    assert normalized[0]["args"]["segment_id"] == "seg_0001"
+    assert normalized[0]["args"]["targets"] == ["David", "Apollo and Daphne"]
     assert "route_violation" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 
@@ -423,7 +422,6 @@ def test_timeline_skill_upgrades_empty_read_segment_before_deny_list(tmp_path: P
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("timeline_ordering"),
     )
@@ -461,7 +459,6 @@ def test_skill_aware_empty_program_fallback_uses_allowed_visual_tool(tmp_path: P
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("timeline_ordering"),
     )
@@ -496,7 +493,6 @@ def test_same_round_duplicate_global_gist_is_dropped(tmp_path: Path):
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("main_idea"),
     )
@@ -520,7 +516,6 @@ def test_skill_name_tool_step_is_dropped_without_route_violation(tmp_path: Path)
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("main_idea"),
     )
@@ -531,15 +526,15 @@ def test_skill_name_tool_step_is_dropped_without_route_violation(tmp_path: Path)
     assert "route_violation" not in trace
 
 
-def test_skill_name_tool_step_is_dropped_in_free_exploration(tmp_path: Path):
+def test_skill_name_tool_step_is_dropped(tmp_path: Path):
     backend = StaticBackend("{}")
-    workspace = EvidenceWorkspace.create(tmp_path, "skill_name_tool_free_exploration")
+    workspace = EvidenceWorkspace.create(tmp_path, "skill_name_tool")
     agent = IterativeVisualAgent(
         backend=backend,
         registry=ToolRegistry(),
         workspace=workspace,
         scene_index=_scene_index(),
-        budget=AgentBudget(max_rounds=1, reserve_final_round=False, free_exploration=True),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False),
     )
 
     normalized = agent._normalize_program(
@@ -547,7 +542,6 @@ def test_skill_name_tool_step_is_dropped_in_free_exploration(tmp_path: Path):
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("main_idea"),
     )
@@ -713,7 +707,6 @@ def test_timeline_skill_repairs_batch_caption_segments_to_single_caption_segment
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("timeline_ordering"),
     )
@@ -766,7 +759,6 @@ def test_timeline_skill_repairs_caption_segment_with_segment_ids_argument(tmp_pa
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
         inspected_segment_ids=set(),
-        tool_class_counts={"cheap": 0, "expensive": 0, "verifier": 0},
         final_round_reserved=False,
         planner_skill=builtin_skill_registry().get("timeline_ordering"),
     )
@@ -776,12 +768,13 @@ def test_timeline_skill_repairs_caption_segment_with_segment_ids_argument(tmp_pa
     assert "segment_ids" not in normalized[0]["args"]
 
 
-def test_free_explore_allows_all(tmp_path: Path):
+def test_skill_allowed_actions_still_apply_under_round_only_budget(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(
         json.dumps(
             {
                 "status": "continue",
+                "skill": "main_idea@v1",
                 "program": [
                     {"tool": "inspect_segment", "args": {"segment_id": "seg_0001", "question": "main idea"}}
                 ],
@@ -794,9 +787,9 @@ def test_free_explore_allows_all(tmp_path: Path):
         registry=_inspect_registry(counter),
         workspace=workspace,
         scene_index=_scene_index(),
-        budget=AgentBudget.free_explore(max_rounds=1, max_tool_calls_per_round=1),
+        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=1, reserve_final_round=False),
     )
 
     agent.run(question="What is the video mainly about?", video_path="/videos/demo.mp4")
 
-    assert counter.get("inspect_segment", 0) == 1
+    assert counter.get("inspect_segment", 0) == 0
