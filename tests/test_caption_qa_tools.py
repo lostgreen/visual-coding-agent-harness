@@ -437,6 +437,55 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(evidence_row_count, 1)
         self.assertIn("David", timeline_text)
 
+    def test_verify_segment_anchors_parses_ordered_visible_into_timeline_order(self):
+        backend = FixedTextBackend(
+            json.dumps(
+                {
+                    "confirmations": [
+                        {"target": "c", "evidence": "c is visible."},
+                        {"target": "a", "evidence": "a is visible."},
+                        {"target": "b", "evidence": "b is visible."},
+                    ],
+                    "rejections": [],
+                }
+            )
+            + "\nORDERED_VISIBLE: c -> a -> b"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_ordered_visible")
+            registry = build_segment_inspector_registry(backend, workspace=workspace)
+            ProgramInterpreter(registry=registry, workspace=workspace).run(
+                [
+                    {
+                        "tool": "verify_segment_anchors",
+                        "args": {
+                            "video_path": "/videos/demo.mp4",
+                            "segment_id": "seg_0001",
+                            "start_sec": 10.0,
+                            "end_sec": 25.0,
+                            "anchors": [
+                                {
+                                    "anchor_id": "anchor_0001",
+                                    "segment_id": "seg_0001",
+                                    "start_sec": 10.0,
+                                    "end_sec": 25.0,
+                                    "targets": ["a", "b", "c"],
+                                }
+                            ],
+                        },
+                    }
+                ]
+            )
+            observation = workspace.read_observations(tool_name="verify_segment_anchors")[0]
+            timeline = workspace.read_timeline_sorted()
+
+        self.assertIn("ORDERED_VISIBLE", backend.requests[0].prompt)
+        self.assertEqual(observation.raw_output["ordered_visible_in_window"], ["c", "a", "b"])
+        self.assertEqual([row["entity"] for row in observation.raw_output["timeline_rows"]], ["c", "a", "b"])
+        self.assertEqual([row["entity"] for row in timeline], ["c", "a", "b"])
+        self.assertLess(timeline[0]["observed_at_sec"], timeline[1]["observed_at_sec"])
+        self.assertLess(timeline[1]["observed_at_sec"], timeline[2]["observed_at_sec"])
+
     def test_verify_segment_anchors_splits_long_anchor_unions(self):
         backend = FixedTextBackend(
             json.dumps(

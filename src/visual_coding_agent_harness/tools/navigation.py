@@ -974,6 +974,12 @@ def _ordered_list_candidates(
             ordered_targets = list(list_match.get("ordered_targets", [])) if list_match else []
             if len(ordered_targets) < min(3, len(target_list)):
                 continue
+            order_source = str(list_match.get("order_source", "text"))
+            directness = "ordered_list_navigation" if order_source == "quoted_list" else "text_position_inference"
+            if order_source == "quoted_list":
+                confidence = 0.98 if len(ordered_targets) == len(target_list) else 0.82
+            else:
+                confidence = min(0.6, 0.72 + 0.02 * len(ordered_targets))
             list_start_sec = _combined_char_time(
                 int(list_match.get("start_char", 0)),
                 source_spans=piece_spans,
@@ -994,13 +1000,14 @@ def _ordered_list_candidates(
                     "start_sec": round(list_start_sec, 3),
                     "end_sec": round(max(list_start_sec, list_end_sec), 3),
                     "snippet": _detail_evidence_snippet(combined, max_chars=240),
-                    "confidence": 0.98 if len(ordered_targets) == len(target_list) else 0.82,
+                    "confidence": confidence,
                     "temporal_density": float(len(ordered_targets)),
-                    "directness": "ordered_list_navigation",
+                    "directness": directness,
                     "ordered_targets": ordered_targets,
                     "quoted_target_count": int(list_match.get("quoted_target_count", 0)),
                     "target_span_chars": int(list_match.get("target_span_chars", 0)),
-                    "list_order_source": str(list_match.get("order_source", "text")),
+                    "list_order_source": order_source,
+                    "single_sentence_quoted": bool(list_match.get("single_sentence_quoted", False)),
                 }
             )
     return _dedupe_ordered_list_candidates(candidates, target_count=len(target_list))
@@ -1008,7 +1015,7 @@ def _ordered_list_candidates(
 
 def _preferred_ordered_list_match(text: str, targets: Sequence[str]) -> Mapping[str, object] | None:
     quoted_mentions = _quoted_target_mentions(text=text, targets=targets)
-    quoted_window = _best_quoted_target_window(quoted_mentions, target_count=len(targets))
+    quoted_window = _best_quoted_target_window(quoted_mentions, text=str(text or ""), target_count=len(targets))
     if quoted_window is not None:
         return quoted_window
 
@@ -1039,6 +1046,7 @@ def _preferred_ordered_list_match(text: str, targets: Sequence[str]) -> Mapping[
 def _best_quoted_target_window(
     mentions: Sequence[Mapping[str, object]],
     *,
+    text: str,
     target_count: int,
 ) -> Mapping[str, object] | None:
     min_unique = min(3, int(target_count))
@@ -1048,6 +1056,8 @@ def _best_quoted_target_window(
     for start_index in range(len(mentions)):
         for end_index in range(start_index, len(mentions)):
             window = mentions[start_index : end_index + 1]
+            if not _quoted_window_has_list_continuity(text=text, window=window):
+                continue
             ordered_targets = _unique_ordered_targets(window)
             unique_count = len(ordered_targets)
             if unique_count < min_unique:
@@ -1064,10 +1074,19 @@ def _best_quoted_target_window(
                 "quoted_target_count": len(window),
                 "target_span_chars": span,
                 "order_source": "quoted_list",
+                "single_sentence_quoted": "." not in str(text[start_char:end_char]),
             }
             if best is None or rank < best[0]:
                 best = (rank, candidate)
     return best[1] if best is not None else None
+
+
+def _quoted_window_has_list_continuity(*, text: str, window: Sequence[Mapping[str, object]]) -> bool:
+    for left, right in zip(window, window[1:]):
+        bridge = str(text or "")[int(left.get("end", 0)) : int(right.get("start", 0))]
+        if re.search(r"[.!?]\s+", bridge):
+            return False
+    return True
 
 
 def _quoted_target_mentions(*, text: str, targets: Sequence[str]) -> list[Mapping[str, object]]:
@@ -1226,6 +1245,8 @@ def _ordered_list_timeline_rows(
     for candidate in candidates:
         if str(candidate.get("match_type", "")) != "ordered_list_mention":
             continue
+        if str(candidate.get("directness", "")) != "ordered_list_navigation":
+            continue
         ordered_targets = candidate.get("ordered_targets", [])
         if not isinstance(ordered_targets, Sequence) or isinstance(ordered_targets, (str, bytes)):
             continue
@@ -1246,9 +1267,10 @@ def _ordered_list_timeline_rows(
                     "entity": target,
                     "observed_at_sec": round(start_sec + index * step_sec, 3),
                     "window": [start_sec, end_sec],
-                    "confidence_signal": "confirmed",
+                    "confidence_signal": "text_inferred",
                     "claim": claim,
                     "grounding_quality": "indexed_transcript",
+                    "requires_visual_verification": True,
                     "source": str(candidate.get("source", "")),
                     "candidate_id": str(candidate.get("candidate_id", "")),
                 }

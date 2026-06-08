@@ -274,14 +274,8 @@ class VideoNavigationTest(unittest.TestCase):
         ])
         self.assertIn("verify_segment_anchors", raw["limitations"])
         self.assertEqual(raw["recommended_next_tools"][0]["tool"], "verify_segment_anchors")
-        self.assertEqual([row["entity"] for row in timeline_rows], [
-            "Aeneas, Anchises, and Ascanius fleeing Troy",
-            "David",
-            "The rape of Persephone",
-            "Apollo and Daphne",
-        ])
-        self.assertTrue(all(row["confidence_signal"] == "confirmed" for row in timeline_rows))
-        self.assertTrue(all(row["obs_id"] == "obs_0001" for row in timeline_rows))
+        self.assertEqual(timeline_rows, [])
+        self.assertEqual(raw["ordered_list_timeline_rows"], [])
         self.assertEqual(workspace.evidence_table_row_count(), 0)
 
     def test_ordered_list_prefers_compact_quoted_list_over_earlier_context_mention(self):
@@ -348,12 +342,75 @@ class VideoNavigationTest(unittest.TestCase):
             "The rape of Persephone",
             "Apollo and Daphne",
         ])
-        self.assertEqual([row["entity"] for row in timeline_rows], [
+        self.assertEqual(timeline_rows, [])
+        self.assertEqual([row["entity"] for row in observation.raw_output["ordered_list_timeline_rows"]], [
             "Aeneas, Anchises, and Ascanius fleeing Troy",
             "David",
             "The rape of Persephone",
             "Apollo and Daphne",
         ])
+        self.assertTrue(
+            all(row["confidence_signal"] == "text_inferred" for row in observation.raw_output["ordered_list_timeline_rows"])
+        )
+
+    def test_ordered_list_does_not_complete_list_from_earlier_context_mention(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=600.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=300.0,
+                    end_sec=600.0,
+                    low_fps_caption="Bernini and the Borghese sculptures are discussed.",
+                    asr_sentences=[
+                        {
+                            "start_sec": 497.12,
+                            "end_sec": 539.097,
+                            "text": (
+                                'The same attention to detail appears later in "Apollo and Daphne". '
+                                'Then the narration lists "Aeneas, Anchises, and Ascanius fleeing Troy", '
+                                '"David", and "The rape of Persephone".'
+                            ),
+                        },
+                    ],
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="locate_incomplete_list")
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            ProgramInterpreter(registry=registry, workspace=workspace).run(
+                [
+                    {
+                        "tool": "locate_targets_in_segment",
+                        "args": {
+                            "segment_id": "seg_0002",
+                            "targets": [
+                                "Aeneas, Anchises, and Ascanius fleeing Troy",
+                                "David",
+                                "The rape of Persephone",
+                                "Apollo and Daphne",
+                            ],
+                        },
+                    }
+                ]
+            )
+            observation = workspace.read_observations(tool_name="locate_targets_in_segment")[0]
+
+        ordered_candidates = [
+            candidate for candidate in observation.raw_output["candidates"]
+            if candidate["match_type"] == "ordered_list_mention"
+        ]
+        self.assertEqual(len(ordered_candidates), 1)
+        self.assertEqual(ordered_candidates[0]["ordered_targets"], [
+            "Aeneas, Anchises, and Ascanius fleeing Troy",
+            "David",
+            "The rape of Persephone",
+        ])
+        self.assertEqual(ordered_candidates[0]["directness"], "ordered_list_navigation")
+        self.assertLessEqual(ordered_candidates[0]["confidence"], 0.82)
 
     def test_locate_targets_in_segment_unions_explicit_targets_with_target_coverage(self):
         video_map = VideoMap(

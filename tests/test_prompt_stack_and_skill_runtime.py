@@ -118,6 +118,36 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("verify_ledger_answer(answer: str, question: str", prompt)
         self.assertNotIn("verify_ledger_answer(answer: str, ledger_text", prompt)
 
+    def test_replanning_prompt_includes_recent_tool_outputs_before_ledger(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        allocator = default_context_budget_allocator(total_budget_tokens=600)
+
+        prompt, _report = build_replanning_prompt(
+            question="What order is shown?",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\nolder claim",
+            round_number=2,
+            budget=AgentBudget(max_rounds=3),
+            allocator=allocator,
+            recent_tool_outputs=[
+                {
+                    "observation_id": "obs_0007",
+                    "tool": "locate_targets_in_segment",
+                    "claim": "Locator found candidate anchors.",
+                    "raw_output": {
+                        "anchors_for_vlm": [{"segment_id": "seg_0002", "targets": ["David"]}],
+                        "ordered_list_timeline_rows": [],
+                    },
+                }
+            ],
+        )
+
+        self.assertIn("# Recent Tool Outputs", prompt)
+        self.assertLess(prompt.index("# Recent Tool Outputs"), prompt.index("Evidence ledger:"))
+        self.assertIn("obs_0007", prompt)
+        self.assertIn("anchors_for_vlm", prompt)
+        self.assertIn("seg_0002", prompt)
+
     def test_tool_schema_filters_to_active_skill_allowed_actions(self):
         rendered = _tool_schema_block(
             option_blind=True,

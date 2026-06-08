@@ -6,6 +6,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     AgentBudget,
     IterativeVisualAgent,
     _answer_option_from_temporal_answer,
+    _blocked_final_reason,
     _exhausted_one_shot_tools,
     _sanitize_option_blind_feedback,
 )
@@ -2360,15 +2361,8 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(
-                result.answer,
-                'D. "Aeneas, Anchises, and Ascanius fleeing Troy", "David", '
-                '"The rape of Persephone" and "Apollo and Daphne".',
-            )
-            self.assertEqual(set(result.citations), {"scene_order_seg_0001", "scene_order_seg_0004"})
-            table = workspace.evidence_table_v2(question=question, options=extract_candidate_options(question))
-            self.assertGreaterEqual(len(table["groups"]["D"]), 4)
+            self.assertNotEqual(result.status, "final")
+            self.assertNotIn("timeline_temporal_order", (workspace.root / "trace.jsonl").read_text(encoding="utf-8"))
 
     def test_iterative_agent_indexes_scene_order_for_life_journey_when_planner_selects_timeline_skill(self):
         class LifeJourneyBackend(VisionLanguageBackend):
@@ -3022,11 +3016,13 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "B")
-            self.assertEqual(result.citations, ["obs_0007", "obs_0008"])
+            self.assertEqual(result.status, "need_more_evidence")
+            self.assertIn("timeline inference requires planner", result.answer)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_timeline_temporal_inference", trace)
+            self.assertNotIn("iterative_timeline_temporal_decision", trace)
 
-    def test_interactive_timeline_decides_from_ordered_asr_locator_rows(self):
+    def test_interactive_timeline_locator_rows_do_not_auto_final(self):
         video_map = VideoMap(
             video_path="/videos/bernini.mp4",
             duration_sec=600.0,
@@ -3095,11 +3091,148 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D")
-            self.assertEqual(result.citations, ["obs_0001", "obs_0001", "obs_0001", "obs_0001"])
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertNotEqual(result.answer, "D")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("iterative_timeline_temporal_decision", trace)
+            self.assertNotIn("iterative_timeline_temporal_decision", trace)
+
+    def test_confirmed_timeline_inference_is_prompt_hint_not_auto_final(self):
+        registry = ToolRegistry()
+
+        @tool(name="vision_read", description="Read visible temporal anchors.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str,
+            nframes: int = 128,
+            max_pixels: int = 151200,
+            fps: float = 0.0,
+        ):
+            observed_at = 5.0 if event_label == "light appears" else 20.0
+            return {
+                "claim": f"{event_label} is visually confirmed.",
+                "confidence": 0.92,
+                "event_label": event_label,
+                "observed_at_sec": observed_at,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(vision_read)
+        question = (
+            "In what order are the events shown in the video?\n"
+            "A. door opens, light appears\n"
+            "B. light appears, door opens"
+        )
+
+        class PendingInferenceBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.replan_prompts = []
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    self.replan_prompts.append(request.prompt)
+                    if len(self.replan_prompts) == 1:
+                        return BackendResponse(
+                            text='{"status":"continue","skill":"timeline_ordering","rationale":"verify anchors",'
+                            '"program":['
+                            '{"tool":"vision_read","args":{"video_path":"/videos/demo.mp4","segment_id":"seg_0001",'
+                            '"start_sec":0,"end_sec":10,"ask_for":"first event","event_label":"light appears"}},'
+                            '{"tool":"vision_read","args":{"video_path":"/videos/demo.mp4","segment_id":"seg_0002",'
+                            '"start_sec":15,"end_sec":25,"ask_for":"second event","event_label":"door opens"}}]}'
+                        )
+                    self.assert_pending_prompt = request.prompt
+                    return BackendResponse(
+                        text='{"status":"final","skill":"timeline_ordering","answer":"B",'
+                        '"citations":["obs_0001"],"confidence":0.8}'
+                    )
+                return BackendResponse(text='{"answer":"need_more_evidence","citations":[]}')
+
+        backend = PendingInferenceBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="pending_timeline_inference")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=SceneIndex(
+                    video_path="/videos/demo.mp4",
+                    duration_sec=30.0,
+                    segments=[
+                        VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=15.0),
+                        VideoSegment(segment_id="seg_0002", start_sec=15.0, end_sec=30.0),
+                    ],
+                ),
+                budget=AgentBudget(max_rounds=2, max_tool_calls_per_round=2, reserve_final_round=False),
+            )
+
+            result = agent.run(question=question, video_path="/videos/demo.mp4")
+
+            self.assertEqual(len(backend.replan_prompts), 2)
+            self.assertNotEqual(result.status, "final")
+            self.assertIn("# Pending Inference", backend.replan_prompts[1])
+            self.assertIn("option B", backend.replan_prompts[1])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_timeline_temporal_inference", trace)
+            self.assertNotIn("iterative_timeline_temporal_decision", trace)
+
+    def test_single_scene_final_requires_short_window_covering_targets(self):
+        question = (
+            "As depicted in the video, in what order are these works presented in a single scene?\n"
+            'A. "alpha", "beta", "gamma"\n'
+            'B. "gamma", "beta", "alpha"'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="single_scene_gate")
+            long_obs = workspace.write_observation(
+                tool_name="verify_segment_anchors",
+                claim="alpha, beta, gamma are visible but over a broad window.",
+                confidence=0.9,
+                raw_output={
+                    "grounding_quality": "visually_confirmed",
+                    "confirmations": [{"target": "alpha"}, {"target": "beta"}, {"target": "gamma"}],
+                    "ordered_visible_in_window": ["alpha", "beta", "gamma"],
+                    "verify_windows": [{"start_sec": 10.0, "end_sec": 90.0}],
+                },
+            )
+
+            blocked = _blocked_final_reason(
+                question=question,
+                has_inspect_with_candidate_options=True,
+                workspace=workspace,
+                answer="A",
+                citations=[long_obs.observation_id],
+            )
+
+            self.assertEqual(blocked, "single_scene_subwindow_vision_read_missing")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="single_scene_gate_ok")
+            short_obs = workspace.write_observation(
+                tool_name="verify_segment_anchors",
+                claim="alpha, beta, gamma are visible in one short window.",
+                confidence=0.9,
+                raw_output={
+                    "grounding_quality": "visually_confirmed",
+                    "confirmations": [{"target": "alpha"}, {"target": "beta"}, {"target": "gamma"}],
+                    "ordered_visible_in_window": ["alpha", "beta", "gamma"],
+                    "verify_windows": [{"start_sec": 10.0, "end_sec": 40.0}],
+                },
+            )
+
+            blocked = _blocked_final_reason(
+                question=question,
+                has_inspect_with_candidate_options=True,
+                workspace=workspace,
+                answer="A",
+                citations=[short_obs.observation_id],
+            )
+
+            self.assertEqual(blocked, "")
 
     def test_timeline_ordering_uses_caption_pass_before_focused_reads(self):
         registry = ToolRegistry()
@@ -3176,12 +3309,15 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.status, "need_more_evidence")
+            self.assertIn("timeline inference requires planner", result.answer)
             self.assertEqual(
                 [step["tool"] for step in result.rounds[0].program],
                 ["caption_segment", "caption_segment", "caption_segment", "vision_read", "vision_read"],
             )
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_timeline_temporal_inference", trace)
+            self.assertNotIn("iterative_timeline_temporal_decision", trace)
             self.assertNotIn("ground_question", [call[0] for call in calls])
             self.assertEqual([call[1] for call in calls if call[0] == "vision_read"], ["seg_0001", "seg_0002"])
 
@@ -3570,10 +3706,26 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "final")
             self.assertTrue(result.answer.startswith("A"))
             self.assertEqual(result.citations, ["obs_0003"])
-            self.assertEqual([call[0] for call in calls], ["search_segments", "search_segments", "vision_read"])
-            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "replan", "answer_from_evidence"])
+            self.assertEqual(
+                [call[0] for call in calls],
+                ["search_segments", "search_segments", "vision_read", "search_segments", "search_segments"],
+            )
+            self.assertEqual(
+                [request.task for request in backend.requests],
+                [
+                    "replan",
+                    "replan",
+                    "replan",
+                    "answer_from_evidence",
+                    "replan",
+                    "answer_from_evidence",
+                    "replan",
+                    "answer_from_evidence",
+                ],
+            )
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn('"source": "all_segments_inspected"', trace)
+            self.assertIn("iterative_answer_suggestion", trace)
 
     def test_model_rewritten_mcq_is_used_for_planner_and_tools_only(self):
         raw_question = (
@@ -3715,7 +3867,7 @@ class IterativeAgentTest(unittest.TestCase):
         self.assertNotIn("A. The fall of Rome", joined)
         self.assertNotIn("Why the Austro-Hungarian Empire was divided", joined)
 
-    def test_repeated_empty_program_finalizes_from_structured_evidence_before_stopping(self):
+    def test_repeated_empty_program_does_not_auto_finalize_from_structured_evidence(self):
         class ShouldNotAnswerBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 if request.task == "answer_from_evidence":
@@ -3774,10 +3926,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D. How the empire rose and fell")
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertNotIn("D. How the empire rose and fell", result.answer)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("source\": \"repeated_program_guard", trace)
+            self.assertNotIn("final_answer", trace)
 
     def test_navigation_only_no_growth_forces_visual_read_on_requested_segment(self):
         class NavThenAnswerBackend(VisionLanguageBackend):

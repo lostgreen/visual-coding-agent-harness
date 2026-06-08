@@ -377,7 +377,7 @@ def _confirmed_timeline_events(timeline: Sequence[Any]) -> list[Mapping[str, Any
     for row in timeline:
         if not isinstance(row, Mapping):
             continue
-        if str(row.get("confidence_signal", "")).strip().lower() != "confirmed":
+        if str(row.get("confidence_signal", "")).strip().lower() != "visually_confirmed":
             continue
         event = str(row.get("entity") or row.get("event_label") or "").strip()
         observed_at_sec = row.get("observed_at_sec")

@@ -64,7 +64,10 @@ def test_videomme_three_case_replay_contracts(tmp_path: Path, fixture_name: str)
         assert not (result.status == "final" and result.answer.strip().startswith("B"))
     elif fixture["case_id"] == "611-2":
         assert result.status != "max_rounds_reached"
-        assert result.status == "low_confidence_final" or result.answer.strip().startswith("D")
+        assert result.status != "final" or result.answer.strip().startswith("D")
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+        assert "iterative_timeline_temporal_decision" not in trace
+        assert "iterative_timeline_temporal_inference" in trace
     elif fixture["case_id"] == "612-1":
         assert result.status != "final" or result.answer.strip().startswith("B")
         assert not (result.status == "final" and result.answer.strip().startswith("D"))

@@ -286,11 +286,16 @@ def builtin_skill_registry() -> SkillRegistry:
                         assign="decision",
                     ),
                 ),
-                sufficiency=("every_event_has_confirmed_timestamp", "observed_order_matches_one_option"),
+                sufficiency=(
+                    "every_event_has_confirmed_timestamp",
+                    "observed_order_matches_one_option",
+                    "single_scene_subwindow_vision_read_present",
+                ),
                 verifier_checks=(
                     "temporal_order_consistent",
                     "no_unconfirmed_event_in_selected_option",
                     "selected_option_has_structured_support",
+                    "single_scene_constraint_satisfied_when_applicable",
                 ),
                 recovery={
                     "missing_event": {"action": "need_more_evidence", "target": "missing event window"},

@@ -41,6 +41,9 @@ def _exhausted_one_shot_tools(workspace: Any) -> frozenset[str]:
     )
 
 
+_ANSWER_AGENT_AUTO_FINAL_SOURCES = frozenset({"planner_final_takeover", "budget_exhausted"})
+
+
 @dataclass(frozen=True)
 class AgentBudget:
     max_rounds: int = 8
@@ -189,6 +192,7 @@ class IterativeVisualAgent:
             _program_has_inspect_with_candidate_options(round_item.program) for round_item in rounds
         )
         answer_feedback: list[str] = []
+        pending_inferences: list[str] = []
         last_round_normalization_notes: list[NormalizationNote] = []
         repeated_program_key = ""
         repeated_program_count = 0
@@ -215,10 +219,12 @@ class IterativeVisualAgent:
                 inspected_segment_ids=sorted(inspected_segment_ids),
                 final_round_reserved=final_round_reserved,
                 answer_feedback=answer_feedback,
+                pending_inferences=pending_inferences,
                 normalization_notes=last_round_normalization_notes,
                 hypothesis_text=self.workspace.read_hypothesis_text(),
                 reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
                 evidence_status_summary=evidence_status_summary,
+                recent_tool_outputs=self.workspace.recent_tool_outputs(limit=3),
                 exhausted_tools=exhausted_tools,
                 active_skill=last_selected_skill_id,
                 route=classify_question_route(raw_question),
@@ -690,42 +696,19 @@ class IterativeVisualAgent:
                 else None
             )
             if timeline_decision is not None:
-                answer = str(timeline_decision["answer"])
                 timeline_citations = [str(obs_id) for obs_id in timeline_decision["citations"]]
+                inference_hint = _timeline_decision_pending_inference(timeline_decision)
+                pending_inferences = [inference_hint]
                 self.workspace.write_trace_event(
-                    "iterative_timeline_temporal_decision",
+                    "iterative_timeline_temporal_inference",
                     {
                         "round": round_number,
-                        "answer": answer,
+                        "answer": str(timeline_decision["answer"]),
                         "citations": timeline_citations,
                         "matched_events": list(timeline_decision["matched_events"]),
                         "source": "interactive_loop",
+                        "planner_action": "hint_only",
                     },
-                )
-                rounds.append(
-                    IterativeRound(
-                        round_number=round_number,
-                        status="final",
-                        planner_text=planner_response.text,
-                        rationale=rationale,
-                        program=program,
-                        observation_ids=observation_ids,
-                    )
-                )
-                self._write_final_trace(
-                    round_number=round_number,
-                    answer=answer,
-                    citations=timeline_citations,
-                    source="timeline_temporal_order",
-                )
-                return IterativeRunResult(
-                    question=raw_question,
-                    video_path=video_path,
-                    answer=answer,
-                    status="final",
-                    citations=timeline_citations,
-                    confidence=float(timeline_decision.get("confidence", 0.9) or 0.9),
-                    rounds=rounds,
                 )
             current_evidence_table_row_count = self.workspace.evidence_table_row_count()
             if current_evidence_table_row_count <= last_evidence_table_row_count:
@@ -980,6 +963,19 @@ class IterativeVisualAgent:
                     "reason": blocked_reason,
                     "answer": answer_result.answer,
                     "citations": list(answer_result.citations),
+                },
+            )
+            return None
+        if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES:
+            self.workspace.write_trace_event(
+                "iterative_answer_suggestion",
+                {
+                    "round": round_number,
+                    "source": source,
+                    "answer": answer_result.answer,
+                    "citations": list(answer_result.citations),
+                    "confidence": answer_result.confidence,
+                    "recommended_to_planner": True,
                 },
             )
             return None
@@ -2315,41 +2311,17 @@ class IterativeVisualAgent:
                 else None
             )
             if timeline_decision is not None:
-                answer = str(timeline_decision["answer"])
                 citations = [str(obs_id) for obs_id in timeline_decision["citations"]]
                 self.workspace.write_trace_event(
-                    "iterative_timeline_temporal_decision",
+                    "iterative_timeline_temporal_inference",
                     {
                         "round": round_number,
-                        "answer": answer,
+                        "answer": str(timeline_decision["answer"]),
                         "citations": citations,
                         "matched_events": list(timeline_decision["matched_events"]),
+                        "source": "hard_skill_followup",
+                        "planner_action": "hint_only",
                     },
-                )
-                self._write_final_trace(
-                    round_number=round_number,
-                    answer=answer,
-                    citations=citations,
-                    source="timeline_temporal_order",
-                )
-                return IterativeRunResult(
-                    question=question,
-                    video_path=video_path,
-                    answer=answer,
-                    status="final",
-                    citations=citations,
-                    confidence=float(timeline_decision["confidence"]),
-                    rounds=[
-                        *rounds,
-                        IterativeRound(
-                            round_number=round_number,
-                            status="final",
-                            planner_text="",
-                            rationale=str(timeline_decision["rationale"]),
-                            program=program,
-                            observation_ids=round_observation_ids,
-                        ),
-                    ],
                 )
 
             table = self._answer_evidence_table(question)
@@ -2572,37 +2544,31 @@ class IterativeVisualAgent:
             timeline=self.workspace.read_timeline_sorted(),
         )
         if timeline_decision is not None:
-            answer = str(timeline_decision["answer"])
             citations = [str(obs_id) for obs_id in timeline_decision["citations"]]
             self.workspace.write_trace_event(
-                "iterative_timeline_temporal_decision",
+                "iterative_timeline_temporal_inference",
                 {
                     "round": 1,
-                    "answer": answer,
+                    "answer": str(timeline_decision["answer"]),
                     "citations": citations,
                     "matched_events": list(timeline_decision["matched_events"]),
                     "source": "timeline_ordering",
+                    "planner_action": "hint_only",
                 },
-            )
-            self._write_final_trace(
-                round_number=1,
-                answer=answer,
-                citations=citations,
-                source="timeline_ordering",
             )
             return IterativeRunResult(
                 question=question,
                 video_path=video_path,
-                answer=answer,
-                status="final",
+                answer="need_more_evidence: timeline inference requires planner or AnswerAgent confirmation",
+                status="need_more_evidence",
                 citations=citations,
-                confidence=float(timeline_decision["confidence"]),
+                confidence=0.0,
                 rounds=[
                     IterativeRound(
                         round_number=1,
-                        status="final",
+                        status="need_more_evidence",
                         planner_text="",
-                        rationale=str(timeline_decision["rationale"]),
+                        rationale=_timeline_decision_pending_inference(timeline_decision),
                         program=program,
                         observation_ids=observation_ids,
                     )
@@ -2945,7 +2911,90 @@ def _blocked_final_reason(
         return "mcq_final_requires_local_visual_read"
     if not workspace.has_non_navigation_visual_citation(citations):
         return "final_requires_non_navigation_visual_evidence"
+    single_scene_reason = _single_scene_subwindow_final_reason(
+        question=question,
+        workspace=workspace,
+        citations=citations,
+    )
+    if single_scene_reason:
+        return single_scene_reason
     return ""
+
+
+def _single_scene_subwindow_final_reason(
+    *,
+    question: str,
+    workspace: EvidenceWorkspace,
+    citations: Sequence[str],
+) -> str:
+    if not re.search(r"\b(single scene|one scene|same scene|single shot|one shot)\b", question, flags=re.IGNORECASE):
+        return ""
+    targets = _temporal_events_from_question(question, max_events=8)
+    if len(targets) < 2:
+        return ""
+    cited = {str(citation) for citation in citations if str(citation)}
+    for observation in workspace.read_observations():
+        if cited and observation.observation_id not in cited:
+            continue
+        if observation.tool not in {"verify_segment_anchors", "vision_read"}:
+            continue
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        if not _observation_has_short_single_scene_window(raw_output):
+            continue
+        observed_targets = _observation_confirmed_targets(raw_output)
+        if _targets_cover_expected(observed_targets, targets):
+            return ""
+    return "single_scene_subwindow_vision_read_missing"
+
+
+def _observation_has_short_single_scene_window(raw_output: Mapping[str, Any], *, max_window_sec: float = 60.0) -> bool:
+    verify_windows = raw_output.get("verify_windows", [])
+    if isinstance(verify_windows, Sequence) and not isinstance(verify_windows, (str, bytes)):
+        for window in verify_windows:
+            if isinstance(window, Mapping) and _window_duration(window.get("start_sec"), window.get("end_sec")) < max_window_sec:
+                return True
+    return _window_duration(raw_output.get("start_sec"), raw_output.get("end_sec")) < max_window_sec
+
+
+def _window_duration(start_value: Any, end_value: Any) -> float:
+    try:
+        start = float(start_value)
+        end = float(end_value)
+    except (TypeError, ValueError):
+        return float("inf")
+    return max(0.0, end - start)
+
+
+def _observation_confirmed_targets(raw_output: Mapping[str, Any]) -> list[str]:
+    targets: list[str] = []
+    for key in ("ordered_visible_in_window", "ordered_visible"):
+        values = raw_output.get(key, [])
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+            targets.extend(str(value).strip() for value in values if str(value).strip())
+    confirmations = raw_output.get("confirmations", [])
+    if isinstance(confirmations, Sequence) and not isinstance(confirmations, (str, bytes)):
+        for confirmation in confirmations:
+            if isinstance(confirmation, Mapping):
+                target = str(confirmation.get("target", "")).strip()
+                if target:
+                    targets.append(target)
+    for key in ("event_label", "entity"):
+        value = str(raw_output.get(key, "")).strip()
+        if value:
+            targets.append(value)
+    return targets
+
+
+def _targets_cover_expected(observed_targets: Sequence[str], expected_targets: Sequence[str]) -> bool:
+    observed_keys = [_target_fact_key(target) for target in observed_targets if _target_fact_key(target)]
+    for expected in expected_targets:
+        expected_key = _target_fact_key(expected)
+        if not expected_key:
+            continue
+        expected_tokens = set(expected_key.split())
+        if not any(expected_tokens.issubset(set(observed_key.split())) or set(observed_key.split()).issubset(expected_tokens) for observed_key in observed_keys):
+            return False
+    return True
 
 
 def _blocked_planner_final_reason(
@@ -3527,6 +3576,7 @@ def _reflection_rule_for_failure(failure_tag: str) -> str:
         "no_decisive_weak_grounding": "upgrade weak or inferred support to visually_confirmed evidence before finalizing",
         "no_unaddressed_conflict": "resolve stronger conflicting option support before finalizing",
         "temporal_order_requires_confirmed_event_timestamps": "confirm every event timestamp before comparing option sequence",
+        "single_scene_subwindow_vision_read_missing": "for single-scene order questions, run verify_segment_anchors or vision_read on one <60s window covering all target items before finalizing",
         "grounding_quality_floor": "collect at least one visually_confirmed mapped evidence chain before finalizing",
     }
     return rules.get(str(failure_tag), "request targeted evidence before finalizing")
@@ -3900,12 +3950,34 @@ def _timeline_temporal_decision(
     return candidates[0]
 
 
+def _timeline_decision_pending_inference(decision: Mapping[str, Any]) -> str:
+    answer = str(decision.get("answer", "")).strip()
+    matched_events = decision.get("matched_events", [])
+    event_bits = []
+    if isinstance(matched_events, Sequence) and not isinstance(matched_events, (str, bytes)):
+        for item in list(matched_events)[:6]:
+            if not isinstance(item, Mapping):
+                continue
+            expected = str(item.get("expected") or item.get("observed") or "").strip()
+            start_sec = item.get("start_sec")
+            if expected and start_sec is not None:
+                event_bits.append(f"{expected} @ {float(start_sec):.3f}s")
+            elif expected:
+                event_bits.append(expected)
+    evidence_summary = " -> ".join(event_bits) if event_bits else "timeline rows match one option"
+    return (
+        f"Timeline heuristic finds option {answer} is consistent with confirmed timeline rows: "
+        f"{evidence_summary}. This is a pending inference, not an automatic final; decide whether to "
+        "finalize with citations or gather more visual evidence."
+    )
+
+
 def _confirmed_timeline_rows(timeline: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
     confirmed = [
         row
         for row in timeline
         if isinstance(row, Mapping)
-        and str(row.get("confidence_signal", "")).strip().lower() == "confirmed"
+        and str(row.get("confidence_signal", "")).strip().lower() == "visually_confirmed"
         and row.get("observed_at_sec") is not None
     ]
     return sorted(

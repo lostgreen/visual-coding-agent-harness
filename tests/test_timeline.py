@@ -35,7 +35,7 @@ def test_timeline_auto_appended_from_vision_read(tmp_path: Path):
             "entity": "door opens",
             "observed_at_sec": 12.3,
             "window": [10.0, 15.0],
-            "confidence_signal": "confirmed",
+            "confidence_signal": "visually_confirmed",
             "claim": "The door opens at 12.3 seconds.",
         }
     ]
@@ -120,13 +120,13 @@ def test_temporal_predicate_uses_only_confirmed_timeline_entries():
                 "obs_id": "obs_door",
                 "entity": "door opens",
                 "observed_at_sec": 20.0,
-                "confidence_signal": "confirmed",
+                "confidence_signal": "visually_confirmed",
             },
             {
                 "obs_id": "obs_light",
                 "entity": "light turns on",
                 "observed_at_sec": 5.0,
-                "confidence_signal": "confirmed",
+                "confidence_signal": "visually_confirmed",
             },
             {
                 "obs_id": "obs_noise",
@@ -161,13 +161,13 @@ def test_verify_ledger_answer_temporal_gate_reads_timeline(tmp_path: Path):
         obs_id="obs_light",
         entity="light turns on",
         observed_at_sec=5.0,
-        confidence_signal="confirmed",
+        confidence_signal="visually_confirmed",
     )
     workspace.append_to_timeline(
         obs_id="obs_door",
         entity="door opens",
         observed_at_sec=20.0,
-        confidence_signal="confirmed",
+        confidence_signal="visually_confirmed",
     )
     registry = build_verification_registry(workspace=workspace)
 

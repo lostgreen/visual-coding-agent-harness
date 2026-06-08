@@ -175,6 +175,7 @@ def build_segment_inspector_registry(
         confirmations: list[dict[str, object]] = []
         rejections: list[dict[str, object]] = []
         timeline_rows: list[dict[str, object]] = []
+        ordered_visible_in_window: list[str] = []
         verify_windows: list[dict[str, object]] = []
         for anchor_group in anchor_groups:
             window_start, window_end = _anchor_union_window(
@@ -213,6 +214,14 @@ def build_segment_inspector_registry(
             raw_results.append(raw_result)
             parsed = _parse_anchor_verification(raw_result.get("claim", ""))
             group_confirmations = parsed["confirmations"]
+            group_ordered_visible = [
+                str(item).strip()
+                for item in parsed.get("ordered_visible_in_window", [])
+                if str(item).strip()
+            ]
+            ordered_visible_in_window.extend(
+                item for item in group_ordered_visible if item not in ordered_visible_in_window
+            )
             confirmations.extend(group_confirmations)
             rejections.extend(parsed["rejections"])
             timeline_rows.extend(
@@ -220,6 +229,7 @@ def build_segment_inspector_registry(
                     confirmations=group_confirmations,
                     segment_id=segment_id,
                     fallback_window=[window_start, window_end],
+                    ordered_visible=group_ordered_visible,
                 )
             )
             verify_windows.append(
@@ -270,6 +280,7 @@ def build_segment_inspector_registry(
                 "confirmations": confirmations,
                 "rejections": rejections,
                 "timeline_rows": timeline_rows,
+                "ordered_visible_in_window": ordered_visible_in_window,
                 "anchors": anchor_list,
                 "targets": list(targets),
                 "verify_windows": verify_windows,
@@ -462,6 +473,7 @@ def _verify_segment_anchors_prompt(
         "Return JSON only with keys confirmations and rejections.",
         "Each confirmation should include target, relative_sec if possible, observed_at_sec if possible, and evidence.",
         "Each rejection should include target and reason.",
+        "After JSON, add ORDERED_VISIBLE: item1 -> item2 -> item3 using only confirmed visible targets in first-visible order.",
         "Use relative seconds within each anchor when possible; do not choose or compare multiple-choice options.",
         f"Segment: {segment_id}",
     ]
@@ -560,14 +572,38 @@ def _anchor_group_targets(anchors: Sequence[Mapping[str, object]]) -> list[str]:
     return targets
 
 
-def _parse_anchor_verification(text: object) -> dict[str, list[dict[str, object]]]:
-    parsed = _json_object_from_text(str(text or ""))
+def _parse_anchor_verification(text: object) -> dict[str, object]:
+    raw_text = str(text or "")
+    parsed = _json_object_from_text(raw_text)
     confirmations = parsed.get("confirmations", []) if isinstance(parsed, Mapping) else []
     rejections = parsed.get("rejections", []) if isinstance(parsed, Mapping) else []
+    ordered_visible = _ordered_visible_from_verification_text(raw_text, parsed)
     return {
         "confirmations": [dict(item) for item in confirmations if isinstance(item, Mapping)],
         "rejections": [dict(item) for item in rejections if isinstance(item, Mapping)],
+        "ordered_visible_in_window": ordered_visible,
     }
+
+
+def _ordered_visible_from_verification_text(text: str, parsed: Mapping[str, object]) -> list[str]:
+    for key in ("ordered_visible_in_window", "ordered_visible", "ORDERED_VISIBLE"):
+        value = parsed.get(key) if isinstance(parsed, Mapping) else None
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return _split_ordered_visible_items(value)
+    match = re.search(r"ORDERED_VISIBLE\s*:\s*(.+)", str(text or ""), flags=re.IGNORECASE)
+    if not match:
+        return []
+    return _split_ordered_visible_items(match.group(1))
+
+
+def _split_ordered_visible_items(value: str) -> list[str]:
+    return [
+        item.strip().strip("\"'")
+        for item in re.split(r"\s*(?:->|→|,|;)\s*", str(value or "").strip())
+        if item.strip().strip("\"'")
+    ]
 
 
 def _json_object_from_text(text: str) -> Mapping[str, object]:
@@ -594,9 +630,24 @@ def _timeline_rows_from_confirmations(
     confirmations: Sequence[Mapping[str, object]],
     segment_id: str,
     fallback_window: Sequence[float],
+    ordered_visible: Sequence[str] = (),
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for confirmation in confirmations:
+    ordered_keys = [_target_order_key(target) for target in ordered_visible if str(target).strip()]
+    ordered_rank = {key: index for index, key in enumerate(ordered_keys)}
+    ordered_confirmations = sorted(
+        list(confirmations),
+        key=lambda confirmation: (
+            ordered_rank.get(_target_order_key(str(confirmation.get("target", ""))), len(ordered_rank)),
+            _optional_float(confirmation.get("observed_at_sec"))
+            if _optional_float(confirmation.get("observed_at_sec")) is not None
+            else float("inf"),
+        ),
+    )
+    start = float(fallback_window[0]) if len(fallback_window) >= 2 else 0.0
+    end = float(fallback_window[1]) if len(fallback_window) >= 2 else start
+    step = max(0.001, (end - start) / max(1, len(ordered_confirmations) - 1)) if ordered_confirmations else 0.001
+    for index, confirmation in enumerate(ordered_confirmations):
         target = str(confirmation.get("target", "")).strip()
         if not target:
             continue
@@ -605,6 +656,8 @@ def _timeline_rows_from_confirmations(
             relative = _optional_float(confirmation.get("relative_sec"))
             if relative is not None and fallback_window:
                 observed_at = float(fallback_window[0]) + relative
+        if observed_at is None and ordered_keys:
+            observed_at = start + index * step
         rows.append(
             {
                 "segment_id": segment_id,
@@ -616,6 +669,10 @@ def _timeline_rows_from_confirmations(
             }
         )
     return rows
+
+
+def _target_order_key(value: str) -> str:
+    return re.sub(r"\W+", " ", str(value or "").lower()).strip()
 
 
 def _optional_float(value: object) -> float | None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -84,10 +85,12 @@ def build_replanning_prompt(
     tool_class_counts: Mapping[str, int] | None = None,
     final_round_reserved: bool = False,
     answer_feedback: Sequence[str] = (),
+    pending_inferences: Sequence[str] = (),
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
+    recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
     exhausted_tools: frozenset[str] | None = None,
     active_skill: str | None = None,
     route: str | None = None,
@@ -102,10 +105,12 @@ def build_replanning_prompt(
         inspected_segment_ids=inspected_segment_ids,
         final_round_reserved=final_round_reserved,
         answer_feedback=answer_feedback,
+        pending_inferences=pending_inferences,
         normalization_notes=normalization_notes,
         hypothesis_text=hypothesis_text,
         reflection_memory=reflection_memory,
         evidence_status_summary=evidence_status_summary,
+        recent_tool_outputs=recent_tool_outputs,
         exhausted_tools=exhausted_tools,
         active_skill=active_skill,
         route=route,
@@ -132,10 +137,12 @@ def compose_replanning_prompt_slots(
     tool_class_counts: Mapping[str, int] | None = None,
     final_round_reserved: bool = False,
     answer_feedback: Sequence[str] = (),
+    pending_inferences: Sequence[str] = (),
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
+    recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
     exhausted_tools: frozenset[str] | None = None,
     active_skill: str | None = None,
     route: str | None = None,
@@ -207,6 +214,9 @@ def compose_replanning_prompt_slots(
     evidence_body = "# Evidence Snapshot\n"
     if evidence_status_text:
         evidence_body += evidence_status_text + "\n"
+    recent_outputs_text = _recent_tool_outputs_block(recent_tool_outputs)
+    if recent_outputs_text:
+        evidence_body += recent_outputs_text + "\n"
     evidence_body += "Evidence ledger:\n" + (ledger_text or "(none)")
     return {
         "task": render_prompt_blocks(task_blocks),
@@ -225,6 +235,7 @@ def compose_replanning_prompt_slots(
         ),
         "feedback": _feedback_slot(
             answer_feedback=answer_feedback,
+            pending_inferences=pending_inferences,
             normalization_notes=normalization_notes,
             reflection_memory=reflection_memory,
         ),
@@ -578,10 +589,19 @@ def _budget_snapshot_block(
 def _feedback_slot(
     *,
     answer_feedback: Sequence[str],
+    pending_inferences: Sequence[str] = (),
     normalization_notes: Sequence[Any],
     reflection_memory: Sequence[str],
 ) -> str:
     blocks = []
+    if pending_inferences:
+        blocks.append(
+            PromptBlock(
+                name="pending_inference",
+                title="Pending Inference",
+                body="\n".join(f"- {item}" for item in pending_inferences[:3]),
+            ).render()
+        )
     if normalization_notes:
         blocks.append(
             PromptBlock(
@@ -610,6 +630,27 @@ def _feedback_slot(
             ).render()
         )
     return "\n".join(blocks).strip() or "(none)"
+
+
+def _recent_tool_outputs_block(outputs: Sequence[Mapping[str, Any]]) -> str:
+    if not outputs:
+        return ""
+    lines = ["# Recent Tool Outputs"]
+    for output in list(outputs)[-3:]:
+        if not isinstance(output, Mapping):
+            continue
+        obs_id = str(output.get("observation_id", "")).strip()
+        tool_name = str(output.get("tool", "")).strip()
+        claim = str(output.get("claim", "")).strip()
+        title = f"## {obs_id or '(unknown obs)'} | {tool_name or '(unknown tool)'}"
+        lines.append(title)
+        if claim:
+            lines.append(f"claim: {claim}")
+        raw_output = output.get("raw_output", {})
+        if raw_output:
+            lines.append("raw_output:")
+            lines.append(json.dumps(raw_output, ensure_ascii=True, sort_keys=True, indent=2))
+    return "\n".join(lines).strip()
 
 
 def _normalization_notes_body(notes: Sequence[Any]) -> str:

@@ -488,14 +488,72 @@ class EvidenceWorkspace:
             handle.write(f"- {json.dumps(row, ensure_ascii=True, sort_keys=True)}\n")
         return row
 
+    def append_to_timeline_candidate(
+        self,
+        *,
+        obs_id: str,
+        entity: str,
+        observed_at_sec: float | None = None,
+        window: Sequence[float] | None = None,
+        confidence_signal: str = "",
+        claim: str = "",
+        grounding_quality: str = "",
+        requires_visual_verification: bool = False,
+        source: str = "",
+        candidate_id: str = "",
+    ) -> dict[str, Any]:
+        row = _normalize_timeline_row(
+            {
+                "obs_id": obs_id,
+                "entity": entity,
+                "observed_at_sec": observed_at_sec,
+                "window": window,
+                "confidence_signal": confidence_signal,
+                "claim": claim,
+                "grounding_quality": grounding_quality,
+                "requires_visual_verification": requires_visual_verification,
+                "source": source,
+                "candidate_id": candidate_id,
+            }
+        )
+        candidate_path = self.root / "timeline_candidates.md"
+        if not candidate_path.exists():
+            candidate_path.write_text("# Timeline Candidates\n\n", encoding="utf-8")
+        with candidate_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"- {json.dumps(row, ensure_ascii=True, sort_keys=True)}\n")
+        return row
+
     def append_timeline_from_observation(self, observation: Observation) -> dict[str, Any] | None:
-        if observation.tool in {"verify_segment_anchors", "locate_targets_in_segment"}:
+        if observation.tool == "locate_targets_in_segment":
             raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
-            rows = (
-                raw_output.get("ordered_list_timeline_rows", [])
-                if observation.tool == "locate_targets_in_segment"
-                else raw_output.get("timeline_rows", [])
-            )
+            rows = raw_output.get("ordered_list_timeline_rows", [])
+            appended = []
+            if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
+                for row in rows:
+                    if not isinstance(row, Mapping):
+                        continue
+                    appended.append(
+                        self.append_to_timeline_candidate(
+                            obs_id=observation.observation_id,
+                            entity=str(row.get("entity", "")),
+                            observed_at_sec=(
+                                None
+                                if row.get("observed_at_sec") is None
+                                else float(row.get("observed_at_sec", 0.0) or 0.0)
+                            ),
+                            window=row.get("window", []),
+                            confidence_signal=str(row.get("confidence_signal", "") or observation.confidence_signal),
+                            claim=str(row.get("claim", "") or observation.claim),
+                            grounding_quality=str(row.get("grounding_quality", "")),
+                            requires_visual_verification=bool(row.get("requires_visual_verification", False)),
+                            source=str(row.get("source", "")),
+                            candidate_id=str(row.get("candidate_id", "")),
+                        )
+                    )
+            return appended[0] if appended else None
+        if observation.tool == "verify_segment_anchors":
+            raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+            rows = raw_output.get("timeline_rows", [])
             appended = []
             if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
                 for row in rows:
@@ -668,6 +726,23 @@ class EvidenceWorkspace:
         if tool_name is None:
             return observations
         return [observation for observation in observations if observation.tool == str(tool_name)]
+
+    def recent_tool_outputs(self, *, limit: int = 3) -> list[dict[str, Any]]:
+        """Return recent observation payloads for verbatim-safe planner feedback."""
+
+        selected = self.read_observations()[-max(0, int(limit or 0)) :]
+        outputs: list[dict[str, Any]] = []
+        for observation in selected:
+            outputs.append(
+                {
+                    "observation_id": observation.observation_id,
+                    "tool": observation.tool,
+                    "claim": observation.claim,
+                    "confidence": observation.confidence,
+                    "raw_output": _compact_recent_tool_payload(observation.raw_output),
+                }
+            )
+        return outputs
 
     def read_evidence_table_v3(
         self,
@@ -2056,7 +2131,29 @@ def _normalize_timeline_row(row: Mapping[str, Any]) -> dict[str, Any]:
     }
     if not payload["confidence_signal"]:
         payload["confidence_signal"] = "confirmed" if observed_at_sec is not None else "window_only"
+    for field in ("grounding_quality", "source", "candidate_id", "segment_id"):
+        value = row.get(field)
+        if value not in (None, ""):
+            payload[field] = str(value)
+    if row.get("requires_visual_verification") is not None:
+        payload["requires_visual_verification"] = bool(row.get("requires_visual_verification"))
     return payload
+
+
+def _compact_recent_tool_payload(value: Any, *, max_string_chars: int = 500, max_items: int = 8) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _compact_recent_tool_payload(item, max_string_chars=max_string_chars, max_items=max_items)
+            for key, item in list(value.items())[:max_items]
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [
+            _compact_recent_tool_payload(item, max_string_chars=max_string_chars, max_items=max_items)
+            for item in list(value)[:max_items]
+        ]
+    if isinstance(value, str) and len(value) > max_string_chars:
+        return value[:max_string_chars] + f"... [truncated {len(value) - max_string_chars} chars]"
+    return value
 
 
 def _normalize_hypothesis_slots(slots: Mapping[str, Any]) -> dict[str, dict[str, str]]:
@@ -2113,6 +2210,8 @@ def _timeline_confidence_signal(
     grounding_quality = str(raw_output.get("grounding_quality", "")).strip().lower()
     if grounding_quality in {"weak", "inferred", "external_knowledge"}:
         return "unsupported"
+    if grounding_quality == "visually_confirmed" and observed_at_sec is not None:
+        return "visually_confirmed"
     return "confirmed" if observed_at_sec is not None else "window_only"
 
 

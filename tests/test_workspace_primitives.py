@@ -51,3 +51,25 @@ def test_workspace_primitives_return_deterministic_results(tmp_path: Path):
     assert hypothesis_before["regions"][0]["slots"]["slot_door"]["status"] == "empty"
     assert updated["regions"][0]["slot"]["status"] == "satisfied"
     assert hypothesis_after["regions"][0]["slots"]["slot_door"]["status"] == "satisfied"
+
+
+def test_recent_tool_outputs_returns_latest_three_with_raw_payload(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "recent_tool_outputs")
+    for index in range(4):
+        workspace.write_observation(
+            tool_name="vision_read",
+            claim=f"Observation {index}.",
+            confidence=0.7 + index / 10,
+            raw_output={
+                "visual_caption": f"caption {index}",
+                "anchors_for_vlm": [{"segment_id": f"seg_{index:04d}"}],
+                "long_field": "x" * 1200,
+            },
+        )
+
+    outputs = workspace.recent_tool_outputs(limit=3)
+
+    assert [item["observation_id"] for item in outputs] == ["obs_0002", "obs_0003", "obs_0004"]
+    assert outputs[-1]["raw_output"]["visual_caption"] == "caption 3"
+    assert outputs[-1]["raw_output"]["anchors_for_vlm"] == [{"segment_id": "seg_0003"}]
+    assert len(outputs[-1]["raw_output"]["long_field"]) < 1200
