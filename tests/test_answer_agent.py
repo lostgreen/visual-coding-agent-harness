@@ -102,7 +102,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.status, "final")
         self.assertEqual(result.answer, "D. Aeneas, David, Persephone, Apollo and Daphne")
 
-    def test_answer_agent_falls_back_to_main_idea_unassigned_evidence_after_parse_failure(self):
+    def test_answer_agent_does_not_map_unassigned_evidence_after_parse_failure(self):
         backend = StaticBackend("I think D because the whole video covers the empire.")
         table = {
             "options": [
@@ -142,12 +142,11 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
             evidence_table=table,
         )
 
-        self.assertEqual(result.status, "final")
-        self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rises and falls")
-        self.assertTrue(result.citations)
-        self.assertEqual(result.conflict["source"], "fallback_main_idea_unassigned_evidence")
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertFalse(result.answer)
+        self.assertFalse(result.citations)
 
-    def test_answer_agent_falls_back_to_main_idea_unassigned_evidence_after_abstain(self):
+    def test_answer_agent_preserves_abstain_without_unassigned_option_mapping(self):
         backend = StaticBackend(
             '{"answer": "need_more_evidence", "rationale": "Need explicit option mapping.", '
             '"citations": [], "missing_evidence": ["more explicit theme"], "confidence": 0.0}'
@@ -190,10 +189,9 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
             evidence_table=table,
         )
 
-        self.assertEqual(result.status, "final")
-        self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rises and falls")
-        self.assertTrue(result.citations)
-        self.assertEqual(result.conflict["source"], "fallback_main_idea_unassigned_evidence")
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertEqual(result.answer, "need_more_evidence")
+        self.assertFalse(result.citations)
 
     def test_arbitration_prefers_visually_grounded_support_over_weak_caption(self):
         table = {
@@ -416,7 +414,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rose and fell")
         self.assertEqual(set(result.citations), {"obs_0003", "obs_0006"})
         self.assertEqual(result.conflict["winner"], "D")
-        self.assertIn("coverage", result.rationale)
+        self.assertIn("strongest weighted support", result.rationale)
 
     def test_mutex_conflict_blocks_final(self):
         table = {

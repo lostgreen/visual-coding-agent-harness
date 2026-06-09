@@ -142,22 +142,6 @@ def build_segment_inspector_registry(
                         fact["grounding_quality"] = "weak"
         if mutex_group_id:
             result["mutex_group_id"] = str(mutex_group_id)
-        if mutex_prompt:
-            supported_option = _mutex_supported_option(
-                str(result.get("claim", "")),
-                option_x=mutex_option_x or "X",
-                option_y=mutex_option_y or "Y",
-            )
-            result["supported_option"] = supported_option
-            if supported_option:
-                result["candidate_option_relations"] = [
-                    {
-                        "option": supported_option,
-                        "relation": "support",
-                        "strength": float(result.get("confidence", 0.0) or 0.0),
-                        "assigned_by": "vision_read_mutex",
-                    }
-                ]
         return result
 
     @tool(name="verify_segment_anchors", description="Verify text-located target anchors with a focused visual read.")
@@ -383,7 +367,6 @@ def _run_inspector(
     limitations = (
         "Inspector distilled one localized observation; intermediate visual reasoning stays outside the main context."
     )
-
     if extract_clips:
         if workspace is None:
             raise ValueError("extract_clips=True requires an EvidenceWorkspace")
@@ -792,14 +775,3 @@ def _mutex_read_prompt(
         "Do not use outside video context or external knowledge.\n"
         f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]"
     )
-
-
-def _mutex_supported_option(claim: str, *, option_x: str, option_y: str) -> str:
-    text = str(claim).strip()
-    if re.search(r"\bneither\b", text, flags=re.IGNORECASE):
-        return ""
-    for option in (option_x, option_y):
-        normalized = str(option).strip().upper()[:1]
-        if normalized and re.match(rf"\s*(?:option\s+)?{re.escape(normalized)}\b", text, flags=re.IGNORECASE):
-            return normalized
-    return ""

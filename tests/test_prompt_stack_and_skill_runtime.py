@@ -419,10 +419,10 @@ The prose says recovery_rules: this sentence must not define metadata.
 
         self.assertEqual(_semantic_question_text(wrapped), "How was his life journey according to the video?")
         targets = _skill_target_facts(question=wrapped, skill_name="grounded_factual_qa")
-        self.assertIn("humble background", targets)
-        self.assertIn("upper class", targets)
-        self.assertIn("seclusion", targets)
-        self.assertIn("farmhouse", targets)
+        self.assertIn("Borned with humble background and lived in seclusion in a farmhouse", targets)
+        self.assertIn("Borned with a humble background", targets)
+        self.assertIn("entered the upper class", targets)
+        self.assertIn("lived in seclusion in a farmhouse", targets)
         self.assertTrue(all("VideoMME" not in target for target in targets))
         self.assertEqual(
             _skill_target_facts(question=temporal, skill_name="timeline_ordering"),

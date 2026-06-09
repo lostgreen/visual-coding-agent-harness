@@ -12,7 +12,6 @@ from ..contracts import (
     ClaimRelation,
     TargetSpec,
     build_ordered_transcript_sequence,
-    ordered_sequence_exact_option,
 )
 from ..registry import ToolError, ToolRegistry, tool
 from ..video_map import VideoMap, VideoMapSegment, VideoMapStore
@@ -966,11 +965,10 @@ def _answer_evidence_rows_from_indexed_detail(
                 rows.append(
                     _indexed_asr_evidence_row(
                         segment=segment,
-                        option=option,
                         target=" -> ".join(ordered_targets[:6]),
                         match=sequence[-1],
                         claim=(
-                            f"Indexed ASR in {segment.segment_id} presents option {option} target sequence in order: "
+                            f"Indexed ASR in {segment.segment_id} presents a target sequence in order: "
                             + " -> ".join(ordered_targets[:6])
                         ),
                         confidence=0.9,
@@ -984,7 +982,6 @@ def _answer_evidence_rows_from_indexed_detail(
             rows.append(
                 _indexed_asr_evidence_row(
                     segment=segment,
-                    option=option,
                     target=target,
                     match=match,
                     claim=(
@@ -1017,12 +1014,6 @@ def _answer_evidence_rows_from_bound_targets(
     supported_relations = [
         relation for relation in relation_payloads if str(relation.get("status", "")).lower() == "supported"
     ]
-    option_relations = _supported_option_relations_from_bindings(
-        targets=targets,
-        relations=relations,
-        supported_relations=supported_relations,
-        workspace=workspace,
-    )
     rows: list[Mapping[str, object]] = []
     for binding in result.evidence_bindings:
         if binding.status != "supported":
@@ -1052,7 +1043,6 @@ def _answer_evidence_rows_from_bound_targets(
                 ),
                 "confidence": 0.88,
                 "grounding_quality": "indexed_transcript",
-                "candidate_option_relations": option_relations,
                 "confidence_signal": "explicit transcript binding",
                 "limitations": "Conservative transcript binding over indexed ASR; no model-level semantic inference.",
                 "source": binding.source,
@@ -1107,9 +1097,7 @@ def _ordered_transcript_answer_evidence_rows(
     targets: Sequence[TargetSpec],
     workspace: EvidenceWorkspace | None,
 ) -> list[Mapping[str, object]]:
-    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
-    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
-    if not targets or not isinstance(options_by_id, Mapping) or not options_by_id:
+    if not targets:
         return []
     sequence = build_ordered_transcript_sequence(
         text=segment.asr_text,
@@ -1120,8 +1108,7 @@ def _ordered_transcript_answer_evidence_rows(
     )
     if sequence is None:
         return []
-    option = ordered_sequence_exact_option(sequence, options_by_id)
-    if sequence.status != "supported" or not option:
+    if sequence.status != "supported":
         return []
     sequence_payload = sequence.to_dict()
     target_refs = list(sequence.ordered_target_refs)
@@ -1135,25 +1122,22 @@ def _ordered_transcript_answer_evidence_rows(
             "event_label": "ordered_transcript_sequence",
             "claim": (
                 f"Indexed transcript in {segment.segment_id} gives a complete contiguous ordered list "
-                f"that maps exactly to option {option}: " + " -> ".join(target_refs)
+                "over target refs: " + " -> ".join(target_refs)
             ),
             "confidence": sequence.confidence,
             "grounding_quality": "indexed_transcript",
-            "supported_option": option,
-            "candidate_option_relations": [
-                {
-                    "option": option,
-                    "relation": "support",
-                    "strength": sequence.confidence,
-                    "assigned_by": "ordered_transcript_sequence",
-                    "required_target_sequence": target_refs,
-                }
-            ],
             "confidence_signal": "complete contiguous transcript ordered list",
             "limitations": "Order is derived from ASR text position in one contiguous enumeration; visual corroboration is optional unless explicitly required.",
             "source": sequence.source,
             "snippet": sequence.snippet,
             "ordered_transcript_sequence": sequence_payload,
+            "sequence_binding": {
+                "evidence_id": evidence_id,
+                "status": "supported",
+                "source": sequence.source,
+                "snippet": sequence.snippet,
+                "ordered_target_refs": target_refs,
+            },
             "evidence_binding": {
                 "evidence_id": evidence_id,
                 "status": "supported",
@@ -1166,51 +1150,6 @@ def _ordered_transcript_answer_evidence_rows(
             },
         }
     ]
-
-
-def _supported_option_relations_from_bindings(
-    *,
-    targets: Sequence[TargetSpec],
-    relations: Sequence[ClaimRelation],
-    supported_relations: Sequence[Mapping[str, object]],
-    workspace: EvidenceWorkspace | None,
-) -> list[Mapping[str, object]]:
-    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
-    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
-    if not isinstance(options_by_id, Mapping) or not options_by_id:
-        return []
-    selected_target_ids = {target.target_id for target in targets}
-    selected_relation_ids = {relation.relation_id for relation in relations}
-    supported_relation_ids = {
-        str(relation.get("relation_id", ""))
-        for relation in supported_relations
-        if str(relation.get("relation_id", ""))
-    }
-    option_relations: list[Mapping[str, object]] = []
-    for option_id, option in options_by_id.items():
-        required_relations = tuple(str(item) for item in getattr(option, "required_relations", ()) if str(item))
-        target_sequence = tuple(str(item) for item in getattr(option, "target_sequence", ()) if str(item))
-        if required_relations:
-            if not set(required_relations).issubset(selected_relation_ids):
-                continue
-            if not set(required_relations).issubset(supported_relation_ids):
-                continue
-        elif target_sequence:
-            if not set(target_sequence).issubset(selected_target_ids):
-                continue
-            continue
-        else:
-            continue
-        option_relations.append(
-            {
-                "option": str(option_id).strip().upper()[:1],
-                "relation": "support",
-                "strength": 0.88,
-                "assigned_by": "transcript_evidence_binder",
-                "required_relations": list(required_relations),
-            }
-        )
-    return option_relations
 
 
 def _relation_touches_target(
@@ -1288,20 +1227,12 @@ def _indexed_asr_matches_for_target(
 
 
 def _indexed_asr_target_aliases(target: str) -> list[str]:
-    normalized = " ".join(str(target or "").lower().split()).strip()
-    aliases = {
-        "upper class": ["upper class", "upper echelons", "high society", "royal court", "court painter"],
-        "seclusion": ["seclusion", "total isolation", "in isolation", "worked in total isolation", "withdrew from public life"],
-        "humble background": ["humble background", "humble origins", "modest background", "from a humble background"],
-        "farmhouse": ["farmhouse", "into a farmhouse", "moved into a farmhouse", "country house", "countryside farmhouse"],
-    }.get(normalized, [str(target)])
-    return _unique_nonempty_texts(aliases)
+    return _unique_nonempty_texts([str(target)])
 
 
 def _indexed_asr_evidence_row(
     *,
     segment: VideoMapSegment,
-    option: str,
     target: str,
     match: Mapping[str, object],
     claim: str,
@@ -1312,19 +1243,10 @@ def _indexed_asr_evidence_row(
         "tool": "asr_cue_detail",
         "segment_id": segment.segment_id,
         "time_range": [float(match.get("start_sec", segment.start_sec) or segment.start_sec), float(match.get("end_sec", segment.end_sec) or segment.end_sec)],
-        "supported_option": str(option).strip().upper()[:1],
         "event_label": target,
         "claim": claim,
         "confidence": float(confidence),
         "grounding_quality": "indexed_transcript",
-        "candidate_option_relations": [
-            {
-                "option": str(option).strip().upper()[:1],
-                "relation": "support",
-                "strength": float(confidence),
-                "assigned_by": assigned_by,
-            }
-        ],
         "confidence_signal": "indexed transcript cue",
         "limitations": "Derived from indexed ASR cue text; use visual tools for non-narrated visual appearance details.",
         "artifact": segment.video_path if hasattr(segment, "video_path") else "",
@@ -1429,31 +1351,6 @@ def _target_hit_for_segment(*, segment: VideoMapSegment, target: str) -> Mapping
         "fields": [str(hit["field"]) for hit in field_hits],
         "matches": field_hits,
     }
-
-
-_RARE_SINGLE_TOKEN_TARGETS = {"aeneas", "anchises", "ascanius", "persephone"}
-_COMMON_SINGLE_TOKEN_TARGETS = {"apollo", "david"}
-_SINGLE_TOKEN_CONTEXT_TERMS = {
-    "artwork",
-    "artworks",
-    "bernini",
-    "borghese",
-    "card",
-    "collection",
-    "displayed",
-    "gallery",
-    "marble",
-    "masterpiece",
-    "masterpieces",
-    "museum",
-    "sculptor",
-    "sculpture",
-    "sculptures",
-    "shown",
-    "statue",
-    "statues",
-    "title",
-}
 
 
 def _locate_target_candidates(
@@ -2108,7 +2005,6 @@ def _locate_recommended_next_actions(
                 "target_refs": refs,
                 "ordered_targets": ordered_target_texts,
                 "evidence_id": str(row.get("evidence_id") or ""),
-                "supported_option": str(row.get("supported_option") or ""),
                 "args": {
                     "segment_id": str(segment_id or ordered_candidate.get("segment_id") or ""),
                     "target_refs": refs,
@@ -2263,13 +2159,7 @@ def _target_alias_patterns(target: str) -> list[Mapping[str, object]]:
     if tokens[0] == "the" and len(tokens) > 1:
         aliases.append(("cleaned_name", "cleaned_name", 0.85, tokens[1:], False))
     if len(tokens) == 1:
-        token = tokens[0]
-        if token in _RARE_SINGLE_TOKEN_TARGETS:
-            aliases.append(("rare_token", "phrase_alias", 0.7, tokens, False))
-        else:
-            aliases.append(("contextual_single_name", "contextual_single_name", 0.55, tokens, True))
-    if "persephone" in tokens:
-        aliases.append(("rare_token", "phrase_alias", 0.7, ("persephone",), False))
+        aliases.append(("contextual_single_name", "contextual_single_name", 0.55, tokens, True))
 
     patterns: list[Mapping[str, object]] = []
     seen: set[str] = set()
@@ -2316,11 +2206,30 @@ def _single_token_context_allowed(*, target_token: str, text: str, start: int, e
     right = min(len(text), int(end) + context_chars)
     context = " ".join(str(text[left:right]).lower().split())
     context_tokens = set(re.findall(r"[a-z0-9]+", context))
-    if token == "david" and "michelangelo" in context_tokens and not {"bernini", "borghese"}.intersection(context_tokens):
-        return False
-    if token in _COMMON_SINGLE_TOKEN_TARGETS:
-        return bool(_SINGLE_TOKEN_CONTEXT_TERMS.intersection(context_tokens))
-    return bool(_SINGLE_TOKEN_CONTEXT_TERMS.intersection(context_tokens))
+    generic_stopwords = {
+        "a",
+        "an",
+        "and",
+        "as",
+        "by",
+        "for",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "the",
+        "to",
+        "video",
+        "with",
+    }
+    informative_context = {
+        item
+        for item in context_tokens
+        if item != token and len(item) >= 4 and item not in generic_stopwords
+    }
+    return len(informative_context) >= 2
 
 
 def _locate_match_directness(*, match_type: str, confidence: float) -> str:

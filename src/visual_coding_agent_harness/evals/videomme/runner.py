@@ -1132,6 +1132,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--disable-map-reflux", dest="enable_map_reflux", action="store_false")
     parser.add_argument("--enable-evidence-staging", dest="enable_evidence_staging", action="store_true", default=None)
     parser.add_argument("--disable-evidence-staging", dest="enable_evidence_staging", action="store_false")
+    parser.add_argument("--enable-planner-owned-grounding", dest="planner_owned_grounding", action="store_true", default=None)
+    parser.add_argument("--disable-planner-owned-grounding", dest="planner_owned_grounding", action="store_false")
     parser.add_argument("--followup-budget", type=int, default=None)
     parser.add_argument(
         "--free-explore",
@@ -1169,6 +1171,11 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         disable_global_gist_route=args.disable_global_gist_route,
         rewrite_mcq_for_exploration=bool(args.use_global_question_rewrite),
         hard_skill_runtime="agent_v2" in strategies,
+        planner_owned_grounding=(
+            bool(args.planner_owned_grounding)
+            if args.planner_owned_grounding is not None
+            else "agent_v2" in strategies
+        ),
     )
     if args.enable_followup is False:
         budget = replace(budget, hard_skill_runtime=False)
@@ -1180,6 +1187,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         "enable_context_budget": args.enable_context_budget,
         "enable_map_reflux": args.enable_map_reflux,
         "enable_evidence_staging": args.enable_evidence_staging,
+        "planner_owned_grounding": budget.planner_owned_grounding,
         "enable_mcq_rewrite": bool(args.use_global_question_rewrite),
         "contract_nframes": args.contract_nframes,
         "followup_budget": args.followup_budget,

@@ -5,10 +5,10 @@ from pathlib import Path
 from visual_coding_agent_harness.agents.iterative_agent import (
     AgentBudget,
     IterativeVisualAgent,
-    _answer_option_from_temporal_answer,
     _blocked_final_reason,
     _blocked_planner_final_reason,
     _exhausted_one_shot_tools,
+    _planner_final_answer_with_option,
     _program_signature,
     _sanitize_option_blind_feedback,
 )
@@ -39,7 +39,7 @@ class ScriptedPlannerBackend(VisionLanguageBackend):
         return BackendResponse(text=self.responses.pop(0))
 
 
-def test_temporal_answer_sequence_maps_to_unique_mcq_option():
+def test_planner_final_keeps_temporal_free_text_for_verifier():
     question = (
         "VideoMME multiple-choice question. Answer with exactly one option letter (A/B/C/D) first.\n"
         "Question: As depicted in the video, in what order does the author present Bernini's four masterpieces?\n"
@@ -54,10 +54,10 @@ def test_temporal_answer_sequence_maps_to_unique_mcq_option():
         "then David, then The rape of Persephone, and finally Apollo and Daphne."
     )
 
-    assert _answer_option_from_temporal_answer(question=question, answer=answer) == "D"
+    assert _planner_final_answer_with_option(question=question, answer=answer) == answer
 
 
-def test_temporal_answer_sequence_does_not_map_partial_order():
+def test_planner_final_keeps_partial_temporal_free_text_unchanged():
     question = (
         "Question: order?\n"
         "Options:\n"
@@ -65,7 +65,9 @@ def test_temporal_answer_sequence_does_not_map_partial_order():
         "B. blue, red and green."
     )
 
-    assert _answer_option_from_temporal_answer(question=question, answer="The clip mentions red and blue.") is None
+    answer = "The clip mentions red and blue."
+
+    assert _planner_final_answer_with_option(question=question, answer=answer) == answer
 
 
 def test_option_b_requires_complete_relation_chain():
@@ -198,7 +200,7 @@ def test_612_complete_chain_maps_to_b_gate():
     assert reason == ""
 
 
-def test_deterministic_sequence_mapping_can_resolve_conflict():
+def test_answer_verifier_blocks_conflicting_planner_sequence_final():
     backend = ScriptedPlannerBackend(
         [
             '{"status": "final", "skill": "visual_timeline_qa@v1", "answer": "C", "citations": ["obs_0001"], "confidence": 0.92}',
@@ -239,14 +241,13 @@ def test_deterministic_sequence_mapping_can_resolve_conflict():
 
         result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
-        assert result.status == "final"
-        assert result.answer == "D"
-        assert result.evidence_ids == ["seq_obs_0001"]
+        assert result.status == "max_rounds_reached"
+        assert result.answer == "Stopped after 1 exploration round with partial evidence."
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-        assert "deterministic_evidence_mapping" in trace
-        assert "answer_conflict_detected" in trace
+        assert "deterministic_evidence_mapping" not in trace
+        assert "answer_conflict_detected" not in trace
+        assert "planner_final_verifier_disagrees" in trace
         assert '"planner_answer": "C"' in trace
-        assert '"resolved_answer": "D"' in trace
 
 
 BERNINI_ORDER_QUESTION = (
@@ -260,7 +261,7 @@ BERNINI_ORDER_QUESTION = (
 )
 
 
-def test_ordered_option_sequence_registry_is_visible_in_first_prompt(tmp_path: Path):
+def test_ordered_option_sequence_registry_is_not_seeded_before_grounding_plan(tmp_path: Path):
     backend = ScriptedPlannerBackend(
         [
             '{"status": "continue", "skill": "visual_timeline_qa", "rationale": "inspect", "program": []}',
@@ -298,17 +299,12 @@ def test_ordered_option_sequence_registry_is_visible_in_first_prompt(tmp_path: P
     agent.run(question=BERNINI_ORDER_QUESTION, video_path="/videos/bernini.mp4")
 
     prompt = backend.requests[0].prompt
-    assert "Registered target_refs:" in prompt
-    assert "- T1: Aeneas, Anchises, and Ascanius fleeing Troy" in prompt
-    assert "- T2: David" in prompt
-    assert "- T3: The rape of Persephone" in prompt
-    assert "- T4: Apollo and Daphne" in prompt
-    coverage = workspace.read_observations(tool_name="target_coverage")[0]
-    assert 'David" and "Aeneas' not in coverage.claim
-    assert "Q1" not in coverage.claim
+    assert "No target_refs are registered for this run" in prompt
+    assert "Registered target_refs:" not in prompt
+    assert workspace.observation_count(tool_name="target_coverage") == 0
 
 
-def test_life_journey_registry_uses_canonical_narrated_refs(tmp_path: Path):
+def test_life_journey_registry_is_not_semantically_canonicalized_before_grounding_plan(tmp_path: Path):
     question = (
         "How was his life journey according to the video?\n"
         "A. Born with humble background and lived in seclusion in a farmhouse.\n"
@@ -336,16 +332,9 @@ def test_life_journey_registry_uses_canonical_narrated_refs(tmp_path: Path):
 
     agent.run(question=question, video_path="/videos/goya.mp4")
 
-    registry_state = workspace.target_registry
-    assert registry_state.targets_by_id["T1"].canonical_text == "humble background"
-    assert registry_state.targets_by_id["T2"].canonical_text == "entered upper class"
-    assert registry_state.targets_by_id["T3"].canonical_text == "seclusion/farmhouse"
-    assert registry_state.targets_by_id["T4"].canonical_text == "born in upper class"
-    assert registry_state.targets_by_id["T2"].modality_hint == ClaimModality.NARRATED_FACT
-    assert registry_state.option_for("B").target_sequence == ("T1", "T2", "T3")
-    assert registry_state.option_for("B").required_relations == ("R1", "R2")
-    assert registry_state.option_for("C").target_sequence == ("T1", "T3", "T2")
-    assert registry_state.option_for("D").target_sequence == ("T4", "T3")
+    assert getattr(workspace, "target_registry", None) is None
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "target_registry_compiled" not in trace
 
 
 def test_program_signature_ignores_assign_names_and_trace_ids():
@@ -752,12 +741,10 @@ class IterativeAgentTest(unittest.TestCase):
             ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
-            self.assertIn("Target coverage matrix", prompt)
-            self.assertIn("David", prompt)
-            self.assertIn("Apollo and Daphne", prompt)
-            self.assertIn("target_coverage", ledger)
-            self.assertIn("target_coverage_seeded", trace)
-            self.assertEqual(workspace.observation_count(tool_name="target_coverage"), 1)
+            self.assertNotIn("Target coverage matrix", prompt)
+            self.assertNotIn("target_coverage", ledger)
+            self.assertNotIn("target_coverage_seeded", trace)
+            self.assertEqual(workspace.observation_count(tool_name="target_coverage"), 0)
 
     def test_read_segment_detail_is_preserved_when_navigation_needs_visual_followup(self):
         class DetailThenFinalBackend(ScriptedPlannerBackend):
@@ -842,9 +829,9 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             second_program = result.rounds[1].program
-            self.assertEqual([step["tool"] for step in second_program], ["read_segment_detail", "vision_read"])
+            self.assertEqual([step["tool"] for step in second_program], ["read_segment_detail"])
             self.assertEqual(workspace.observation_count(tool_name="read_segment_detail"), 1)
-            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 3)
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 2)
 
     def test_option_blind_timeline_vision_read_uses_unordered_target_anchors(self):
         class TargetAwareBackend(ScriptedPlannerBackend):
@@ -3296,16 +3283,14 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/goya.mp4")
 
-            self.assertEqual(result.status, "final")
-            self.assertTrue(result.answer.startswith("B"))
-            self.assertTrue(result.evidence_ids)
-            self.assertTrue(any(evidence_id.startswith("ev_bind_seg_0001_") for evidence_id in result.evidence_ids))
+            self.assertEqual(result.status, "evidence_repair_exhausted")
+            self.assertIn("candidate option B", result.answer)
+            self.assertEqual(result.evidence_ids, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("effective_skill_locked", trace)
             self.assertIn("effective_skill_change_ignored", trace)
             self.assertIn("prefinal_evidence_repair_requested", trace)
-            self.assertIn("sequence_binding_created", trace)
-            self.assertIn("planner_final_after_prefinal_evidence_repair", trace)
+            self.assertNotIn("planner_final_after_prefinal_evidence_repair", trace)
 
     def test_repair_failure_has_terminal_evidence_repair_exhausted_status(self):
         class NarrationFinalNoRepairCandidateBackend(VisionLanguageBackend):
@@ -3466,9 +3451,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rises and falls")
-            self.assertEqual(set(result.citations), {"scene_coverage_seg_0001", "scene_coverage_seg_0003"})
+            self.assertEqual(result.status, "max_rounds_reached")
             table = workspace.evidence_table_v2(
                 question="What is the video mainly about?",
                 options=[
@@ -3476,7 +3459,7 @@ class IterativeAgentTest(unittest.TestCase):
                     "D. How the Austro-Hungarian Empire rose and fell",
                 ],
             )
-            self.assertGreaterEqual(len(table["groups"]["D"]), 2)
+            self.assertEqual(table["groups"]["D"], [])
 
     def test_iterative_agent_indexes_scene_order_for_videomme_masterpiece_sequence(self):
         class SceneOrderBackend(VisionLanguageBackend):
@@ -3606,14 +3589,10 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/goya.mp4")
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(
-                result.answer,
-                "B. Borned with a humble background, entered the upper class and then lived in seclusion in a farmhouse.",
-            )
-            self.assertEqual(set(result.citations), {"scene_order_seg_0001", "scene_order_seg_0003"})
+            self.assertEqual(result.status, "max_rounds_reached")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_skill_selection", trace)
+            self.assertNotIn("timeline_temporal_order", trace)
 
     def test_iterative_agent_prompt_includes_broad_long_video_index(self):
         backend = ScriptedPlannerBackend(
@@ -4806,11 +4785,13 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="Describe what is visible.", video_path="/videos/demo.mp4")
 
-            self.assertEqual([step["tool"] for step in result.rounds[2].program], ["video_ls", "vision_read"])
-            self.assertEqual(calls[-1][0], "vision_read")
+            self.assertEqual([step["tool"] for step in result.rounds[2].program], ["video_ls"])
+            self.assertTrue(calls)
+            self.assertNotEqual(calls[-1][0], "vision_read")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("force_visual_after_no_evidence_growth", trace)
-            self.assertIn("append_visual_followup", trace)
+            self.assertIn("silent_forced_visual_disabled", trace)
+            self.assertNotIn("append_visual_followup", trace)
 
     def test_navigation_only_mcq_round_forces_uninspected_visual_when_no_option_support(self):
         planner_responses = [
@@ -4869,11 +4850,12 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             self.assertEqual(result.rounds[0].program[0]["tool"], "search_segments")
-            self.assertEqual([step["tool"] for step in result.rounds[1].program], ["search_segments", "vision_read"])
-            self.assertEqual(calls[-1], ("vision_read", "seg_0001", 0.0, 20.0))
+            self.assertEqual([step["tool"] for step in result.rounds[1].program], ["search_segments"])
+            self.assertEqual(calls[-1], ("search_segments", "repeat localization"))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("force_uninspected_visual_without_option_support", trace)
-            self.assertIn("append_visual_followup", trace)
+            self.assertIn("silent_forced_visual_disabled", trace)
+            self.assertNotIn("append_visual_followup", trace)
 
     def test_mcq_full_segment_sweep_hands_off_to_answer_agent_before_budget_end(self):
         class FullSweepAnswerBackend(VisionLanguageBackend):
@@ -4951,29 +4933,32 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertTrue(result.answer.startswith("A"))
-            self.assertEqual(result.citations, ["obs_0003"])
+            self.assertEqual(result.status, "max_rounds_reached")
             self.assertEqual(
                 [call[0] for call in calls],
-                ["search_segments", "search_segments", "vision_read", "search_segments", "search_segments"],
+                ["search_segments", "search_segments", "search_segments", "search_segments"],
             )
             self.assertEqual(
                 [request.task for request in backend.requests],
                 [
                     "replan",
                     "replan",
+                    "answer_from_evidence",
                     "replan",
                     "answer_from_evidence",
                     "replan",
+                    "answer_from_evidence",
+                    "replan",
+                    "answer_from_evidence",
+                    "answer_from_evidence",
                     "answer_from_evidence",
                 ],
             )
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn('"source": "all_segments_inspected"', trace)
-            self.assertIn("iterative_answer_suggestion", trace)
+            self.assertNotIn('"source": "all_segments_inspected"', trace)
+            self.assertNotIn("iterative_finalization_ready", trace)
             self.assertIn('"source": "evidence_table_no_growth"', trace)
-            self.assertIn("iterative_finalization_ready", trace)
+            self.assertIn("silent_forced_visual_disabled", trace)
 
     def test_model_rewritten_mcq_is_used_for_planner_and_tools_only(self):
         raw_question = (
@@ -5309,9 +5294,10 @@ class IterativeAgentTest(unittest.TestCase):
 
             agent.run(question="What happens?", video_path="/videos/demo.mp4")
 
-            self.assertIn(("vision_read", "seg_0001", "What happens?"), calls)
+            self.assertNotIn(("vision_read", "seg_0001", "What happens?"), calls)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("force_visual_from_navigation_no_growth", trace)
+            self.assertIn("silent_forced_visual_disabled", trace)
 
     def test_answer_agent_final_trace_includes_scene_index_citation_provenance(self):
         class ProvenanceBackend(ScriptedPlannerBackend):

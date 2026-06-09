@@ -820,7 +820,7 @@ _NO_TARGET_REF_FINAL_RULES = (
 _ROUTE_SPECIFIC_FINAL_RULES: dict[str, tuple[str, ...]] = {
     "gist_global": (
         "- For gist/global questions, use global_gist before local decomposition as a sparse topic hint, not an option vote.",
-        "- Main-idea answers must compare whole-video coverage; partial ending-only evidence cannot beat a full rise/stability/fall arc.",
+        "- Main-idea answers must compare cited whole-video coverage; partial coverage cannot beat a fuller supported account.",
     ),
     "temporal_order": (
         "- For order/sequence questions, use target_coverage or scene-index ASR hints to pick a candidate segment, then call locate_targets_in_segment(segment_id, targets=[...]).",

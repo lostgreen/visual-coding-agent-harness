@@ -42,7 +42,7 @@ def select_question_playbook(question: str) -> QuestionPlaybook:
             ],
             sufficiency_rules=[
                 "A global_gist observation is a topic hint, not structured option support.",
-                "Prefer the option that covers the most video stages; partial ending-only coverage cannot beat a full rise/stability/fall arc.",
+                "Prefer the option whose claim best matches cited whole-video coverage; partial coverage cannot beat a fuller supported account.",
             ],
         )
 
@@ -204,13 +204,10 @@ def classify_question_route(question: str) -> str:
         "specific moment",
         "life journey",
         "journey",
-        "rose",
-        "rise",
-        "entered",
-        "moved into",
-        "withdrew",
-        "withdrawal",
-        "seclusion",
+        "transition",
+        "development",
+        "phase",
+        "progression",
     ]
     if any(marker in lowered for marker in temporal_markers):
         return "temporal_order"
@@ -237,14 +234,6 @@ def extract_candidate_options(question: str) -> Sequence[str]:
         if text:
             options.append(f"{match.group(1).upper()}{match.group(2)} {text}")
     return options
-
-
-OPTION_TARGET_SYNONYMS = {
-    "upper class": ["upper echelons", "high society", "royal court", "bourgeois", "court painter"],
-    "seclusion": ["isolation", "isolated", "secluded", "withdrew from public life"],
-    "humble background": ["humble origins", "modest background", "from a humble background"],
-    "farmhouse": ["country house", "countryside farmhouse", "secluded farmhouse"],
-}
 
 
 def extract_option_target_atoms(
@@ -274,16 +263,6 @@ def extract_option_target_atoms(
             atoms.append(atom)
             if len(atoms) >= max_targets:
                 return atoms
-    if include_synonyms:
-        for atom in list(atoms):
-            for synonym in OPTION_TARGET_SYNONYMS.get(atom.lower(), []):
-                key = _target_atom_key(synonym)
-                if not key or key in seen:
-                    continue
-                seen.add(key)
-                atoms.append(synonym)
-                if len(atoms) >= max_targets:
-                    return atoms
     return atoms
 
 
@@ -314,9 +293,6 @@ def extract_option_sequence_specs(question_or_options: str | Sequence[str]) -> d
         if isinstance(question_or_options, str)
         else [str(option) for option in question_or_options]
     )
-    life_journey_sequences = _life_journey_option_sequence_specs(options)
-    if life_journey_sequences:
-        return life_journey_sequences
     parsed: list[tuple[str, tuple[str, ...]]] = []
     for index, option in enumerate(options):
         letter = _option_letter(option, index=index)
@@ -353,79 +329,6 @@ def extract_option_sequence_specs(question_or_options: str | Sequence[str]) -> d
     return sequences
 
 
-_LIFE_JOURNEY_TARGETS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("T1", "humble background", (r"\b(?:born|came|coming|from|with)\b.{0,45}\b(?:humble|modest|lowly)\b.{0,35}\b(?:background|origins?)\b",)),
-    (
-        "T2",
-        "entered upper class",
-        (
-            r"\b(?:entered|entering|rose|risen|reached|became|becoming|joined)\b.{0,55}\b(?:upper class|upper echelons?|high society|royal court|court painter|bourgeois)\b",
-        ),
-    ),
-    (
-        "T3",
-        "seclusion/farmhouse",
-        (
-            r"\b(?:lived|living|withdrew|withdrawn|retired|spent)\b.{0,55}\b(?:seclusion|isolation|isolated|secluded|farmhouse|country house)\b",
-            r"\b(?:seclusion|isolation|isolated|secluded|farmhouse|country house)\b",
-        ),
-    ),
-    (
-        "T4",
-        "born in upper class",
-        (
-            r"\bborn(?:ed)?\b.{0,20}\b(?:in|into|to)\b.{0,25}\b(?:upper class|upper echelons?|high society|royal court|bourgeois)\b",
-        ),
-    ),
-)
-
-
-def _life_journey_option_sequence_specs(options: Sequence[str]) -> dict[str, OptionSequenceSpec]:
-    parsed: dict[str, OptionSequenceSpec] = {}
-    for index, option in enumerate(options):
-        letter = _option_letter(option, index=index)
-        events = _life_journey_events_for_option(option)
-        if len(events) < 2:
-            continue
-        parsed[letter] = OptionSequenceSpec(
-            option_letter=letter,
-            ordered_items=tuple(item for _ref, item in events),
-            ordered_target_refs=tuple(ref for ref, _item in events),
-        )
-    if len(parsed) < 2:
-        return {}
-    all_refs = {ref for sequence in parsed.values() for ref in sequence.ordered_target_refs}
-    if {"T1", "T3"}.issubset(all_refs) and ({"T2", "T4"} & all_refs):
-        return parsed
-    return {}
-
-
-def _life_journey_events_for_option(option_text: str) -> list[tuple[str, str]]:
-    text = _strip_option_prefix(option_text)
-    lowered = text.lower()
-    matches: list[tuple[int, str, str]] = []
-    for target_ref, canonical_text, patterns in _LIFE_JOURNEY_TARGETS:
-        target_matches = [
-            match
-            for pattern in patterns
-            for match in [re.search(pattern, lowered)]
-            if match is not None
-        ]
-        if not target_matches:
-            continue
-        first = min(target_matches, key=lambda match: match.start())
-        matches.append((first.start(), target_ref, canonical_text))
-    matches.sort(key=lambda item: item[0])
-    events: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for _position, target_ref, canonical_text in matches:
-        if target_ref in seen:
-            continue
-        seen.add(target_ref)
-        events.append((target_ref, canonical_text))
-    return events
-
-
 def extract_option_target_atoms_for_option(
     option_text: str,
     *,
@@ -437,17 +340,6 @@ def extract_option_target_atoms_for_option(
         return list(quoted_items)
     lowered = text.lower()
     positioned_atoms: list[tuple[int, str]] = []
-    for pattern, atom in (
-        (r"\b(?:humble|modest|lowly)\b.{0,40}\b(?:background|origins?)\b", "humble background"),
-        (r"\b(?:upper class|upper echelons?|high society|royal court|court painter|bourgeois)\b", "upper class"),
-        (r"\b(?:farmhouse|country house|countryside farmhouse)\b", "farmhouse"),
-        (r"\b(?:seclusion|isolation|isolated|secluded|withdrew|withdrawal)\b", "seclusion"),
-    ):
-        match = re.search(pattern, lowered)
-        if match:
-            positioned_atoms.append((match.start(), atom))
-    positioned_atoms.sort(key=lambda item: item[0])
-
     for chunk in _split_option_atom_text(text):
         cleaned = _clean_option_atom(chunk)
         if _chunk_is_covered_by_canonical_atom(cleaned, [atom for _, atom in positioned_atoms]):
@@ -463,13 +355,6 @@ def extract_option_target_atoms_for_option(
             continue
         seen.add(key)
         unique.append(atom)
-    if include_synonyms:
-        for atom in list(unique):
-            for synonym in OPTION_TARGET_SYNONYMS.get(atom.lower(), []):
-                key = _target_atom_key(synonym)
-                if key and key not in seen:
-                    seen.add(key)
-                    unique.append(synonym)
     return unique
 
 
@@ -501,14 +386,7 @@ def _option_letter(option_text: str, *, index: int) -> str:
 
 def _split_option_atom_text(text: str) -> list[str]:
     primary = re.split(r"\b(?:and then|then|before|after)\b|[,;]|->|/|\|", text, flags=re.IGNORECASE)
-    parts: list[str] = []
-    action_splitter = re.compile(
-        r"\band\s+(?=(?:lived|entered|went|moved|became|was|were|is|are|appeared|appears|shown|shows|born|rose|withdrew)\b)",
-        flags=re.IGNORECASE,
-    )
-    for part in primary:
-        parts.extend(action_splitter.split(part))
-    return parts
+    return list(primary)
 
 
 def _quoted_option_items(option_text: str) -> tuple[str, ...]:
@@ -562,25 +440,14 @@ def _canonical_item_text(item: str, canonical_items: Sequence[str]) -> str:
 def _clean_option_atom(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", str(text)).strip(" .:-\"'“”")
     cleaned = re.sub(r"\b(first|last|earlier|later|right|immediately|eventually)\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"^\b(?:born|borned)\s+(?:with|in|from)\s+", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"^\b(?:lived|entered|moved|went|rose|withdrew)\s+(?:in|into|to|from|through)\s+", "", cleaned, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", cleaned).strip(" .:-\"'“”")
 
 
 def _chunk_is_covered_by_canonical_atom(chunk: str, canonical_atoms: Sequence[str]) -> bool:
-    lowered = str(chunk or "").lower()
-    canonical = {str(atom).lower() for atom in canonical_atoms}
-    if "humble background" in canonical and re.search(r"\b(?:humble|modest|lowly)\b.*\b(?:background|origins?)\b", lowered):
-        return True
-    if "upper class" in canonical and re.search(r"\b(?:upper class|upper echelons?|high society|royal court|court painter|bourgeois)\b", lowered):
-        return True
-    if {"seclusion", "farmhouse"}.issubset(canonical) and "seclusion" in lowered and "farmhouse" in lowered:
-        return True
-    if "seclusion" in canonical and re.search(r"\b(?:seclusion|isolation|isolated|secluded|withdrew|withdrawal)\b", lowered):
-        return True
-    if "farmhouse" in canonical and re.search(r"\b(?:farmhouse|country house|countryside farmhouse)\b", lowered):
-        return True
-    return False
+    chunk_key = _target_atom_key(chunk)
+    if not chunk_key:
+        return False
+    return any(chunk_key == _target_atom_key(atom) for atom in canonical_atoms)
 
 
 _OPTION_ATOM_STOPWORDS = {

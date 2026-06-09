@@ -18,6 +18,7 @@ from .answer_agent import AnswerAgent, AnswerAgentResult
 from .contracts import VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
+from .grounding import compile_grounding_plan, ground_question_with_model
 from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
 from .output_quality import is_unsupported_claim
 from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
@@ -25,7 +26,6 @@ from .question_policy import (
     classify_narration_subroute,
     classify_question_route,
     extract_candidate_options,
-    extract_option_sequence_specs,
     extract_option_target_atom_map,
     extract_option_target_atoms,
     select_question_playbook,
@@ -82,6 +82,7 @@ class AgentBudget:
     max_repeated_programs: int = 3
     max_repeated_invalid_programs: int = 3
     hard_skill_runtime: bool = False
+    planner_owned_grounding: bool = False
     reflection_memory_max_items: int = 5
     disable_global_gist_route: bool = False
     rewrite_mcq_for_exploration: bool = False
@@ -158,16 +159,6 @@ class FinalEvidenceBridgeResult:
 
 
 @dataclass(frozen=True)
-class DeterministicEvidenceMapping:
-    option: str
-    answer: str
-    citations: tuple[str, ...]
-    evidence_ids: tuple[str, ...]
-    confidence: float
-    evidence_kind: str
-
-
-@dataclass(frozen=True)
 class SkillTargetFact:
     fact: str
     mutex_group_id: str = ""
@@ -221,10 +212,8 @@ class IterativeVisualAgent:
         exploration_question_text = self._question_for_exploration(question_context)
         vlm_safe_question = question_context.vlm_safe_question
         self.workspace.ensure_hypothesis(raw_question)
-        self._initialize_option_sequence_registry(raw_question)
+        self._initialize_planner_owned_grounding(question_context)
         self._seed_target_coverage(raw_question)
-        if not self.budget.rewrite_mcq_for_exploration:
-            self._seed_scene_coverage_evidence(raw_question)
         if (
             not self.budget.disable_global_gist_route
             and classify_question_route(raw_question) == "gist_global"
@@ -446,17 +435,6 @@ class IterativeVisualAgent:
                     question=raw_question,
                     answer=str(action.get("answer", "")),
                 )
-                deterministic_final = self._try_deterministic_evidence_final(
-                    question=raw_question,
-                    video_path=video_path,
-                    rounds=rounds,
-                    round_number=round_number,
-                    planner_text=planner_response.text,
-                    planner_answer=final_answer,
-                    rationale=rationale or "deterministic_evidence_mapping",
-                )
-                if deterministic_final is not None:
-                    return deterministic_final
                 bridge_result = _bridge_final_evidence_refs(
                     workspace=self.workspace,
                     question=raw_question,
@@ -1034,19 +1012,6 @@ class IterativeVisualAgent:
             )
             citations.extend(observation_ids)
             inspected_segment_ids.update(_segment_ids_from_program(program))
-            deterministic_final = self._try_deterministic_evidence_final(
-                question=raw_question,
-                video_path=video_path,
-                rounds=rounds,
-                round_number=round_number,
-                planner_text=planner_response.text,
-                planner_answer="",
-                rationale="decision_ready",
-                program=program,
-                observation_ids=observation_ids,
-            )
-            if deterministic_final is not None:
-                return deterministic_final
             if _program_has_inspect_with_candidate_options(program):
                 has_inspect_with_candidate_options = True
             timeline_decision = (
@@ -1379,7 +1344,7 @@ class IterativeVisualAgent:
 
     def _question_for_exploration(self, question_context: QuestionContext) -> str:
         question = question_context.raw_question
-        self._exploration_target_entities = tuple(extract_option_target_atoms(question, max_targets=12, include_synonyms=True))
+        self._exploration_target_entities = tuple(extract_option_target_atoms(question, max_targets=12, include_synonyms=False))
         if not self.budget.rewrite_mcq_for_exploration or not question_context.options:
             return question_context.planner_question
         rewrite = rewrite_exploration_question_with_model(
@@ -1402,85 +1367,61 @@ class IterativeVisualAgent:
         )
         return rewrite.exploration_question or question_context.vlm_safe_question
 
-    def _initialize_option_sequence_registry(self, question: str) -> None:
+    def _initialize_planner_owned_grounding(self, question_context: QuestionContext) -> None:
+        if not self.budget.planner_owned_grounding:
+            return
         if getattr(self.workspace, "target_registry", None) is not None:
             return
-        if classify_question_route(question) != "temporal_order":
-            return
-        sequences = extract_option_sequence_specs(question)
-        if not sequences:
-            return
-        targets_by_ref: dict[str, str] = {}
-        for sequence in sequences.values():
-            for target_ref, item in zip(sequence.ordered_target_refs, sequence.ordered_items):
-                targets_by_ref.setdefault(str(target_ref), str(item))
-        if not targets_by_ref:
-            return
-        narration_life_journey = _is_life_journey_sequence_registry(sequences)
-        relation_ids_by_pair: dict[tuple[str, str], str] = {}
-        relations: list[ClaimRelation] = []
-        if narration_life_journey:
-            adjacent_pairs = {
-                (str(source_ref), str(destination_ref))
-                for sequence in sequences.values()
-                for source_ref, destination_ref in zip(sequence.ordered_target_refs, sequence.ordered_target_refs[1:])
-            }
-            for relation_id, pair in _life_journey_relation_pairs():
-                if pair in adjacent_pairs:
-                    relation_ids_by_pair[pair] = relation_id
-                    relations.append(
-                        ClaimRelation(
-                            relation_id=relation_id,
-                            kind="before",
-                            source_target_id=pair[0],
-                            destination_target_id=pair[1],
-                        )
-                    )
-        targets = [
-            TargetSpec(
-                target_id=target_ref,
-                canonical_text=targets_by_ref[target_ref],
-                aliases=_life_journey_aliases_for_target(target_ref) if narration_life_journey else (),
-                modality_hint=ClaimModality.NARRATED_FACT if narration_life_journey else ClaimModality.VISUAL_FACT,
-                source="option_sequence",
-            )
-            for target_ref in sorted(targets_by_ref, key=lambda ref: int(ref[1:]) if ref.startswith("T") and ref[1:].isdigit() else 10**9)
-        ]
-        options = [
-            OptionSpec(
-                sequence.option_letter,
-                target_sequence=sequence.ordered_target_refs,
-                required_relations=tuple(
-                    relation_ids_by_pair[(str(source_ref), str(destination_ref))]
-                    for source_ref, destination_ref in zip(sequence.ordered_target_refs, sequence.ordered_target_refs[1:])
-                    if (str(source_ref), str(destination_ref)) in relation_ids_by_pair
-                ),
-            )
-            for sequence in sequences.values()
-        ]
-        self.workspace.target_registry = TargetRegistry.from_specs(targets=targets, options=options, relations=relations)
         self.workspace.write_trace_event(
-            "target_registry_initialized",
+            "grounding_requested",
             {
-                "source": "option_sequence",
-                "target_count": len(targets),
-                "option_count": len(options),
-                "target_refs": [target.target_id for target in targets],
+                "route_hint": classify_question_route(question_context.raw_question),
+                "option_count": len(question_context.options),
             },
         )
-        if narration_life_journey:
+        result = ground_question_with_model(
+            self.backend,
+            question=question_context.raw_question,
+            options=question_context.options,
+            route_hint=classify_question_route(question_context.raw_question),
+        )
+        self.workspace.write_trace_event(
+            "grounding_plan_received",
+            {
+                "attempts": result.attempts,
+                "valid": result.validation.is_valid,
+                "fallback_reason": result.fallback_reason,
+            },
+        )
+        if result.plan is None:
             self.workspace.write_trace_event(
-                "narration_registry_initialized",
+                "grounding_unstructured_fallback",
                 {
-                    "target_refs": [target.target_id for target in targets],
-                    "options": {option.option_id: list(option.target_sequence) for option in options},
-                    "required_relations": {
-                        option.option_id: list(option.required_relations)
-                        for option in options
-                        if option.required_relations
-                    },
+                    "reason": result.fallback_reason or "grounding_unavailable",
+                    "findings": [finding.__dict__ for finding in result.validation.findings],
                 },
             )
+            return
+        compiled = compile_grounding_plan(result.plan)
+        self.workspace.target_registry = compiled.registry
+        self.workspace.write_trace_event(
+            "target_registry_compiled",
+            {
+                "source": "grounding_plan",
+                "version": compiled.registry.version,
+                "plan_hash": compiled.plan_hash,
+                "target_key_to_id": dict(compiled.target_key_to_id),
+                "relation_key_to_id": dict(compiled.relation_key_to_id),
+            },
+        )
+        self.workspace.write_trace_event(
+            "target_registry_frozen",
+            {
+                "version": compiled.registry.version,
+                "target_refs": list(compiled.registry.targets_by_id),
+                "option_count": len(compiled.registry.options_by_id),
+            },
+        )
 
     def _verify_planner_final_with_answer_agent(
         self,
@@ -2742,7 +2683,7 @@ class IterativeVisualAgent:
                     "segment_id": segment_id,
                     "ask_for": (
                         "Describe localized main-idea evidence for this segment. Report facts only. "
-                        "Focus on visible entities, events, and whether this part shows rise, stability, decline, collapse, or causes."
+                        "Focus on visible entities, events, and how this part contributes to the overall topic."
                     ),
                     "event_label": "localized main-idea evidence",
                 },
@@ -3127,11 +3068,9 @@ class IterativeVisualAgent:
     ) -> str:
         if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
             return "narration_transcript_route"
-        if _deterministic_evidence_mapping(workspace=self.workspace, question=question) is not None:
-            return "deterministic_evidence_mapping"
         if self._has_pending_candidate_specific_action():
             return "pending_candidate_specific_action"
-        return ""
+        return "silent_forced_visual_disabled"
 
     def _has_pending_candidate_specific_action(self) -> bool:
         for observation in self.workspace.read_observations():
@@ -3464,87 +3403,6 @@ class IterativeVisualAgent:
             payload["citation_provenance"] = provenance
         self.workspace.write_trace_event("iterative_final", payload)
 
-    def _try_deterministic_evidence_final(
-        self,
-        *,
-        question: str,
-        video_path: str,
-        rounds: Sequence[IterativeRound],
-        round_number: int,
-        planner_text: str,
-        planner_answer: str,
-        rationale: str,
-        program: Sequence[Mapping[str, Any]] = (),
-        observation_ids: Sequence[str] = (),
-    ) -> IterativeRunResult | None:
-        mapping = _deterministic_evidence_mapping(workspace=self.workspace, question=question)
-        if mapping is None:
-            return None
-        planner_option = _answer_option_letter(planner_answer)
-        conflict = bool(planner_option and planner_option != mapping.option)
-        self.workspace.write_trace_event(
-            "decision_ready",
-            {
-                "source": "deterministic_evidence_mapping",
-                "answer": mapping.answer,
-                "option": mapping.option,
-                "evidence_kind": mapping.evidence_kind,
-                "citations": list(mapping.citations),
-                "evidence_ids": list(mapping.evidence_ids),
-                "planner_answer": planner_answer,
-                "resolved_answer": mapping.answer,
-                "conflict": conflict,
-            },
-        )
-        if conflict:
-            self.workspace.write_trace_event(
-                "answer_conflict_detected",
-                {
-                    "planner_answer": planner_answer,
-                    "resolved_answer": mapping.answer,
-                    "source": "deterministic_evidence_mapping",
-                },
-            )
-            self.workspace.write_trace_event(
-                "answer_conflict_resolved",
-                {
-                    "planner_answer": planner_answer,
-                    "resolved_answer": mapping.answer,
-                    "source": "deterministic_evidence_mapping",
-                },
-            )
-        final_rounds = list(rounds)
-        final_rounds.append(
-            IterativeRound(
-                round_number=round_number,
-                status="final",
-                planner_text=planner_text,
-                rationale=rationale,
-                program=program,
-                observation_ids=observation_ids,
-            )
-        )
-        self._write_final_trace(
-            round_number=round_number,
-            answer=mapping.answer,
-            citations=mapping.citations,
-            evidence_ids=mapping.evidence_ids,
-            source="deterministic_evidence_mapping",
-            planner_answer=planner_answer,
-            resolved_answer=mapping.answer,
-            conflict=conflict,
-        )
-        return IterativeRunResult(
-            question=question,
-            video_path=video_path,
-            answer=mapping.answer,
-            status="final",
-            citations=list(mapping.citations),
-            evidence_ids=list(mapping.evidence_ids),
-            confidence=mapping.confidence,
-            rounds=final_rounds,
-        )
-
     def _citation_provenance(self, citations: Sequence[str]) -> list[dict[str, Any]]:
         cited = [str(item) for item in citations if str(item)]
         if not cited:
@@ -3581,31 +3439,6 @@ class IterativeVisualAgent:
                 )
         return provenance
 
-    def _seed_scene_coverage_evidence(self, question: str) -> None:
-        route = classify_question_route(question)
-        options = extract_candidate_options(question)
-        if not options:
-            return
-        if route not in {"gist_global", "temporal_order"} and not _question_has_sequence_options(options):
-            return
-        if self.workspace.evidence_table_row_count() > 0:
-            return
-
-        rows = [
-            *_scene_coverage_evidence_rows(scene_index=self.scene_index, question=question, options=options),
-            *_scene_order_evidence_rows(scene_index=self.scene_index, question=question, options=options),
-        ]
-        for row in rows:
-            self.workspace.write_evidence_row(row)
-        if rows:
-            self.workspace.write_trace_event(
-                "scene_coverage_evidence_seeded",
-                {
-                    "row_count": len(rows),
-                    "obs_ids": [str(row.get("obs_id", "")) for row in rows],
-                },
-            )
-
     def _seed_target_coverage(self, question: str) -> None:
         if not extract_candidate_options(question):
             return
@@ -3614,12 +3447,10 @@ class IterativeVisualAgent:
         if self.workspace.observation_count(tool_name="target_coverage") > 0:
             return
         registry = getattr(self.workspace, "target_registry", None)
-        target_refs = []
-        if registry is not None and isinstance(getattr(registry, "targets_by_id", None), Mapping):
-            target_refs = sorted(str(ref) for ref in registry.targets_by_id)
-        targets = [str(target).strip() for target in self._exploration_target_entities if str(target).strip()]
-        if not target_refs and not targets:
-            targets = extract_option_target_atoms(question, max_targets=12, include_synonyms=True)
+        if registry is None or not isinstance(getattr(registry, "targets_by_id", None), Mapping):
+            return
+        target_refs = sorted(str(ref) for ref in registry.targets_by_id)
+        targets: list[str] = []
         if not target_refs and not targets:
             return
         coverage_args: dict[str, Any] = {"top_k": 3}
@@ -3639,11 +3470,7 @@ class IterativeVisualAgent:
                 ]
             )
         except ToolError as exc:
-            if not target_refs:
-                raise
             fallback_targets = [str(target).strip() for target in self._exploration_target_entities if str(target).strip()]
-            if not fallback_targets:
-                fallback_targets = extract_option_target_atoms(question, max_targets=12, include_synonyms=True)
             if not fallback_targets:
                 raise
             self.workspace.write_trace_event(
@@ -4915,179 +4742,6 @@ def _missing_required_relations_final_reason(
     return ""
 
 
-def _deterministic_evidence_mapping(
-    *,
-    workspace: EvidenceWorkspace,
-    question: str,
-) -> DeterministicEvidenceMapping | None:
-    options = extract_candidate_options(question)
-    if not options:
-        return None
-    table = workspace.evidence_table_v2(
-        question=question,
-        options=options,
-        include_legacy_worker_votes=True,
-    )
-    candidates: list[DeterministicEvidenceMapping] = []
-    sequence_mapping = _ordered_transcript_deterministic_mapping(table=table)
-    if sequence_mapping is not None:
-        candidates.append(sequence_mapping)
-    relation_mapping = _relation_chain_deterministic_mapping(
-        workspace=workspace,
-        question=question,
-        table=table,
-    )
-    if relation_mapping is not None:
-        candidates.append(relation_mapping)
-    by_option: dict[str, DeterministicEvidenceMapping] = {}
-    for candidate in candidates:
-        existing = by_option.get(candidate.option)
-        if existing is None or candidate.confidence > existing.confidence:
-            by_option[candidate.option] = candidate
-    if len(by_option) != 1:
-        return None
-    return next(iter(by_option.values()))
-
-
-def _ordered_transcript_deterministic_mapping(*, table: Mapping[str, Any]) -> DeterministicEvidenceMapping | None:
-    rows = table.get("rows", [])
-    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
-        return None
-    candidates: dict[str, list[Mapping[str, Any]]] = {}
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        if str(row.get("tool", "")) != "ordered_transcript_sequence":
-            continue
-        binding = row.get("evidence_binding")
-        if not isinstance(binding, Mapping):
-            continue
-        if str(binding.get("status", "")).lower() != "supported":
-            continue
-        option = str(row.get("supported_option", "") or "").strip().upper()[:1]
-        if not option:
-            continue
-        candidates.setdefault(option, []).append(row)
-    if len(candidates) != 1:
-        return None
-    option, option_rows = next(iter(candidates.items()))
-    return DeterministicEvidenceMapping(
-        option=option,
-        answer=option,
-        citations=tuple(_row_obs_ids(option_rows)),
-        evidence_ids=tuple(_row_evidence_ids(option_rows)),
-        confidence=max((float(row.get("confidence", 0.0) or 0.0) for row in option_rows), default=0.0),
-        evidence_kind="ordered_transcript_sequence",
-    )
-
-
-def _relation_chain_deterministic_mapping(
-    *,
-    workspace: EvidenceWorkspace,
-    question: str,
-    table: Mapping[str, Any],
-) -> DeterministicEvidenceMapping | None:
-    registry = getattr(workspace, "target_registry", None)
-    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
-    if not isinstance(options_by_id, Mapping) or not options_by_id:
-        return None
-    candidates: list[DeterministicEvidenceMapping] = []
-    for option_id, option in options_by_id.items():
-        letter = str(option_id).strip().upper()[:1]
-        required = {str(relation_id) for relation_id in getattr(option, "required_relations", ()) if str(relation_id)}
-        if not letter or not required:
-            continue
-        supported = _supported_relation_ids_for_refs(
-            workspace=workspace,
-            question=question,
-            final_refs=[],
-            selected_option=letter,
-        )
-        if not required.issubset(supported):
-            continue
-        rows = _rows_with_supported_relations(table=table, option=letter, required_relations=required)
-        if not rows:
-            continue
-        candidates.append(
-            DeterministicEvidenceMapping(
-                option=letter,
-                answer=letter,
-                citations=tuple(_row_obs_ids(rows)),
-                evidence_ids=tuple(_row_evidence_ids(rows)),
-                confidence=max((float(row.get("confidence", 0.0) or 0.0) for row in rows), default=0.0),
-                evidence_kind="narration_relation_chain",
-            )
-        )
-    if len(candidates) != 1:
-        return None
-    return candidates[0]
-
-
-def _rows_with_supported_relations(
-    *,
-    table: Mapping[str, Any],
-    option: str,
-    required_relations: set[str],
-) -> list[Mapping[str, Any]]:
-    groups = table.get("groups", {})
-    rows = groups.get(option, []) if isinstance(groups, Mapping) else []
-    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
-        return []
-    kept: list[Mapping[str, Any]] = []
-    covered: set[str] = set()
-    for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        row_relations = _supported_relation_ids_from_row(row)
-        if not row_relations.intersection(required_relations):
-            continue
-        kept.append(row)
-        covered.update(row_relations.intersection(required_relations))
-    return kept if required_relations.issubset(covered) else []
-
-
-def _supported_relation_ids_from_row(row: Mapping[str, Any]) -> set[str]:
-    binding = row.get("evidence_binding")
-    if not isinstance(binding, Mapping):
-        return set()
-    if str(binding.get("status", "")).strip().lower() != "supported":
-        return set()
-    relation_bindings = binding.get("relation_bindings", [])
-    if not isinstance(relation_bindings, Sequence) or isinstance(relation_bindings, (str, bytes)):
-        return set()
-    relation_ids: set[str] = set()
-    for relation in relation_bindings:
-        if not isinstance(relation, Mapping):
-            continue
-        if str(relation.get("status", "")).strip().lower() != "supported":
-            continue
-        relation_id = str(relation.get("relation_id", "")).strip()
-        if relation_id:
-            relation_ids.add(relation_id)
-    return relation_ids
-
-
-def _row_obs_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
-    return _unique_preserving_order(
-        [
-            str(row.get("obs_id", "") or row.get("observation_id", "")).strip()
-            for row in rows
-            if str(row.get("obs_id", "") or row.get("observation_id", "")).strip()
-        ]
-    )
-
-
-def _row_evidence_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
-    ids = []
-    for row in rows:
-        binding = row.get("evidence_binding")
-        binding_id = binding.get("evidence_id", "") if isinstance(binding, Mapping) else ""
-        evidence_id = str(row.get("evidence_id", "") or binding_id).strip()
-        if evidence_id:
-            ids.append(evidence_id)
-    return _unique_preserving_order(ids)
-
-
 def _supported_relation_ids_for_refs(
     *,
     workspace: EvidenceWorkspace,
@@ -5257,342 +4911,6 @@ def _citation_provenance_from_evidence_row(
     if citation_provenance:
         payload["citation_provenance"] = dict(citation_provenance)
     return payload
-
-
-_SCENE_RISE_TERMS = {
-    "rise",
-    "rises",
-    "rose",
-    "rising",
-    "formation",
-    "formed",
-    "created",
-    "creation",
-    "growth",
-    "prosperity",
-    "industrial",
-}
-_SCENE_STABILITY_TERMS = {
-    "stable",
-    "stability",
-    "governance",
-    "government",
-    "rights",
-    "internal",
-    "prosperity",
-    "population",
-}
-_SCENE_FALL_TERMS = {
-    "fall",
-    "fell",
-    "falls",
-    "fallen",
-    "collapse",
-    "collapsed",
-    "collapsing",
-    "decline",
-    "declining",
-    "dissolution",
-    "divided",
-    "partition",
-    "war",
-    "independence",
-}
-
-
-def _scene_coverage_evidence_rows(
-    *,
-    scene_index: SceneIndex,
-    question: str,
-    options: Sequence[str],
-) -> list[dict[str, Any]]:
-    option_stage_targets = {
-        _option_letter(option_text, index=index): _scene_option_stage_targets(option_text)
-        for index, option_text in enumerate(options)
-    }
-    full_arc_options = {
-        option
-        for option, stages in option_stage_targets.items()
-        if "rise" in stages and "fall" in stages
-    }
-    if not full_arc_options:
-        return []
-
-    rows: list[dict[str, Any]] = []
-    seen_stage_by_option: dict[str, set[str]] = {option: set() for option in full_arc_options}
-    for segment in scene_index.segments:
-        text = _scene_segment_text(segment)
-        if not text:
-            continue
-        stages = _scene_text_stages(text)
-        if not stages:
-            continue
-        for option in sorted(full_arc_options):
-            missing = stages.difference(seen_stage_by_option[option])
-            if not missing:
-                continue
-            seen_stage_by_option[option].update(stages)
-            rows.append(
-                {
-                    "evidence_id": f"ev_scene_coverage_{segment.segment_id}",
-                    "obs_id": f"scene_coverage_{segment.segment_id}",
-                    "tool": "timeline_asr_summary",
-                    "segment_id": segment.segment_id,
-                    "time_range": [float(segment.start_sec), float(segment.end_sec)],
-                    "supported_option": option,
-                    "event_label": "scene index coverage",
-                    "claim": _scene_coverage_claim(segment_id=segment.segment_id, stages=stages, text=text),
-                    "confidence": 0.84,
-                    "grounding_quality": "indexed_transcript",
-                    "candidate_option_relations": [
-                        {
-                            "option": option,
-                            "relation": "support",
-                            "strength": 0.84,
-                            "assigned_by": "scene_index_coverage",
-                        }
-                    ],
-                    "confidence_signal": "indexed transcript coverage",
-                    "limitations": "Derived from indexed scene captions/subtitles; verify fine visual details locally when needed.",
-                    "artifact": scene_index.video_path,
-                    **_scene_segment_provenance(segment),
-                }
-            )
-    return [row for row in rows if _scene_row_is_useful_for_full_arc(row, seen_stage_by_option)]
-
-
-def _scene_order_evidence_rows(
-    *,
-    scene_index: SceneIndex,
-    question: str,
-    options: Sequence[str],
-) -> list[dict[str, Any]]:
-    if classify_question_route(question) != "temporal_order" and not _question_has_sequence_options(options):
-        return []
-    if not scene_index.segments:
-        return []
-
-    option_events = {
-        _option_letter(option_text, index=index): _scene_option_event_sequence(option_text)
-        for index, option_text in enumerate(options)
-    }
-    option_events = {
-        option: events
-        for option, events in option_events.items()
-        if len(events) >= 2
-    }
-    if not option_events:
-        return []
-
-    segment_texts = [
-        (segment, _normalize_scene_event_text(_scene_segment_text(segment)))
-        for segment in scene_index.segments
-        if _scene_segment_text(segment)
-    ]
-    matched_options: dict[str, list[tuple[VideoSegment, str]]] = {}
-    for option, events in option_events.items():
-        matches = _match_scene_events_in_order(events=events, segment_texts=segment_texts)
-        if matches is not None:
-            matched_options[option] = matches
-    if not matched_options:
-        return []
-    max_events = max(len(matches) for matches in matched_options.values())
-    matched_options = {
-        option: matches
-        for option, matches in matched_options.items()
-        if len(matches) == max_events
-    }
-    if len(matched_options) != 1:
-        return []
-
-    option, matches = next(iter(matched_options.items()))
-    rows = []
-    for index, (segment, event) in enumerate(matches, start=1):
-        rows.append(
-            {
-                "evidence_id": f"ev_scene_order_{segment.segment_id}_{index:02d}",
-                "obs_id": f"scene_order_{segment.segment_id}",
-                "tool": "timeline_asr_summary",
-                "segment_id": segment.segment_id,
-                "time_range": [float(segment.start_sec), float(segment.end_sec)],
-                "supported_option": option,
-                "event_label": event,
-                "observed_at_sec": float(segment.start_sec),
-                "claim": _scene_order_claim(
-                    segment_id=segment.segment_id,
-                    event=event,
-                    position=index,
-                    text=_scene_segment_text(segment),
-                ),
-                "confidence": 0.86,
-                "grounding_quality": "indexed_transcript",
-                "candidate_option_relations": [
-                    {
-                        "option": option,
-                        "relation": "support",
-                        "strength": 0.86,
-                        "assigned_by": "scene_index_order",
-                    }
-                ],
-                "confidence_signal": "indexed transcript order",
-                "limitations": "Derived from indexed scene captions/subtitles; verify fine visual details locally when needed.",
-                "artifact": scene_index.video_path,
-                **_scene_segment_provenance(segment),
-            }
-        )
-    return rows
-
-
-def _question_has_sequence_options(options: Sequence[str]) -> bool:
-    return any(len(_scene_option_event_sequence(option)) >= 2 for option in options)
-
-
-def _scene_option_stage_targets(option_text: str) -> set[str]:
-    lowered = str(option_text).lower()
-    stages = set()
-    if _scene_contains_any(lowered, _SCENE_RISE_TERMS):
-        stages.add("rise")
-    if _scene_contains_any(lowered, _SCENE_STABILITY_TERMS):
-        stages.add("stability")
-    if _scene_contains_any(lowered, _SCENE_FALL_TERMS):
-        stages.add("fall")
-    return stages
-
-
-def _scene_segment_text(segment: VideoSegment) -> str:
-    return " ".join(
-        part
-        for part in [
-            str(getattr(segment, "asr_summary", "")),
-            str(getattr(segment, "visual_caption", "")),
-            str(getattr(segment, "low_fps_caption", "")),
-            str(getattr(segment, "keyframe_path", "")) if not str(getattr(segment, "low_fps_caption", "")) else "",
-        ]
-        if part
-    ).strip()
-
-
-def _scene_text_stages(text: str) -> set[str]:
-    lowered = str(text).lower()
-    stages = set()
-    if _scene_contains_any(lowered, _SCENE_RISE_TERMS):
-        stages.add("rise")
-    if _scene_contains_any(lowered, _SCENE_STABILITY_TERMS):
-        stages.add("stability")
-    if _scene_contains_any(lowered, _SCENE_FALL_TERMS):
-        stages.add("fall")
-    return stages
-
-
-def _scene_contains_any(text: str, terms: set[str]) -> bool:
-    tokens = set(re.findall(r"[A-Za-z0-9]+", str(text).lower()))
-    return bool(tokens.intersection(terms))
-
-
-def _scene_coverage_claim(*, segment_id: str, stages: set[str], text: str) -> str:
-    stage_text = ", ".join(sorted(stages))
-    compact_text = re.sub(r"\s+", " ", text).strip()
-    compact_text = compact_text[:420] + ("..." if len(compact_text) > 420 else "")
-    return f"{segment_id} indexed transcript/caption covers {stage_text}: {compact_text}"
-
-
-def _scene_row_is_useful_for_full_arc(row: Mapping[str, Any], seen_stage_by_option: Mapping[str, set[str]]) -> bool:
-    option = str(row.get("supported_option", ""))
-    stages = seen_stage_by_option.get(option, set())
-    return "rise" in stages and "fall" in stages
-
-
-def _scene_option_event_sequence(option_text: str) -> list[str]:
-    text = _strip_option_letter(option_text)
-    quoted = [part.strip() for part in re.findall(r'"([^"]+)"|“([^”]+)”|‘([^’]+)’', text) for part in part if part.strip()]
-    if len(quoted) >= 2:
-        return quoted
-    normalized = (
-        text.replace("->", ",")
-        .replace(">", ",")
-        .replace(" and ", ",")
-        .replace(" then ", ",")
-    )
-    events = [part.strip(" .:-\"'") for part in re.split(r"[,;/]+", normalized) if part.strip(" .:-\"'")]
-    return [event for event in events if len(_scene_event_tokens(event)) >= 2]
-
-
-def _match_scene_events_in_order(
-    *,
-    events: Sequence[str],
-    segment_texts: Sequence[tuple[VideoSegment, str]],
-) -> list[tuple[VideoSegment, str]] | None:
-    cursor = 0
-    matches: list[tuple[VideoSegment, str]] = []
-    for event in events:
-        event_tokens = _scene_event_tokens(event)
-        if not event_tokens:
-            return None
-        matched = None
-        for index in range(cursor, len(segment_texts)):
-            segment, normalized_text = segment_texts[index]
-            if event_tokens.issubset(set(normalized_text.split())):
-                matched = (index, segment)
-                break
-        if matched is None:
-            return None
-        cursor = matched[0] + 1
-        matches.append((matched[1], event))
-    return matches
-
-
-def _scene_order_claim(*, segment_id: str, event: str, position: int, text: str) -> str:
-    compact_text = re.sub(r"\s+", " ", text).strip()
-    compact_text = compact_text[:360] + ("..." if len(compact_text) > 360 else "")
-    return f"{segment_id} indexed transcript/caption places ordered item {position}: {event}. Context: {compact_text}"
-
-
-def _strip_option_letter(option_text: str) -> str:
-    return re.sub(r"^\s*[A-H](?:[\.)]\s*|\s+)", "", str(option_text), flags=re.IGNORECASE).strip()
-
-
-def _normalize_scene_event_text(text: str) -> str:
-    return " ".join(_scene_event_tokens(text))
-
-
-def _scene_event_tokens(text: str) -> set[str]:
-    stopwords = {
-        "a",
-        "an",
-        "and",
-        "as",
-        "by",
-        "created",
-        "depicted",
-        "does",
-        "for",
-        "four",
-        "in",
-        "is",
-        "of",
-        "order",
-        "present",
-        "presented",
-        "scene",
-        "shown",
-        "single",
-        "the",
-        "then",
-        "to",
-        "video",
-        "with",
-    }
-    return {
-        _normalize_scene_event_token(token)
-        for token in re.findall(r"[A-Za-z0-9]+", str(text).lower())
-        if len(token) >= 3 and token not in stopwords
-    }
-
-
-def _normalize_scene_event_token(token: str) -> str:
-    if token == "borned":
-        return "born"
-    return token
 
 
 def _hard_skill_gate_reason(
@@ -5792,7 +5110,7 @@ def _option_fact_target_specs(options: Sequence[str], *, max_targets: int = 6) -
             SkillTargetFact(fact=target, mutex_group_id="option_fact_mutex")
             for target in quoted_targets
         ]
-    option_atoms = extract_option_target_atoms(options, max_targets=max_targets, include_synonyms=True)
+    option_atoms = extract_option_target_atoms(options, max_targets=max_targets, include_synonyms=False)
     if option_atoms:
         return [
             SkillTargetFact(fact=target, mutex_group_id="option_fact_mutex")
@@ -5952,58 +5270,7 @@ def _answer_option_letter(answer: str) -> str | None:
 
 
 def _planner_final_answer_with_option(*, question: str, answer: str) -> str:
-    if _answer_option_letter(answer) or not extract_candidate_options(question):
-        return str(answer)
-    option = _answer_option_from_temporal_answer(question=question, answer=answer)
-    if not option:
-        return str(answer)
-    return f"{option}. {str(answer).strip()}"
-
-
-def _answer_option_from_temporal_answer(*, question: str, answer: str) -> str | None:
-    options = extract_candidate_options(question)
-    if len(options) < 2:
-        return None
-    candidates = []
-    for index, option_text in enumerate(options):
-        events = _option_temporal_events(option_text)
-        if len(events) < 2:
-            continue
-        positions = [_fact_position_in_text(text=answer, fact=event) for event in events]
-        if any(position is None for position in positions):
-            continue
-        numeric_positions = [int(position) for position in positions if position is not None]
-        if numeric_positions != sorted(numeric_positions):
-            continue
-        candidates.append(_option_letter(option_text, index=index))
-    if len(candidates) != 1:
-        return None
-    return candidates[0]
-
-
-def _fact_position_in_text(*, text: str, fact: str) -> int | None:
-    target_tokens = _target_fact_key(fact).split()
-    if not target_tokens:
-        return None
-    haystack = [
-        (match.group(0).lower(), match.start())
-        for match in re.finditer(r"[A-Za-z0-9]+", str(text or ""))
-        if match.group(0).lower() not in _TARGET_STOPWORDS
-    ]
-    if not haystack:
-        return None
-    for index, (token, position) in enumerate(haystack):
-        if token != target_tokens[0]:
-            continue
-        target_index = 1
-        for candidate_token, _ in haystack[index + 1 :]:
-            if target_index >= len(target_tokens):
-                break
-            if candidate_token == target_tokens[target_index]:
-                target_index += 1
-        if target_index >= len(target_tokens):
-            return int(position)
-    return None
+    return str(answer)
 
 
 def _timeline_temporal_decision(
@@ -6557,35 +5824,6 @@ def _has_explicit_subwindow(args: Mapping[str, Any]) -> bool:
     except (TypeError, ValueError):
         return False
     return end_sec > start_sec
-
-
-def _is_life_journey_sequence_registry(sequences: Mapping[str, Any]) -> bool:
-    canonical_items = {
-        str(item)
-        for sequence in sequences.values()
-        for item in getattr(sequence, "ordered_items", ())
-    }
-    return {"humble background", "entered upper class", "seclusion/farmhouse"}.issubset(canonical_items)
-
-
-def _life_journey_aliases_for_target(target_ref: str) -> tuple[str, ...]:
-    aliases_by_ref = {
-        "T1": ("humble origins", "modest background", "from a humble background"),
-        "T2": ("upper class", "rose through the ranks", "reached high society", "became a royal painter", "court painter"),
-        "T3": ("seclusion", "isolation", "isolated", "secluded", "withdrew from public life", "farmhouse", "country house"),
-        "T4": ("born in upper class", "born into the upper class"),
-    }
-    return aliases_by_ref.get(str(target_ref), ())
-
-
-def _life_journey_relation_pairs() -> tuple[tuple[str, tuple[str, str]], ...]:
-    return (
-        ("R1", ("T1", "T2")),
-        ("R2", ("T2", "T3")),
-        ("R3", ("T1", "T3")),
-        ("R4", ("T3", "T2")),
-        ("R5", ("T4", "T3")),
-    )
 
 
 def _route_repair_target_keys(args: Mapping[str, Any]) -> list[str]:

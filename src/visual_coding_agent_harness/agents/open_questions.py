@@ -174,8 +174,8 @@ def _rewrite_prompt(*, question: str, route_hint: str = "") -> str:
         "- exploration_question must be an open observation request, not a checklist, detector, or comparison among "
         "candidate answers. Extract the discriminative facts, entities, events, attributes, and temporal relations "
         "that should be observed.\n"
-        "- For main-idea questions, ask for overall topic, main entity, time span, narrative arc, and major stages "
-        "such as origin, growth, stability, decline, collapse, causes, or consequences when relevant.\n"
+        "- For main-idea questions, ask for the overall topic, main subject, time span, narrative structure, "
+        "major phases, causes, and consequences only when they are relevant to the question.\n"
         "- For temporal-order questions, extract the unique events/entities into target_entities metadata, but keep "
         "exploration_question as an open request to describe the video's actual presentation flow. Do not list those "
         "targets inside exploration_question.\n"
@@ -184,26 +184,25 @@ def _rewrite_prompt(*, question: str, route_hint: str = "") -> str:
         "Example 1 input:\n"
         "Question: What's the main idea of the video?\n"
         "Options:\n"
-        "A. The fall of Rome\n"
-        "B. Why the Austro-Hungarian Empire was divided\n"
-        "C. A battle timeline\n"
-        "D. How the Austro-Hungarian Empire rises and falls.\n"
+        "A. A single unrelated detail\n"
+        "B. Why Entity X changes over time\n"
+        "C. A brief side event\n"
+        "D. How Entity X develops across the video.\n"
         "Example 1 output:\n"
-        '{"exploration_question":"Describe the overall topic and narrative arc of the video. Identify the main '
-        'entity, time span, major stages, and whether the video covers origin, growth, stability, decline, collapse, '
-        'causes, or consequences.","focus_points":["overall topic","main entity","time span","narrative stages"],'
-        '"target_entities":["Austro-Hungarian Empire"]}\n\n'
+        '{"exploration_question":"Describe the overall topic and narrative structure of the video. Identify the '
+        'main subject, time span, major phases, and relevant causes or consequences.","focus_points":["overall topic",'
+        '"main subject","time span","narrative phases"],"target_entities":["Entity X"]}\n\n'
         "Example 2 input:\n"
-        "Question: In what order does the author present four sculptures?\n"
+        "Question: In what order does the presenter discuss four items?\n"
         "Options:\n"
-        'A. "The Rape of Persephone", "Apollo and Daphne", "David", "Aeneas fleeing Troy".\n'
-        'B. "David", "Aeneas fleeing Troy", "Apollo and Daphne", "The Rape of Persephone".\n'
+        'A. "Item Alpha", "Item Beta", "Item Gamma", "Item Delta".\n'
+        'B. "Item Gamma", "Item Alpha", "Item Delta", "Item Beta".\n'
         "Example 2 output:\n"
-        '{"exploration_question":"Describe the video segment by segment. Record the actual artworks, sculptures, '
+        '{"exploration_question":"Describe the video segment by segment. Record the actual named items, '
         'onscreen text, narration, and scene transitions in the order they appear, with timestamps when possible; '
         'focus on concrete observations rather than conclusions.","focus_points":["presentation order",'
-        '"timestamp evidence","artwork identification"],"target_entities":["Aeneas fleeing Troy",'
-        '"Apollo and Daphne","David","The Rape of Persephone"]}\n\n'
+        '"timestamp evidence","item identification"],"target_entities":["Item Alpha","Item Beta","Item Gamma",'
+        '"Item Delta"]}\n\n'
         f"Route hint: {route_hint or '(none)'}\n"
         f"Input question:\n{question}\n"
     )
@@ -217,9 +216,8 @@ def _fallback_rewrite(*, question: str, route_hint: str = "") -> str:
         return _temporal_order_exploration_question(_sort_unique_targets(quoted[:8]))
     if any(term in lowered for term in ["main idea", "mainly about", "overall", "topic", "theme"]):
         return (
-            "Describe the overall topic and narrative arc of the video. Identify the main entity, time span, "
-            "major stages, and whether the video covers origin, growth, stability, decline, collapse, causes, "
-            "or consequences."
+            "Describe the overall topic and narrative structure of the video. Identify the main subject, time span, "
+            "major phases, and relevant causes or consequences."
         )
     return exploration_question(question, route_hint=route_hint).replace("Do not choose an option.", "Report facts only.")
 

@@ -254,14 +254,16 @@ class VideoNavigationTest(unittest.TestCase):
             located = registry.execute(
                 "locate_targets_in_segment",
                 {"segment_id": "seg_0002", "target_refs": ["T1", "T2", "T3", "T4"]},
-            )
+        )
 
         self.assertEqual(located["answer_evidence_rows"][0]["tool"], "ordered_transcript_sequence")
-        self.assertEqual(located["answer_evidence_rows"][0]["supported_option"], "D")
+        self.assertNotIn("supported_option", located["answer_evidence_rows"][0])
+        self.assertNotIn("candidate_option_relations", located["answer_evidence_rows"][0])
         self.assertEqual(
             located["answer_evidence_rows"][0]["ordered_transcript_sequence"]["ordered_target_refs"],
             ["T1", "T2", "T3", "T4"],
         )
+        self.assertEqual(located["answer_evidence_rows"][0]["sequence_binding"]["ordered_target_refs"], ["T1", "T2", "T3", "T4"])
         self.assertEqual(located["recommended_next_actions"][0]["route_kind"], "ordered_list_transcript_complete")
         self.assertEqual(located["recommended_next_actions"][0]["tool"], "read_segment_detail")
         self.assertFalse(
@@ -352,12 +354,10 @@ class VideoNavigationTest(unittest.TestCase):
                 include_legacy_worker_votes=True,
             )
 
-            b_rows = table["groups"]["B"]
-            c_rows = table["groups"]["C"]
-            self.assertTrue(any(row["tool"] == "asr_cue_detail" for row in b_rows))
-            self.assertTrue(all(row["grounding_quality"] == "indexed_transcript" for row in b_rows))
-            self.assertTrue(any("target sequence in order" in row["claim"] for row in b_rows))
-            self.assertFalse(any("target sequence in order" in row["claim"] for row in c_rows))
+            rows = table["groups"]["unassigned"]
+            self.assertTrue(any(row["tool"] == "asr_cue_detail" for row in rows))
+            self.assertTrue(all(row["grounding_quality"] == "indexed_transcript" for row in rows))
+            self.assertTrue(all(not row.get("supported_option") for row in rows))
 
     def test_read_segment_detail_does_not_promote_target_refs_by_default(self):
         video_map = VideoMap(
@@ -515,13 +515,14 @@ class VideoNavigationTest(unittest.TestCase):
                 include_legacy_worker_votes=True,
             )
 
-        self.assertTrue(table["groups"]["B"])
+        self.assertTrue(table["groups"]["unassigned"])
+        self.assertFalse(table["groups"]["B"])
         self.assertFalse(table["groups"]["C"])
         self.assertTrue(
             any(
                 row["tool"] == "transcript_evidence_binder"
                 and row["evidence_binding"]["status"] == "supported"
-                for row in table["groups"]["B"]
+                for row in table["groups"]["unassigned"]
             )
         )
 
@@ -1060,8 +1061,8 @@ class VideoNavigationTest(unittest.TestCase):
             {"segment_id": "seg_0002", "targets": ["David"]},
         )
 
-        self.assertEqual(len(located["candidates"]), 1)
-        self.assertEqual(located["candidates"][0]["start_sec"], 430.0)
+        self.assertEqual(len(located["candidates"]), 2)
+        self.assertEqual(located["candidates"][0]["start_sec"], 330.0)
         self.assertEqual(located["candidates"][0]["match_type"], "contextual_single_name")
 
     def test_search_segments_returns_modality_channels_and_evidence_snippets(self):

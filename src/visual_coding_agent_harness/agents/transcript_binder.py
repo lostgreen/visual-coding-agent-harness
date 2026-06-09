@@ -165,12 +165,7 @@ def _first_target_match(snippet: str, target: TargetSpec) -> re.Match[str] | Non
 
 def _target_aliases(target: TargetSpec) -> list[str]:
     aliases = [target.canonical_text, *list(target.aliases)]
-    built_ins = {
-        "upper class": ["upper class", "upper-class", "upper echelons", "high society", "upper"],
-        "humble background": ["humble background", "humble origins", "modest background"],
-        "successful": ["successful", "becoming successful"],
-    }.get(target.canonical_text.lower().strip(), [])
-    return _unique_nonempty([*aliases, *built_ins])
+    return _unique_nonempty(aliases)
 
 
 def _phrase_pattern(phrase: str) -> str:

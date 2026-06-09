@@ -93,7 +93,7 @@ class QuestionPolicyTest(unittest.TestCase):
 
         self.assertEqual(classify_question_route(question), "temporal_order")
 
-    def test_extracts_option_atoms_and_synonyms_for_life_journey(self):
+    def test_option_atoms_preserve_surface_clauses_without_semantic_synonyms(self):
         question = (
             "How was his life journey according to the video?\n"
             "A. Born with humble background and lived in seclusion in a farmhouse.\n"
@@ -101,12 +101,11 @@ class QuestionPolicyTest(unittest.TestCase):
         )
 
         atoms = extract_option_target_atoms(question, include_synonyms=True)
-        self.assertIn("humble background", atoms)
-        self.assertIn("upper class", atoms)
-        self.assertIn("farmhouse", atoms)
-        self.assertIn("isolation", atoms)
-        self.assertIn("upper echelons", atoms)
-        self.assertIn("withdrew from public life", atoms)
+        self.assertIn("Born with humble background and lived in seclusion in a farmhouse", atoms)
+        self.assertIn("entered the upper class", atoms)
+        self.assertNotIn("isolation", atoms)
+        self.assertNotIn("upper echelons", atoms)
+        self.assertNotIn("withdrew from public life", atoms)
 
     def test_option_atom_map_preserves_option_order(self):
         question = (
@@ -117,10 +116,10 @@ class QuestionPolicyTest(unittest.TestCase):
 
         mapping = extract_option_target_atom_map(question, include_synonyms=False)
 
-        self.assertLess(mapping["B"].index("upper class"), mapping["B"].index("seclusion"))
-        self.assertLess(mapping["C"].index("seclusion"), mapping["C"].index("upper class"))
+        self.assertLess(mapping["B"].index("entered the upper class"), mapping["B"].index("lived in seclusion in a farmhouse"))
+        self.assertLess(mapping["C"].index("lived in seclusion in a farmhouse"), mapping["C"].index("entered the upper class"))
 
-    def test_life_journey_option_sequences_distinguish_entered_and_born_upper_class(self):
+    def test_life_journey_option_sequences_are_not_semantically_canonicalized(self):
         question = (
             "How was his life journey according to the video?\n"
             "A. Born with humble background and lived in seclusion in a farmhouse.\n"
@@ -131,13 +130,9 @@ class QuestionPolicyTest(unittest.TestCase):
 
         sequences = extract_option_sequence_specs(question)
 
-        self.assertEqual(sequences["B"].ordered_items, ("humble background", "entered upper class", "seclusion/farmhouse"))
-        self.assertEqual(sequences["B"].ordered_target_refs, ("T1", "T2", "T3"))
-        self.assertEqual(sequences["C"].ordered_target_refs, ("T1", "T3", "T2"))
-        self.assertEqual(sequences["D"].ordered_items, ("born in upper class", "seclusion/farmhouse"))
-        self.assertEqual(sequences["D"].ordered_target_refs, ("T4", "T3"))
+        self.assertEqual(sequences, {})
 
-    def test_real_612_borned_option_creates_t4(self):
+    def test_real_612_borned_option_is_left_for_grounding_planner(self):
         question = (
             "How was his life journey according to the video?\n"
             "A. Born with humble background and lived in seclusion in a farmhouse.\n"
@@ -148,8 +143,7 @@ class QuestionPolicyTest(unittest.TestCase):
 
         sequences = extract_option_sequence_specs(question)
 
-        self.assertEqual(sequences["D"].ordered_items, ("born in upper class", "seclusion/farmhouse"))
-        self.assertEqual(sequences["D"].ordered_target_refs, ("T4", "T3"))
+        self.assertEqual(sequences, {})
 
     def test_temporal_route_ignores_formatting_instruction_first(self):
         route = classify_question_route(

@@ -557,6 +557,28 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.budget.max_rounds, 20)
         self.assertEqual(config.budget.max_repeated_programs, 20)
 
+    def test_agent_v2_enables_planner_owned_grounding_by_default(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(["--strategy", "agent_v2"])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertTrue(config.budget.planner_owned_grounding)
+        self.assertTrue(config.ablation_flags["planner_owned_grounding"])
+
+    def test_planner_owned_grounding_can_be_disabled(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(["--strategy", "agent_v2", "--disable-planner-owned-grounding"])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertFalse(config.budget.planner_owned_grounding)
+        self.assertFalse(config.ablation_flags["planner_owned_grounding"])
+
     def test_legacy_expensive_tool_budget_flag_is_accepted_but_ignored(self):
         from runs import eval_runner
 
