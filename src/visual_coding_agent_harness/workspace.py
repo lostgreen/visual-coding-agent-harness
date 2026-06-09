@@ -193,6 +193,7 @@ class EvidenceWorkspace:
         "qa_region",
         "inspect_region",
         "asr_cue_detail",
+        "ordered_transcript_sequence",
         "timeline_asr_summary",
         "transcript_evidence_binder",
         "verify_local_claim",

@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from ..agents.transcript_binder import TranscriptEvidenceBinder
-from ..contracts import ClaimRelation, TargetSpec
+from ..contracts import (
+    ClaimModality,
+    ClaimRelation,
+    TargetSpec,
+    build_ordered_transcript_sequence,
+    ordered_sequence_exact_option,
+)
 from ..registry import ToolError, ToolRegistry, tool
 from ..video_map import VideoMap, VideoMapSegment, VideoMapStore
 from ..workspace import EvidenceWorkspace, MapUpdateProposal
@@ -212,7 +218,25 @@ def build_video_navigation_registry(
             segment=segment,
             option_targets=resolved_option_targets,
         )
+        evidence_bindings: list[Mapping[str, object]] = []
+        relation_bindings: list[Mapping[str, object]] = []
         if promote_answer_evidence and binding_targets:
+            binding_result = _bound_transcript_binding_result(
+                segment=segment,
+                targets=binding_targets,
+                relations=binding_relations,
+            )
+            binding_payload = binding_result.to_dict()
+            evidence_bindings = [
+                dict(binding)
+                for binding in binding_payload.get("evidence_bindings", [])
+                if isinstance(binding, Mapping)
+            ]
+            relation_bindings = [
+                dict(binding)
+                for binding in binding_payload.get("relation_bindings", [])
+                if isinstance(binding, Mapping)
+            ]
             answer_evidence_rows = [
                 *answer_evidence_rows,
                 *_answer_evidence_rows_from_bound_targets(
@@ -220,6 +244,7 @@ def build_video_navigation_registry(
                     targets=binding_targets,
                     relations=binding_relations,
                     workspace=workspace,
+                    binding_result=binding_result,
                 ),
             ]
         return {
@@ -238,6 +263,8 @@ def build_video_navigation_registry(
             "target_hits": target_hits,
             "target_matches": target_matches,
             "unmatched_targets": unmatched_targets,
+            "evidence_bindings": evidence_bindings,
+            "relation_bindings": relation_bindings,
             "answer_evidence_rows": answer_evidence_rows,
             "nav_digest": nav_digest,
             "regions": [segment.to_dict()],
@@ -272,6 +299,11 @@ def build_video_navigation_registry(
             segment=segment,
             candidates=candidates,
         )
+        ordered_transcript_rows = _ordered_transcript_answer_evidence_rows(
+            segment=segment,
+            targets=binding_targets,
+            workspace=workspace,
+        )
         focused_vision_call_args = _focused_vision_call_args_for_ordered_candidate(
             segment=segment,
             candidates=candidates,
@@ -280,18 +312,33 @@ def build_video_navigation_registry(
             focused_vision_call_args=focused_vision_call_args,
             candidates=candidates,
             target_refs=_ordered_candidate_target_refs(candidates=candidates, workspace=workspace),
+            ordered_transcript_rows=ordered_transcript_rows,
+            segment_id=segment.segment_id,
         )
         if workspace is not None and recommended_next_actions:
             for action in recommended_next_actions:
-                if action.get("route_kind") == "focused_ordered_list_vision":
+                route_kind = str(action.get("route_kind") or "")
+                if route_kind in {"focused_ordered_list_vision", "ordered_list_transcript_complete"}:
                     workspace.write_trace_event(
-                        "ordered_list_candidate_detected",
+                        "ordered_transcript_candidate_detected"
+                        if route_kind == "ordered_list_transcript_complete"
+                        else "ordered_list_candidate_detected",
                         {
                             "segment_id": segment.segment_id,
                             "candidate_id": str(action.get("candidate_id") or ""),
                             "target_refs": list(action.get("target_refs") or []),
                         },
                     )
+                if action.get("route_kind") == "ordered_list_transcript_complete":
+                    workspace.write_trace_event(
+                        "ordered_transcript_sequence_supported",
+                        {
+                            "segment_id": segment.segment_id,
+                            "candidate_id": str(action.get("candidate_id") or ""),
+                            "target_refs": list(action.get("target_refs") or []),
+                        },
+                    )
+                if action.get("route_kind") == "focused_ordered_list_vision":
                     workspace.write_trace_event(
                         "focused_ordered_list_vision_recommended",
                         {
@@ -324,6 +371,7 @@ def build_video_navigation_registry(
             "candidates": candidates,
             "anchors_for_vlm": anchors,
             "ordered_list_timeline_rows": ordered_list_timeline_rows,
+            "answer_evidence_rows": ordered_transcript_rows,
             "focused_vision_call_args": focused_vision_call_args,
             "verify_call_args": verify_call_args,
             "recommended_next_actions": recommended_next_actions,
@@ -335,6 +383,7 @@ def build_video_navigation_registry(
                     "candidates": candidates,
                     "anchors_for_vlm": anchors,
                     "ordered_list_timeline_rows": ordered_list_timeline_rows,
+                    "answer_evidence_rows": ordered_transcript_rows,
                     "focused_vision_call_args": focused_vision_call_args,
                     "verify_call_args": verify_call_args,
                     "recommended_next_actions": recommended_next_actions,
@@ -955,16 +1004,14 @@ def _answer_evidence_rows_from_bound_targets(
     targets: Sequence[TargetSpec],
     relations: Sequence[ClaimRelation],
     workspace: EvidenceWorkspace | None,
+    binding_result: Any | None = None,
 ) -> list[Mapping[str, object]]:
-    if not segment.asr_text:
+    if not _bound_transcript_text(segment):
         return []
-    result = TranscriptEvidenceBinder().bind(
-        text=segment.asr_text,
+    result = binding_result or _bound_transcript_binding_result(
+        segment=segment,
         targets=targets,
         relations=relations,
-        segment_id=segment.segment_id,
-        start_sec=float(segment.start_sec),
-        source="asr",
     )
     relation_payloads = [asdict(binding) for binding in result.relation_bindings]
     supported_relations = [
@@ -1014,6 +1061,111 @@ def _answer_evidence_rows_from_bound_targets(
             }
         )
     return rows
+
+
+def _bound_transcript_binding_result(
+    *,
+    segment: VideoMapSegment,
+    targets: Sequence[TargetSpec],
+    relations: Sequence[ClaimRelation],
+) -> Any:
+    text = _bound_transcript_text(segment)
+    start_sec = _bound_transcript_start_sec(segment)
+    return TranscriptEvidenceBinder().bind(
+        text=text,
+        targets=targets,
+        relations=relations,
+        segment_id=segment.segment_id,
+        start_sec=start_sec,
+        source="indexed_transcript",
+    )
+
+
+def _bound_transcript_text(segment: VideoMapSegment) -> str:
+    sentence_texts = [
+        str(sentence.get("text") or "").strip()
+        for sentence in (getattr(segment, "asr_sentences", ()) or ())
+        if isinstance(sentence, Mapping) and str(sentence.get("text") or "").strip()
+    ]
+    if sentence_texts:
+        return " ".join(sentence_texts)
+    return str(segment.asr_text or "").strip()
+
+
+def _bound_transcript_start_sec(segment: VideoMapSegment) -> float:
+    starts = [
+        float(sentence.get("start_sec", segment.start_sec) or segment.start_sec)
+        for sentence in (getattr(segment, "asr_sentences", ()) or ())
+        if isinstance(sentence, Mapping) and str(sentence.get("text") or "").strip()
+    ]
+    return min(starts) if starts else float(segment.start_sec)
+
+
+def _ordered_transcript_answer_evidence_rows(
+    *,
+    segment: VideoMapSegment,
+    targets: Sequence[TargetSpec],
+    workspace: EvidenceWorkspace | None,
+) -> list[Mapping[str, object]]:
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
+    if not targets or not isinstance(options_by_id, Mapping) or not options_by_id:
+        return []
+    sequence = build_ordered_transcript_sequence(
+        text=segment.asr_text,
+        targets=targets,
+        segment_id=segment.segment_id,
+        start_sec=float(segment.start_sec),
+        end_sec=float(segment.end_sec),
+    )
+    if sequence is None:
+        return []
+    option = ordered_sequence_exact_option(sequence, options_by_id)
+    if sequence.status != "supported" or not option:
+        return []
+    sequence_payload = sequence.to_dict()
+    target_refs = list(sequence.ordered_target_refs)
+    evidence_id = str(sequence_payload.get("evidence_id") or f"seq_{segment.segment_id}")
+    return [
+        {
+            "evidence_id": evidence_id,
+            "tool": "ordered_transcript_sequence",
+            "segment_id": segment.segment_id,
+            "time_range": [float(segment.start_sec), float(segment.end_sec)],
+            "event_label": "ordered_transcript_sequence",
+            "claim": (
+                f"Indexed transcript in {segment.segment_id} gives a complete contiguous ordered list "
+                f"that maps exactly to option {option}: " + " -> ".join(target_refs)
+            ),
+            "confidence": sequence.confidence,
+            "grounding_quality": "indexed_transcript",
+            "supported_option": option,
+            "candidate_option_relations": [
+                {
+                    "option": option,
+                    "relation": "support",
+                    "strength": sequence.confidence,
+                    "assigned_by": "ordered_transcript_sequence",
+                    "required_target_sequence": target_refs,
+                }
+            ],
+            "confidence_signal": "complete contiguous transcript ordered list",
+            "limitations": "Order is derived from ASR text position in one contiguous enumeration; visual corroboration is optional unless explicitly required.",
+            "source": sequence.source,
+            "snippet": sequence.snippet,
+            "ordered_transcript_sequence": sequence_payload,
+            "evidence_binding": {
+                "evidence_id": evidence_id,
+                "status": "supported",
+                "claim_modality": ClaimModality.NARRATED_FACT.value,
+                "target_id": "ordered_sequence",
+                "segment_id": segment.segment_id,
+                "source": sequence.source,
+                "snippet": sequence.snippet,
+                "ordered_target_refs": target_refs,
+            },
+        }
+    ]
 
 
 def _supported_option_relations_from_bindings(
@@ -1315,8 +1467,15 @@ def _locate_target_candidates(
     per_target_limit = max(1, int(top_k_per_target or 1))
     for target_index, target in enumerate([str(item).strip() for item in targets if str(item).strip()], start=1):
         matches = _find_target_text_matches(target=target, sources=sources, top_k=per_target_limit)
-        for match in matches:
-            candidate_id = f"cand_{len(candidates) + 1:04d}"
+        for match_index, match in enumerate(matches, start=1):
+            candidate_id = _locate_candidate_id(
+                segment_id=segment.segment_id,
+                kind="target",
+                index=target_index,
+                match=match,
+                target=target,
+                match_index=match_index,
+            )
             candidates.append(
                 {
                     "candidate_id": candidate_id,
@@ -1335,12 +1494,37 @@ def _locate_target_candidates(
                     ),
                 }
             )
-    for ordered in _ordered_list_candidates(segment=segment, sources=sources, targets=targets):
-        candidate_id = f"cand_{len(candidates) + 1:04d}"
+    for ordered_index, ordered in enumerate(_ordered_list_candidates(segment=segment, sources=sources, targets=targets), start=1):
+        candidate_id = _locate_candidate_id(
+            segment_id=segment.segment_id,
+            kind="ordered_list",
+            index=ordered_index,
+            match=ordered,
+            target="ordered_list",
+            match_index=ordered_index,
+        )
         ordered_candidate = dict(ordered)
         ordered_candidate["candidate_id"] = candidate_id
         candidates.append(ordered_candidate)
     return candidates
+
+
+def _locate_candidate_id(
+    *,
+    segment_id: str,
+    kind: str,
+    index: int,
+    match: Mapping[str, object],
+    target: str,
+    match_index: int,
+) -> str:
+    source = re.sub(r"[^A-Za-z0-9]+", "_", str(match.get("source") or "source")).strip("_") or "source"
+    start = str(round(float(match.get("start_sec", 0.0) or 0.0), 3)).replace(".", "_")
+    char_start = int(match.get("match_start", match.get("start_char", 0)) or 0)
+    target_key = re.sub(r"[^A-Za-z0-9]+", "_", _target_text_key(str(target)))[:32].strip("_") or "target"
+    segment_key = re.sub(r"[^A-Za-z0-9]+", "_", str(segment_id or "segment")).strip("_") or "segment"
+    kind_key = re.sub(r"[^A-Za-z0-9]+", "_", str(kind or "candidate")).strip("_") or "candidate"
+    return f"cand_{segment_key}_{kind_key}_{index:02d}_{match_index:02d}_{source}_{start}_{char_start}_{target_key}"
 
 
 def _locate_text_sources(segment: VideoMapSegment) -> list[Mapping[str, object]]:
@@ -1891,29 +2075,81 @@ def _locate_recommended_next_actions(
     focused_vision_call_args: Mapping[str, object],
     candidates: Sequence[Mapping[str, object]],
     target_refs: Sequence[str],
+    ordered_transcript_rows: Sequence[Mapping[str, object]] = (),
+    segment_id: str = "",
 ) -> list[dict[str, object]]:
-    if not focused_vision_call_args:
-        return []
     ordered_candidate = _selected_ordered_list_candidate(candidates)
     if not ordered_candidate:
         return []
     ordered_targets = ordered_candidate.get("ordered_targets", [])
-    fallback_refs = [
+    ordered_target_texts = [
         str(target).strip()
-        for target in (ordered_targets if isinstance(ordered_targets, Sequence) and not isinstance(ordered_targets, (str, bytes)) else [])
+        for target in (
+            ordered_targets
+            if isinstance(ordered_targets, Sequence) and not isinstance(ordered_targets, (str, bytes))
+            else []
+        )
         if str(target).strip()
     ]
-    refs = [str(ref).strip() for ref in target_refs if str(ref).strip()] or fallback_refs
+    refs = [str(ref).strip() for ref in target_refs if str(ref).strip()]
+    complete_rows = [row for row in ordered_transcript_rows if isinstance(row, Mapping)]
+    if complete_rows and refs:
+        row = dict(complete_rows[0])
+        return [
+            {
+                "candidate_id": _ordered_candidate_stable_id(
+                    segment_id=segment_id,
+                    candidate=ordered_candidate,
+                    route_kind="ordered_list_transcript_complete",
+                ),
+                "candidate_type": "ordered_list",
+                "route_kind": "ordered_list_transcript_complete",
+                "tool": "read_segment_detail",
+                "target_refs": refs,
+                "ordered_targets": ordered_target_texts,
+                "evidence_id": str(row.get("evidence_id") or ""),
+                "supported_option": str(row.get("supported_option") or ""),
+                "args": {
+                    "segment_id": str(segment_id or ordered_candidate.get("segment_id") or ""),
+                    "target_refs": refs,
+                    "promote_answer_evidence": True,
+                },
+            }
+        ]
+    if not focused_vision_call_args:
+        return []
     return [
-        {
-            "candidate_id": str(ordered_candidate.get("candidate_id") or ""),
-            "candidate_type": "ordered_list",
-            "route_kind": "focused_ordered_list_vision",
-            "tool": "vision_read",
+            {
+                "candidate_id": _ordered_candidate_stable_id(
+                    segment_id=segment_id,
+                    candidate=ordered_candidate,
+                    route_kind="focused_ordered_list_vision",
+                ),
+                "candidate_type": "ordered_list",
+                "candidate_kind": "ordered_list_visual_candidate",
+                "route_kind": "focused_ordered_list_vision",
+                "tool": "vision_read",
             "target_refs": refs,
+            "ordered_targets": ordered_target_texts,
             "args": dict(focused_vision_call_args),
         }
     ]
+
+
+def _ordered_candidate_stable_id(
+    *,
+    segment_id: str,
+    candidate: Mapping[str, object],
+    route_kind: str,
+) -> str:
+    raw_id = str(candidate.get("candidate_id") or "").strip()
+    start = str(candidate.get("start_sec", "")).replace(".", "_")
+    end = str(candidate.get("end_sec", "")).replace(".", "_")
+    if raw_id and raw_id.startswith("cand_") and str(segment_id):
+        return f"cand_{segment_id}_{route_kind}_{raw_id}_{start}_{end}"
+    if raw_id:
+        return raw_id
+    return f"cand_{segment_id or 'segment'}_{route_kind}_{start}_{end}"
 
 
 def _locate_recommended_next_tools(

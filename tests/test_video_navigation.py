@@ -219,6 +219,91 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(located["targets"], ["humble background"])
         self.assertTrue(located["candidates"])
 
+    def test_complete_asr_order_skips_required_visual_route(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=240.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=180.0,
+                    end_sec=205.0,
+                    asr_text=(
+                        'Bernini presents "Aeneas, Anchises, and Ascanius fleeing Troy", '
+                        '"David", "The rape of Persephone", and "Apollo and Daphne" in this passage.'
+                    ),
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="complete_asr_sequence")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "Aeneas, Anchises, and Ascanius fleeing Troy"),
+                    TargetSpec("T2", "David"),
+                    TargetSpec("T3", "The rape of Persephone"),
+                    TargetSpec("T4", "Apollo and Daphne"),
+                ],
+                options=[
+                    OptionSpec("C", target_sequence=("T1", "T3", "T2", "T4")),
+                    OptionSpec("D", target_sequence=("T1", "T2", "T3", "T4")),
+                ],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            located = registry.execute(
+                "locate_targets_in_segment",
+                {"segment_id": "seg_0002", "target_refs": ["T1", "T2", "T3", "T4"]},
+            )
+
+        self.assertEqual(located["answer_evidence_rows"][0]["tool"], "ordered_transcript_sequence")
+        self.assertEqual(located["answer_evidence_rows"][0]["supported_option"], "D")
+        self.assertEqual(
+            located["answer_evidence_rows"][0]["ordered_transcript_sequence"]["ordered_target_refs"],
+            ["T1", "T2", "T3", "T4"],
+        )
+        self.assertEqual(located["recommended_next_actions"][0]["route_kind"], "ordered_list_transcript_complete")
+        self.assertEqual(located["recommended_next_actions"][0]["tool"], "read_segment_detail")
+        self.assertFalse(
+            any(action.get("route_kind") == "focused_ordered_list_vision" for action in located["recommended_next_actions"])
+        )
+
+    def test_partial_asr_order_falls_back_to_focused_vision(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=240.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=180.0,
+                    end_sec=205.0,
+                    asr_text='Bernini mentions "Aeneas", "David", and "Persephone", then moves on.',
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="partial_asr_sequence")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "Aeneas"),
+                    TargetSpec("T2", "David"),
+                    TargetSpec("T3", "Persephone"),
+                    TargetSpec("T4", "Apollo and Daphne"),
+                ],
+                options=[OptionSpec("D", target_sequence=("T1", "T2", "T3", "T4"))],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            located = registry.execute(
+                "locate_targets_in_segment",
+                {"segment_id": "seg_0002", "target_refs": ["T1", "T2", "T3", "T4"]},
+            )
+
+        self.assertEqual(located["answer_evidence_rows"], [])
+        self.assertTrue(
+            any(action.get("route_kind") == "focused_ordered_list_vision" for action in located["recommended_next_actions"])
+        )
+
     def test_read_segment_detail_promotes_matching_asr_cues_to_answer_evidence(self):
         video_map = VideoMap(
             video_path="/videos/goya.mp4",
@@ -440,6 +525,99 @@ class VideoNavigationTest(unittest.TestCase):
             )
         )
 
+    def test_promote_detail_emits_formal_evidence_and_relation_bindings(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=10.0,
+                    end_sec=60.0,
+                    asr_text=(
+                        "Goya was a man from a humble background who rose through the ranks to reach the upper "
+                        "class, then withdrew into a farmhouse."
+                    ),
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="formal_bindings")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "humble background", subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T2", "entered upper class", aliases=("upper class", "upper"), subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T3", "seclusion/farmhouse", aliases=("farmhouse", "withdrew into a farmhouse"), subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                ],
+                options=[OptionSpec("B", target_sequence=("T1", "T2", "T3"), required_relations=("R1", "R2"))],
+                relations=[
+                    ClaimRelation("R1", "before", "T1", "T2"),
+                    ClaimRelation("R2", "before", "T2", "T3"),
+                ],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            detail = registry.execute(
+                "read_segment_detail",
+                {"segment_id": "seg_0001", "target_refs": ["T1", "T2", "T3"], "promote_answer_evidence": True},
+            )
+
+        self.assertEqual(
+            {binding["target_id"]: binding["status"] for binding in detail["evidence_bindings"]},
+            {"T1": "supported", "T2": "supported", "T3": "supported"},
+        )
+        self.assertEqual(
+            {binding["relation_id"]: binding["status"] for binding in detail["relation_bindings"]},
+            {"R1": "supported", "R2": "supported"},
+        )
+        self.assertTrue(
+            any(
+                relation["relation_id"] == "R2"
+                for row in detail["answer_evidence_rows"]
+                for relation in row["evidence_binding"].get("relation_bindings", [])
+            )
+        )
+
+    def test_raw_asr_cues_are_used_before_summary_for_bindings(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_text="A lossy summary says Goya reached the upper class before his humble background.",
+                    asr_sentences=[
+                        {
+                            "start_sec": 12.0,
+                            "end_sec": 18.0,
+                            "text": "Goya was a man from a humble background who rose to reach the upper class.",
+                        }
+                    ],
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="raw_asr_first")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "humble background", subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T2", "entered upper class", aliases=("upper class",), subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                ],
+                relations=[ClaimRelation("R1", "before", "T1", "T2")],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            detail = registry.execute(
+                "read_segment_detail",
+                {"segment_id": "seg_0001", "target_refs": ["T1", "T2"], "promote_answer_evidence": True},
+            )
+
+        self.assertEqual(detail["relation_bindings"][0]["status"], "supported")
+        self.assertIn("rose to reach", detail["relation_bindings"][0]["snippet"])
+        self.assertEqual(detail["evidence_bindings"][0]["mention_timestamp_sec"], 12.0)
+
     def test_read_segment_detail_returns_full_segment_fields_and_target_hits(self):
         registry = build_video_navigation_registry(demo_video_map())
 
@@ -598,8 +776,9 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(raw["recommended_next_actions"][0]["tool"], "vision_read")
         self.assertEqual(raw["recommended_next_actions"][0]["args"], raw["focused_vision_call_args"])
         self.assertEqual(raw["recommended_next_actions"][0]["args"]["nframes"], 128)
+        self.assertEqual(raw["recommended_next_actions"][0]["target_refs"], [])
         self.assertEqual(
-            raw["recommended_next_actions"][0]["target_refs"],
+            raw["recommended_next_actions"][0]["ordered_targets"],
             [
                 "Aeneas, Anchises, and Ascanius fleeing Troy",
                 "David",
@@ -608,6 +787,8 @@ class VideoNavigationTest(unittest.TestCase):
             ],
         )
         self.assertTrue(str(raw["recommended_next_actions"][0]["candidate_id"]).startswith("cand_"))
+        self.assertIn("seg_0002", raw["recommended_next_actions"][0]["candidate_id"])
+        self.assertFalse(raw["recommended_next_actions"][0]["candidate_id"].endswith("0001"))
         self.assertEqual(raw["focused_vision_call_args"]["segment_id"], "seg_0002")
         self.assertLess(raw["focused_vision_call_args"]["start_sec"], ordered_candidates[0]["start_sec"])
         self.assertGreater(raw["focused_vision_call_args"]["end_sec"], ordered_candidates[0]["end_sec"])
