@@ -55,6 +55,26 @@ Current local checks:
 - `PYTHONPATH=src:. pytest -q` -> `462 passed in 1.77s`
 - `git diff --check` -> passed
 
+## Launched KML Rerun
+
+Code commit used for launch:
+
+`7468bef`
+
+Run root:
+
+`/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_closure_7468bef_3demo_20260609_213500_pyenv`
+
+Artifacts:
+
+- pid: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_closure_7468bef_3demo_20260609_213500_pyenv/job.pid`
+- log: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_closure_7468bef_3demo_20260609_213500_pyenv/job.log`
+- summary: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_closure_7468bef_3demo_20260609_213500_pyenv/summary.json`
+
+Launch PID:
+
+`36743`
+
 ## Files Changed
 
 - `src/visual_coding_agent_harness/agents/iterative_agent.py`
