@@ -181,10 +181,23 @@ class CaptionQAToolsTest(unittest.TestCase):
         )
 
         for request in backend.requests:
-            self.assertEqual(request.metadata["original_question"], MCQ_QUESTION)
+            self.assertNotIn("original_question", request.metadata)
             self.assertIn("What is the video mainly about?", request.prompt)
             self.assertIn("Do not choose an option.", request.prompt)
             assert_no_mcq_leak(self, request.prompt)
+
+    def test_general_qa_video_sanitizes_full_mcq_before_backend_generate(self):
+        backend = CaptionQARecordingBackend()
+        registry = build_vlm_registry(backend)
+
+        registry.execute("qa_video", {"video_path": "/videos/demo.mp4", "question": MCQ_QUESTION, "nframes": 12})
+
+        request = backend.requests[0]
+        self.assertIn("What is the video mainly about?", request.prompt)
+        self.assertIn("Do not choose an option.", request.prompt)
+        self.assertNotIn("original_question", request.metadata)
+        assert_no_mcq_leak(self, request.prompt)
+        assert_no_mcq_leak(self, request.metadata["question"])
 
     def test_segment_tool_marks_explicit_no_evidence_as_unsupported(self):
         backend = FixedTextBackend("The video does not depict Bernini's four masterpieces in this segment.")
@@ -217,7 +230,7 @@ class CaptionQAToolsTest(unittest.TestCase):
         registry.execute("caption_segments", {"segment_ids": ["seg_0001"], "question": MCQ_QUESTION})
 
         request = backend.requests[0]
-        self.assertEqual(request.metadata["original_question"], MCQ_QUESTION)
+        self.assertNotIn("original_question", request.metadata)
         self.assertIn("What is the video mainly about?", request.prompt)
         self.assertIn("Do not choose an option.", request.prompt)
         assert_no_mcq_leak(self, request.prompt)
@@ -285,7 +298,8 @@ class CaptionQAToolsTest(unittest.TestCase):
         request = backend.requests[0]
         self.assertEqual(request.task, "inspect_segment")
         self.assertEqual(request.media_path, "/videos/demo.mp4")
-        self.assertEqual(request.metadata["candidate_options"], ["A. aircraft", "B. submarine"])
+        self.assertEqual(request.metadata["candidate_options"], [])
+        self.assertNotIn("original_candidate_options", request.metadata)
         self.assertIn("You are a Segment Inspector subagent", request.prompt)
         self.assertIn("Return one distilled local observation", request.prompt)
         self.assertIn("Do not choose an option", request.prompt)

@@ -72,3 +72,46 @@ Suggested next actions:
 
 - This branch intentionally changes old tests that expected timeline or AnswerAgent heuristics to directly final. The new contract is planner ownership: framework heuristics become visible suggestions unless the planner has explicitly finalized or the run reaches the configured final fallback.
 - `timeline_candidates.md` is now the home for transcript/navigation order candidates. `timeline.md` is reserved for visual verifier rows and legacy explicit visual timestamp rows.
+
+## Update 2026-06-09
+
+Current goal:
+
+- Apply the new review plan: raw MCQ remains canonical for planner, navigation/search, evidence comparison, and AnswerAgent; only local VLM worker requests receive option-free factual prompts.
+- Address remote Agent interaction failure mode where indexed ASR details were visible through `read_segment_detail` but could not become answer-grade evidence, causing repeated visual exploration.
+
+Important decisions:
+
+- `QuestionContext` now makes question views explicit. Planner, AnswerAgent, and navigation use raw MCQ by default; `vlm_safe_question` is reserved for local VLM prompt repair.
+- VideoMME runner no longer enables global MCQ rewrite by default. Legacy behavior is available with `--use-global-question-rewrite`; `--disable-mcq-rewrite` remains a compatibility no-op because rewrite is already disabled by default.
+- Local VLM tools strip option labels/text from prompts and request metadata. Planner/search may still use options and option-derived atoms.
+- `read_segment_detail` remains navigation-only, but it can return structured `answer_evidence_rows`; the interpreter promotes only those rows into evidence table entries as `tool="asr_cue_detail"` and `grounding_quality="indexed_transcript"`.
+- Final gates now use answer-grade evidence terminology: visual evidence, indexed transcript evidence, OCR, or QA can support a final answer. Navigation-only rows and text-inferred locator rows remain insufficient.
+
+Files changed in this update:
+
+- Question handling and planning: `agents/open_questions.py`, `agents/question_policy.py`, `agents/iterative_agent.py`, `agents/prompt_stack.py`.
+- Evidence promotion and gates: `tools/navigation.py`, `interpreter.py`, `workspace.py`, `agents/answer_agent.py`.
+- Local VLM sanitization: `tools/vlm.py`, `tools/segments.py`, `tools/enrichment.py`, `tools/inspector.py`, `tools/global_view.py`.
+- Runner defaults: `evals/videomme/runner.py`.
+- Focused tests updated/added across question policy, open questions, VLM sanitization, navigation ASR promotion, runner config, and iterative agent prompt/final gates.
+
+Current verification:
+
+- Local full regression: `PYTHONPATH=src:. pytest -q`
+  - Result: `410 passed in 1.48s`.
+- Focused regression before full run:
+  - `tests/test_question_policy.py tests/test_open_questions.py tests/test_caption_qa_tools.py tests/test_global_view.py tests/test_video_navigation.py tests/test_eval_runner.py tests/test_iterative_agent.py`
+  - Result: `171 passed in 0.80s`.
+
+Stale evidence:
+
+- Previous local/KML pytest counts of `403 passed` are from before this 2026-06-09 rewrite/ASR-promotion patch.
+- Previous KML repo state at code commit `28c778a` does not include this unpushed local patch unless synced later.
+
+Next actions:
+
+1. Review and commit the local patch.
+2. Sync to KML via GitHub/proxy or a reviewed patch path.
+3. Re-run local/KML full pytest and synthetic three-case replay after sync.
+4. Re-run VideoMME cases `605-1,611-2,612-1`; for `612-1`, check whether `asr_cue_detail` rows support option B before max rounds.

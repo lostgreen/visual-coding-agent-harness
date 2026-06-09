@@ -45,8 +45,6 @@ def build_video_enrichment_registry(
                 "max_pixels": int(max_pixels),
                 "question": prompt_question,
             }
-            if prompt_question != str(question or "").strip():
-                metadata["original_question"] = question
             if fps > 0:
                 metadata["fps"] = float(fps)
             if extract_clips:

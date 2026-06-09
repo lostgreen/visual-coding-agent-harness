@@ -119,6 +119,61 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(coverage["coverage"][2]["status"], "missing")
         self.assertIn("T1 blue aircraft", coverage["claim"])
 
+    def test_read_segment_detail_promotes_matching_asr_cues_to_answer_evidence(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_text=(
+                        "Goya came from a humble background, rose through the ranks to the upper echelons "
+                        "of high society, moved into a farmhouse, and worked in total isolation."
+                    ),
+                )
+            ],
+        )
+        registry = build_video_navigation_registry(video_map)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="asr_answer_rows")
+            ProgramInterpreter(registry, workspace).run(
+                [
+                    {
+                        "tool": "read_segment_detail",
+                        "args": {
+                            "segment_id": "seg_0001",
+                            "option_targets": {
+                                "B": ["humble background", "upper class", "farmhouse", "seclusion"],
+                                "C": ["humble background", "seclusion", "farmhouse", "upper class"],
+                            },
+                        },
+                    }
+                ]
+            )
+
+            table = workspace.evidence_table_v2(
+                question=(
+                    "How was his life journey according to the video?\n"
+                    "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+                    "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class."
+                ),
+                options=[
+                    "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.",
+                    "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.",
+                ],
+                include_legacy_worker_votes=True,
+            )
+
+            b_rows = table["groups"]["B"]
+            c_rows = table["groups"]["C"]
+            self.assertTrue(any(row["tool"] == "asr_cue_detail" for row in b_rows))
+            self.assertTrue(all(row["grounding_quality"] == "indexed_transcript" for row in b_rows))
+            self.assertTrue(any("target sequence in order" in row["claim"] for row in b_rows))
+            self.assertFalse(any("target sequence in order" in row["claim"] for row in c_rows))
+
     def test_read_segment_detail_returns_full_segment_fields_and_target_hits(self):
         registry = build_video_navigation_registry(demo_video_map())
 

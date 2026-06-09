@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
+from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
@@ -30,24 +31,26 @@ def build_vlm_registry(
 
     @tool(name="caption_image", description="Caption an image using the shared VLM backend.")
     def caption_image(image_path: str, question: str = "Describe the image.") -> Mapping[str, object]:
+        prompt_question = exploration_question(question)
         return _run_vlm_tool(
             backend=backend,
             task="caption_image",
             media_path=image_path,
             media_type="image",
-            prompt=_caption_qa_prompt(task="caption_image", question=question),
-            metadata={"task": "caption_image", "question": question},
+            prompt=_caption_qa_prompt(task="caption_image", question=prompt_question),
+            metadata={"task": "caption_image", "question": prompt_question},
         )
 
     @tool(name="qa_image", description="Answer an image question using the shared VLM backend.")
     def qa_image(image_path: str, question: str) -> Mapping[str, object]:
+        prompt_question = exploration_question(question)
         return _run_vlm_tool(
             backend=backend,
             task="qa_image",
             media_path=image_path,
             media_type="image",
-            prompt=_caption_qa_prompt(task="qa_image", question=question),
-            metadata={"task": "qa_image", "question": question},
+            prompt=_caption_qa_prompt(task="qa_image", question=prompt_question),
+            metadata={"task": "qa_image", "question": prompt_question},
         )
 
     @tool(name="caption_region", description="Crop and caption one image region using the shared VLM backend.")
@@ -56,6 +59,7 @@ def build_vlm_registry(
         bbox: Sequence[int],
         question: str = "Describe this image region.",
     ) -> Mapping[str, object]:
+        prompt_question = exploration_question(question)
         crop_path = _materialize_region_crop(
             image_path=image_path,
             bbox=bbox,
@@ -64,7 +68,7 @@ def build_vlm_registry(
         )
         metadata = {
             "task": "caption_region",
-            "question": question,
+            "question": prompt_question,
             "source_image_path": image_path,
             "bbox": list(bbox),
             "crop_path": crop_path,
@@ -74,13 +78,14 @@ def build_vlm_registry(
             task="caption_region",
             media_path=crop_path,
             media_type="image",
-            prompt=_caption_qa_prompt(task="caption_region", question=question),
+            prompt=_caption_qa_prompt(task="caption_region", question=prompt_question),
             metadata=metadata,
             input_artifacts=[crop_path],
         )
 
     @tool(name="qa_region", description="Crop and answer a question about one image region using the shared VLM backend.")
     def qa_region(image_path: str, bbox: Sequence[int], question: str) -> Mapping[str, object]:
+        prompt_question = exploration_question(question)
         crop_path = _materialize_region_crop(
             image_path=image_path,
             bbox=bbox,
@@ -89,7 +94,7 @@ def build_vlm_registry(
         )
         metadata = {
             "task": "qa_region",
-            "question": question,
+            "question": prompt_question,
             "source_image_path": image_path,
             "bbox": list(bbox),
             "crop_path": crop_path,
@@ -99,7 +104,7 @@ def build_vlm_registry(
             task="qa_region",
             media_path=crop_path,
             media_type="image",
-            prompt=_caption_qa_prompt(task="qa_region", question=question),
+            prompt=_caption_qa_prompt(task="qa_region", question=prompt_question),
             metadata=metadata,
             input_artifacts=[crop_path],
         )
@@ -112,15 +117,16 @@ def build_vlm_registry(
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
+        prompt_question = exploration_question(question)
         return _run_vlm_tool(
             backend=backend,
             task="caption_video",
             media_path=video_path,
             media_type="video",
-            prompt=_caption_qa_prompt(task="caption_video", question=question),
+            prompt=_caption_qa_prompt(task="caption_video", question=prompt_question),
             metadata={
                 "task": "caption_video",
-                "question": question,
+                "question": prompt_question,
                 **_video_metadata(nframes=nframes, max_pixels=max_pixels, fps=fps),
             },
         )
@@ -133,15 +139,16 @@ def build_vlm_registry(
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
+        prompt_question = exploration_question(question)
         return _run_vlm_tool(
             backend=backend,
             task="qa_video",
             media_path=video_path,
             media_type="video",
-            prompt=_caption_qa_prompt(task="qa_video", question=question),
+            prompt=_caption_qa_prompt(task="qa_video", question=prompt_question),
             metadata={
                 "task": "qa_video",
-                "question": question,
+                "question": prompt_question,
                 **_video_metadata(nframes=nframes, max_pixels=max_pixels, fps=fps),
             },
         )

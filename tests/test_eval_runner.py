@@ -503,11 +503,22 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertTrue(config.budget.disable_global_gist_route)
 
-    def test_videomme_runner_enables_mcq_rewrite_by_default(self):
+    def test_videomme_runner_disables_global_mcq_rewrite_by_default(self):
         from runs import eval_runner
 
         parser = eval_runner.build_arg_parser()
         args = parser.parse_args([])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertFalse(config.budget.rewrite_mcq_for_exploration)
+        self.assertFalse(config.ablation_flags["enable_mcq_rewrite"])
+
+    def test_videomme_runner_can_enable_legacy_global_mcq_rewrite(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(["--use-global-question-rewrite"])
 
         config = eval_runner.config_from_args(args)
 

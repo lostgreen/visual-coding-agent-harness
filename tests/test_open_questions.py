@@ -1,6 +1,6 @@
 import unittest
 
-from visual_coding_agent_harness.agents.open_questions import exploration_question, rewrite_exploration_question_with_model
+from visual_coding_agent_harness.agents.open_questions import build_question_context, exploration_question, rewrite_exploration_question_with_model
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 
 
@@ -50,6 +50,15 @@ def assert_no_mcq_leak(testcase: unittest.TestCase, prompt: str, option_texts=MC
 
 
 class OpenQuestionsTest(unittest.TestCase):
+    def test_question_context_keeps_raw_mcq_for_planner_and_answer(self):
+        context = build_question_context(MCQ_QUESTION)
+
+        self.assertEqual(context.planner_question, MCQ_QUESTION)
+        self.assertEqual(context.answer_question, MCQ_QUESTION)
+        self.assertEqual(context.navigation_question, MCQ_QUESTION)
+        self.assertIn("A. The fall of Rome", context.planner_question)
+        assert_no_mcq_leak(self, context.vlm_safe_question)
+
     def test_exploration_question_strips_mcq_labels_options_and_answer_letter_instruction(self):
         question = exploration_question(MCQ_QUESTION)
 

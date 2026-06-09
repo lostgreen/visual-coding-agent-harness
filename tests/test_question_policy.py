@@ -1,6 +1,12 @@
 import unittest
 
-from visual_coding_agent_harness.agents.question_policy import classify_question_route, extract_candidate_options, select_question_playbook
+from visual_coding_agent_harness.agents.question_policy import (
+    classify_question_route,
+    extract_candidate_options,
+    extract_option_target_atom_map,
+    extract_option_target_atoms,
+    select_question_playbook,
+)
 
 
 class QuestionPolicyTest(unittest.TestCase):
@@ -10,7 +16,7 @@ class QuestionPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(playbook.name, "multiple_choice")
-        self.assertIn("inspect_segment", " ".join(playbook.instructions))
+        self.assertIn("discriminative search atoms", " ".join(playbook.instructions))
         self.assertIn("verify option consistency", " ".join(playbook.sufficiency_rules))
 
     def test_selects_temporal_ordering_playbook_from_question(self):
@@ -73,6 +79,44 @@ class QuestionPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(route, "temporal_order")
+
+    def test_option_life_journey_markers_make_route_temporal(self):
+        question = (
+            "How was his life journey according to the video?\n"
+            "A. Born with humble background and lived in seclusion in a farmhouse.\n"
+            "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+            "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
+            "D. Born in the upper class and lived in seclusion in a farmhouse."
+        )
+
+        self.assertEqual(classify_question_route(question), "temporal_order")
+
+    def test_extracts_option_atoms_and_synonyms_for_life_journey(self):
+        question = (
+            "How was his life journey according to the video?\n"
+            "A. Born with humble background and lived in seclusion in a farmhouse.\n"
+            "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse."
+        )
+
+        atoms = extract_option_target_atoms(question, include_synonyms=True)
+        self.assertIn("humble background", atoms)
+        self.assertIn("upper class", atoms)
+        self.assertIn("farmhouse", atoms)
+        self.assertIn("isolation", atoms)
+        self.assertIn("upper echelons", atoms)
+        self.assertIn("withdrew from public life", atoms)
+
+    def test_option_atom_map_preserves_option_order(self):
+        question = (
+            "How was his life journey according to the video?\n"
+            "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+            "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class."
+        )
+
+        mapping = extract_option_target_atom_map(question, include_synonyms=False)
+
+        self.assertLess(mapping["B"].index("upper class"), mapping["B"].index("seclusion"))
+        self.assertLess(mapping["C"].index("seclusion"), mapping["C"].index("upper class"))
 
     def test_temporal_route_ignores_formatting_instruction_first(self):
         route = classify_question_route(

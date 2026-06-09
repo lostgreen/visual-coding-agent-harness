@@ -141,6 +141,7 @@ class ProgramInterpreter:
                 "observation_id": observation.observation_id,
             },
         )
+        self._write_answer_evidence_rows(observation=observation, raw_output=raw_output)
         distilled_records = distill(observation, self.workspace)
         for evidence_record in distilled_records:
             self.workspace.write_evidence(evidence_record)
@@ -151,6 +152,40 @@ class ProgramInterpreter:
         if "assign" in step:
             assignments[str(step["assign"])] = observation.observation_id
         return observation.observation_id
+
+    def _write_answer_evidence_rows(self, *, observation: Observation, raw_output: Mapping[str, Any]) -> None:
+        rows = raw_output.get("answer_evidence_rows", [])
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            return
+        written = 0
+        for index, row in enumerate(rows, start=1):
+            if not isinstance(row, Mapping):
+                continue
+            payload = dict(row)
+            payload.setdefault("obs_id", observation.observation_id)
+            payload.setdefault("observation_id", observation.observation_id)
+            payload.setdefault("evidence_id", f"ev_answer_{observation.observation_id}_{index:02d}")
+            relations = payload.get("candidate_option_relations", [])
+            if isinstance(relations, Sequence) and not isinstance(relations, (str, bytes)):
+                resolved_relations = []
+                for relation in relations:
+                    if not isinstance(relation, Mapping):
+                        continue
+                    resolved = dict(relation)
+                    resolved.setdefault("observation_id", observation.observation_id)
+                    resolved_relations.append(resolved)
+                payload["candidate_option_relations"] = resolved_relations
+            self.workspace.write_evidence_row(payload)
+            written += 1
+        if written:
+            self.workspace.write_trace_event(
+                "answer_evidence_rows_promoted",
+                {
+                    "tool": observation.tool,
+                    "observation_id": observation.observation_id,
+                    "row_count": written,
+                },
+            )
 
     def _attach_visual_manifest(
         self,

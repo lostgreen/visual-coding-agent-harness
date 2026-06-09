@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
+from .question_policy import extract_candidate_options
 
 
 _OPTION_LINE_RE = re.compile(r"^\s*[A-H][\).:-]\s+\S.*$", re.IGNORECASE)
@@ -24,6 +25,28 @@ class ExplorationQuestionRewrite:
     raw_text: str = ""
     used_model: bool = False
     fallback_reason: str = ""
+
+
+@dataclass(frozen=True)
+class QuestionContext:
+    raw_question: str
+    options: list[str]
+    planner_question: str
+    answer_question: str
+    navigation_question: str
+    vlm_safe_question: str
+
+
+def build_question_context(question: str) -> QuestionContext:
+    raw_question = str(question or "")
+    return QuestionContext(
+        raw_question=raw_question,
+        options=list(extract_candidate_options(raw_question)),
+        planner_question=raw_question,
+        answer_question=raw_question,
+        navigation_question=raw_question,
+        vlm_safe_question=exploration_question(raw_question),
+    )
 
 
 def exploration_question(question: str, route_hint: str = "") -> str:

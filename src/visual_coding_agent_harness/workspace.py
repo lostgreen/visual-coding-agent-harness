@@ -192,6 +192,7 @@ class EvidenceWorkspace:
         "ocr_region",
         "qa_region",
         "inspect_region",
+        "asr_cue_detail",
         "timeline_asr_summary",
         "verify_local_claim",
     }
@@ -2397,6 +2398,7 @@ def _grounding_quality(*, raw_output: Mapping[str, Any], limitations: str, confi
     if explicit in {
         "global_sparse",
         "visually_confirmed",
+        "indexed_transcript",
         "query_global_context",
         "inferred",
         "external_knowledge",
@@ -2431,6 +2433,7 @@ def _sort_evidence_rows(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     grounding_rank = {
         "global_sparse": 0,
         "visually_confirmed": 0,
+        "indexed_transcript": 0,
         "inferred": 1,
         "weak": 2,
         "external_knowledge": 3,

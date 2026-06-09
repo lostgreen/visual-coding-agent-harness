@@ -617,7 +617,7 @@ def _is_visual_support_relation(relation: Mapping[str, Any]) -> bool:
         or relation.get("grounding")
         or ""
     ).strip()
-    return grounding in {"", "visually_confirmed"}
+    return grounding in {"", "visually_confirmed", "indexed_transcript"}
 
 
 def _strong_mutex_conflict(table: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any], str] | None:

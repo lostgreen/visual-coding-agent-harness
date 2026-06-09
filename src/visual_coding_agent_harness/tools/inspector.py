@@ -326,7 +326,6 @@ def _run_inspector(
     nframes_tool_cap: int | None = None,
 ) -> Mapping[str, object]:
     resolved_nframes, _ = resolve_nframes(nframes, tool_cap=nframes_tool_cap)
-    metadata_candidate_options = list(original_candidate_options or candidate_options)
     metadata = {
         "tool_role": "segment_inspector",
         "context_tier": "isolated_subagent",
@@ -334,14 +333,10 @@ def _run_inspector(
         "start_sec": float(start_sec),
         "end_sec": float(end_sec),
         "question": question,
-        "candidate_options": metadata_candidate_options,
+        "candidate_options": list(candidate_options),
         "nframes": int(resolved_nframes),
         "max_pixels": int(max_pixels),
     }
-    if original_question is not None and str(original_question or "").strip() != str(question or "").strip():
-        metadata["original_question"] = original_question
-    if original_candidate_options:
-        metadata["original_candidate_options"] = list(original_candidate_options)
     if fps > 0:
         metadata["fps"] = float(fps)
     max_new_tokens = 256

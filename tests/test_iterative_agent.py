@@ -373,9 +373,9 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("fps", prompt)
             self.assertIn("delegate localized visual reading to one focused evidence tool", prompt)
             self.assertIn("Do not spend every round on navigation-only tools", prompt)
-            self.assertIn("Multiple-choice answers must use vision_read or inspect_segment", prompt)
+            self.assertIn("Local VLM tools must receive neutral factual prompts", prompt)
             self.assertIn("navigation-only evidence and locate candidates are insufficient", prompt)
-            self.assertIn("non-navigation visual evidence", prompt)
+            self.assertIn("answer-grade citation", prompt)
 
     def test_option_blind_mcq_seeds_target_coverage_before_first_planner_round(self):
         class RewriteThenPlanBackend(ScriptedPlannerBackend):
@@ -1151,10 +1151,8 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             prompt = backend.requests[0].prompt
-            self.assertIn(
-                'candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]',
-                prompt,
-            )
+            self.assertNotIn("candidate_options in JSON should be option letters", prompt)
+            self.assertIn("Local VLM tools must receive neutral factual prompts", prompt)
             self.assertIn("Do not copy quoted option text into JSON string values", prompt)
 
     def test_iterative_agent_limits_tool_calls_per_round(self):
@@ -1729,7 +1727,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(tool_args["end_sec"], 1804.957)
             self.assertEqual(tool_args["segment_id"], "window_001800000_001804957")
 
-    def test_iterative_agent_injects_mcq_options_into_inspector_args(self):
+    def test_iterative_agent_keeps_mcq_options_out_of_inspector_args(self):
         backend = ScriptedPlannerBackend(
             [
                 (
@@ -1743,7 +1741,7 @@ class IterativeAgentTest(unittest.TestCase):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
 
         with tempfile.TemporaryDirectory() as tmp:
-            workspace = EvidenceWorkspace.create(Path(tmp), run_id="inject_mcq_options")
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="no_inspector_mcq_options")
             agent = IterativeVisualAgent(
                 backend=backend,
                 registry=build_segment_test_registry(),
@@ -1757,9 +1755,10 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             tool_args = result.rounds[0].program[0]["args"]
-            self.assertEqual(tool_args["candidate_options"], ["A. aircraft museum", "B. submarine"])
+            self.assertNotIn("candidate_options", tool_args)
+            self.assertIn("Which option is visible?", tool_args["question"])
 
-    def test_iterative_agent_replaces_letter_only_candidate_options_with_full_options(self):
+    def test_iterative_agent_strips_planner_candidate_options_from_inspector_args(self):
         backend = ScriptedPlannerBackend(
             [
                 (
@@ -1773,7 +1772,7 @@ class IterativeAgentTest(unittest.TestCase):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
 
         with tempfile.TemporaryDirectory() as tmp:
-            workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_full_options")
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="strip_planner_mcq_options")
             agent = IterativeVisualAgent(
                 backend=backend,
                 registry=build_segment_test_registry(),
@@ -1788,7 +1787,7 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             tool_args = result.rounds[0].program[0]["args"]
-            self.assertEqual(tool_args["candidate_options"], ["A. aircraft museum", "B. submarine"])
+            self.assertNotIn("candidate_options", tool_args)
 
     def test_iterative_agent_recovers_when_planner_copies_unescaped_option_quotes(self):
         malformed_planner_json = (
@@ -1831,10 +1830,7 @@ class IterativeAgentTest(unittest.TestCase):
 
             self.assertEqual(result.status, "final")
             self.assertEqual(result.rounds[0].program[0]["tool"], "inspect_segment")
-            self.assertEqual(
-                result.rounds[0].program[0]["args"]["candidate_options"],
-                ['A. "David" then Apollo', "B. plain option"],
-            )
+            self.assertNotIn("candidate_options", result.rounds[0].program[0]["args"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_json_parse_error", trace)
 
@@ -1927,7 +1923,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertNotIn("aircraft museum", tool_args["question"])
             self.assertEqual(tool_args["question"], "Describe the actual visible objects and narrated facts.")
 
-    def test_iterative_agent_blocks_mcq_final_until_inspector_with_options(self):
+    def test_iterative_agent_blocks_mcq_final_until_answer_grade_evidence(self):
         class McqFinalBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 if request.task == "answer_from_evidence":
@@ -1965,7 +1961,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.citations, ["obs_0001"])
             self.assertEqual(result.rounds[0].status, "continue")
             self.assertEqual(result.rounds[0].program[0]["tool"], "inspect_segment")
-            self.assertEqual(result.rounds[0].program[0]["args"]["candidate_options"], ["A. aircraft museum", "B. submarine"])
+            self.assertNotIn("candidate_options", result.rounds[0].program[0]["args"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_final_blocked", trace)
 

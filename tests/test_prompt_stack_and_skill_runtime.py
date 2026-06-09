@@ -87,7 +87,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertNotIn("Recommended fallback skill", prompt)
         self.assertIn("timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
-        self.assertIn("Final answers require at least one evidence-grade visual observation", prompt)
+        self.assertIn("Final answers require at least one answer-grade citation", prompt)
 
     def test_slot_prompt_contains_all_four_sections_and_budget_report(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
@@ -328,9 +328,10 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
 
         self.assertEqual(_semantic_question_text(wrapped), "How was his life journey according to the video?")
         targets = _skill_target_facts(question=wrapped, skill_name="grounded_factual_qa")
-        self.assertIn("Borned with humble background", targets)
-        self.assertIn("entered the upper class", targets)
-        self.assertIn("lived in seclusion in a farmhouse", targets)
+        self.assertIn("humble background", targets)
+        self.assertIn("upper class", targets)
+        self.assertIn("seclusion", targets)
+        self.assertIn("farmhouse", targets)
         self.assertTrue(all("VideoMME" not in target for target in targets))
         self.assertEqual(
             _skill_target_facts(question=temporal, skill_name="timeline_ordering"),
@@ -619,7 +620,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
 
             self.assertNotEqual(result.status, "final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("final_requires_non_navigation_visual_evidence", trace)
+            self.assertIn("final_requires_answer_grade_evidence", trace)
 
     def test_failure_reflection_memory_is_injected_after_parse_error(self):
         backend = RecordingBackend(

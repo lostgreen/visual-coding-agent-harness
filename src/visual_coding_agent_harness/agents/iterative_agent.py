@@ -16,10 +16,16 @@ from .answer_agent import AnswerAgent, AnswerAgentResult
 from .contracts import VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
-from .open_questions import exploration_question, rewrite_exploration_question_with_model
+from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
 from .output_quality import is_unsupported_claim
 from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
-from .question_policy import classify_question_route, extract_candidate_options, select_question_playbook
+from .question_policy import (
+    classify_question_route,
+    extract_candidate_options,
+    extract_option_target_atom_map,
+    extract_option_target_atoms,
+    select_question_playbook,
+)
 from .skills.predicates import (
     grounding_quality_floor,
     no_decisive_weak_grounding,
@@ -154,9 +160,11 @@ class IterativeVisualAgent:
         )
 
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
-        raw_question = question
-        exploration_question_text = self._question_for_exploration(raw_question)
-        self.workspace.ensure_hypothesis(question)
+        question_context = build_question_context(question)
+        raw_question = question_context.raw_question
+        exploration_question_text = self._question_for_exploration(question_context)
+        vlm_safe_question = question_context.vlm_safe_question
+        self.workspace.ensure_hypothesis(raw_question)
         self._seed_target_coverage(raw_question)
         if not self.budget.rewrite_mcq_for_exploration:
             self._seed_scene_coverage_evidence(raw_question)
@@ -429,6 +437,7 @@ class IterativeVisualAgent:
                 program = self._normalize_program(
                     planned_program,
                     question=exploration_question_text,
+                    vlm_safe_question=vlm_safe_question,
                     raw_question=raw_question,
                     video_path=video_path,
                     inspected_segment_ids=inspected_segment_ids,
@@ -896,16 +905,19 @@ class IterativeVisualAgent:
             rounds=rounds,
         )
 
-    def _question_for_exploration(self, question: str) -> str:
-        self._exploration_target_entities = ()
-        if not self.budget.rewrite_mcq_for_exploration or not extract_candidate_options(question):
-            return question
+    def _question_for_exploration(self, question_context: QuestionContext) -> str:
+        question = question_context.raw_question
+        self._exploration_target_entities = tuple(extract_option_target_atoms(question, max_targets=12, include_synonyms=True))
+        if not self.budget.rewrite_mcq_for_exploration or not question_context.options:
+            return question_context.planner_question
         rewrite = rewrite_exploration_question_with_model(
             self.backend,
             question=question,
             route_hint=classify_question_route(question),
         )
-        self._exploration_target_entities = tuple(rewrite.target_entities)
+        rewrite_targets = tuple(rewrite.target_entities)
+        if rewrite_targets:
+            self._exploration_target_entities = rewrite_targets
         self.workspace.write_trace_event(
             "mcq_exploration_question_rewrite",
             {
@@ -916,12 +928,13 @@ class IterativeVisualAgent:
                 "target_entities": list(rewrite.target_entities),
             },
         )
-        return rewrite.exploration_question or exploration_question(question)
+        return rewrite.exploration_question or question_context.vlm_safe_question
 
     def _try_answer_agent_final(
         self,
         *,
         question: str,
+        vlm_safe_question: str = "",
         video_path: str,
         rounds: Sequence[IterativeRound],
         round_number: int,
@@ -1023,6 +1036,7 @@ class IterativeVisualAgent:
         planner_skill: SkillSpec | None = None,
         notes_out: list[NormalizationNote] | None = None,
         raw_question: str = "",
+        vlm_safe_question: str = "",
     ) -> Sequence[Mapping[str, Any]]:
         if not isinstance(program, list):
             raise ValueError("Planner action status=continue requires a list program")
@@ -1236,6 +1250,13 @@ class IterativeVisualAgent:
                     and not args.get("candidate_options")
                 ):
                     args["candidate_options"] = list(candidate_options)
+            if tool_name == "read_segment_detail":
+                if self._exploration_target_entities and not args.get("targets"):
+                    args["targets"] = list(self._exploration_target_entities)
+                if self._tool_accepts_argument(tool_name, "option_targets") and not args.get("option_targets"):
+                    option_targets = extract_option_target_atom_map(raw_question or question, include_synonyms=False)
+                    if option_targets:
+                        args["option_targets"] = option_targets
             if final_round_reserved and tool_name != "verify_ledger_answer":
                 self.workspace.write_trace_event(
                     "exploration_policy_adjustment",
@@ -1271,6 +1292,14 @@ class IterativeVisualAgent:
                 continue
 
             if tool_name in _SEGMENT_MEDIA_TOOLS:
+                for option_arg in (
+                    "candidate_options",
+                    "mutex_option_x_text",
+                    "mutex_option_y_text",
+                    "mutex_option_x",
+                    "mutex_option_y",
+                ):
+                    args.pop(option_arg, None)
                 segment = (
                     self._resolve_media_segment(
                         str(segment_id),
@@ -1312,7 +1341,7 @@ class IterativeVisualAgent:
                         )
                         if not pool_exhausted_logged:
                             self.workspace.write_reflection_memory(
-                                route=classify_question_route(question),
+                        route=classify_question_route(question),
                                 failure_tag="segment_pool_exhausted",
                                 rule=(
                                     "Scene index segment pool is empty; pivot to zoom/expand_window on a key "
@@ -1370,6 +1399,7 @@ class IterativeVisualAgent:
                         str(args["ask_for"]),
                         route_hint=planner_skill.name if planner_skill else "",
                         question_context=question,
+                        vlm_safe_question=vlm_safe_question,
                         forbidden_question=raw_question,
                         option_blind=self.budget.rewrite_mcq_for_exploration,
                         target_entities=self._exploration_target_entities,
@@ -1380,6 +1410,7 @@ class IterativeVisualAgent:
                         str(args["question"]),
                         route_hint=planner_skill.name if planner_skill else "",
                         question_context=question,
+                        vlm_safe_question=vlm_safe_question,
                         forbidden_question=raw_question,
                         option_blind=self.budget.rewrite_mcq_for_exploration,
                         target_entities=self._exploration_target_entities,
@@ -1388,8 +1419,6 @@ class IterativeVisualAgent:
                 if candidate_options:
                     if tool_name == "vision_read":
                         args.setdefault("event_label", str(args.get("ask_for", "")))
-                    if tool_name == "inspect_segment" and not self.budget.rewrite_mcq_for_exploration:
-                        args["candidate_options"] = candidate_options
                 args.setdefault("nframes", self.budget.default_nframes)
                 reserved_segment_ids.add(segment.segment_id)
 
@@ -1426,13 +1455,6 @@ class IterativeVisualAgent:
                         planner_skill=active_skill,
                         target_entities=self._exploration_target_entities,
                     )
-                candidate_options = extract_candidate_options(question)
-                if (
-                    candidate_options
-                    and fallback_tool_name == "inspect_segment"
-                    and not self.budget.rewrite_mcq_for_exploration
-                ):
-                    fallback_args["candidate_options"] = list(candidate_options)
                 normalized.append(
                     {
                         "tool": fallback_tool_name,
@@ -1611,9 +1633,6 @@ class IterativeVisualAgent:
         if tool_name is None:
             return []
         args: dict[str, Any] = {"segment_id": fallback_segment_id, "question": question}
-        candidate_options = extract_candidate_options(question)
-        if candidate_options and tool_name == "inspect_segment":
-            args["candidate_options"] = list(candidate_options)
         return [{"tool": tool_name, "args": args, "assign": f"required_{fallback_segment_id}"}]
 
     def _fallback_visual_tool_name(self) -> str | None:
@@ -1654,9 +1673,6 @@ class IterativeVisualAgent:
             args["event_label"] = target_question
         else:
             args["question"] = target_question
-        candidate_options = extract_candidate_options(question)
-        if candidate_options and tool_name == "inspect_segment":
-            args["candidate_options"] = list(candidate_options)
         return [{"tool": tool_name, "args": args, "assign": f"forced_visual_{segment.segment_id}"}]
 
     def _visual_evidence_from_navigation_program(
@@ -1961,9 +1977,11 @@ class IterativeVisualAgent:
             )
 
     def _seed_target_coverage(self, question: str) -> None:
-        if not self.budget.rewrite_mcq_for_exploration or not extract_candidate_options(question):
+        if not extract_candidate_options(question):
             return
         targets = [str(target).strip() for target in self._exploration_target_entities if str(target).strip()]
+        if not targets:
+            targets = extract_option_target_atoms(question, max_targets=12, include_synonyms=True)
         if not targets or not self._has_tool("target_coverage"):
             return
         if self.workspace.observation_count(tool_name="target_coverage") > 0:
@@ -2138,13 +2156,18 @@ class IterativeVisualAgent:
                 },
             )
             return None
-        if not self.workspace.has_non_navigation_visual_citation(low_confidence.citations):
+        if not _has_answer_grade_citation(
+            workspace=self.workspace,
+            question=question,
+            answer=low_confidence.answer,
+            citations=low_confidence.citations,
+        ):
             self.workspace.write_trace_event(
                 "low_confidence_final_blocked",
                 {
                     "round": round_number,
                     "source": source,
-                    "reason": "final_requires_non_navigation_visual_evidence",
+                    "reason": "final_requires_answer_grade_evidence",
                     "citations": list(low_confidence.citations),
                 },
             )
@@ -2918,19 +2941,16 @@ def _blocked_final_reason(
     unsatisfied_slots = workspace.unsatisfied_hypothesis_slots()
     if unsatisfied_slots:
         return "hypothesis_slots_unsatisfied: " + ", ".join(unsatisfied_slots[:5])
-    if (
-        extract_candidate_options(question)
-        and not has_inspect_with_candidate_options
-        and not workspace.has_non_navigation_visual_citation(citations)
-        and not _indexed_transcript_supports_answer(
-            workspace=workspace,
-            question=question,
-            answer=answer,
-        )
-    ):
+    has_answer_grade_evidence = _has_answer_grade_citation(
+        workspace=workspace,
+        question=question,
+        answer=answer,
+        citations=citations,
+    )
+    if extract_candidate_options(question) and not has_inspect_with_candidate_options and not has_answer_grade_evidence:
         return "mcq_final_requires_local_visual_read"
-    if not workspace.has_non_navigation_visual_citation(citations):
-        return "final_requires_non_navigation_visual_evidence"
+    if not has_answer_grade_evidence:
+        return "final_requires_answer_grade_evidence"
     single_scene_reason = _single_scene_subwindow_final_reason(
         question=question,
         workspace=workspace,
@@ -3098,6 +3118,20 @@ def _main_idea_indexed_coverage_supports_answer(
     return _indexed_transcript_supports_answer(workspace=workspace, question=question, answer=answer)
 
 
+def _has_answer_grade_citation(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    answer: str,
+    citations: Sequence[str],
+) -> bool:
+    return workspace.has_non_navigation_visual_citation(citations) or _indexed_transcript_supports_answer(
+        workspace=workspace,
+        question=question,
+        answer=answer,
+    )
+
+
 def _indexed_transcript_supports_answer(
     *,
     workspace: EvidenceWorkspace,
@@ -3117,7 +3151,7 @@ def _indexed_transcript_supports_answer(
     for row in table.get("groups", {}).get(selected_option, []):
         if not isinstance(row, Mapping):
             continue
-        if str(row.get("tool", "")) == "timeline_asr_summary" and str(row.get("grounding_quality", "")) == "indexed_transcript":
+        if str(row.get("tool", "")) in {"timeline_asr_summary", "asr_cue_detail"} and str(row.get("grounding_quality", "")) == "indexed_transcript":
             return True
     return False
 
@@ -3589,7 +3623,8 @@ def _cited_table_rows_satisfy_grounding_floor(
 def _reflection_rule_for_failure(failure_tag: str) -> str:
     rules = {
         "planner_json_parse_error": "return valid JSON matching the continue/final response contract before using tools",
-        "final_requires_non_navigation_visual_evidence": "cite a non-navigation visual observation before finalizing",
+        "final_requires_non_navigation_visual_evidence": "cite answer-grade visual, ASR, OCR, or QA evidence before finalizing",
+        "final_requires_answer_grade_evidence": "cite answer-grade visual, ASR, OCR, or QA evidence before finalizing",
         "mcq_final_requires_local_visual_read": "localize a candidate and call vision_read or inspect_segment before finalizing MCQ answers",
         "answer_agent_need_more_evidence": "request targeted evidence when AnswerAgent abstains instead of forcing an option",
         "selected_option_has_structured_support": "map options only from structured visual facts with candidate_option_relations",
@@ -3597,7 +3632,7 @@ def _reflection_rule_for_failure(failure_tag: str) -> str:
         "no_unaddressed_conflict": "resolve stronger conflicting option support before finalizing",
         "temporal_order_requires_confirmed_event_timestamps": "confirm every event timestamp before comparing option sequence",
         "single_scene_subwindow_vision_read_missing": "for single-scene order questions, run verify_segment_anchors or vision_read on one <60s window covering all target items before finalizing",
-        "grounding_quality_floor": "collect at least one visually_confirmed mapped evidence chain before finalizing",
+        "grounding_quality_floor": "collect at least one visually_confirmed or indexed_transcript mapped evidence chain before finalizing",
     }
     return rules.get(str(failure_tag), "request targeted evidence before finalizing")
 
@@ -3712,6 +3747,12 @@ def _option_fact_target_specs(options: Sequence[str], *, max_targets: int = 6) -
         return [
             SkillTargetFact(fact=target, mutex_group_id="option_fact_mutex")
             for target in quoted_targets
+        ]
+    option_atoms = extract_option_target_atoms(options, max_targets=max_targets, include_synonyms=True)
+    if option_atoms:
+        return [
+            SkillTargetFact(fact=target, mutex_group_id="option_fact_mutex")
+            for target in option_atoms
         ]
 
     targets: list[SkillTargetFact] = []
@@ -3988,7 +4029,7 @@ def _timeline_decision_pending_inference(decision: Mapping[str, Any]) -> str:
     return (
         f"Timeline heuristic finds option {answer} is consistent with confirmed timeline rows: "
         f"{evidence_summary}. This is a pending inference, not an automatic final; decide whether to "
-        "finalize with citations or gather more visual evidence."
+        "finalize with answer-grade citations or gather more evidence."
     )
 
 
@@ -4110,7 +4151,7 @@ def _should_run_answer_probe(
         return False
     if not extract_candidate_options(question):
         return False
-    return has_inspect_with_candidate_options and bool(citations)
+    return bool(citations)
 
 
 def _tool_exploration_question(
@@ -4118,12 +4159,29 @@ def _tool_exploration_question(
     *,
     route_hint: str = "",
     question_context: str = "",
+    vlm_safe_question: str = "",
     forbidden_question: str = "",
     option_blind: bool = False,
     target_entities: Sequence[str] = (),
 ) -> str:
+    cleaned = " ".join(str(question or "").split()).strip()
+    rewritten_context = " ".join(str(question_context or "").split()).strip()
+    safe_context = " ".join(str(vlm_safe_question or "").split()).strip()
+    if rewritten_context and (
+        not forbidden_question or not _text_has_option_surface(rewritten_context, raw_question=forbidden_question)
+    ):
+        safe_context = rewritten_context
+    if not safe_context:
+        safe_context = exploration_question(question_context or forbidden_question or question, route_hint=route_hint)
+    if forbidden_question and _text_has_option_surface(cleaned, raw_question=forbidden_question):
+        if safe_context and not _text_has_option_surface(safe_context, raw_question=forbidden_question):
+            return safe_context
+        return "Gather factual evidence needed for final matching. Do not choose or compare options."
     if not option_blind:
-        return exploration_question(question, route_hint=route_hint)
+        candidate = exploration_question(question, route_hint=route_hint)
+        if forbidden_question and _text_has_option_surface(candidate, raw_question=forbidden_question):
+            return safe_context
+        return candidate
     lowered_route = str(route_hint or "").lower()
     if "timeline" in lowered_route or "temporal" in lowered_route:
         return _append_target_attention_block(
@@ -4138,9 +4196,8 @@ def _tool_exploration_question(
             "Openly describe this segment's actual visual content and narrated topic. Mention concrete "
             "entities, setting, stage of the story, and any visible text. Do not choose or compare options."
         )
-    cleaned = " ".join(str(question or "").split()).strip()
     if forbidden_question and _text_has_option_surface(cleaned, raw_question=forbidden_question):
-        fallback = " ".join(str(question_context or "").split()).strip()
+        fallback = safe_context or " ".join(str(question_context or "").split()).strip()
         if fallback and not _text_has_option_surface(fallback, raw_question=forbidden_question):
             return fallback
         return "Gather factual evidence needed for final matching."

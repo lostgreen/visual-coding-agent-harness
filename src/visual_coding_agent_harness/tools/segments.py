@@ -112,8 +112,6 @@ def _run_segment_tool(
         "max_pixels": int(max_pixels),
         "question": prompt_question,
     }
-    if prompt_question != str(question or "").strip():
-        metadata["original_question"] = question
     if fps > 0:
         metadata["fps"] = float(fps)
     media_path = video_path

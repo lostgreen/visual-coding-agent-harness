@@ -85,7 +85,7 @@ class GlobalViewToolTest(unittest.TestCase):
         )
 
         request = backend.requests[0]
-        self.assertEqual(request.metadata["original_question"], MCQ_QUESTION)
+        self.assertNotIn("original_question", request.metadata)
         self.assertIn("What is the video mainly about?", request.prompt)
         self.assertIn("Do not choose an option.", request.prompt)
         assert_no_mcq_leak(self, request.prompt)

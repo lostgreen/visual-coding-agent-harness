@@ -53,7 +53,7 @@ def _route_playbook_body(playbook: QuestionPlaybook, *, option_blind: bool = Fal
                 "Local workers should report facts and presentation order only.",
             ],
             sufficiency_rules=[
-                "Citations must include timestamped visual observations for the ordered events.",
+                "Citations must include timestamped answer-grade visual, ASR, OCR, or QA evidence for the ordered events.",
                 "Evidence must not conflict with the claimed temporal relation.",
                 "Record the observed order with segment or timestamp evidence before final handoff.",
             ],
@@ -67,7 +67,7 @@ def _route_playbook_body(playbook: QuestionPlaybook, *, option_blind: bool = Fal
             "Local workers should report facts only.",
         ],
         sufficiency_rules=[
-            "Final handoff needs cited non-navigation visual evidence.",
+            "Final handoff needs cited answer-grade visual, ASR, OCR, or QA evidence.",
             "State uncertainty when evidence is incomplete or ambiguous.",
         ],
     ).to_prompt()
@@ -418,11 +418,7 @@ def _tool_schema_block(
 
 
 def _tool_schema_signatures(*, option_blind: bool = False) -> tuple[str, ...]:
-    inspect_schema = (
-        "inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
-        if option_blind
-        else "inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, candidate_options: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
-    )
+    inspect_schema = "inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
     verifier_schema = (
         "verify_ledger_answer(answer: str, question: str = '', min_score: float = 0.6, required_citations: list = [])"
         if option_blind
@@ -771,9 +767,9 @@ _OPTION_BLIND_FINAL_RULES = (
 )
 
 _OPTION_LABELED_FINAL_RULES = (
-    "- Multiple-choice answers must use vision_read or inspect_segment on a localized candidate before finalizing; candidate options are only fact-finding hints.",
+    "- Multiple-choice answers may use original options for planning, search, target coverage, and evidence comparison.",
+    "- Local VLM tools must receive neutral factual prompts; do not pass option labels or complete candidate option text to local workers.",
     "- Local workers must not choose options or emit supported_option; the AnswerAgent maps cited facts to options globally.",
-    '- JSON safety: candidate_options in JSON should be option letters only, for example ["A", "B", "C", "D"]; the harness restores full option text.',
     "- Do not copy quoted option text into JSON string values; refer to option letters instead.",
 )
 
@@ -793,7 +789,7 @@ def _final_gate_block(
     lines.extend(_ROUTE_SPECIFIC_FINAL_RULES.get(str(route or ""), ()))
     lines.extend(_OPTION_BLIND_FINAL_RULES if option_blind else _OPTION_LABELED_FINAL_RULES)
     lines.append(
-        "- Final answers require at least one evidence-grade visual observation from vision_read, inspect_segment, caption_segment, verify_segment_anchors, or qa_segment; navigation-only evidence and locate candidates are insufficient."
+        "- Final answers require at least one answer-grade citation from visual tools, indexed ASR/OCR, or QA evidence; navigation-only evidence and locate candidates are insufficient."
     )
     if final_round_line:
         lines.append(final_round_line.strip())

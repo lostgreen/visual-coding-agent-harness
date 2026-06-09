@@ -1110,9 +1110,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Skip the automatic gist_global shortcut so debugging runs capture planner-loop IO.",
     )
     parser.add_argument(
-        "--disable-mcq-rewrite",
+        "--use-global-question-rewrite",
+        dest="use_global_question_rewrite",
         action="store_true",
-        help="Disable text-model MCQ-to-open-question rewriting for planner/tool exploration.",
+        default=False,
+        help="Use legacy text-model MCQ-to-open-question rewriting as the canonical planner task.",
+    )
+    parser.add_argument(
+        "--disable-mcq-rewrite",
+        dest="use_global_question_rewrite",
+        action="store_false",
+        help="Legacy compatibility flag; global MCQ rewrite is disabled by default.",
     )
     parser.add_argument("--enable-query-context", dest="enable_query_context", action="store_true", default=None)
     parser.add_argument("--disable-query-context", dest="enable_query_context", action="store_false")
@@ -1158,7 +1166,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         reserve_final_round=reserve_final_round,
         max_repeated_programs=max(max_rounds, AgentBudget().max_repeated_programs),
         disable_global_gist_route=args.disable_global_gist_route,
-        rewrite_mcq_for_exploration=not args.disable_mcq_rewrite,
+        rewrite_mcq_for_exploration=bool(args.use_global_question_rewrite),
     )
     if args.enable_followup is False:
         budget = replace(budget, hard_skill_runtime=False)
@@ -1170,7 +1178,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         "enable_context_budget": args.enable_context_budget,
         "enable_map_reflux": args.enable_map_reflux,
         "enable_evidence_staging": args.enable_evidence_staging,
-        "enable_mcq_rewrite": not args.disable_mcq_rewrite,
+        "enable_mcq_rewrite": bool(args.use_global_question_rewrite),
         "contract_nframes": args.contract_nframes,
         "followup_budget": args.followup_budget,
     }

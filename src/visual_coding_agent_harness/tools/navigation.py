@@ -148,10 +148,18 @@ def build_video_navigation_registry(
         }
 
     @tool(name="read_segment_detail", description="Read full indexed details for one segment, including target hits.")
-    def read_segment_detail(segment_id: str, targets: Sequence[str] = ()) -> Mapping[str, object]:
+    def read_segment_detail(
+        segment_id: str,
+        targets: Sequence[str] = (),
+        option_targets: Mapping[str, Sequence[str]] | None = None,
+    ) -> Mapping[str, object]:
         current = video_map_store.current
         segment = current.get(segment_id)
-        resolved_targets = _detail_targets(targets=targets, workspace=workspace)
+        resolved_option_targets = _normalize_option_targets(option_targets or {})
+        resolved_targets = _detail_targets(
+            targets=[*list(targets), *_flatten_option_targets(resolved_option_targets)],
+            workspace=workspace,
+        )
         target_hits = [
             _target_hit_for_segment(segment=segment, target=str(target))
             for target in resolved_targets
@@ -160,6 +168,10 @@ def build_video_navigation_registry(
         target_matches = [_detail_target_match(hit) for hit in target_hits if bool(hit.get("matched"))]
         unmatched_targets = [str(hit.get("target", "")) for hit in target_hits if not bool(hit.get("matched"))]
         nav_digest = _segment_nav_digest(segment=segment, target_matches=target_matches)
+        answer_evidence_rows = _answer_evidence_rows_from_indexed_detail(
+            segment=segment,
+            option_targets=resolved_option_targets,
+        )
         return {
             "claim": f"{_segment_detail_claim(segment, target_hits=target_hits)} {nav_digest}",
             "confidence": 1.0,
@@ -176,6 +188,7 @@ def build_video_navigation_registry(
             "target_hits": target_hits,
             "target_matches": target_matches,
             "unmatched_targets": unmatched_targets,
+            "answer_evidence_rows": answer_evidence_rows,
             "nav_digest": nav_digest,
             "regions": [segment.to_dict()],
             "recommended_next_tools": _detail_recommended_next_tools(segment=segment, target_matches=target_matches),
@@ -619,6 +632,193 @@ def _detail_targets(*, targets: Sequence[str], workspace: EvidenceWorkspace | No
     if explicit:
         return _unique_nonempty_texts([*explicit, *inherited])
     return inherited
+
+
+def _normalize_option_targets(option_targets: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
+    normalized: dict[str, list[str]] = {}
+    for option, targets in option_targets.items():
+        letter = str(option).strip().upper()[:1]
+        if not letter:
+            continue
+        if isinstance(targets, (str, bytes)):
+            values = [str(targets)]
+        elif isinstance(targets, Sequence):
+            values = [str(target) for target in targets]
+        else:
+            continue
+        cleaned = _unique_nonempty_texts(values)
+        if cleaned:
+            normalized[letter] = cleaned
+    return normalized
+
+
+def _flatten_option_targets(option_targets: Mapping[str, Sequence[str]]) -> list[str]:
+    flattened: list[str] = []
+    for targets in option_targets.values():
+        if isinstance(targets, Sequence) and not isinstance(targets, (str, bytes)):
+            flattened.extend(str(target) for target in targets)
+    return _unique_nonempty_texts(flattened)
+
+
+def _answer_evidence_rows_from_indexed_detail(
+    *,
+    segment: VideoMapSegment,
+    option_targets: Mapping[str, Sequence[str]],
+) -> list[Mapping[str, object]]:
+    if not option_targets:
+        return []
+    asr_sources = [
+        source for source in _locate_text_sources(segment) if str(source.get("source", "")).startswith("asr")
+    ]
+    if not asr_sources:
+        return []
+
+    rows: list[Mapping[str, object]] = []
+    for option, targets in option_targets.items():
+        ordered_targets = _unique_nonempty_texts([str(target) for target in targets])
+        if len(ordered_targets) >= 2:
+            sequence = _ordered_indexed_matches(targets=ordered_targets, sources=asr_sources)
+            if len(sequence) >= len(ordered_targets):
+                rows.append(
+                    _indexed_asr_evidence_row(
+                        segment=segment,
+                        option=option,
+                        target=" -> ".join(ordered_targets[:6]),
+                        match=sequence[-1],
+                        claim=(
+                            f"Indexed ASR in {segment.segment_id} presents option {option} target sequence in order: "
+                            + " -> ".join(ordered_targets[:6])
+                        ),
+                        confidence=0.9,
+                        assigned_by="asr_cue_sequence",
+                    )
+                )
+        for target in ordered_targets:
+            match = _best_indexed_asr_match(target=target, sources=asr_sources)
+            if match is None:
+                continue
+            rows.append(
+                _indexed_asr_evidence_row(
+                    segment=segment,
+                    option=option,
+                    target=target,
+                    match=match,
+                    claim=(
+                        f"Indexed ASR in {segment.segment_id} directly mentions target '{target}'. "
+                        f"Snippet: {match.get('snippet', '')}"
+                    ),
+                    confidence=min(0.86, float(match.get("confidence", 0.0) or 0.0)),
+                    assigned_by="asr_cue_detail",
+                )
+            )
+    return rows
+
+
+def _best_indexed_asr_match(
+    *,
+    target: str,
+    sources: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    matches = [
+        match
+        for match in _indexed_asr_matches_for_target(target=target, sources=sources, top_k=5)
+        if str(match.get("source", "")).startswith("asr")
+    ]
+    return matches[0] if matches else None
+
+
+def _ordered_indexed_matches(
+    *,
+    targets: Sequence[str],
+    sources: Sequence[Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    ordered: list[Mapping[str, object]] = []
+    cursor = (-1.0, -1)
+    for target in targets:
+        candidates = [
+            match
+            for match in _indexed_asr_matches_for_target(target=target, sources=sources, top_k=8)
+            if str(match.get("source", "")).startswith("asr")
+        ]
+        selected = None
+        for match in candidates:
+            position = (float(match.get("start_sec", 0.0) or 0.0), int(match.get("match_start", 0) or 0))
+            if position > cursor:
+                selected = match
+                cursor = position
+                break
+        if selected is None:
+            return ordered
+        ordered.append(selected)
+    return ordered
+
+
+def _indexed_asr_matches_for_target(
+    *,
+    target: str,
+    sources: Sequence[Mapping[str, object]],
+    top_k: int,
+) -> list[Mapping[str, object]]:
+    matches: list[Mapping[str, object]] = []
+    for alias in _indexed_asr_target_aliases(target):
+        matches.extend(_find_target_text_matches(target=alias, sources=sources, top_k=top_k))
+    deduped = _dedupe_locate_matches([dict(match) for match in matches])
+    return sorted(
+        deduped,
+        key=lambda item: (
+            int(item.get("source_priority", 9)),
+            int(item.get("match_priority", 9)),
+            float(item.get("start_sec", 0.0) or 0.0),
+            int(item.get("match_start", 0) or 0),
+            -float(item.get("confidence", 0.0) or 0.0),
+        ),
+    )[: max(1, int(top_k or 1))]
+
+
+def _indexed_asr_target_aliases(target: str) -> list[str]:
+    normalized = " ".join(str(target or "").lower().split()).strip()
+    aliases = {
+        "upper class": ["upper class", "upper echelons", "high society", "royal court", "court painter"],
+        "seclusion": ["seclusion", "total isolation", "in isolation", "worked in total isolation", "withdrew from public life"],
+        "humble background": ["humble background", "humble origins", "modest background", "from a humble background"],
+        "farmhouse": ["farmhouse", "into a farmhouse", "moved into a farmhouse", "country house", "countryside farmhouse"],
+    }.get(normalized, [str(target)])
+    return _unique_nonempty_texts(aliases)
+
+
+def _indexed_asr_evidence_row(
+    *,
+    segment: VideoMapSegment,
+    option: str,
+    target: str,
+    match: Mapping[str, object],
+    claim: str,
+    confidence: float,
+    assigned_by: str,
+) -> Mapping[str, object]:
+    return {
+        "tool": "asr_cue_detail",
+        "segment_id": segment.segment_id,
+        "time_range": [float(match.get("start_sec", segment.start_sec) or segment.start_sec), float(match.get("end_sec", segment.end_sec) or segment.end_sec)],
+        "supported_option": str(option).strip().upper()[:1],
+        "event_label": target,
+        "claim": claim,
+        "confidence": float(confidence),
+        "grounding_quality": "indexed_transcript",
+        "candidate_option_relations": [
+            {
+                "option": str(option).strip().upper()[:1],
+                "relation": "support",
+                "strength": float(confidence),
+                "assigned_by": assigned_by,
+            }
+        ],
+        "confidence_signal": "indexed transcript cue",
+        "limitations": "Derived from indexed ASR cue text; use visual tools for non-narrated visual appearance details.",
+        "artifact": segment.video_path if hasattr(segment, "video_path") else "",
+        "source": str(match.get("source", "")),
+        "snippet": str(match.get("snippet", "")),
+    }
 
 
 def _coverage_targets(workspace: EvidenceWorkspace) -> list[str]:

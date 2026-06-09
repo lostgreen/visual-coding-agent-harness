@@ -36,8 +36,6 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
             "sample_offset_sec": float(sample_offset_sec),
             "question": prompt_question,
         }
-        if prompt_question != str(question or "").strip():
-            metadata["original_question"] = question
         response = backend.generate(
             BackendRequest(
                 task="global_gist",
