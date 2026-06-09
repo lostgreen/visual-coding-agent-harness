@@ -9,6 +9,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _semantic_question_text,
     _skill_target_facts,
 )
+from visual_coding_agent_harness.agents.skills.specs import SkillSpec, builtin_skill_registry, skill_catalog_prompt
 from visual_coding_agent_harness.agents.prompt_stack import (
     _final_gate_block,
     _normalization_notes_body,
@@ -21,6 +22,7 @@ from visual_coding_agent_harness.agents.context_budget import default_context_bu
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
+from visual_coding_agent_harness.contracts import ClaimModality
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -88,6 +90,44 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
         self.assertIn("Final answers require at least one answer-grade citation", prompt)
+
+    def test_builtin_skill_playbooks_load_front_matter_and_body_for_planner(self):
+        registry = builtin_skill_registry()
+        narration = registry.get("narration_timeline_qa")
+        visual = registry.get("visual_timeline_qa")
+
+        self.assertEqual(narration.default_claim_modality, "narrated_fact")
+        self.assertEqual(visual.default_claim_modality, "visual_fact")
+        self.assertIn(registry.get("mixed_asr_visual_qa").default_claim_modality, {item.value for item in ClaimModality})
+        self.assertIsInstance(narration.recovery_rules, dict)
+        self.assertEqual(narration.recovery_rules["missing_asr"]["action"], "use_visual_fallback")
+        self.assertIn("Planner playbook", narration.prompt_context())
+        self.assertIn("narrated_fact", narration.prompt_context())
+        catalog = skill_catalog_prompt()
+        self.assertIn("narration_timeline_qa@v1", catalog)
+        self.assertIn("default_claim_modality=narrated_fact", catalog)
+        self.assertIn("narrated life story", catalog)
+
+    def test_skill_playbook_parser_keeps_structured_recovery_out_of_markdown_prose(self):
+        raw = """---
+name: demo_skill
+version: 1
+default_claim_modality: narrated_fact
+recovery_rules:
+  insufficient:
+    action: ask_for_more
+    target: transcript
+---
+# Planner playbook
+
+The prose says recovery_rules: this sentence must not define metadata.
+"""
+
+        skill = SkillSpec.from_markdown_playbook(raw, trigger_route="demo_route")
+
+        self.assertEqual(skill.name, "demo_skill")
+        self.assertEqual(skill.recovery_rules, {"insufficient": {"action": "ask_for_more", "target": "transcript"}})
+        self.assertIn("this sentence must not define metadata", skill.prompt_context())
 
     def test_slot_prompt_contains_all_four_sections_and_budget_report(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)

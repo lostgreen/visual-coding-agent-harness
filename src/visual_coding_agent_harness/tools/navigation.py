@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
+from dataclasses import asdict
 from typing import Mapping, Sequence
 
-from ..registry import ToolRegistry, tool
+from ..agents.transcript_binder import TranscriptEvidenceBinder
+from ..contracts import ClaimRelation, TargetSpec
+from ..registry import ToolError, ToolRegistry, tool
 from ..video_map import VideoMap, VideoMapSegment, VideoMapStore
 from ..workspace import EvidenceWorkspace, MapUpdateProposal
 
@@ -70,22 +73,36 @@ def build_video_navigation_registry(
         }
 
     @tool(name="target_coverage", description="Build a target-to-segment coverage matrix from indexed caption/ASR/OCR/entity fields.")
-    def target_coverage(targets: Sequence[str], top_k: int = 3, modalities: Sequence[str] = ()) -> Mapping[str, object]:
+    def target_coverage(
+        targets: Sequence[str] = (),
+        target_refs: Sequence[str] = (),
+        top_k: int = 3,
+        modalities: Sequence[str] = (),
+        group_by_option: bool = False,
+    ) -> Mapping[str, object]:
         current = video_map_store.current
         rows = []
-        for index, target in enumerate([str(item).strip() for item in targets if str(item).strip()], start=1):
-            results = current.search(query=target, top_k=top_k, modalities=modalities)
-            candidates = [_coverage_candidate(result) for result in results]
-            status = "candidate" if candidates else "missing"
-            rows.append(
-                {
-                    "target_id": f"T{index}",
-                    "target": target,
-                    "status": status,
-                    "candidates": candidates,
-                    "missing_confirmation": not bool(candidates),
-                }
+        coverage_targets = _coverage_target_specs(targets=targets, target_refs=target_refs, workspace=workspace)
+        for index, coverage_target in enumerate(coverage_targets, start=1):
+            candidates = _coverage_candidates_for_target(
+                current=current,
+                target=coverage_target["target"],
+                aliases=coverage_target.get("aliases", ()),
+                top_k=top_k,
+                modalities=modalities,
             )
+            status = "candidate" if candidates else "missing"
+            row = {
+                "target_id": coverage_target.get("target_ref") or f"T{index}",
+                "target": coverage_target["target"],
+                "status": status,
+                "candidates": candidates,
+                "missing_confirmation": not bool(candidates),
+            }
+            if coverage_target.get("target_ref"):
+                row["target_ref"] = coverage_target["target_ref"]
+            rows.append(row)
+        option_coverage = _option_coverage_rows(rows=rows, workspace=workspace) if group_by_option else []
         summary = "; ".join(
             f"{row['target_id']} {row['target']}: "
             + (
@@ -100,6 +117,7 @@ def build_video_navigation_registry(
             "confidence": 1.0,
             "input_artifacts": [current.video_path],
             "coverage": rows,
+            "option_coverage": option_coverage,
             "limitations": "Index coverage only; use read_segment_detail and visual tools to confirm facts before final answers.",
         }
 
@@ -151,13 +169,23 @@ def build_video_navigation_registry(
     def read_segment_detail(
         segment_id: str,
         targets: Sequence[str] = (),
+        target_refs: Sequence[str] = (),
+        promote_answer_evidence: bool = False,
         option_targets: Mapping[str, Sequence[str]] | None = None,
     ) -> Mapping[str, object]:
         current = video_map_store.current
         segment = current.get(segment_id)
         resolved_option_targets = _normalize_option_targets(option_targets or {})
+        binding_targets, binding_relations = _resolve_binding_specs(
+            target_refs=target_refs,
+            workspace=workspace,
+        )
         resolved_targets = _detail_targets(
-            targets=[*list(targets), *_flatten_option_targets(resolved_option_targets)],
+            targets=[
+                *list(targets),
+                *_flatten_option_targets(resolved_option_targets),
+                *[target.canonical_text for target in binding_targets],
+            ],
             workspace=workspace,
         )
         target_hits = [
@@ -172,6 +200,15 @@ def build_video_navigation_registry(
             segment=segment,
             option_targets=resolved_option_targets,
         )
+        if promote_answer_evidence and binding_targets:
+            answer_evidence_rows = [
+                *answer_evidence_rows,
+                *_answer_evidence_rows_from_bound_targets(
+                    segment=segment,
+                    targets=binding_targets,
+                    relations=binding_relations,
+                ),
+            ]
         return {
             "claim": f"{_segment_detail_claim(segment, target_hits=target_hits)} {nav_digest}",
             "confidence": 1.0,
@@ -199,11 +236,16 @@ def build_video_navigation_registry(
     def locate_targets_in_segment(
         segment_id: str,
         targets: Sequence[str] = (),
+        target_refs: Sequence[str] = (),
         top_k_per_target: int = 3,
     ) -> Mapping[str, object]:
         current = video_map_store.current
         segment = current.get(segment_id)
-        resolved_targets = _detail_targets(targets=targets, workspace=workspace)
+        binding_targets, _binding_relations = _resolve_binding_specs(target_refs=target_refs, workspace=workspace)
+        resolved_targets = _detail_targets(
+            targets=[*list(targets), *[target.canonical_text for target in binding_targets]],
+            workspace=workspace,
+        )
         candidates = _locate_target_candidates(
             segment=segment,
             targets=resolved_targets,
@@ -577,6 +619,79 @@ def _coverage_candidate(result: object) -> Mapping[str, object]:
     }
 
 
+def _coverage_candidates_for_target(
+    *,
+    current: VideoMap,
+    target: object,
+    aliases: object,
+    top_k: int,
+    modalities: Sequence[str],
+) -> list[Mapping[str, object]]:
+    queries = _unique_nonempty_texts([str(target), *_coerce_text_sequence(aliases)])
+    candidates: list[Mapping[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for query in queries:
+        for result in current.search(query=query, top_k=top_k, modalities=modalities):
+            candidate = dict(_coverage_candidate(result))
+            key = (str(candidate.get("segment_id", "")), str(candidate.get("source", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidate["query"] = query
+            candidates.append(candidate)
+            if len(candidates) >= max(1, int(top_k or 1)):
+                return candidates
+    return candidates
+
+
+def _coverage_target_specs(
+    *,
+    targets: Sequence[str],
+    target_refs: Sequence[str],
+    workspace: EvidenceWorkspace | None,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    seen_refs: set[str] = set()
+    binding_targets, _relations = _resolve_binding_specs(target_refs=target_refs, workspace=workspace)
+    for target in binding_targets:
+        if target.target_id in seen_refs:
+            continue
+        seen_refs.add(target.target_id)
+        rows.append(
+            {
+                "target_ref": target.target_id,
+                "target": target.canonical_text,
+                "aliases": tuple(str(alias) for alias in target.aliases),
+            }
+        )
+    for target in _unique_nonempty_texts(targets):
+        rows.append({"target": target, "aliases": ()})
+    return rows
+
+
+def _option_coverage_rows(*, rows: Sequence[Mapping[str, object]], workspace: EvidenceWorkspace | None) -> list[dict[str, object]]:
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    if registry is None:
+        return []
+    rows_by_ref = {str(row.get("target_ref", "")): row for row in rows if str(row.get("target_ref", ""))}
+    option_rows: list[dict[str, object]] = []
+    options_by_id = getattr(registry, "options_by_id", {})
+    for option_id in sorted(str(key) for key in options_by_id):
+        option = registry.option_for(option_id)
+        target_sequence = [str(target_id) for target_id in option.target_sequence]
+        if not target_sequence or any(target_id not in rows_by_ref for target_id in target_sequence):
+            continue
+        option_rows.append(
+            {
+                "option": option.option_id,
+                "target_refs": target_sequence,
+                "targets": [str(rows_by_ref[target_id].get("target", "")) for target_id in target_sequence],
+                "coverage": [dict(rows_by_ref[target_id]) for target_id in target_sequence],
+            }
+        )
+    return option_rows
+
+
 def _relevance_reason(matched_fields: Sequence[str]) -> str:
     fields = [str(field) for field in matched_fields if str(field)]
     if not fields:
@@ -660,6 +775,54 @@ def _flatten_option_targets(option_targets: Mapping[str, Sequence[str]]) -> list
     return _unique_nonempty_texts(flattened)
 
 
+def _resolve_binding_specs(
+    *,
+    target_refs: Sequence[str],
+    workspace: EvidenceWorkspace | None,
+) -> tuple[list[TargetSpec], list[ClaimRelation]]:
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    if registry is None:
+        if any(str(ref or "").strip() for ref in target_refs):
+            raise ToolError("target_refs require a workspace TargetRegistry")
+        return [], []
+    selected_targets: list[TargetSpec] = []
+    selected_target_ids: set[str] = set()
+    relation_ids: set[str] = set()
+    for raw_ref in target_refs:
+        ref = str(raw_ref or "").strip()
+        if not ref:
+            continue
+        options_by_id = getattr(registry, "options_by_id", {})
+        if ref in options_by_id:
+            option = registry.option_for(ref)
+            for target_id in option.target_sequence:
+                target = registry.resolve_target_ref(target_id)
+                if target.target_id not in selected_target_ids:
+                    selected_targets.append(target)
+                    selected_target_ids.add(target.target_id)
+            relation_ids.update(str(relation_id) for relation_id in option.required_relations)
+            continue
+        try:
+            target = registry.resolve_target_ref(ref)
+        except KeyError as exc:
+            raise ToolError(f"Unknown target_ref: {ref}") from exc
+        if target.target_id not in selected_target_ids:
+            selected_targets.append(target)
+            selected_target_ids.add(target.target_id)
+
+    relations_by_id = getattr(registry, "relations_by_id", {})
+    selected_relations: list[ClaimRelation] = []
+    for relation in relations_by_id.values():
+        if not isinstance(relation, ClaimRelation):
+            continue
+        if relation.relation_id in relation_ids or (
+            relation.source_target_id in selected_target_ids
+            and relation.destination_target_id in selected_target_ids
+        ):
+            selected_relations.append(relation)
+    return selected_targets, selected_relations
+
+
 def _answer_evidence_rows_from_indexed_detail(
     *,
     segment: VideoMapSegment,
@@ -712,6 +875,78 @@ def _answer_evidence_rows_from_indexed_detail(
                 )
             )
     return rows
+
+
+def _answer_evidence_rows_from_bound_targets(
+    *,
+    segment: VideoMapSegment,
+    targets: Sequence[TargetSpec],
+    relations: Sequence[ClaimRelation],
+) -> list[Mapping[str, object]]:
+    if not segment.asr_text:
+        return []
+    result = TranscriptEvidenceBinder().bind(
+        text=segment.asr_text,
+        targets=targets,
+        relations=relations,
+        segment_id=segment.segment_id,
+        start_sec=float(segment.start_sec),
+        source="asr",
+    )
+    relation_payloads = [asdict(binding) for binding in result.relation_bindings]
+    supported_relations = [
+        relation for relation in relation_payloads if str(relation.get("status", "")).lower() == "supported"
+    ]
+    rows: list[Mapping[str, object]] = []
+    for binding in result.evidence_bindings:
+        if binding.status != "supported":
+            continue
+        binding_payload = asdict(binding)
+        binding_payload["claim_modality"] = binding.claim_modality.value
+        binding_payload["relation_bindings"] = [
+            relation
+            for relation in supported_relations
+            if _relation_touches_target(
+                relation_id=str(relation.get("relation_id", "")),
+                target_id=binding.target_id,
+                relations=relations,
+            )
+        ]
+        rows.append(
+            {
+                "evidence_id": binding.evidence_id,
+                "tool": "transcript_evidence_binder",
+                "segment_id": segment.segment_id,
+                "time_range": [float(segment.start_sec), float(segment.end_sec)],
+                "event_label": binding.target_id,
+                "claim": (
+                    f"TranscriptEvidenceBinder marked {binding.target_id} as supported in "
+                    f"{segment.segment_id}: {binding.snippet}"
+                ),
+                "confidence": 0.88,
+                "grounding_quality": "indexed_transcript",
+                "candidate_option_relations": [],
+                "confidence_signal": "explicit transcript binding",
+                "limitations": "Conservative transcript binding over indexed ASR; no model-level semantic inference.",
+                "source": binding.source,
+                "snippet": binding.snippet,
+                "evidence_binding": binding_payload,
+            }
+        )
+    return rows
+
+
+def _relation_touches_target(
+    *,
+    relation_id: str,
+    target_id: str,
+    relations: Sequence[ClaimRelation],
+) -> bool:
+    for relation in relations:
+        if relation.relation_id != relation_id:
+            continue
+        return target_id in {relation.source_target_id, relation.destination_target_id}
+    return False
 
 
 def _best_indexed_asr_match(
@@ -1713,3 +1948,13 @@ def _unique_nonempty_texts(values: Sequence[str]) -> list[str]:
         items.append(text)
         seen.add(text)
     return items
+
+
+def _coerce_text_sequence(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (str, bytes)):
+        return [str(value)]
+    if isinstance(value, Sequence):
+        return [str(item) for item in value]
+    return [str(value)]

@@ -2109,6 +2109,9 @@ def _normalize_evidence_row(row: Mapping[str, Any], *, evidence_id: str | None =
         legacy_worker_vote=bool(row.get("legacy_worker_vote", False)),
         limitations=str(row.get("limitations", "")),
         artifact=str(row.get("artifact", "")),
+        evidence_binding=dict(row.get("evidence_binding", {}))
+        if isinstance(row.get("evidence_binding"), Mapping)
+        else {},
         **_evidence_provenance_fields(row),
     ).to_dict()
     if payload["time_range"] is None and payload["t_start"] is not None and payload["t_end"] is not None:

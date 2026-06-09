@@ -86,6 +86,70 @@ def select_question_playbook(question: str) -> QuestionPlaybook:
     )
 
 
+def classify_narration_subroute(question: str) -> str:
+    """Split temporal questions into narrated biography vs visual timeline cases."""
+
+    semantic_lowered = _semantic_question_text(question).lower()
+    visual_hard_negatives = [
+        "open the door",
+        "painting positioned",
+        "ball move",
+        "move after impact",
+        "pick up",
+        "visible",
+        "shown on screen",
+    ]
+    if any(marker in semantic_lowered for marker in visual_hard_negatives):
+        return "visual_timeline"
+
+    explicit_narration_markers = [
+        "according to the narrator",
+        "narrator",
+        "narration",
+        "voiceover",
+        "voice-over",
+        "tells us",
+        "tell us",
+        "told us",
+        "what does the video say",
+        "what does the video tell",
+    ]
+    if any(marker in semantic_lowered for marker in explicit_narration_markers):
+        return "narration_timeline"
+
+    biographical_markers = [
+        "life journey",
+        "early life",
+        "childhood",
+        "born",
+        "grew up",
+        "biography",
+        "career",
+        "left home",
+        "background",
+    ]
+    asr_availability_hints = [
+        "according to",
+        "the video",
+        "narrator",
+        "narration",
+        "voiceover",
+        "voice-over",
+        "tell",
+        "tells",
+        "told",
+        "say",
+        "says",
+        "said",
+    ]
+    if any(marker in semantic_lowered for marker in biographical_markers) and any(
+        hint in semantic_lowered for hint in asr_availability_hints
+    ):
+        return "narration_timeline"
+
+    return "visual_timeline"
+
+
 def classify_question_route(question: str) -> str:
     """Classify whether the question needs a whole-video floor or localized search."""
 

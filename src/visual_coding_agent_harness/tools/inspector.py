@@ -10,7 +10,7 @@ from ..agents.contracts import resolve_nframes
 from ..agents.open_questions import exploration_question
 from ..agents.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..registry import ToolRegistry, tool
+from ..registry import ToolError, ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
 from .segments import ClipExtractor, _clip_output_path, _extract_clip_ffmpeg
 
@@ -160,12 +160,14 @@ def build_segment_inspector_registry(
         anchors: Sequence[Mapping[str, object]],
         question: str = "",
         targets: Sequence[str] = (),
+        target_refs: Sequence[str] = (),
         start_sec: float = 0.0,
         end_sec: float = 0.0,
         nframes: int | None = 8,
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
+        resolved_targets = _resolve_target_ref_texts(target_refs=target_refs, targets=targets, workspace=workspace)
         anchor_list = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)]
         _validate_anchor_segment_ids(segment_id=segment_id, anchors=anchor_list)
         anchor_groups = _anchor_verify_groups(
@@ -190,7 +192,7 @@ def build_segment_inspector_registry(
                 segment_id=segment_id,
                 anchors=anchor_group,
                 question=question,
-                targets=targets,
+                targets=resolved_targets,
             )
             raw_result = dict(
                 _run_inspector(
@@ -285,7 +287,7 @@ def build_segment_inspector_registry(
                 "timeline_rows": timeline_rows,
                 "ordered_visible_in_window": ordered_visible_in_window,
                 "anchors": anchor_list,
-                "targets": list(targets),
+                "targets": list(resolved_targets),
                 "verify_windows": verify_windows,
                 "grounding_quality": "visually_confirmed" if confirmations else "inferred",
                 "limitations": (
@@ -300,6 +302,30 @@ def build_segment_inspector_registry(
     registry.register(vision_read)
     registry.register(verify_segment_anchors)
     return registry
+
+
+def _resolve_target_ref_texts(
+    *,
+    target_refs: Sequence[str],
+    targets: Sequence[str],
+    workspace: Optional[EvidenceWorkspace],
+) -> list[str]:
+    resolved = [str(target).strip() for target in targets if str(target).strip()]
+    refs = [str(ref).strip() for ref in target_refs if str(ref).strip()]
+    if not refs:
+        return resolved
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    if registry is None:
+        raise ToolError("target_refs require a workspace TargetRegistry")
+    for ref in refs:
+        try:
+            target = registry.resolve_target_ref(ref)
+        except KeyError as exc:
+            raise ToolError(f"Unknown target_ref: {ref}") from exc
+        canonical = str(getattr(target, "canonical_text", "")).strip()
+        if canonical and canonical not in resolved:
+            resolved.append(canonical)
+    return resolved
 
 
 def _run_inspector(

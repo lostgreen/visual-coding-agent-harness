@@ -29,6 +29,14 @@ class SequenceBackend:
         return BackendResponse(text=self.responses.pop(0))
 
 
+class FakeTargetRegistry:
+    def __init__(self, known_keys: set[str]):
+        self.known_keys = set(known_keys)
+
+    def has(self, key: str) -> bool:
+        return key in self.known_keys
+
+
 def _scene_index() -> SceneIndex:
     return SceneIndex(
         video_path="/videos/demo.mp4",
@@ -272,6 +280,185 @@ def test_normalization_strips_unsupported_read_timeline_sorted_args(tmp_path: Pa
     assert normalized == [{"tool": "read_timeline_sorted", "args": {}}]
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert "strip_unsupported_tool_args" in trace
+
+
+def test_known_legacy_target_id_rewrites_to_target_refs(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(
+        segment_id: str,
+        targets: list | None = None,
+        target_refs: list | None = None,
+        normalized_target_keys: list | None = None,
+    ):
+        return {
+            "claim": f"located {segment_id}: {targets} {target_refs} {normalized_target_keys}",
+            "confidence": 0.4,
+        }
+
+    registry.register(locate_targets_in_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "target_refs_legacy_rewrite")
+    workspace.target_registry = FakeTargetRegistry({"T1"})
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+    notes = []
+
+    normalized = agent._normalize_program(
+        [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["T1"]}}],
+        question="Where is T1?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+        notes_out=notes,
+    )
+
+    assert normalized == [
+        {
+            "tool": "locate_targets_in_segment",
+            "args": {"segment_id": "seg_0001", "target_refs": ["T1"], "normalized_target_keys": ["T1"]},
+        }
+    ]
+    assert any(note.reason == "rewrite_legacy_targets_to_target_refs" for note in notes)
+
+
+def test_unknown_target_ref_rejects_tool_call(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(segment_id: str, target_refs: list | None = None):
+        return {"claim": f"located {segment_id}: {target_refs}", "confidence": 0.4}
+
+    registry.register(locate_targets_in_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "target_refs_unknown_reject")
+    workspace.target_registry = FakeTargetRegistry({"T1"})
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+    notes = []
+
+    normalized = agent._normalize_program(
+        [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "target_refs": ["T9"]}}],
+        question="Where is T9?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+        notes_out=notes,
+    )
+
+    assert normalized == []
+    assert any(note.reason == "unknown_target_ref" for note in notes)
+    assert "unknown_target_ref" in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+
+def test_unknown_legacy_target_id_rejects_entire_tool_call(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(segment_id: str, targets: list | None = None):
+        return {"claim": f"located {segment_id}: {targets}", "confidence": 0.4}
+
+    registry.register(locate_targets_in_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "target_refs_unknown_legacy_reject")
+    workspace.target_registry = FakeTargetRegistry({"T1"})
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+    notes = []
+
+    normalized = agent._normalize_program(
+        [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["T9"]}}],
+        question="Where is T9?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+        notes_out=notes,
+    )
+
+    assert normalized == []
+    assert any(note.reason == "unknown_legacy_target_ref" for note in notes)
+    assert "unknown_legacy_target_ref" in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+
+def test_free_text_target_ref_rejects_tool_call(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(segment_id: str, target_refs: list | None = None):
+        return {"claim": f"located {segment_id}: {target_refs}", "confidence": 0.4}
+
+    registry.register(locate_targets_in_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "target_refs_free_text_reject")
+    workspace.target_registry = FakeTargetRegistry({"T1"})
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [
+            {
+                "tool": "locate_targets_in_segment",
+                "args": {"segment_id": "seg_0001", "target_refs": ["Apollo and Daphne"]},
+            }
+        ],
+        question="Where is Apollo and Daphne?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+    )
+
+    assert normalized == []
+
+
+def test_natural_language_targets_are_preserved(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(segment_id: str, targets: list | None = None):
+        return {"claim": f"located {segment_id}: {targets}", "confidence": 0.4}
+
+    registry.register(locate_targets_in_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "target_refs_free_text_targets")
+    workspace.target_registry = FakeTargetRegistry({"T1"})
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [
+            {
+                "tool": "locate_targets_in_segment",
+                "args": {"segment_id": "seg_0001", "targets": ["Apollo and Daphne"]},
+            }
+        ],
+        question="Where is Apollo and Daphne?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+    )
+
+    assert normalized[0]["args"] == {"segment_id": "seg_0001", "targets": ["Apollo and Daphne"]}
 
 
 def test_mutex_fact_repairs_planner_inspect_segment_to_vision_read(tmp_path: Path):

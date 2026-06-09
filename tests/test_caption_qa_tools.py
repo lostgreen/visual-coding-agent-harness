@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.contracts import TargetRegistry, TargetSpec
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.tools.enrichment import build_video_enrichment_registry
 from visual_coding_agent_harness.tools.inspector import build_segment_inspector_registry
@@ -470,6 +471,27 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(observation.raw_output["timeline_rows"][0]["entity"], "David")
         self.assertEqual(evidence_row_count, 1)
         self.assertIn("David", timeline_text)
+
+    def test_verify_segment_anchors_accepts_target_refs_from_registry(self):
+        backend = FixedTextBackend("{}")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_target_refs")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[TargetSpec("T1", "humble background", subject="Goya")]
+            )
+            registry = build_segment_inspector_registry(backend, workspace=workspace)
+
+            result = registry.execute(
+                "verify_segment_anchors",
+                {
+                    "video_path": "/videos/goya.mp4",
+                    "segment_id": "seg_0001",
+                    "anchors": [],
+                    "target_refs": ["T1"],
+                },
+            )
+
+        self.assertEqual(result["targets"], ["humble background"])
 
     def test_verify_segment_anchors_parses_ordered_visible_into_timeline_order(self):
         backend = FixedTextBackend(

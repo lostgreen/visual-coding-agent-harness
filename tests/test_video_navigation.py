@@ -3,7 +3,9 @@ import unittest
 from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.contracts import ClaimRelation, ClaimModality, OptionSpec, TargetRegistry, TargetSpec
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
+from visual_coding_agent_harness.registry import ToolError
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
@@ -119,6 +121,85 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(coverage["coverage"][2]["status"], "missing")
         self.assertIn("T1 blue aircraft", coverage["claim"])
 
+    def test_target_coverage_resolves_target_refs_and_groups_by_option(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=120.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_text="Goya was a man from a humble background.",
+                ),
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=60.0,
+                    end_sec=120.0,
+                    asr_text="Goya rose through the ranks to reach the upper echelons.",
+                ),
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="coverage_target_refs")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "humble background", subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec(
+                        "T2",
+                        "upper class",
+                        aliases=("upper echelons",),
+                        subject="Goya",
+                        modality_hint=ClaimModality.NARRATED_FACT,
+                    ),
+                ],
+                options=[
+                    OptionSpec("B", target_sequence=("T1", "T2")),
+                    OptionSpec("C", target_sequence=("T2", "T1")),
+                ],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            coverage = registry.execute(
+                "target_coverage",
+                {"target_refs": ["T1", "T2"], "group_by_option": True, "top_k": 2},
+            )
+
+        self.assertEqual([row["target_ref"] for row in coverage["coverage"]], ["T1", "T2"])
+        self.assertEqual([row["target"] for row in coverage["coverage"]], ["humble background", "upper class"])
+        self.assertEqual(coverage["option_coverage"][0]["option"], "B")
+        self.assertEqual(coverage["option_coverage"][0]["target_refs"], ["T1", "T2"])
+        self.assertEqual(coverage["option_coverage"][1]["option"], "C")
+        self.assertEqual(coverage["option_coverage"][1]["target_refs"], ["T2", "T1"])
+
+    def test_locate_targets_in_segment_accepts_target_refs_from_registry(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_text="Goya was a man from a humble background.",
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="locate_target_refs")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[TargetSpec("T1", "humble background", subject="Goya")]
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            located = registry.execute(
+                "locate_targets_in_segment",
+                {"segment_id": "seg_0001", "target_refs": ["T1"]},
+            )
+
+        self.assertEqual(located["targets"], ["humble background"])
+        self.assertTrue(located["candidates"])
+
     def test_read_segment_detail_promotes_matching_asr_cues_to_answer_evidence(self):
         video_map = VideoMap(
             video_path="/videos/goya.mp4",
@@ -173,6 +254,99 @@ class VideoNavigationTest(unittest.TestCase):
             self.assertTrue(all(row["grounding_quality"] == "indexed_transcript" for row in b_rows))
             self.assertTrue(any("target sequence in order" in row["claim"] for row in b_rows))
             self.assertFalse(any("target sequence in order" in row["claim"] for row in c_rows))
+
+    def test_read_segment_detail_does_not_promote_target_refs_by_default(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_text="Goya was a man from a humble background who rose through the ranks to reach the upper.",
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="target_refs_no_promote")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "humble background", subject="Goya", relation="present", modality_hint=ClaimModality.NARRATED_FACT),
+                ]
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            detail = registry.execute(
+                "read_segment_detail",
+                {
+                    "segment_id": "seg_0001",
+                    "target_refs": ["T1"],
+                    "promote_answer_evidence": False,
+                },
+            )
+
+        self.assertEqual(detail["answer_evidence_rows"], [])
+
+    def test_read_segment_detail_rejects_unknown_target_refs_directly(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=60.0, asr_text="Goya rose.")],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="target_refs_unknown_direct")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[TargetSpec("T1", "humble background", subject="Goya")]
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            with self.assertRaises(ToolError):
+                registry.execute(
+                    "read_segment_detail",
+                    {"segment_id": "seg_0001", "target_refs": ["T99"], "promote_answer_evidence": True},
+                )
+
+    def test_read_segment_detail_promotes_bound_target_refs_when_requested(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=10.0,
+                    end_sec=60.0,
+                    asr_text="Goya was a man from a humble background who rose through the ranks to reach the upper.",
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="target_refs_promote")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "humble background", subject="Goya", relation="present", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T2", "upper class", aliases=("upper",), subject="Goya", relation="present", modality_hint=ClaimModality.NARRATED_FACT),
+                ],
+                relations=[
+                    ClaimRelation("R1", "before", "T1", "T2"),
+                ],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            detail = registry.execute(
+                "read_segment_detail",
+                {
+                    "segment_id": "seg_0001",
+                    "target_refs": ["T1", "T2"],
+                    "promote_answer_evidence": True,
+                },
+            )
+
+        rows = detail["answer_evidence_rows"]
+        self.assertEqual([row["evidence_binding"]["target_id"] for row in rows], ["T1", "T2"])
+        self.assertTrue(all(row["evidence_binding"]["status"] == "supported" for row in rows))
+        self.assertTrue(all(str(row["evidence_id"]).startswith("ev_bind_seg_0001_") for row in rows))
+        self.assertTrue(any(relation["relation_id"] == "R1" for row in rows for relation in row["evidence_binding"].get("relation_bindings", [])))
 
     def test_read_segment_detail_returns_full_segment_fields_and_target_hits(self):
         registry = build_video_navigation_registry(demo_video_map())

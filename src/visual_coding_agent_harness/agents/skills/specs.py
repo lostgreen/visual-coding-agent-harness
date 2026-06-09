@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from string import Formatter
 from typing import Any, FrozenSet, Mapping, Sequence
 
-from ..question_policy import classify_question_route
+from ..question_policy import classify_narration_subroute, classify_question_route
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,9 @@ class SkillSpec:
     exemplars: Sequence[str] = field(default_factory=tuple)
     self_check: Sequence[str] = field(default_factory=tuple)
     allowed_actions: FrozenSet[str] = field(default_factory=frozenset)
+    default_claim_modality: str = "visual_fact"
+    recovery_rules: Mapping[str, Any] = field(default_factory=dict)
+    playbook_body: str = ""
 
     def prompt_context(self) -> str:
         lines = [f"Skill: {self.name}@v{self.version}", "Procedure:"]
@@ -52,7 +56,47 @@ class SkillSpec:
         if self.exemplars:
             lines.append("Exemplars:")
             lines.extend(f"- {item}" for item in self.exemplars)
+        if self.playbook_body:
+            lines.append("Planner playbook:")
+            lines.append(self.playbook_body.strip())
         return "\n".join(lines)
+
+    @classmethod
+    def from_markdown_playbook(
+        cls,
+        text: str,
+        *,
+        trigger_route: str,
+        trigger_markers: Sequence[str] = (),
+        input_slots: Sequence[str] = ("question", "options", "video_id"),
+        procedure: Sequence[SkillStep] = (),
+        sufficiency: Sequence[str] = (),
+        verifier_checks: Sequence[str] = (),
+        allowed_actions: FrozenSet[str] = frozenset(),
+    ) -> "SkillSpec":
+        front_matter, body = _split_front_matter(text)
+        metadata = _parse_front_matter(front_matter)
+        recovery_rules = metadata.get("recovery_rules", {})
+        if not isinstance(recovery_rules, Mapping):
+            raise ValueError("playbook recovery_rules must be a mapping")
+        return cls(
+            name=str(metadata["name"]),
+            version=int(metadata["version"]),
+            trigger=SkillTrigger(route=trigger_route, markers=tuple(trigger_markers)),
+            input_slots=tuple(input_slots),
+            procedure=tuple(procedure),
+            sufficiency=tuple(sufficiency),
+            verifier_checks=tuple(verifier_checks),
+            recovery=dict(recovery_rules),
+            allowed_actions=allowed_actions,
+            default_claim_modality=str(metadata["default_claim_modality"]),
+            recovery_rules=dict(recovery_rules),
+            playbook_body=body.strip(),
+        )
+
+    @classmethod
+    def from_markdown_playbook_path(cls, path: Path, **kwargs: Any) -> "SkillSpec":
+        return cls.from_markdown_playbook(path.read_text(encoding="utf-8"), **kwargs)
 
 
 class SkillRegistry:
@@ -71,6 +115,67 @@ class SkillRegistry:
         return tuple(self._skills.values())
 
 
+def _split_front_matter(text: str) -> tuple[str, str]:
+    normalized = text.replace("\r\n", "\n")
+    if not normalized.startswith("---\n"):
+        raise ValueError("playbook markdown must start with front matter")
+    end = normalized.find("\n---\n", 4)
+    if end < 0:
+        raise ValueError("playbook markdown front matter is not closed")
+    return normalized[4:end], normalized[end + len("\n---\n") :]
+
+
+def _parse_front_matter(text: str) -> dict[str, Any]:
+    root: dict[str, Any] = {}
+    stack: list[tuple[int, dict[str, Any]]] = [(-1, root)]
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        stripped = raw_line.strip()
+        if ":" not in stripped:
+            raise ValueError(f"unsupported front matter line: {raw_line!r}")
+        key, raw_value = stripped.split(":", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        if not stack:
+            raise ValueError(f"invalid front matter indentation near: {raw_line!r}")
+        parent = stack[-1][1]
+        if raw_value:
+            parent[key] = _parse_scalar(raw_value)
+        else:
+            child: dict[str, Any] = {}
+            parent[key] = child
+            stack.append((indent, child))
+    for required in ("name", "version", "default_claim_modality", "recovery_rules"):
+        if required not in root:
+            raise ValueError(f"playbook front matter missing required key: {required}")
+    return root
+
+
+def _parse_scalar(value: str) -> Any:
+    stripped = value.strip()
+    if stripped.isdigit():
+        return int(stripped)
+    if stripped.lower() in {"true", "false"}:
+        return stripped.lower() == "true"
+    if (stripped.startswith('"') and stripped.endswith('"')) or (stripped.startswith("'") and stripped.endswith("'")):
+        return stripped[1:-1]
+    return stripped
+
+
+def _playbook_summary(body: str, *, max_chars: int = 220) -> str:
+    paragraphs = [line.strip() for line in body.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if not paragraphs:
+        return ""
+    summary = " ".join(paragraphs[:2])
+    if len(summary) <= max_chars:
+        return summary
+    return summary[: max_chars - 3].rstrip() + "..."
+
+
 def skill_catalog_prompt(
     *,
     registry: SkillRegistry | None = None,
@@ -86,9 +191,13 @@ def skill_catalog_prompt(
         suffix = f" ({', '.join(f'{tool}=exhausted' for tool in spent)})" if spent else ""
         lines.append(
             f"- {skill.name}@v{skill.version}: route={skill.trigger.route}; markers={marker_text}; "
+            f"default_claim_modality={skill.default_claim_modality}; "
             f"allowed_actions={', '.join(remaining) or '(none)'}{suffix}; "
             f"sufficiency={'; '.join(skill.sufficiency)}"
         )
+        summary = _playbook_summary(skill.playbook_body)
+        if summary:
+            lines.append(f"  playbook: {summary}")
     return "\n".join(lines)
 
 
@@ -104,7 +213,147 @@ def allowed_actions_for_skill(skill_id: str) -> frozenset[str]:
     return frozenset()
 
 
+def _playbook_dir() -> Path:
+    return Path(__file__).with_name("playbooks")
+
+
+def _load_builtin_playbook(
+    filename: str,
+    *,
+    trigger_route: str,
+    trigger_markers: Sequence[str],
+    input_slots: Sequence[str],
+    procedure: Sequence[SkillStep],
+    sufficiency: Sequence[str],
+    verifier_checks: Sequence[str],
+    allowed_actions: FrozenSet[str],
+) -> SkillSpec:
+    return SkillSpec.from_markdown_playbook_path(
+        _playbook_dir() / filename,
+        trigger_route=trigger_route,
+        trigger_markers=trigger_markers,
+        input_slots=input_slots,
+        procedure=procedure,
+        sufficiency=sufficiency,
+        verifier_checks=verifier_checks,
+        allowed_actions=allowed_actions,
+    )
+
+
+def _timeline_ordering_steps() -> tuple[SkillStep, ...]:
+    return (
+        SkillStep(
+            step="caption_coarse_segments",
+            op="caption_segment",
+            foreach="segments",
+            args={
+                "question": (
+                    "Openly describe the segment's actual visible/narrated events, artworks, objects, "
+                    "people, scene changes, and onscreen text in presentation order."
+                )
+            },
+            assign="caption[{segment}]",
+        ),
+        SkillStep(
+            step="read_first_timestamp",
+            op="vision_read",
+            foreach="events",
+            args={
+                "window": "caption_match[{event}]",
+                "ask_for": "At what timestamp (precise, in seconds) does '{event}' first appear?",
+            },
+            assign="fact[{event}]",
+        ),
+        SkillStep(step="assemble", op="read_timeline_sorted", assign="timeline"),
+        SkillStep(
+            step="decide",
+            op="answer_agent",
+            args={"evidence": "evidence_table_v2()", "route": "temporal_order"},
+            assign="decision",
+        ),
+    )
+
+
+def _timeline_sufficiency() -> tuple[str, ...]:
+    return (
+        "every_event_has_confirmed_timestamp",
+        "observed_order_matches_one_option",
+        "single_scene_subwindow_vision_read_present",
+    )
+
+
+def _timeline_verifier_checks() -> tuple[str, ...]:
+    return (
+        "temporal_order_consistent",
+        "no_unconfirmed_event_in_selected_option",
+        "selected_option_has_structured_support",
+        "single_scene_constraint_satisfied_when_applicable",
+    )
+
+
+def _timeline_allowed_actions() -> frozenset[str]:
+    return frozenset(
+        {
+            "caption_segment",
+            "query_context",
+            "vision_read",
+            "read_timeline_sorted",
+            "target_coverage",
+            "read_segment_detail",
+            "locate_targets_in_segment",
+            "verify_segment_anchors",
+            "search_segments",
+        }
+        | {"verify_ledger_answer"}
+    )
+
+
+def _grounded_factual_steps() -> tuple[SkillStep, ...]:
+    return (
+        SkillStep(
+            step="locate",
+            op="ground_question",
+            args={"query": "{target_fact}"},
+            assign="cand",
+            on_fail="widen_query",
+        ),
+        SkillStep(
+            step="read",
+            op="vision_read",
+            foreach="candidates",
+            args={"window": "{candidate}", "ask_for": "{target_fact}"},
+            assign="fact[{candidate}]",
+        ),
+        SkillStep(
+            step="decide",
+            op="answer_agent",
+            args={"evidence": "evidence_table_v2()", "route": "needle_local"},
+            assign="decision",
+        ),
+    )
+
+
+def _grounded_allowed_actions() -> frozenset[str]:
+    return frozenset(
+        {
+            "ground_question",
+            "query_context",
+            "vision_read",
+            "target_coverage",
+            "read_segment_detail",
+            "locate_targets_in_segment",
+            "verify_segment_anchors",
+            "search_segments",
+        }
+        | {"verify_ledger_answer"}
+    )
+
+
 def builtin_skill_registry() -> SkillRegistry:
+    timeline_steps = _timeline_ordering_steps()
+    timeline_allowed_actions = _timeline_allowed_actions()
+    grounded_steps = _grounded_factual_steps()
+    grounded_allowed_actions = _grounded_allowed_actions()
     return SkillRegistry(
         [
             SkillSpec(
@@ -203,28 +452,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 version=1,
                 trigger=SkillTrigger(route="needle_local", markers=("which", "what", "where", "who")),
                 input_slots=("question", "options", "video_id", "target_fact"),
-                procedure=(
-                    SkillStep(
-                        step="locate",
-                        op="ground_question",
-                        args={"query": "{target_fact}"},
-                        assign="cand",
-                        on_fail="widen_query",
-                    ),
-                    SkillStep(
-                        step="read",
-                        op="vision_read",
-                        foreach="candidates",
-                        args={"window": "{candidate}", "ask_for": "{target_fact}"},
-                        assign="fact[{candidate}]",
-                    ),
-                    SkillStep(
-                        step="decide",
-                        op="answer_agent",
-                        args={"evidence": "evidence_table_v2()", "route": "needle_local"},
-                        assign="decision",
-                    ),
-                ),
+                procedure=grounded_steps,
                 sufficiency=("distinguishing_fact_exists",),
                 verifier_checks=(
                     "selected_option_has_structured_support",
@@ -233,19 +461,51 @@ def builtin_skill_registry() -> SkillRegistry:
                 ),
                 recovery={"insufficient": {"action": "need_more_evidence", "target": "distinguishing fact window"}},
                 self_check=("decision.citations all visually_confirmed",),
-                allowed_actions=frozenset(
-                    {
-                        "ground_question",
-                        "query_context",
-                        "vision_read",
-                        "target_coverage",
-                        "read_segment_detail",
-                        "locate_targets_in_segment",
-                        "verify_segment_anchors",
-                        "search_segments",
-                    }
-                    | {"verify_ledger_answer"}
+                allowed_actions=grounded_allowed_actions,
+            ),
+            _load_builtin_playbook(
+                "narration_timeline_qa.md",
+                trigger_route="temporal_order",
+                trigger_markers=("according to the narrator", "life journey", "early life", "tell us", "narrator"),
+                input_slots=("question", "options", "video_id", "events"),
+                procedure=timeline_steps,
+                sufficiency=("narrated_fact_sequence_has_asr_or_transcript_support", "timeline_conflicts_resolved"),
+                verifier_checks=("narrated_fact_support_present", "selected_option_has_structured_support"),
+                allowed_actions=timeline_allowed_actions,
+            ),
+            _load_builtin_playbook(
+                "visual_timeline_qa.md",
+                trigger_route="temporal_order",
+                trigger_markers=("before", "after", "first", "last", "then", "order", "sequence", "move", "positioned"),
+                input_slots=("question", "options", "video_id", "events"),
+                procedure=timeline_steps,
+                sufficiency=_timeline_sufficiency(),
+                verifier_checks=_timeline_verifier_checks(),
+                allowed_actions=timeline_allowed_actions,
+            ),
+            _load_builtin_playbook(
+                "mixed_asr_visual_qa.md",
+                trigger_route="mixed_asr_visual",
+                trigger_markers=("said", "says", "narrator", "shown", "visible"),
+                input_slots=("question", "options", "video_id", "target_fact"),
+                procedure=grounded_steps,
+                sufficiency=("asr_claim_and_visual_anchor_are_consistent",),
+                verifier_checks=("selected_option_has_structured_support", "no_unaddressed_conflict"),
+                allowed_actions=grounded_allowed_actions | timeline_allowed_actions,
+            ),
+            _load_builtin_playbook(
+                "grounded_factual_qa.md",
+                trigger_route="needle_local",
+                trigger_markers=("which", "what", "where", "who"),
+                input_slots=("question", "options", "video_id", "target_fact"),
+                procedure=grounded_steps,
+                sufficiency=("distinguishing_fact_exists",),
+                verifier_checks=(
+                    "selected_option_has_structured_support",
+                    "no_decisive_weak_grounding",
+                    "no_unaddressed_conflict",
                 ),
+                allowed_actions=grounded_allowed_actions,
             ),
             SkillSpec(
                 name="timeline_ordering",
@@ -255,48 +515,9 @@ def builtin_skill_registry() -> SkillRegistry:
                     markers=("before", "after", "first", "last", "then", "order", "sequence"),
                 ),
                 input_slots=("question", "options", "video_id", "events"),
-                procedure=(
-                    SkillStep(
-                        step="caption_coarse_segments",
-                        op="caption_segment",
-                        foreach="segments",
-                        args={
-                            "question": (
-                                "Openly describe the segment's actual visible/narrated events, artworks, objects, "
-                                "people, scene changes, and onscreen text in presentation order."
-                            )
-                        },
-                        assign="caption[{segment}]",
-                    ),
-                    SkillStep(
-                        step="read_first_timestamp",
-                        op="vision_read",
-                        foreach="events",
-                        args={
-                            "window": "caption_match[{event}]",
-                            "ask_for": "At what timestamp (precise, in seconds) does '{event}' first appear?",
-                        },
-                        assign="fact[{event}]",
-                    ),
-                    SkillStep(step="assemble", op="read_timeline_sorted", assign="timeline"),
-                    SkillStep(
-                        step="decide",
-                        op="answer_agent",
-                        args={"evidence": "evidence_table_v2()", "route": "temporal_order"},
-                        assign="decision",
-                    ),
-                ),
-                sufficiency=(
-                    "every_event_has_confirmed_timestamp",
-                    "observed_order_matches_one_option",
-                    "single_scene_subwindow_vision_read_present",
-                ),
-                verifier_checks=(
-                    "temporal_order_consistent",
-                    "no_unconfirmed_event_in_selected_option",
-                    "selected_option_has_structured_support",
-                    "single_scene_constraint_satisfied_when_applicable",
-                ),
+                procedure=timeline_steps,
+                sufficiency=_timeline_sufficiency(),
+                verifier_checks=_timeline_verifier_checks(),
                 recovery={
                     "missing_event": {"action": "need_more_evidence", "target": "missing event window"},
                     "conflict": {"action": "need_more_evidence", "target": "conflicting event timestamps"},
@@ -305,20 +526,7 @@ def builtin_skill_registry() -> SkillRegistry:
                     "caption coarse segments -> read first timestamps -> sort timeline -> compare to option sequences",
                 ),
                 self_check=("decision.option != null", "decision.citations all confirmed"),
-                allowed_actions=frozenset(
-                    {
-                        "caption_segment",
-                        "query_context",
-                        "vision_read",
-                        "read_timeline_sorted",
-                        "target_coverage",
-                        "read_segment_detail",
-                        "locate_targets_in_segment",
-                        "verify_segment_anchors",
-                        "search_segments",
-                    }
-                    | {"verify_ledger_answer"}
-                ),
+                allowed_actions=timeline_allowed_actions,
             ),
         ]
     )
@@ -327,6 +535,11 @@ def builtin_skill_registry() -> SkillRegistry:
 def select_skill(question: str, *, registry: SkillRegistry | None = None, route: str | None = None) -> SkillSpec:
     resolved_registry = registry or builtin_skill_registry()
     resolved_route = route or classify_question_route(question)
+    if resolved_route == "temporal_order" and classify_narration_subroute(question) == "narration_timeline":
+        try:
+            return resolved_registry.get("narration_timeline_qa")
+        except KeyError:
+            pass
     lowered = question.lower()
     scored = []
     for skill in resolved_registry.list():

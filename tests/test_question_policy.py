@@ -2,6 +2,7 @@ import unittest
 
 from visual_coding_agent_harness.agents.question_policy import (
     classify_question_route,
+    classify_narration_subroute,
     extract_candidate_options,
     extract_option_target_atom_map,
     extract_option_target_atoms,
@@ -130,6 +131,31 @@ class QuestionPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(route, "temporal_order")
+
+    def test_classifies_narration_subroute_from_explicit_or_biographical_asr_markers(self):
+        positives = [
+            "How was his life journey according to the video?",
+            "According to the narrator, why did he leave?",
+            "What does the video tell us about her early life?",
+        ]
+
+        for question in positives:
+            with self.subTest(question=question):
+                self.assertEqual(classify_narration_subroute(question), "narration_timeline")
+
+    def test_narration_subroute_rejects_visual_action_and_spatial_hard_negatives(self):
+        negatives = [
+            "How did the man open the door?",
+            "According to the video, how did the man open the door?",
+            "How was the painting positioned?",
+            "According to the video, how was the painting positioned?",
+            "How did the ball move after impact?",
+            "What does she pick up next?",
+        ]
+
+        for question in negatives:
+            with self.subTest(question=question):
+                self.assertEqual(classify_narration_subroute(question), "visual_timeline")
 
 
 if __name__ == "__main__":

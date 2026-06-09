@@ -426,12 +426,12 @@ def _tool_schema_signatures(*, option_blind: bool = False) -> tuple[str, ...]:
     )
     return (
         "ground_question(query: str, top_k: int = 5, modalities: list = [])",
-        "target_coverage(targets: list, top_k: int = 3, modalities: list = [])",
+        "target_coverage(targets: list = [], target_refs: list = [], top_k: int = 3, modalities: list = [], group_by_option: bool = False)",
         "search_segments(query: str, top_k: int = 5, modalities: list = [])",
         "read_segment(segment_id: str)",
-        "read_segment_detail(segment_id: str, targets: list = [])",
-        "locate_targets_in_segment(segment_id: str, targets: list = [], top_k_per_target: int = 3)",
-        "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [])",
+        "read_segment_detail(segment_id: str, targets: list = [], target_refs: list = [], promote_answer_evidence: bool = False)",
+        "locate_targets_in_segment(segment_id: str, targets: list = [], target_refs: list = [], top_k_per_target: int = 3)",
+        "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [], target_refs: list = [])",
         "global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)",
         "summarize_ledger_evidence(max_claims: int = 5)",
         verifier_schema,
@@ -732,6 +732,8 @@ def _evidence_only_snapshot_block(
 _ROUTE_AGNOSTIC_FINAL_RULES = (
     "- The compact scene index is the default map; do not call video_ls for short indexed videos.",
     "- Use target_coverage when MCQ/QA targets need a segment coverage matrix.",
+    "- target_refs accepts only known registry ids like T1; free text or unknown T<n> ids hard-reject the tool call.",
+    "- targets is only for natural-language target text; acceptance requires 0 occurrences of T<n> in legacy targets.",
     "- Use read_segment_detail to expand one selected segment before spending VLM calls.",
     "- Use navigation output as a map, then delegate localized visual reading to one focused evidence tool on one candidate segment.",
     "- Do not spend every round on navigation-only tools; gather evidence-grade visual observations before finalizing.",

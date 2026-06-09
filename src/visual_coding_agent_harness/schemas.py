@@ -74,6 +74,7 @@ class EvidenceRowV2:
     raw_asr_ref: Any = ""
     visual_caption_source: str = ""
     citation_provenance: Mapping[str, Any] = field(default_factory=dict)
+    evidence_binding: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

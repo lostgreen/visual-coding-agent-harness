@@ -8,6 +8,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _answer_option_from_temporal_answer,
     _blocked_final_reason,
     _exhausted_one_shot_tools,
+    _program_signature,
     _sanitize_option_blind_feedback,
 )
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
@@ -63,6 +64,29 @@ def test_temporal_answer_sequence_does_not_map_partial_order():
     )
 
     assert _answer_option_from_temporal_answer(question=question, answer="The clip mentions red and blue.") is None
+
+
+def test_program_signature_ignores_assign_names_and_trace_ids():
+    first = [
+        {
+            "tool": "read_segment_detail",
+            "args": {"segment_id": "seg_0001", "targets": ["humble background"]},
+            "assign": "obs_0017",
+            "trace_id": "trace-a",
+            "observation_id": "obs_0017",
+        }
+    ]
+    second = [
+        {
+            "tool": "read_segment_detail",
+            "args": {"targets": ["humble background"], "segment_id": "seg_0001"},
+            "assign": "obs_0019",
+            "trace_id": "trace-b",
+            "observation_id": "obs_0019",
+        }
+    ]
+
+    assert _program_signature(first) == _program_signature(second)
 
 
 def build_segment_test_registry() -> ToolRegistry:
@@ -358,7 +382,11 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("search_segments(query", prompt)
             self.assertIn("read_segment(segment_id", prompt)
             self.assertIn("read_segment_detail(segment_id", prompt)
+            self.assertIn("promote_answer_evidence", prompt)
             self.assertIn("locate_targets_in_segment(segment_id", prompt)
+            self.assertIn("target_refs: list", prompt)
+            self.assertIn("unknown T<n> ids hard-reject the tool call", prompt)
+            self.assertIn("0 occurrences of T<n> in legacy targets", prompt)
             self.assertIn("verify_segment_anchors(segment_id", prompt)
             self.assertNotIn("expand_window(segment_id", prompt)
             self.assertNotIn("zoom(segment_id", prompt)
@@ -1600,6 +1628,228 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("iterative_no_progress_guard", trace)
             self.assertIn("repeated_program", trace)
 
+    def test_route_repair_second_repeat_proposes_recovery_without_executing(self):
+        repeated_locator = (
+            '{"status": "continue", "skill": "timeline_ordering", "program": ['
+            '{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["David"]}}'
+            "]}"
+        )
+        backend = ScriptedPlannerBackend([repeated_locator, repeated_locator])
+        registry = ToolRegistry()
+        verify_calls = {"count": 0}
+
+        @tool(name="locate_targets_in_segment", description="Locate targets in a segment.")
+        def locate_targets_in_segment(segment_id: str, targets: list | None = None):
+            return {"claim": f"located {segment_id}: {targets}", "confidence": 0.4}
+
+        @tool(name="verify_segment_anchors", description="Verify located anchors.")
+        def verify_segment_anchors(
+            segment_id: str,
+            anchors: list,
+            targets: list | None = None,
+            question: str = "",
+            start_sec: float = 0.0,
+            end_sec: float = 0.0,
+        ):
+            verify_calls["count"] += 1
+            return {"claim": f"verified {segment_id}", "confidence": 0.8}
+
+        registry.register(locate_targets_in_segment)
+        registry.register(verify_segment_anchors)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="route_repair_recovery_proposal")
+            workspace.write_observation(
+                tool_name="locate_targets_in_segment",
+                claim="locator produced anchors",
+                confidence=0.8,
+                raw_output={
+                    "segment_id": "seg_0001",
+                    "verify_call_args": {
+                        "segment_id": "seg_0001",
+                        "anchors": [{"anchor_id": "a1", "segment_id": "seg_0001"}],
+                        "targets": ["David"],
+                    },
+                },
+            )
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=2, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            result = agent.run(question="Which order is shown?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(verify_calls["count"], 1)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("route_repair_applied", trace)
+            self.assertIn("route_repair_recovery_proposed", trace)
+            self.assertIn("read_segment_detail", trace)
+
+    def test_route_repair_third_repeat_hard_stops(self):
+        repeated_locator = (
+            '{"status": "continue", "skill": "timeline_ordering", "program": ['
+            '{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["David"]}}'
+            "]}"
+        )
+        backend = ScriptedPlannerBackend([repeated_locator, repeated_locator, repeated_locator])
+        registry = ToolRegistry()
+        verify_calls = {"count": 0}
+
+        @tool(name="locate_targets_in_segment", description="Locate targets in a segment.")
+        def locate_targets_in_segment(segment_id: str, targets: list | None = None):
+            return {"claim": f"located {segment_id}: {targets}", "confidence": 0.4}
+
+        @tool(name="verify_segment_anchors", description="Verify located anchors.")
+        def verify_segment_anchors(
+            segment_id: str,
+            anchors: list,
+            targets: list | None = None,
+            question: str = "",
+            start_sec: float = 0.0,
+            end_sec: float = 0.0,
+        ):
+            verify_calls["count"] += 1
+            return {"claim": f"verified {segment_id}", "confidence": 0.8}
+
+        registry.register(locate_targets_in_segment)
+        registry.register(verify_segment_anchors)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="route_repair_exhausted")
+            workspace.write_observation(
+                tool_name="locate_targets_in_segment",
+                claim="locator produced anchors",
+                confidence=0.8,
+                raw_output={
+                    "segment_id": "seg_0001",
+                    "verify_call_args": {
+                        "segment_id": "seg_0001",
+                        "anchors": [{"anchor_id": "a1", "segment_id": "seg_0001"}],
+                        "targets": ["David"],
+                    },
+                },
+            )
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=3, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            result = agent.run(question="Which order is shown?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "route_repair_exhausted")
+            self.assertEqual(verify_calls["count"], 1)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("route_repair_exhausted", trace)
+            self.assertIn("repair_repeated_locator_to_verify_segment_anchors", trace)
+
+    def test_route_repair_count_is_target_key_specific(self):
+        locator_for_david = (
+            '{"status": "continue", "skill": "timeline_ordering", "program": ['
+            '{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["David"]}}'
+            "]}"
+        )
+        locator_for_apollo = (
+            '{"status": "continue", "skill": "timeline_ordering", "program": ['
+            '{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["Apollo"]}}'
+            "]}"
+        )
+        backend = ScriptedPlannerBackend([locator_for_david, locator_for_apollo, locator_for_david])
+        registry = ToolRegistry()
+        verify_calls = {"count": 0}
+
+        @tool(name="locate_targets_in_segment", description="Locate targets in a segment.")
+        def locate_targets_in_segment(segment_id: str, targets: list | None = None):
+            return {"claim": f"located {segment_id}: {targets}", "confidence": 0.4}
+
+        @tool(name="verify_segment_anchors", description="Verify located anchors.")
+        def verify_segment_anchors(
+            segment_id: str,
+            anchors: list,
+            targets: list | None = None,
+            question: str = "",
+            start_sec: float = 0.0,
+            end_sec: float = 0.0,
+        ):
+            verify_calls["count"] += 1
+            return {"claim": f"verified {segment_id}: {targets}", "confidence": 0.8}
+
+        registry.register(locate_targets_in_segment)
+        registry.register(verify_segment_anchors)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="route_repair_key_specific")
+            workspace.write_observation(
+                tool_name="locate_targets_in_segment",
+                claim="locator produced anchors",
+                confidence=0.8,
+                raw_output={
+                    "segment_id": "seg_0001",
+                    "verify_call_args": {
+                        "segment_id": "seg_0001",
+                        "anchors": [{"anchor_id": "a1", "segment_id": "seg_0001"}],
+                        "targets": ["David"],
+                    },
+                },
+            )
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=3, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            result = agent.run(question="Which order is shown?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(verify_calls["count"], 2)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("route_repair_recovery_proposed", trace)
+
+    def test_no_progress_warning_after_three_rounds_without_supported_binding(self):
+        backend = ScriptedPlannerBackend(
+            [
+                '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "first"}}]}',
+                '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "second"}}]}',
+                '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "third"}}]}',
+            ]
+        )
+        registry = ToolRegistry()
+
+        @tool(name="video_ls", description="Return navigation-only hints.")
+        def video_ls(query: str = ""):
+            return {"claim": f"navigation hint for {query}", "confidence": 0.4}
+
+        registry.register(video_ls)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="supported_binding_no_progress")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=3, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            result = agent.run(question="Find the narrated evidence", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("iterative_no_progress_warning", trace)
+            self.assertIn("supported_evidence_binding_no_growth", trace)
+
     def test_iterative_agent_repairs_media_tool_missing_segment_id_from_time_window(self):
         backend = ScriptedPlannerBackend(
             [
@@ -2209,6 +2459,122 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertTrue(result.answer.startswith("D"))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_final_answer_verifier", trace)
+            self.assertIn("planner_final_after_answer_agent_verifier", trace)
+
+    def test_narration_timeline_planner_final_requires_supported_evidence_id(self):
+        class NarrationFinalWithoutEvidenceIdBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "final", "skill": "narration_timeline_qa@v1", '
+                            '"answer": "B", "citations": ["obs_0001"], "confidence": 0.83}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "confidence": 0.0}')
+                raise AssertionError(request.task)
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="narration_final_requires_evidence_id")
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": "ev_bind_seg_0001_T1",
+                    "obs_id": "obs_0001",
+                    "tool": "timeline_asr_summary",
+                    "segment_id": "seg_0001",
+                    "claim": "The narration says he became a painter.",
+                    "confidence": 0.91,
+                    "grounding_quality": "indexed_transcript",
+                    "supported_option": "B",
+                    "candidate_option_relations": [
+                        {"option": "B", "relation": "support", "strength": 0.91, "observation_id": "obs_0001"}
+                    ],
+                    "evidence_binding": {
+                        "status": "supported",
+                        "claim_modality": "narrated_fact",
+                        "target_id": "T1",
+                        "segment_id": "seg_0001",
+                    },
+                }
+            )
+            agent = IterativeVisualAgent(
+                backend=NarrationFinalWithoutEvidenceIdBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="According to the narration, what happened?\nA. He became a sculptor\nB. He became a painter",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertNotEqual(result.status, "final")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("planner_final_requires_supported_evidence_id", trace)
+
+    def test_narration_timeline_planner_final_accepts_explicit_supported_evidence_id(self):
+        class NarrationFinalWithEvidenceIdBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "final", "skill": "narration_timeline_qa@v1", '
+                            '"answer": "B", "citations": ["obs_0001"], '
+                            '"evidence_ids": ["ev_bind_seg_0001_T1"], "confidence": 0.83}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "confidence": 0.0}')
+                raise AssertionError(request.task)
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="narration_final_accepts_evidence_id")
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": "ev_bind_seg_0001_T1",
+                    "obs_id": "obs_0001",
+                    "tool": "timeline_asr_summary",
+                    "segment_id": "seg_0001",
+                    "claim": "The narration says he became a painter.",
+                    "confidence": 0.91,
+                    "grounding_quality": "indexed_transcript",
+                    "supported_option": "B",
+                    "candidate_option_relations": [
+                        {"option": "B", "relation": "support", "strength": 0.91, "observation_id": "obs_0001"}
+                    ],
+                    "evidence_binding": {
+                        "status": "supported",
+                        "claim_modality": "narrated_fact",
+                        "target_id": "T1",
+                        "segment_id": "seg_0001",
+                    },
+                }
+            )
+            agent = IterativeVisualAgent(
+                backend=NarrationFinalWithEvidenceIdBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="According to the narration, what happened?\nA. He became a sculptor\nB. He became a painter",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.citations, ["obs_0001"])
+            self.assertEqual(result.evidence_ids, ["ev_bind_seg_0001_T1"])
+            self.assertEqual(result.to_dict()["output"]["evidence_ids"], ["ev_bind_seg_0001_T1"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_final_after_answer_agent_verifier", trace)
 
     def test_iterative_agent_indexes_scene_coverage_for_main_idea_mcq(self):
