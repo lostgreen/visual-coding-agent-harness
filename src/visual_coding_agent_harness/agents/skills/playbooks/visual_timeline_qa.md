@@ -16,6 +16,7 @@ Use this playbook when the question asks about visible actions, object motion, s
 
 Planner playbook:
 - Locate coarse candidate segments before focused reads.
+- If a locator observation exposes a complete ordered transcript sequence, promote that sequence; visual corroboration is optional unless the question explicitly asks for onscreen/visible order.
 - If a locator observation exposes a focused ordered-list `vision_read` action, execute that focused read before anchor verification.
 - Confirm each ordered event with a timestamped visual observation.
 - Use anchor verification for separate individual-event anchors, not as the main route for one ordered-list scene.

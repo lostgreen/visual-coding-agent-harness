@@ -7,6 +7,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     IterativeVisualAgent,
     _answer_option_from_temporal_answer,
     _blocked_final_reason,
+    _blocked_planner_final_reason,
     _exhausted_one_shot_tools,
     _program_signature,
     _sanitize_option_blind_feedback,
@@ -65,6 +66,187 @@ def test_temporal_answer_sequence_does_not_map_partial_order():
     )
 
     assert _answer_option_from_temporal_answer(question=question, answer="The clip mentions red and blue.") is None
+
+
+def test_option_b_requires_complete_relation_chain():
+    question = (
+        "How was his life journey according to the video?\n"
+        "A. Born with humble background and lived in seclusion in a farmhouse.\n"
+        "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+        "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
+        "D. Borned in the upper class and lived in seclusion in a farmhouse."
+    )
+    skill = type("Skill", (), {"name": "narration_timeline_qa"})()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="missing_relation_gate")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[
+                TargetSpec("T1", "humble background", modality_hint=ClaimModality.NARRATED_FACT),
+                TargetSpec("T2", "entered upper class", modality_hint=ClaimModality.NARRATED_FACT),
+                TargetSpec("T3", "seclusion/farmhouse", modality_hint=ClaimModality.NARRATED_FACT),
+                TargetSpec("T4", "born in upper class", modality_hint=ClaimModality.NARRATED_FACT),
+            ],
+            options=[
+                OptionSpec("B", target_sequence=("T1", "T2", "T3"), required_relations=("R1", "R2")),
+                OptionSpec("C", target_sequence=("T1", "T3", "T2"), required_relations=("R3", "R4")),
+                OptionSpec("D", target_sequence=("T4", "T3"), required_relations=("R5",)),
+            ],
+            relations=[
+                ClaimRelation("R1", "before", "T1", "T2"),
+                ClaimRelation("R2", "before", "T2", "T3"),
+                ClaimRelation("R3", "before", "T1", "T3"),
+                ClaimRelation("R4", "before", "T3", "T2"),
+                ClaimRelation("R5", "before", "T4", "T3"),
+            ],
+        )
+        workspace.write_evidence_row(
+            {
+                "evidence_id": "ev_bind_seg_0001_T2",
+                "obs_id": "obs_0001",
+                "tool": "transcript_evidence_binder",
+                "segment_id": "seg_0001",
+                "claim": "Transcript supports only T1 before T2.",
+                "confidence": 0.9,
+                "grounding_quality": "indexed_transcript",
+                "supported_option": "B",
+                "evidence_binding": {
+                    "evidence_id": "ev_bind_seg_0001_T2",
+                    "status": "supported",
+                    "claim_modality": "narrated_fact",
+                    "target_id": "T2",
+                    "segment_id": "seg_0001",
+                    "relation_bindings": [
+                        {"relation_id": "R1", "status": "supported", "binding_id": "rel_bind_R1"}
+                    ],
+                },
+            }
+        )
+
+        reason = _blocked_planner_final_reason(
+            question=question,
+            has_inspect_with_candidate_options=False,
+            workspace=workspace,
+            answer="B",
+            citations=["obs_0001"],
+            evidence_ids=["ev_bind_seg_0001_T2"],
+            planner_skill=skill,
+        )
+
+    assert reason == "planner_final_missing_required_relations:R2"
+
+
+def test_612_complete_chain_maps_to_b_gate():
+    question = (
+        "How was his life journey according to the video?\n"
+        "A. Born with humble background and lived in seclusion in a farmhouse.\n"
+        "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+        "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
+        "D. Borned in the upper class and lived in seclusion in a farmhouse."
+    )
+    skill = type("Skill", (), {"name": "narration_timeline_qa"})()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="complete_relation_gate")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[
+                TargetSpec("T1", "humble background", modality_hint=ClaimModality.NARRATED_FACT),
+                TargetSpec("T2", "entered upper class", modality_hint=ClaimModality.NARRATED_FACT),
+                TargetSpec("T3", "seclusion/farmhouse", modality_hint=ClaimModality.NARRATED_FACT),
+                TargetSpec("T4", "born in upper class", modality_hint=ClaimModality.NARRATED_FACT),
+            ],
+            options=[OptionSpec("B", target_sequence=("T1", "T2", "T3"), required_relations=("R1", "R2"))],
+            relations=[
+                ClaimRelation("R1", "before", "T1", "T2"),
+                ClaimRelation("R2", "before", "T2", "T3"),
+            ],
+        )
+        workspace.write_evidence_row(
+            {
+                "evidence_id": "ev_bind_seg_0001_T2",
+                "obs_id": "obs_0001",
+                "tool": "transcript_evidence_binder",
+                "segment_id": "seg_0001",
+                "claim": "Transcript supports T1 before T2 and T2 before T3.",
+                "confidence": 0.9,
+                "grounding_quality": "indexed_transcript",
+                "supported_option": "B",
+                "evidence_binding": {
+                    "evidence_id": "ev_bind_seg_0001_T2",
+                    "status": "supported",
+                    "claim_modality": "narrated_fact",
+                    "target_id": "T2",
+                    "segment_id": "seg_0001",
+                    "relation_bindings": [
+                        {"relation_id": "R1", "status": "supported", "binding_id": "rel_bind_R1"},
+                        {"relation_id": "R2", "status": "supported", "binding_id": "rel_bind_R2"},
+                    ],
+                },
+            }
+        )
+
+        reason = _blocked_planner_final_reason(
+            question=question,
+            has_inspect_with_candidate_options=False,
+            workspace=workspace,
+            answer="B",
+            citations=["obs_0001"],
+            evidence_ids=["ev_bind_seg_0001_T2"],
+            planner_skill=skill,
+        )
+
+    assert reason == ""
+
+
+def test_deterministic_sequence_mapping_can_resolve_conflict():
+    backend = ScriptedPlannerBackend(
+        [
+            '{"status": "final", "skill": "visual_timeline_qa@v1", "answer": "C", "citations": ["obs_0001"], "confidence": 0.92}',
+        ]
+    )
+    question = BERNINI_ORDER_QUESTION
+    scene_index = fixed_window_scene_index(video_path="/videos/bernini.mp4", duration_sec=60.0, window_sec=60.0)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="deterministic_sequence_conflict")
+        workspace.write_evidence_row(
+            {
+                "evidence_id": "seq_obs_0001",
+                "obs_id": "obs_0001",
+                "tool": "ordered_transcript_sequence",
+                "segment_id": "seg_0001",
+                "claim": "Transcript sequence maps exactly to D.",
+                "confidence": 0.94,
+                "grounding_quality": "indexed_transcript",
+                "supported_option": "D",
+                "evidence_binding": {
+                    "evidence_id": "seq_obs_0001",
+                    "status": "supported",
+                    "claim_modality": "narrated_fact",
+                    "target_id": "ordered_sequence",
+                    "segment_id": "seg_0001",
+                    "ordered_target_refs": ["T1", "T2", "T3", "T4"],
+                },
+            }
+        )
+        agent = IterativeVisualAgent(
+            backend=backend,
+            registry=ToolRegistry(),
+            workspace=workspace,
+            scene_index=scene_index,
+            budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+        )
+
+        result = agent.run(question=question, video_path="/videos/bernini.mp4")
+
+        assert result.status == "final"
+        assert result.answer == "D"
+        assert result.evidence_ids == ["seq_obs_0001"]
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+        assert "deterministic_evidence_mapping" in trace
+        assert "answer_conflict_detected" in trace
+        assert '"planner_answer": "C"' in trace
+        assert '"resolved_answer": "D"' in trace
 
 
 BERNINI_ORDER_QUESTION = (

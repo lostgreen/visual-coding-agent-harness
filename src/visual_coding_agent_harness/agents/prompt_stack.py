@@ -824,6 +824,8 @@ _ROUTE_SPECIFIC_FINAL_RULES: dict[str, tuple[str, ...]] = {
     ),
     "temporal_order": (
         "- For order/sequence questions, use target_coverage or scene-index ASR hints to pick a candidate segment, then call locate_targets_in_segment(segment_id, targets=[...]).",
+        "- A complete contiguous ASR enumeration may be answer-grade order evidence; promote the transcript sequence when route_kind=ordered_list_transcript_complete.",
+        "- Use focused vision only when the ASR list is partial, ambiguous, contradicted, or the question explicitly requires onscreen/visible order.",
         "- If locate_targets_in_segment returns recommended_next_actions with route_kind=focused_ordered_list_vision, execute that focused vision_read before anchor verification.",
         "- Use verify_segment_anchors only for separate individual-event anchors; do not use it as the main route for a single ordered-list scene.",
         "- For narrated biography/life-order claims, use read_segment_detail(promote_answer_evidence=true) instead of visual-verifying abstract narrated facts.",

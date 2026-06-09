@@ -158,6 +158,16 @@ class FinalEvidenceBridgeResult:
 
 
 @dataclass(frozen=True)
+class DeterministicEvidenceMapping:
+    option: str
+    answer: str
+    citations: tuple[str, ...]
+    evidence_ids: tuple[str, ...]
+    confidence: float
+    evidence_kind: str
+
+
+@dataclass(frozen=True)
 class SkillTargetFact:
     fact: str
     mutex_group_id: str = ""
@@ -436,6 +446,17 @@ class IterativeVisualAgent:
                     question=raw_question,
                     answer=str(action.get("answer", "")),
                 )
+                deterministic_final = self._try_deterministic_evidence_final(
+                    question=raw_question,
+                    video_path=video_path,
+                    rounds=rounds,
+                    round_number=round_number,
+                    planner_text=planner_response.text,
+                    planner_answer=final_answer,
+                    rationale=rationale or "deterministic_evidence_mapping",
+                )
+                if deterministic_final is not None:
+                    return deterministic_final
                 bridge_result = _bridge_final_evidence_refs(
                     workspace=self.workspace,
                     question=raw_question,
@@ -732,12 +753,25 @@ class IterativeVisualAgent:
                     and program
                     and not _program_has_visual_evidence_tool(program)
                 ):
-                    forced_program = self._fallback_visual_evidence_program(
+                    skip_reason = self._generic_forced_visual_skip_reason(
+                        question=raw_question,
+                        planner_skill=active_skill,
+                    )
+                    forced_program = [] if skip_reason else self._fallback_visual_evidence_program(
                         question=exploration_question_text,
                         video_path=video_path,
                         inspected_segment_ids=inspected_segment_ids,
                         planner_skill=active_skill,
                     )
+                    if skip_reason:
+                        self.workspace.write_trace_event(
+                            "forced_visual_skipped_for_transcript_route",
+                            {
+                                "round": round_number,
+                                "reason": skip_reason,
+                                "trigger": "force_visual_after_no_evidence_growth",
+                            },
+                        )
                     if forced_program:
                         resolved_program = _append_program_steps(
                             program,
@@ -762,12 +796,25 @@ class IterativeVisualAgent:
                     and not _program_has_visual_evidence_tool(program)
                     and _all_scene_segments_inspected(self.scene_index, inspected_segment_ids)
                 ):
-                    forced_program = self._visual_evidence_from_navigation_program(
+                    skip_reason = self._generic_forced_visual_skip_reason(
+                        question=raw_question,
+                        planner_skill=active_skill,
+                    )
+                    forced_program = [] if skip_reason else self._visual_evidence_from_navigation_program(
                         program=program,
                         question=exploration_question_text,
                         video_path=video_path,
                         planner_skill=active_skill,
                     )
+                    if skip_reason:
+                        self.workspace.write_trace_event(
+                            "forced_visual_skipped_for_transcript_route",
+                            {
+                                "round": round_number,
+                                "reason": skip_reason,
+                                "trigger": "force_visual_from_navigation_no_growth",
+                            },
+                        )
                     if forced_program:
                         resolved_program = _append_program_steps(
                             program,
@@ -793,12 +840,25 @@ class IterativeVisualAgent:
                     and not _program_has_visual_evidence_tool(program)
                     and not _evidence_status_has_strong_option_support(evidence_status_summary)
                 ):
-                    forced_program = self._fallback_visual_evidence_program(
+                    skip_reason = self._generic_forced_visual_skip_reason(
+                        question=raw_question,
+                        planner_skill=active_skill,
+                    )
+                    forced_program = [] if skip_reason else self._fallback_visual_evidence_program(
                         question=exploration_question_text,
                         video_path=video_path,
                         inspected_segment_ids=inspected_segment_ids,
                         planner_skill=active_skill,
                     )
+                    if skip_reason:
+                        self.workspace.write_trace_event(
+                            "forced_visual_skipped_for_transcript_route",
+                            {
+                                "round": round_number,
+                                "reason": skip_reason,
+                                "trigger": "force_uninspected_visual_without_option_support",
+                            },
+                        )
                     if forced_program:
                         resolved_program = _append_program_steps(
                             program,
@@ -974,6 +1034,19 @@ class IterativeVisualAgent:
             )
             citations.extend(observation_ids)
             inspected_segment_ids.update(_segment_ids_from_program(program))
+            deterministic_final = self._try_deterministic_evidence_final(
+                question=raw_question,
+                video_path=video_path,
+                rounds=rounds,
+                round_number=round_number,
+                planner_text=planner_response.text,
+                planner_answer="",
+                rationale="decision_ready",
+                program=program,
+                observation_ids=observation_ids,
+            )
+            if deterministic_final is not None:
+                return deterministic_final
             if _program_has_inspect_with_candidate_options(program):
                 has_inspect_with_candidate_options = True
             timeline_decision = (
@@ -2947,7 +3020,15 @@ class IterativeVisualAgent:
         if len(candidates) != 1:
             return []
         selected = candidates[0]
-        self._executed_recommended_action_ids.add(f"{selected['route_kind']}:{selected['candidate_id']}")
+        self.workspace.write_trace_event(
+            "pending_action_selected",
+            {
+                "route_kind": selected["route_kind"],
+                "candidate_id": selected["candidate_id"],
+                "tool": selected["tool"],
+                "args": dict(selected.get("args") or {}),
+            },
+        )
         return [selected]
 
     def _write_recovery_execution_traces(
@@ -2964,8 +3045,30 @@ class IterativeVisualAgent:
             if not route_kind:
                 continue
             candidate_id = str(step.get("candidate_id") or "")
+            action_key = f"{route_kind}:{candidate_id}"
+            if candidate_id:
+                self._executed_recommended_action_ids.add(action_key)
+            self.workspace.write_trace_event(
+                "pending_action_execution_started",
+                {
+                    "round": round_number,
+                    "route_kind": route_kind,
+                    "candidate_id": candidate_id,
+                    "tool": str(step.get("tool") or ""),
+                },
+            )
             self.workspace.write_trace_event(
                 "recovery_executed",
+                {
+                    "round": round_number,
+                    "route_kind": route_kind,
+                    "candidate_id": candidate_id,
+                    "tool": str(step.get("tool") or ""),
+                    "observation_id": str(observation_id),
+                },
+            )
+            self.workspace.write_trace_event(
+                "pending_action_executed",
                 {
                     "round": round_number,
                     "route_kind": route_kind,
@@ -3015,6 +3118,42 @@ class IterativeVisualAgent:
             if self._has_tool(tool_name):
                 return tool_name
         return None
+
+    def _generic_forced_visual_skip_reason(
+        self,
+        *,
+        question: str,
+        planner_skill: SkillSpec | None,
+    ) -> str:
+        if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
+            return "narration_transcript_route"
+        if _deterministic_evidence_mapping(workspace=self.workspace, question=question) is not None:
+            return "deterministic_evidence_mapping"
+        if self._has_pending_candidate_specific_action():
+            return "pending_candidate_specific_action"
+        return ""
+
+    def _has_pending_candidate_specific_action(self) -> bool:
+        for observation in self.workspace.read_observations():
+            raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+            actions = raw_output.get("recommended_next_actions")
+            if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes)):
+                continue
+            for action in actions:
+                if not isinstance(action, Mapping):
+                    continue
+                route_kind = str(action.get("route_kind") or "")
+                if route_kind not in {
+                    "ordered_list_transcript_complete",
+                    "focused_ordered_list_vision",
+                    "narration_transcript_promotion",
+                }:
+                    continue
+                candidate_id = str(action.get("candidate_id") or observation.observation_id).strip()
+                action_key = f"{route_kind}:{candidate_id}"
+                if action_key not in self._executed_recommended_action_ids:
+                    return True
+        return False
 
     def _fallback_visual_evidence_program(
         self,
@@ -3298,6 +3437,9 @@ class IterativeVisualAgent:
         evidence_ids: Sequence[str] = (),
         source: str = "",
         status: str = "final",
+        planner_answer: str = "",
+        resolved_answer: str = "",
+        conflict: bool | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "round": round_number,
@@ -3308,12 +3450,100 @@ class IterativeVisualAgent:
             payload["evidence_ids"] = list(evidence_ids)
         if source:
             payload["source"] = source
+            payload["final_source"] = source
+        if planner_answer:
+            payload["planner_answer"] = planner_answer
+        if resolved_answer:
+            payload["resolved_answer"] = resolved_answer
+        if conflict is not None:
+            payload["conflict"] = bool(conflict)
         if status != "final":
             payload["status"] = status
         provenance = self._citation_provenance(_unique_preserving_order([*citations, *evidence_ids]))
         if provenance:
             payload["citation_provenance"] = provenance
         self.workspace.write_trace_event("iterative_final", payload)
+
+    def _try_deterministic_evidence_final(
+        self,
+        *,
+        question: str,
+        video_path: str,
+        rounds: Sequence[IterativeRound],
+        round_number: int,
+        planner_text: str,
+        planner_answer: str,
+        rationale: str,
+        program: Sequence[Mapping[str, Any]] = (),
+        observation_ids: Sequence[str] = (),
+    ) -> IterativeRunResult | None:
+        mapping = _deterministic_evidence_mapping(workspace=self.workspace, question=question)
+        if mapping is None:
+            return None
+        planner_option = _answer_option_letter(planner_answer)
+        conflict = bool(planner_option and planner_option != mapping.option)
+        self.workspace.write_trace_event(
+            "decision_ready",
+            {
+                "source": "deterministic_evidence_mapping",
+                "answer": mapping.answer,
+                "option": mapping.option,
+                "evidence_kind": mapping.evidence_kind,
+                "citations": list(mapping.citations),
+                "evidence_ids": list(mapping.evidence_ids),
+                "planner_answer": planner_answer,
+                "resolved_answer": mapping.answer,
+                "conflict": conflict,
+            },
+        )
+        if conflict:
+            self.workspace.write_trace_event(
+                "answer_conflict_detected",
+                {
+                    "planner_answer": planner_answer,
+                    "resolved_answer": mapping.answer,
+                    "source": "deterministic_evidence_mapping",
+                },
+            )
+            self.workspace.write_trace_event(
+                "answer_conflict_resolved",
+                {
+                    "planner_answer": planner_answer,
+                    "resolved_answer": mapping.answer,
+                    "source": "deterministic_evidence_mapping",
+                },
+            )
+        final_rounds = list(rounds)
+        final_rounds.append(
+            IterativeRound(
+                round_number=round_number,
+                status="final",
+                planner_text=planner_text,
+                rationale=rationale,
+                program=program,
+                observation_ids=observation_ids,
+            )
+        )
+        self._write_final_trace(
+            round_number=round_number,
+            answer=mapping.answer,
+            citations=mapping.citations,
+            evidence_ids=mapping.evidence_ids,
+            source="deterministic_evidence_mapping",
+            planner_answer=planner_answer,
+            resolved_answer=mapping.answer,
+            conflict=conflict,
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer=mapping.answer,
+            status="final",
+            citations=list(mapping.citations),
+            evidence_ids=list(mapping.evidence_ids),
+            confidence=mapping.confidence,
+            rounds=final_rounds,
+        )
 
     def _citation_provenance(self, citations: Sequence[str]) -> list[dict[str, Any]]:
         cited = [str(item) for item in citations if str(item)]
@@ -4580,6 +4810,14 @@ def _blocked_planner_final_reason(
     if planner_skill is None and classify_question_route(question) != "gist_global":
         return ""
     if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
+        relation_reason = _missing_required_relations_final_reason(
+            workspace=workspace,
+            question=question,
+            answer=answer,
+            final_refs=final_evidence_refs,
+        )
+        if relation_reason:
+            return relation_reason
         return ""
 
     selected_option = _answer_option_letter(answer)
@@ -4628,6 +4866,287 @@ def _has_minimum_non_navigation_visual_citations(
             if len(matched_observation_ids) >= minimum:
                 return True
     return False
+
+
+def _missing_required_relations_final_reason(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    answer: str,
+    final_refs: Sequence[str],
+) -> str:
+    registry = getattr(workspace, "target_registry", None)
+    option_id = _answer_option_letter(answer)
+    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
+    if not option_id or not isinstance(options_by_id, Mapping) or option_id not in options_by_id:
+        return ""
+    option = options_by_id[option_id]
+    required = {str(relation_id) for relation_id in getattr(option, "required_relations", ()) if str(relation_id)}
+    if not required:
+        return ""
+    supported = _supported_relation_ids_for_refs(
+        workspace=workspace,
+        question=question,
+        final_refs=final_refs,
+        selected_option=option_id,
+    )
+    missing = sorted(required - supported)
+    if missing:
+        workspace.write_trace_event(
+            "narration_relation_chain_missing",
+            {
+                "answer": option_id,
+                "required_relations": sorted(required),
+                "supported_relations": sorted(supported),
+                "missing_relations": missing,
+                "final_refs": list(final_refs),
+            },
+        )
+        return "planner_final_missing_required_relations:" + ",".join(missing)
+    workspace.write_trace_event(
+        "narration_relation_chain_complete",
+        {
+            "answer": option_id,
+            "required_relations": sorted(required),
+            "supported_relations": sorted(supported),
+            "final_refs": list(final_refs),
+        },
+    )
+    return ""
+
+
+def _deterministic_evidence_mapping(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+) -> DeterministicEvidenceMapping | None:
+    options = extract_candidate_options(question)
+    if not options:
+        return None
+    table = workspace.evidence_table_v2(
+        question=question,
+        options=options,
+        include_legacy_worker_votes=True,
+    )
+    candidates: list[DeterministicEvidenceMapping] = []
+    sequence_mapping = _ordered_transcript_deterministic_mapping(table=table)
+    if sequence_mapping is not None:
+        candidates.append(sequence_mapping)
+    relation_mapping = _relation_chain_deterministic_mapping(
+        workspace=workspace,
+        question=question,
+        table=table,
+    )
+    if relation_mapping is not None:
+        candidates.append(relation_mapping)
+    by_option: dict[str, DeterministicEvidenceMapping] = {}
+    for candidate in candidates:
+        existing = by_option.get(candidate.option)
+        if existing is None or candidate.confidence > existing.confidence:
+            by_option[candidate.option] = candidate
+    if len(by_option) != 1:
+        return None
+    return next(iter(by_option.values()))
+
+
+def _ordered_transcript_deterministic_mapping(*, table: Mapping[str, Any]) -> DeterministicEvidenceMapping | None:
+    rows = table.get("rows", [])
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        return None
+    candidates: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("tool", "")) != "ordered_transcript_sequence":
+            continue
+        binding = row.get("evidence_binding")
+        if not isinstance(binding, Mapping):
+            continue
+        if str(binding.get("status", "")).lower() != "supported":
+            continue
+        option = str(row.get("supported_option", "") or "").strip().upper()[:1]
+        if not option:
+            continue
+        candidates.setdefault(option, []).append(row)
+    if len(candidates) != 1:
+        return None
+    option, option_rows = next(iter(candidates.items()))
+    return DeterministicEvidenceMapping(
+        option=option,
+        answer=option,
+        citations=tuple(_row_obs_ids(option_rows)),
+        evidence_ids=tuple(_row_evidence_ids(option_rows)),
+        confidence=max((float(row.get("confidence", 0.0) or 0.0) for row in option_rows), default=0.0),
+        evidence_kind="ordered_transcript_sequence",
+    )
+
+
+def _relation_chain_deterministic_mapping(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    table: Mapping[str, Any],
+) -> DeterministicEvidenceMapping | None:
+    registry = getattr(workspace, "target_registry", None)
+    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
+    if not isinstance(options_by_id, Mapping) or not options_by_id:
+        return None
+    candidates: list[DeterministicEvidenceMapping] = []
+    for option_id, option in options_by_id.items():
+        letter = str(option_id).strip().upper()[:1]
+        required = {str(relation_id) for relation_id in getattr(option, "required_relations", ()) if str(relation_id)}
+        if not letter or not required:
+            continue
+        supported = _supported_relation_ids_for_refs(
+            workspace=workspace,
+            question=question,
+            final_refs=[],
+            selected_option=letter,
+        )
+        if not required.issubset(supported):
+            continue
+        rows = _rows_with_supported_relations(table=table, option=letter, required_relations=required)
+        if not rows:
+            continue
+        candidates.append(
+            DeterministicEvidenceMapping(
+                option=letter,
+                answer=letter,
+                citations=tuple(_row_obs_ids(rows)),
+                evidence_ids=tuple(_row_evidence_ids(rows)),
+                confidence=max((float(row.get("confidence", 0.0) or 0.0) for row in rows), default=0.0),
+                evidence_kind="narration_relation_chain",
+            )
+        )
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
+def _rows_with_supported_relations(
+    *,
+    table: Mapping[str, Any],
+    option: str,
+    required_relations: set[str],
+) -> list[Mapping[str, Any]]:
+    groups = table.get("groups", {})
+    rows = groups.get(option, []) if isinstance(groups, Mapping) else []
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        return []
+    kept: list[Mapping[str, Any]] = []
+    covered: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        row_relations = _supported_relation_ids_from_row(row)
+        if not row_relations.intersection(required_relations):
+            continue
+        kept.append(row)
+        covered.update(row_relations.intersection(required_relations))
+    return kept if required_relations.issubset(covered) else []
+
+
+def _supported_relation_ids_from_row(row: Mapping[str, Any]) -> set[str]:
+    binding = row.get("evidence_binding")
+    if not isinstance(binding, Mapping):
+        return set()
+    if str(binding.get("status", "")).strip().lower() != "supported":
+        return set()
+    relation_bindings = binding.get("relation_bindings", [])
+    if not isinstance(relation_bindings, Sequence) or isinstance(relation_bindings, (str, bytes)):
+        return set()
+    relation_ids: set[str] = set()
+    for relation in relation_bindings:
+        if not isinstance(relation, Mapping):
+            continue
+        if str(relation.get("status", "")).strip().lower() != "supported":
+            continue
+        relation_id = str(relation.get("relation_id", "")).strip()
+        if relation_id:
+            relation_ids.add(relation_id)
+    return relation_ids
+
+
+def _row_obs_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    return _unique_preserving_order(
+        [
+            str(row.get("obs_id", "") or row.get("observation_id", "")).strip()
+            for row in rows
+            if str(row.get("obs_id", "") or row.get("observation_id", "")).strip()
+        ]
+    )
+
+
+def _row_evidence_ids(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    ids = []
+    for row in rows:
+        binding = row.get("evidence_binding")
+        binding_id = binding.get("evidence_id", "") if isinstance(binding, Mapping) else ""
+        evidence_id = str(row.get("evidence_id", "") or binding_id).strip()
+        if evidence_id:
+            ids.append(evidence_id)
+    return _unique_preserving_order(ids)
+
+
+def _supported_relation_ids_for_refs(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    final_refs: Sequence[str],
+    selected_option: str,
+) -> set[str]:
+    refs = {str(ref) for ref in final_refs if str(ref)}
+    table = workspace.evidence_table_v2(
+        question=question,
+        options=extract_candidate_options(question),
+        include_legacy_worker_votes=True,
+    )
+    groups = table.get("groups", {})
+    if refs:
+        candidate_rows = table.get("rows", [])
+    elif isinstance(groups, Mapping):
+        candidate_rows = groups.get(selected_option, [])
+    else:
+        candidate_rows = []
+    if not isinstance(candidate_rows, Sequence) or isinstance(candidate_rows, (str, bytes)):
+        return set()
+    supported: set[str] = set()
+    for row in candidate_rows:
+        if not isinstance(row, Mapping):
+            continue
+        if refs and not _evidence_row_matches_any_ref(row, refs):
+            continue
+        binding = row.get("evidence_binding")
+        if not isinstance(binding, Mapping):
+            continue
+        if str(binding.get("status", "")).strip().lower() != "supported":
+            continue
+        relation_bindings = binding.get("relation_bindings", [])
+        if not isinstance(relation_bindings, Sequence) or isinstance(relation_bindings, (str, bytes)):
+            continue
+        for relation in relation_bindings:
+            if not isinstance(relation, Mapping):
+                continue
+            if str(relation.get("status", "")).strip().lower() != "supported":
+                continue
+            relation_id = str(relation.get("relation_id", "")).strip()
+            if relation_id:
+                supported.add(relation_id)
+    return supported
+
+
+def _evidence_row_matches_any_ref(row: Mapping[str, Any], refs: set[str]) -> bool:
+    binding = row.get("evidence_binding")
+    binding_id = ""
+    if isinstance(binding, Mapping):
+        binding_id = str(binding.get("evidence_id", "")).strip()
+    row_refs = {
+        str(row.get("obs_id", "")).strip(),
+        str(row.get("observation_id", "")).strip(),
+        str(row.get("evidence_id", "")).strip(),
+        binding_id,
+    }
+    return bool(refs.intersection(ref for ref in row_refs if ref))
 
 
 def _main_idea_indexed_coverage_supports_answer(
