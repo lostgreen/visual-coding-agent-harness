@@ -251,6 +251,38 @@ def test_timeline_repairs_read_segment_to_detail_with_targets(tmp_path: Path):
     assert "tool_not_in_allowed_actions" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 
+def test_text_segment_tool_invalid_segment_is_rejected(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(segment_id: str, targets: list | None = None):
+        return {"claim": f"located {segment_id}: {targets}", "confidence": 0.4}
+
+    registry.register(locate_targets_in_segment)
+    workspace = EvidenceWorkspace.create(tmp_path, "invalid_text_segment")
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0008", "targets": ["David"]}}],
+        question="Which artwork appears first?\nA. David\nB. Apollo and Daphne",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("visual_timeline_qa"),
+    )
+
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert normalized == []
+    assert "invalid_segment_id" in trace
+    assert "seg_0008" in trace
+
+
 def test_normalization_strips_unsupported_read_timeline_sorted_args(tmp_path: Path):
     registry = ToolRegistry()
 
@@ -358,6 +390,46 @@ def test_unknown_target_ref_rejects_tool_call(tmp_path: Path):
     assert normalized == []
     assert any(note.reason == "unknown_target_ref" for note in notes)
     assert "unknown_target_ref" in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+
+def test_third_repeated_invalid_protocol_stops_tool_spending(tmp_path: Path):
+    counter: dict[str, int] = {}
+    registry = ToolRegistry()
+
+    @tool(name="locate_targets_in_segment", description="Locate targets in one segment.")
+    def locate_targets_in_segment(segment_id: str, target_refs: list | None = None):
+        counter["locate_targets_in_segment"] = counter.get("locate_targets_in_segment", 0) + 1
+        return {"claim": f"located {segment_id}: {target_refs}", "confidence": 0.4}
+
+    registry.register(locate_targets_in_segment)
+    backend = StaticBackend(
+        json.dumps(
+            {
+                "status": "continue",
+                "program": [
+                    {"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "target_refs": ["T9"]}}
+                ],
+            }
+        )
+    )
+    workspace = EvidenceWorkspace.create(tmp_path, "repeated_invalid_protocol")
+    workspace.target_registry = FakeTargetRegistry({"T1"})
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=5, reserve_final_round=False),
+    )
+
+    result = agent.run(question="Which artwork appears first?\nA. David\nB. Apollo", video_path="/videos/demo.mp4")
+
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert result.status == "protocol_repair_exhausted"
+    assert counter.get("locate_targets_in_segment", 0) == 0
+    assert "unknown_target_ref" in trace
+    assert "repeated_invalid_program_blocked" in trace
+    assert "protocol_repair_exhausted" in trace
 
 
 def test_unknown_legacy_target_id_rejects_entire_tool_call(tmp_path: Path):
@@ -942,7 +1014,7 @@ def test_planner_selected_skill_overrides_fallback_route_for_tool_policy(tmp_pat
     assert "route_violation" not in trace
 
 
-def test_missing_planner_skill_does_not_enable_route_policy(tmp_path: Path):
+def test_missing_planner_skill_uses_effective_skill_policy_in_hard_runtime(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(
         json.dumps(
@@ -970,12 +1042,13 @@ def test_missing_planner_skill_does_not_enable_route_policy(tmp_path: Path):
     agent.run(question="Which event happened first?\nA. red then blue\nB. blue then red", video_path="/videos/demo.mp4")
 
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert counter.get("inspect_segment", 0) == 1
+    assert counter.get("inspect_segment", 0) == 0
     assert "planner_skill_missing" in trace
-    assert "route_violation" not in trace
+    assert "effective_skill" in trace
+    assert "route_violation" in trace
 
 
-def test_invalid_planner_skill_does_not_fallback_to_route_classifier(tmp_path: Path):
+def test_invalid_planner_skill_uses_effective_skill_policy_in_hard_runtime(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(
         json.dumps(
@@ -1004,10 +1077,11 @@ def test_invalid_planner_skill_does_not_fallback_to_route_classifier(tmp_path: P
     agent.run(question="Which event happened first?\nA. red then blue\nB. blue then red", video_path="/videos/demo.mp4")
 
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert counter.get("inspect_segment", 0) == 1
+    assert counter.get("inspect_segment", 0) == 0
     assert "planner_skill_invalid" in trace
     assert "planner_skill_selection" not in trace
-    assert "route_violation" not in trace
+    assert "effective_skill" in trace
+    assert "route_violation" in trace
 
 
 def test_timeline_skill_repairs_batch_caption_segments_to_single_caption_segment(tmp_path: Path):

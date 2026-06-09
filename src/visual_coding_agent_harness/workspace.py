@@ -194,6 +194,7 @@ class EvidenceWorkspace:
         "inspect_region",
         "asr_cue_detail",
         "timeline_asr_summary",
+        "transcript_evidence_binder",
         "verify_local_claim",
     }
 

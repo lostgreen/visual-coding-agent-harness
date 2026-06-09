@@ -13,6 +13,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
 )
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.contracts import ClaimRelation, ClaimModality, OptionSpec, TargetRegistry, TargetSpec
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
 from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
@@ -2461,7 +2462,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("planner_final_answer_verifier", trace)
             self.assertIn("planner_final_after_answer_agent_verifier", trace)
 
-    def test_narration_timeline_planner_final_requires_supported_evidence_id(self):
+    def test_unique_supported_binding_can_fill_narration_evidence_id(self):
         class NarrationFinalWithoutEvidenceIdBackend(VisionLanguageBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 if request.task == "replan":
@@ -2513,9 +2514,70 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertNotEqual(result.status, "final")
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.evidence_ids, ["ev_bind_seg_0001_T1"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("planner_final_requires_supported_evidence_id", trace)
+            self.assertIn("planner_final_evidence_id_bridge", trace)
+
+    def test_multiple_supported_bindings_are_not_guessed_for_narration_final(self):
+        class NarrationFinalWithoutEvidenceIdBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "final", "skill": "narration_timeline_qa@v1", '
+                            '"answer": "B", "citations": ["obs_0001"], "confidence": 0.83}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "confidence": 0.0}')
+                raise AssertionError(request.task)
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="narration_final_multiple_bindings")
+            for target_id in ("T1", "T2"):
+                workspace.write_evidence_row(
+                    {
+                        "evidence_id": f"ev_bind_seg_0001_{target_id}",
+                        "obs_id": "obs_0001",
+                        "tool": "timeline_asr_summary",
+                        "segment_id": "seg_0001",
+                        "claim": f"The narration supports {target_id}.",
+                        "confidence": 0.91,
+                        "grounding_quality": "indexed_transcript",
+                        "supported_option": "B",
+                        "candidate_option_relations": [
+                            {"option": "B", "relation": "support", "strength": 0.91, "observation_id": "obs_0001"}
+                        ],
+                        "evidence_binding": {
+                            "status": "supported",
+                            "claim_modality": "narrated_fact",
+                            "target_id": target_id,
+                            "segment_id": "seg_0001",
+                        },
+                    }
+                )
+            agent = IterativeVisualAgent(
+                backend=NarrationFinalWithoutEvidenceIdBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="According to the narration, what happened?\nA. He became a sculptor\nB. He became a painter",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "evidence_repair_exhausted")
+            self.assertEqual(result.evidence_ids, [])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("planner_final_evidence_id_bridge", trace)
+            self.assertIn("candidate_evidence_ids", trace)
+            self.assertIn("evidence_repair_exhausted", trace)
 
     def test_narration_timeline_planner_final_accepts_explicit_supported_evidence_id(self):
         class NarrationFinalWithEvidenceIdBackend(VisionLanguageBackend):
@@ -2576,6 +2638,178 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.to_dict()["output"]["evidence_ids"], ["ev_bind_seg_0001_T1"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_final_after_answer_agent_verifier", trace)
+
+    def test_narration_prefinal_repair_promotes_real_transcript_evidence_id(self):
+        class NarrationFinalNeedsRepairBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "final", "skill": "visual_timeline_qa@v1", '
+                            '"answer": "B", "citations": ["obs_0001"], "confidence": 0.83}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "confidence": 0.0}')
+                raise AssertionError(request.task)
+
+        question = (
+            "How was his life journey according to the video?\n"
+            "A. He was born wealthy and stayed in court.\n"
+            "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+            "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class."
+        )
+        scene_index = SceneIndex(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_summary=(
+                        "Goya was a man from a humble background who rose through the ranks to reach the upper "
+                        "class, then withdrew into a farmhouse."
+                    ),
+                )
+            ],
+        )
+        video_map = VideoMap.from_scene_index(scene_index)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="narration_prefinal_repair")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "humble background", subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T2", "upper class", aliases=("upper",), subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T3", "farmhouse", subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                ],
+                options=[
+                    OptionSpec("B", target_sequence=("T1", "T2", "T3"), required_relations=("R1", "R2")),
+                    OptionSpec("C", target_sequence=("T1", "T3", "T2"), required_relations=("R3", "R4")),
+                ],
+                relations=[
+                    ClaimRelation("R1", "before", "T1", "T2"),
+                    ClaimRelation("R2", "before", "T2", "T3"),
+                    ClaimRelation("R3", "before", "T1", "T3"),
+                    ClaimRelation("R4", "before", "T3", "T2"),
+                ],
+            )
+            agent = IterativeVisualAgent(
+                backend=NarrationFinalNeedsRepairBackend(),
+                registry=build_video_navigation_registry(video_map, workspace=workspace),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+            )
+
+            result = agent.run(question=question, video_path="/videos/goya.mp4")
+
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("B"))
+            self.assertTrue(result.evidence_ids)
+            self.assertTrue(any(evidence_id.startswith("ev_bind_seg_0001_") for evidence_id in result.evidence_ids))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("effective_skill_locked", trace)
+            self.assertIn("effective_skill_change_ignored", trace)
+            self.assertIn("prefinal_evidence_repair_requested", trace)
+            self.assertIn("sequence_binding_created", trace)
+            self.assertIn("planner_final_after_prefinal_evidence_repair", trace)
+
+    def test_repair_failure_has_terminal_evidence_repair_exhausted_status(self):
+        class NarrationFinalNoRepairCandidateBackend(VisionLanguageBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    return BackendResponse(
+                        text=(
+                            '{"status": "final", "skill": "narration_timeline_qa@v1", '
+                            '"answer": "B", "citations": ["obs_0001"], "confidence": 0.83}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "confidence": 0.0}')
+                raise AssertionError(request.task)
+
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="repair_failure_terminal")
+            agent = IterativeVisualAgent(
+                backend=NarrationFinalNoRepairCandidateBackend(),
+                registry=build_segment_test_registry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="According to the narration, what happened?\nA. He became a sculptor\nB. He became a painter",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "evidence_repair_exhausted")
+            self.assertNotEqual(result.status, "max_rounds_reached")
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("prefinal_evidence_repair_failed", trace)
+            self.assertIn("evidence_repair_exhausted", trace)
+            self.assertIn('"selected_option": ""', trace)
+            self.assertIn('"candidate_option": "B"', trace)
+
+    def test_post_repair_allows_only_one_action_round(self):
+        class PostRepairActionBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.replan_count = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    self.replan_count += 1
+                    if self.replan_count == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status": "final", "skill": "narration_timeline_qa@v1", '
+                                '"answer": "B", "citations": ["obs_0001"], "confidence": 0.83}'
+                            )
+                        )
+                    return BackendResponse(
+                        text=(
+                            '{"status": "continue", "skill": "narration_timeline_qa@v1", '
+                            '"program": [{"tool": "read_segment_detail", "args": {"segment_id": "seg_0001", '
+                            '"targets": ["painter"]}}]}'
+                        )
+                    )
+                if request.task == "answer_from_evidence":
+                    return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "confidence": 0.0}')
+                raise AssertionError(request.task)
+
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0, asr_summary="He painted.")],
+        )
+        video_map = VideoMap.from_scene_index(scene_index)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="post_repair_one_action")
+            backend = PostRepairActionBackend()
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=build_video_navigation_registry(video_map, workspace=workspace),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=4, reserve_final_round=False),
+            )
+
+            result = agent.run(
+                question="According to the narration, what happened?\nA. He became a sculptor\nB. He became a painter",
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "evidence_repair_exhausted")
+            self.assertEqual(backend.replan_count, 2)
+            self.assertLessEqual(len(result.rounds), 2)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("prefinal_evidence_repair_failed", trace)
+            self.assertIn("evidence_repair_exhausted", trace)
 
     def test_iterative_agent_indexes_scene_coverage_for_main_idea_mcq(self):
         class SceneCoverageBackend(VisionLanguageBackend):

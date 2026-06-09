@@ -8,7 +8,14 @@ from typing import Any, Mapping, Sequence
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
-INCOMPLETE_STATUSES = {"max_rounds_reached", "incomplete", "error", "failed"}
+INCOMPLETE_STATUSES = {
+    "max_rounds_reached",
+    "protocol_repair_exhausted",
+    "evidence_repair_exhausted",
+    "incomplete",
+    "error",
+    "failed",
+}
 VISUAL_SEGMENT_TOOLS = {"inspect_segment", "caption_segment", "qa_segment", "caption_segments", "vision_read"}
 GROUNDING_WEIGHTS = {
     "global_sparse": 0.35,

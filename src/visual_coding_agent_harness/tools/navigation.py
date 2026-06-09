@@ -84,6 +84,9 @@ def build_video_navigation_registry(
         rows = []
         coverage_targets = _coverage_target_specs(targets=targets, target_refs=target_refs, workspace=workspace)
         for index, coverage_target in enumerate(coverage_targets, start=1):
+            target_ref = str(coverage_target.get("target_ref") or "").strip()
+            query_id = "" if target_ref else f"Q{index}"
+            display_id = target_ref or query_id
             candidates = _coverage_candidates_for_target(
                 current=current,
                 target=coverage_target["target"],
@@ -93,14 +96,17 @@ def build_video_navigation_registry(
             )
             status = "candidate" if candidates else "missing"
             row = {
-                "target_id": coverage_target.get("target_ref") or f"T{index}",
+                "target_id": display_id,
                 "target": coverage_target["target"],
                 "status": status,
                 "candidates": candidates,
                 "missing_confirmation": not bool(candidates),
+                "source": "target_registry" if target_ref else "free_text_query",
             }
-            if coverage_target.get("target_ref"):
-                row["target_ref"] = coverage_target["target_ref"]
+            if target_ref:
+                row["target_ref"] = target_ref
+            else:
+                row["query_id"] = query_id
             rows.append(row)
         option_coverage = _option_coverage_rows(rows=rows, workspace=workspace) if group_by_option else []
         summary = "; ".join(
@@ -156,6 +162,9 @@ def build_video_navigation_registry(
     @tool(name="read_segment", description="Read compact indexed metadata for one segment.")
     def read_segment(segment_id: str) -> Mapping[str, object]:
         current = video_map_store.current
+        invalid = _invalid_segment_result(current=current, segment_id=segment_id)
+        if invalid is not None:
+            return invalid
         segment = current.get(segment_id)
         claim = _segment_claim(segment)
         return {
@@ -174,6 +183,9 @@ def build_video_navigation_registry(
         option_targets: Mapping[str, Sequence[str]] | None = None,
     ) -> Mapping[str, object]:
         current = video_map_store.current
+        invalid = _invalid_segment_result(current=current, segment_id=segment_id)
+        if invalid is not None:
+            return invalid
         segment = current.get(segment_id)
         resolved_option_targets = _normalize_option_targets(option_targets or {})
         binding_targets, binding_relations = _resolve_binding_specs(
@@ -207,6 +219,7 @@ def build_video_navigation_registry(
                     segment=segment,
                     targets=binding_targets,
                     relations=binding_relations,
+                    workspace=workspace,
                 ),
             ]
         return {
@@ -240,6 +253,9 @@ def build_video_navigation_registry(
         top_k_per_target: int = 3,
     ) -> Mapping[str, object]:
         current = video_map_store.current
+        invalid = _invalid_segment_result(current=current, segment_id=segment_id)
+        if invalid is not None:
+            return invalid
         segment = current.get(segment_id)
         binding_targets, _binding_relations = _resolve_binding_specs(target_refs=target_refs, workspace=workspace)
         resolved_targets = _detail_targets(
@@ -310,6 +326,9 @@ def build_video_navigation_registry(
     @tool(name="expand_window", description="Return a bounded temporal window around a segment.")
     def expand_window(segment_id: str, before_sec: float = 30.0, after_sec: float = 30.0) -> Mapping[str, object]:
         current = video_map_store.current
+        invalid = _invalid_segment_result(current=current, segment_id=segment_id)
+        if invalid is not None:
+            return invalid
         segment = current.get(segment_id)
         start_sec = max(0.0, segment.start_sec - before_sec)
         end_sec = min(current.duration_sec, segment.end_sec + after_sec)
@@ -334,6 +353,9 @@ def build_video_navigation_registry(
     @tool(name="zoom", description="Materialize finer child segments for a coarse VideoMap segment.")
     def zoom(segment_id: str, target_granularity_sec: float = 60.0) -> Mapping[str, object]:
         current = video_map_store.current
+        invalid = _invalid_segment_result(current=current, segment_id=segment_id)
+        if invalid is not None:
+            return invalid
         parent = current.get(segment_id)
         children = video_map_store.materialize_zoom(
             segment_id,
@@ -476,6 +498,28 @@ def _available_indexes(segments: Sequence[VideoMapSegment]) -> Sequence[str]:
         if any(predicate(segment) for segment in segments):
             indexes.append(name)
     return indexes
+
+
+def _invalid_segment_result(*, current: VideoMap, segment_id: object) -> Mapping[str, object] | None:
+    requested = str(segment_id or "").strip()
+    valid_ids = [segment.segment_id for segment in current.segments]
+    if requested and requested in set(valid_ids):
+        return None
+    return {
+        "ok": False,
+        "error_code": "invalid_segment_id",
+        "requested_segment_id": requested,
+        "valid_segment_ids": valid_ids,
+        "claim": (
+            f"Invalid segment_id '{requested}'. Valid segment_ids: "
+            + (", ".join(valid_ids[:16]) if valid_ids else "(none)")
+        ),
+        "confidence": 0.0,
+        "input_artifacts": [current.video_path],
+        "regions": [],
+        "grounding_quality": "invalid",
+        "limitations": "Segment id was rejected exactly; no substitute segment was selected.",
+    }
 
 
 _GROUNDING_STOPWORDS = {
@@ -882,6 +926,7 @@ def _answer_evidence_rows_from_bound_targets(
     segment: VideoMapSegment,
     targets: Sequence[TargetSpec],
     relations: Sequence[ClaimRelation],
+    workspace: EvidenceWorkspace | None,
 ) -> list[Mapping[str, object]]:
     if not segment.asr_text:
         return []
@@ -897,12 +942,19 @@ def _answer_evidence_rows_from_bound_targets(
     supported_relations = [
         relation for relation in relation_payloads if str(relation.get("status", "")).lower() == "supported"
     ]
+    option_relations = _supported_option_relations_from_bindings(
+        targets=targets,
+        relations=relations,
+        supported_relations=supported_relations,
+        workspace=workspace,
+    )
     rows: list[Mapping[str, object]] = []
     for binding in result.evidence_bindings:
         if binding.status != "supported":
             continue
         binding_payload = asdict(binding)
         binding_payload["claim_modality"] = binding.claim_modality.value
+        binding_payload["segment_id"] = segment.segment_id
         binding_payload["relation_bindings"] = [
             relation
             for relation in supported_relations
@@ -925,7 +977,7 @@ def _answer_evidence_rows_from_bound_targets(
                 ),
                 "confidence": 0.88,
                 "grounding_quality": "indexed_transcript",
-                "candidate_option_relations": [],
+                "candidate_option_relations": option_relations,
                 "confidence_signal": "explicit transcript binding",
                 "limitations": "Conservative transcript binding over indexed ASR; no model-level semantic inference.",
                 "source": binding.source,
@@ -934,6 +986,51 @@ def _answer_evidence_rows_from_bound_targets(
             }
         )
     return rows
+
+
+def _supported_option_relations_from_bindings(
+    *,
+    targets: Sequence[TargetSpec],
+    relations: Sequence[ClaimRelation],
+    supported_relations: Sequence[Mapping[str, object]],
+    workspace: EvidenceWorkspace | None,
+) -> list[Mapping[str, object]]:
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
+    if not isinstance(options_by_id, Mapping) or not options_by_id:
+        return []
+    selected_target_ids = {target.target_id for target in targets}
+    selected_relation_ids = {relation.relation_id for relation in relations}
+    supported_relation_ids = {
+        str(relation.get("relation_id", ""))
+        for relation in supported_relations
+        if str(relation.get("relation_id", ""))
+    }
+    option_relations: list[Mapping[str, object]] = []
+    for option_id, option in options_by_id.items():
+        required_relations = tuple(str(item) for item in getattr(option, "required_relations", ()) if str(item))
+        target_sequence = tuple(str(item) for item in getattr(option, "target_sequence", ()) if str(item))
+        if required_relations:
+            if not set(required_relations).issubset(selected_relation_ids):
+                continue
+            if not set(required_relations).issubset(supported_relation_ids):
+                continue
+        elif target_sequence:
+            if not set(target_sequence).issubset(selected_target_ids):
+                continue
+            continue
+        else:
+            continue
+        option_relations.append(
+            {
+                "option": str(option_id).strip().upper()[:1],
+                "relation": "support",
+                "strength": 0.88,
+                "assigned_by": "transcript_evidence_binder",
+                "required_relations": list(required_relations),
+            }
+        )
+    return option_relations
 
 
 def _relation_touches_target(
@@ -1195,7 +1292,7 @@ def _locate_target_candidates(
             candidates.append(
                 {
                     "candidate_id": candidate_id,
-                    "target_id": f"T{target_index}",
+                    "query_id": f"Q{target_index}",
                     "target": target,
                     "source": match["source"],
                     "match_type": match["match_type"],

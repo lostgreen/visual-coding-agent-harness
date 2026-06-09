@@ -21,6 +21,7 @@ from .open_questions import QuestionContext, build_question_context, exploration
 from .output_quality import is_unsupported_claim
 from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
 from .question_policy import (
+    classify_narration_subroute,
     classify_question_route,
     extract_candidate_options,
     extract_option_target_atom_map,
@@ -38,6 +39,8 @@ from .skills.specs import SkillSpec, builtin_skill_registry, select_skill
 
 
 _SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read", "verify_segment_anchors"}
+_SEGMENT_TEXT_TOOLS = {"locate_targets_in_segment", "read_segment_detail", "read_segment"}
+_SEGMENT_ID_TOOLS = _SEGMENT_MEDIA_TOOLS | _SEGMENT_TEXT_TOOLS
 _GLOBAL_VIEW_TOOLS = {"global_gist"}
 _ONE_SHOT_TOOLS: frozenset[str] = frozenset({"global_gist"})
 _TARGET_REF_RE = re.compile(r"^T[1-9]\d*$")
@@ -74,6 +77,7 @@ class AgentBudget:
     context_budget_tokens: int = 12000
     context_budget_ratios: Mapping[str, float] | None = None
     max_repeated_programs: int = 3
+    max_repeated_invalid_programs: int = 3
     hard_skill_runtime: bool = False
     reflection_memory_max_items: int = 5
     disable_global_gist_route: bool = False
@@ -135,9 +139,36 @@ class NormalizationNote:
 
 
 @dataclass(frozen=True)
+class FailureSignature:
+    program_signature: str
+    reason: str
+    affected_tools: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class FinalEvidenceBridgeResult:
+    citations: list[str]
+    evidence_ids: list[str]
+    filled_evidence_ids: list[str] = field(default_factory=list)
+    ambiguous: list[Mapping[str, Any]] = field(default_factory=list)
+    changed: bool = False
+
+
+@dataclass(frozen=True)
 class SkillTargetFact:
     fact: str
     mutex_group_id: str = ""
+
+
+@dataclass
+class SkillRuntimeState:
+    recommended_skill: SkillSpec
+    compatible_skill_ids: tuple[str, ...]
+    effective_skill: SkillSpec | None = None
+    locked: bool = False
+    selected_round: int | None = None
+    unlock_used: bool = False
+    override_reason: str = ""
 
 
 class IterativeVisualAgent:
@@ -222,6 +253,7 @@ class IterativeVisualAgent:
         last_round_normalization_notes: list[NormalizationNote] = []
         repeated_program_key = ""
         repeated_program_count = 0
+        invalid_failure_counts: dict[FailureSignature, int] = {}
         no_evidence_growth_rounds = 0
         supported_binding_no_growth_rounds = 0
         last_evidence_table_row_count = self.workspace.evidence_table_row_count()
@@ -229,7 +261,25 @@ class IterativeVisualAgent:
         all_segments_answer_attempted = False
         planner_final_verifier_disagreed = False
         planner_final_auto_final_blocked = False
-        last_selected_skill_id: str | None = None
+        prefinal_evidence_repair_done = False
+        prefinal_evidence_repair_failed = False
+        post_repair_action_rounds_remaining = 0
+        post_repair_action_start_round = 0
+        evidence_repair_candidate_answer = ""
+        evidence_repair_failure_reason = ""
+        skill_runtime = _initial_skill_runtime_state(raw_question) if self.budget.hard_skill_runtime else None
+        last_selected_skill_id: str | None = _skill_id(skill_runtime.effective_skill) if skill_runtime else None
+        if skill_runtime is not None:
+            self.workspace.write_trace_event(
+                "effective_skill_locked",
+                {
+                    "round": len(rounds) + 1,
+                    "recommended_skill": _skill_id(skill_runtime.recommended_skill),
+                    "effective_skill": _skill_id(skill_runtime.effective_skill),
+                    "compatible_skills": list(skill_runtime.compatible_skill_ids),
+                    "reason": "question_policy_recommended",
+                },
+            )
 
         for round_number in range(len(rounds) + 1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
@@ -319,7 +369,6 @@ class IterativeVisualAgent:
             planned_program: Any = action.get("program", [])
             planner_skill, skill_status = _planner_selected_skill(action)
             if skill_status["status"] == "selected":
-                last_selected_skill_id = f"{planner_skill.name}@v{planner_skill.version}"
                 self.workspace.write_trace_event(
                     "planner_skill_selection",
                     {
@@ -328,23 +377,38 @@ class IterativeVisualAgent:
                         "resolved_skill": planner_skill.name,
                     },
                 )
+                if skill_runtime is not None:
+                    self._update_effective_skill_runtime(
+                        state=skill_runtime,
+                        requested_skill=planner_skill,
+                        requested_skill_text=skill_status["requested_skill"],
+                        round_number=round_number,
+                        rationale=rationale,
+                        executed_rounds=len(rounds),
+                        supported_binding_no_growth_rounds=supported_binding_no_growth_rounds,
+                        no_evidence_growth_rounds=no_evidence_growth_rounds,
+                    )
+                else:
+                    last_selected_skill_id = f"{planner_skill.name}@v{planner_skill.version}"
             elif skill_status["status"] == "missing":
-                self.workspace.write_trace_event(
-                    "planner_skill_missing",
-                    {
-                        "round": round_number,
-                        "message": "Planner omitted skill; continuing with ordinary exploration policy.",
-                    },
-                )
+                payload = {"round": round_number}
+                if skill_runtime is not None:
+                    payload["effective_skill"] = _skill_id(skill_runtime.effective_skill)
+                    payload["message"] = "Planner omitted skill; using the run-level effective skill."
+                else:
+                    payload["message"] = "Planner omitted skill; continuing with ordinary exploration policy."
+                self.workspace.write_trace_event("planner_skill_missing", payload)
             elif skill_status["status"] == "invalid":
-                self.workspace.write_trace_event(
-                    "planner_skill_invalid",
-                    {
-                        "round": round_number,
-                        "requested_skill": skill_status["requested_skill"],
-                        "message": "Planner requested an unknown skill; continuing with ordinary exploration policy.",
-                    },
-                )
+                payload = {"round": round_number, "requested_skill": skill_status["requested_skill"]}
+                if skill_runtime is not None:
+                    payload["effective_skill"] = _skill_id(skill_runtime.effective_skill)
+                    payload["message"] = "Planner requested an unknown skill; using the run-level effective skill."
+                else:
+                    payload["message"] = "Planner requested an unknown skill; continuing with ordinary exploration policy."
+                self.workspace.write_trace_event("planner_skill_invalid", payload)
+            active_skill = skill_runtime.effective_skill if skill_runtime is not None else planner_skill
+            if skill_runtime is not None or planner_skill is not None:
+                last_selected_skill_id = _skill_id(active_skill)
 
             if status == "final":
                 final_citations = [str(item) for item in action.get("citations", [])]
@@ -353,6 +417,28 @@ class IterativeVisualAgent:
                     question=raw_question,
                     answer=str(action.get("answer", "")),
                 )
+                bridge_result = _bridge_final_evidence_refs(
+                    workspace=self.workspace,
+                    question=raw_question,
+                    answer=final_answer,
+                    citations=final_citations,
+                    evidence_ids=final_evidence_ids,
+                )
+                if bridge_result.changed or bridge_result.ambiguous:
+                    self.workspace.write_trace_event(
+                        "planner_final_evidence_id_bridge",
+                        {
+                            "round": round_number,
+                            "citations_before": final_citations,
+                            "evidence_ids_before": final_evidence_ids,
+                            "citations_after": bridge_result.citations,
+                            "evidence_ids_after": bridge_result.evidence_ids,
+                            "filled_evidence_ids": bridge_result.filled_evidence_ids,
+                            "ambiguous": bridge_result.ambiguous,
+                        },
+                    )
+                final_citations = bridge_result.citations
+                final_evidence_ids = bridge_result.evidence_ids
                 final_source = "planner_final"
                 if extract_candidate_options(raw_question):
                     self.workspace.write_trace_event(
@@ -381,7 +467,7 @@ class IterativeVisualAgent:
                             answer=final_answer,
                             citations=final_citations,
                             evidence_ids=final_evidence_ids,
-                            planner_skill=planner_skill,
+                            planner_skill=active_skill,
                         )
                     final_source = "planner_final_after_answer_agent_verifier"
                 else:
@@ -392,9 +478,62 @@ class IterativeVisualAgent:
                         answer=final_answer,
                         citations=final_citations,
                         evidence_ids=final_evidence_ids,
-                        planner_skill=planner_skill,
+                        planner_skill=active_skill,
                     )
+                if (
+                    blocked_reason == "planner_final_requires_supported_evidence_id"
+                    and not prefinal_evidence_repair_done
+                    and active_skill is not None
+                    and active_skill.name == "narration_timeline_qa"
+                ):
+                    prefinal_evidence_repair_done = True
+                    repair = self._try_narration_prefinal_evidence_repair(
+                        question=raw_question,
+                        answer=final_answer,
+                        citations=final_citations,
+                    )
+                    if repair is not None:
+                        repair_observation_ids, repair_evidence_ids = repair
+                        citations.extend(
+                            obs_id for obs_id in repair_observation_ids if obs_id not in citations
+                        )
+                        final_citations = _unique_preserving_order([*final_citations, *repair_observation_ids])
+                        final_evidence_ids = _unique_preserving_order([*final_evidence_ids, *repair_evidence_ids])
+                        blocked_reason = _blocked_planner_final_reason(
+                            question=raw_question,
+                            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                            workspace=self.workspace,
+                            answer=final_answer,
+                            citations=final_citations,
+                            evidence_ids=final_evidence_ids,
+                            planner_skill=active_skill,
+                        )
+                        if not blocked_reason:
+                            final_source = "planner_final_after_prefinal_evidence_repair"
+                    else:
+                        prefinal_evidence_repair_failed = True
+                        post_repair_action_rounds_remaining = 1
+                        post_repair_action_start_round = round_number + 1
+                        evidence_repair_candidate_answer = final_answer
+                        evidence_repair_failure_reason = "prefinal_repair_failed"
                 if blocked_reason:
+                    if (
+                        blocked_reason == "planner_final_requires_supported_evidence_id"
+                        and prefinal_evidence_repair_done
+                        and prefinal_evidence_repair_failed
+                        and post_repair_action_rounds_remaining <= 0
+                    ):
+                        return self._evidence_repair_exhausted_result(
+                            question=raw_question,
+                            video_path=video_path,
+                            rounds=rounds,
+                            round_number=round_number,
+                            planner_text=planner_response.text,
+                            rationale=rationale or blocked_reason,
+                            citations=citations,
+                            candidate_answer=evidence_repair_candidate_answer or final_answer,
+                            failure_reason=evidence_repair_failure_reason or blocked_reason,
+                        )
                     if blocked_reason == "planner_final_verifier_disagrees":
                         planner_final_verifier_disagreed = True
                         planner_final_auto_final_blocked = True
@@ -416,7 +555,18 @@ class IterativeVisualAgent:
                         rule=_reflection_rule_for_failure(blocked_reason),
                     )
                     planned_program = []
-                    if not final_round_reserved:
+                    if prefinal_evidence_repair_failed and post_repair_action_rounds_remaining > 0:
+                        answer_feedback = [
+                            "Prefinal evidence repair did not create answer-grade evidence. You have one "
+                            "post-repair action round: provide a different answer with explicit supported "
+                            "evidence_ids, call one non-repeating transcript evidence tool, or abstain."
+                        ]
+                    elif bridge_result.ambiguous:
+                        answer_feedback = [
+                            "A cited observation maps to multiple supported evidence bindings; do not guess. "
+                            f"Choose explicit evidence_ids from: {bridge_result.ambiguous[:3]}."
+                        ]
+                    if not final_round_reserved and not prefinal_evidence_repair_failed:
                         planned_program = self._fallback_inspector_program(
                             question=exploration_question_text,
                             inspected_segment_ids=inspected_segment_ids,
@@ -459,7 +609,7 @@ class IterativeVisualAgent:
                     video_path=video_path,
                     inspected_segment_ids=inspected_segment_ids,
                     final_round_reserved=final_round_reserved,
-                    planner_skill=planner_skill,
+                    planner_skill=active_skill,
                     notes_out=normalization_notes,
                 )
                 last_round_normalization_notes = normalization_notes
@@ -485,6 +635,60 @@ class IterativeVisualAgent:
                         citations=citations,
                         rounds=rounds,
                     )
+                invalid_failure_signature = _normalization_failure_signature(
+                    planned_program=planned_program,
+                    normalization_notes=normalization_notes,
+                    active_skill=active_skill,
+                )
+                if invalid_failure_signature is not None and self.budget.max_repeated_invalid_programs > 0:
+                    repeat_count = invalid_failure_counts.get(invalid_failure_signature, 0) + 1
+                    invalid_failure_counts[invalid_failure_signature] = repeat_count
+                    recovery = _structured_recovery_for_failure(
+                        invalid_failure_signature,
+                        normalization_notes=normalization_notes,
+                    )
+                    if repeat_count >= self.budget.max_repeated_invalid_programs:
+                        self.workspace.write_trace_event(
+                            "protocol_repair_exhausted",
+                            {
+                                "round": round_number,
+                                "repeat_count": repeat_count,
+                                "max_repeated_invalid_programs": self.budget.max_repeated_invalid_programs,
+                                "failure_signature": asdict(invalid_failure_signature),
+                                "recovery": recovery,
+                            },
+                        )
+                        rounds.append(
+                            IterativeRound(
+                                round_number=round_number,
+                                status="protocol_repair_exhausted",
+                                planner_text=planner_response.text,
+                                rationale=rationale or invalid_failure_signature.reason,
+                                program=[],
+                                observation_ids=[],
+                            )
+                        )
+                        partial_answer = _partial_answer_from_ledger(self._read_ledger())
+                        return IterativeRunResult(
+                            question=raw_question,
+                            video_path=video_path,
+                            answer=partial_answer
+                            or "Stopped because the same invalid tool protocol repeated three times.",
+                            status="protocol_repair_exhausted",
+                            citations=citations,
+                            rounds=rounds,
+                        )
+                    if repeat_count == 2:
+                        self.workspace.write_trace_event(
+                            "repeated_invalid_program_blocked",
+                            {
+                                "round": round_number,
+                                "repeat_count": repeat_count,
+                                "failure_signature": asdict(invalid_failure_signature),
+                                "recovery": recovery,
+                            },
+                        )
+                        answer_feedback = [_protocol_recovery_feedback(recovery)]
                 if not program and not final_round_reserved and normalization_notes:
                     self.workspace.write_trace_event(
                         "iterative_normalization_empty",
@@ -513,7 +717,7 @@ class IterativeVisualAgent:
                         question=exploration_question_text,
                         video_path=video_path,
                         inspected_segment_ids=inspected_segment_ids,
-                        planner_skill=planner_skill,
+                        planner_skill=active_skill,
                     )
                     if forced_program:
                         resolved_program = _append_program_steps(
@@ -543,7 +747,7 @@ class IterativeVisualAgent:
                         program=program,
                         question=exploration_question_text,
                         video_path=video_path,
-                        planner_skill=planner_skill,
+                        planner_skill=active_skill,
                     )
                     if forced_program:
                         resolved_program = _append_program_steps(
@@ -574,7 +778,7 @@ class IterativeVisualAgent:
                         question=exploration_question_text,
                         video_path=video_path,
                         inspected_segment_ids=inspected_segment_ids,
-                        planner_skill=planner_skill,
+                        planner_skill=active_skill,
                     )
                     if forced_program:
                         resolved_program = _append_program_steps(
@@ -781,6 +985,30 @@ class IterativeVisualAgent:
                 supported_binding_no_growth_rounds = 0
                 self._reset_route_repair_counts_for_supported_bindings()
             last_supported_binding_count = current_supported_binding_count
+            if (
+                prefinal_evidence_repair_failed
+                and post_repair_action_rounds_remaining > 0
+                and round_number >= post_repair_action_start_round
+            ):
+                post_repair_action_rounds_remaining -= 1
+                if not _supported_evidence_ids_for_answer(
+                    workspace=self.workspace,
+                    question=raw_question,
+                    answer=evidence_repair_candidate_answer,
+                ):
+                    return self._evidence_repair_exhausted_result(
+                        question=raw_question,
+                        video_path=video_path,
+                        rounds=rounds,
+                        round_number=round_number,
+                        planner_text=planner_response.text,
+                        rationale=rationale or "post_repair_action_round_exhausted",
+                        citations=citations,
+                        candidate_answer=evidence_repair_candidate_answer,
+                        failure_reason=evidence_repair_failure_reason or "post_repair_action_round_exhausted",
+                        program=program,
+                        observation_ids=observation_ids,
+                    )
             if supported_binding_no_growth_rounds >= 3 and not self._no_progress_warning_emitted:
                 self._no_progress_warning_emitted = True
                 self.workspace.write_trace_event(
@@ -964,6 +1192,18 @@ class IterativeVisualAgent:
             )
             if low_confidence_result is not None:
                 return low_confidence_result
+        if prefinal_evidence_repair_failed:
+            return self._evidence_repair_exhausted_result(
+                question=raw_question,
+                video_path=video_path,
+                rounds=rounds,
+                round_number=self.budget.max_rounds,
+                planner_text="",
+                rationale="budget_exhausted_after_prefinal_evidence_repair_failed",
+                citations=citations,
+                candidate_answer=evidence_repair_candidate_answer,
+                failure_reason=evidence_repair_failure_reason or "budget_exhausted_after_prefinal_evidence_repair_failed",
+            )
         plural = "round" if self.budget.max_rounds == 1 else "rounds"
         partial_answer = _partial_answer_from_ledger(self._read_ledger())
         return IterativeRunResult(
@@ -973,6 +1213,56 @@ class IterativeVisualAgent:
             or f"Stopped after {self.budget.max_rounds} exploration {plural} with partial evidence.",
             status="max_rounds_reached",
             citations=citations,
+            rounds=rounds,
+        )
+
+    def _evidence_repair_exhausted_result(
+        self,
+        *,
+        question: str,
+        video_path: str,
+        rounds: list[IterativeRound],
+        round_number: int,
+        planner_text: str,
+        rationale: str,
+        citations: Sequence[str],
+        candidate_answer: str,
+        failure_reason: str,
+        program: Sequence[Mapping[str, Any]] = (),
+        observation_ids: Sequence[str] = (),
+    ) -> IterativeRunResult:
+        candidate_option = _answer_option_letter(candidate_answer)
+        self.workspace.write_trace_event(
+            "evidence_repair_exhausted",
+            {
+                "round": round_number,
+                "final_decision": "evidence_repair_exhausted",
+                "selected_option": "",
+                "candidate_option": candidate_option,
+                "candidate_answer": candidate_answer,
+                "failure_reason": failure_reason,
+                "citations": list(citations),
+            },
+        )
+        rounds.append(
+            IterativeRound(
+                round_number=round_number,
+                status="evidence_repair_exhausted",
+                planner_text=planner_text,
+                rationale=rationale,
+                program=list(program),
+                observation_ids=list(observation_ids),
+            )
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer=(
+                "Stopped because narration evidence repair did not produce answer-grade supported evidence "
+                f"for candidate option {candidate_option or '(unknown)'}."
+            ),
+            status="evidence_repair_exhausted",
+            citations=list(citations),
             rounds=rounds,
         )
 
@@ -1405,6 +1695,15 @@ class IterativeVisualAgent:
                     and not args.get("candidate_options")
                 ):
                     args["candidate_options"] = list(candidate_options)
+            if tool_name in _SEGMENT_TEXT_TOOLS:
+                args = self._normalize_text_segment_tool_args(
+                    tool_name=tool_name,
+                    args=args,
+                    notes_out=notes_out,
+                )
+                if args is None:
+                    blocked_route_violation = True
+                    continue
             if tool_name == "read_segment_detail":
                 if self._exploration_target_entities and not args.get("targets"):
                     args["targets"] = list(self._exploration_target_entities)
@@ -1746,16 +2045,27 @@ class IterativeVisualAgent:
         invalid_target: str,
         notes_out: list[NormalizationNote] | None,
     ) -> None:
-        next_action = (
-            "target_refs must contain only known registry ids like T1. Put natural-language targets in "
-            "targets; remove or repair unknown target ids before calling the tool."
-        )
+        registered_refs = _registered_target_ref_descriptions(self.workspace)
+        if registered_refs:
+            registry_text = "; ".join(registered_refs)
+            next_action = (
+                "Coverage-row labels are local to the coverage observation and are not automatically valid "
+                "target_refs. Only these exact IDs are registered target_refs for this run: "
+                f"{registry_text}. Retry with registered target_refs, or use natural-language targets. "
+                "Do not invent T<n> IDs."
+            )
+        else:
+            next_action = (
+                "No target_refs are registered for this run. Coverage-row labels are local to the coverage "
+                "observation. Use natural-language targets and leave target_refs empty."
+            )
         self.workspace.write_trace_event(
             "exploration_policy_adjustment",
             {
                 "reason": reason,
                 "tool": tool_name,
                 "invalid_target": invalid_target,
+                "registered_target_refs": registered_refs,
                 "next_action": next_action,
             },
         )
@@ -1871,6 +2181,237 @@ class IterativeVisualAgent:
                 {"keys": [_route_repair_key_payload(key) for key in reset_keys]},
             )
 
+    def _update_effective_skill_runtime(
+        self,
+        *,
+        state: SkillRuntimeState,
+        requested_skill: SkillSpec | None,
+        requested_skill_text: str,
+        round_number: int,
+        rationale: str,
+        executed_rounds: int,
+        supported_binding_no_growth_rounds: int,
+        no_evidence_growth_rounds: int,
+    ) -> None:
+        if requested_skill is None:
+            return
+        current_id = _skill_id(state.effective_skill)
+        requested_id = _skill_id(requested_skill)
+        if requested_skill.name == "timeline_ordering" and current_id in {
+            "narration_timeline_qa@v1",
+            "visual_timeline_qa@v1",
+        }:
+            self.workspace.write_trace_event(
+                "legacy_skill_deprecated",
+                {
+                    "round": round_number,
+                    "requested_skill": requested_skill_text,
+                    "effective_skill": current_id,
+                    "message": "timeline_ordering@v1 is retained for replay only; the run-level effective skill stays locked.",
+                },
+            )
+            return
+        if requested_id == current_id:
+            return
+        if requested_id not in state.compatible_skill_ids:
+            self.workspace.write_trace_event(
+                "effective_skill_change_rejected",
+                {
+                    "round": round_number,
+                    "requested_skill": requested_skill_text,
+                    "effective_skill": current_id,
+                    "reason": "incompatible_skill",
+                    "compatible_skills": list(state.compatible_skill_ids),
+                },
+            )
+            return
+        can_unlock = (
+            state.locked
+            and not state.unlock_used
+            and executed_rounds >= 3
+            and supported_binding_no_growth_rounds >= 3
+            and no_evidence_growth_rounds >= 2
+            and _rationale_mentions_modality_mismatch(rationale)
+        )
+        if can_unlock:
+            previous_id = current_id
+            state.effective_skill = requested_skill
+            state.unlock_used = True
+            state.override_reason = rationale
+            self.workspace.write_trace_event(
+                "effective_skill_unlocked_once",
+                {
+                    "round": round_number,
+                    "from": previous_id,
+                    "to": requested_id,
+                    "reason": rationale,
+                    "supported_binding_no_growth_rounds": supported_binding_no_growth_rounds,
+                    "no_evidence_growth_rounds": no_evidence_growth_rounds,
+                },
+            )
+            return
+        self.workspace.write_trace_event(
+            "effective_skill_change_ignored",
+            {
+                "round": round_number,
+                "requested_skill": requested_skill_text,
+                "effective_skill": current_id,
+                "reason": "locked_effective_skill",
+            },
+        )
+
+    def _normalize_text_segment_tool_args(
+        self,
+        *,
+        tool_name: str,
+        args: Mapping[str, Any],
+        notes_out: list[NormalizationNote] | None,
+    ) -> dict[str, Any] | None:
+        normalized = dict(args)
+        requested_segment_id = str(normalized.get("segment_id", "") or "").strip()
+        if not requested_segment_id or _scene_segment_or_none(self.scene_index, requested_segment_id) is None:
+            self._record_invalid_segment_id(
+                tool_name=tool_name,
+                args=args,
+                requested_segment_id=requested_segment_id,
+                notes_out=notes_out,
+            )
+            return None
+        normalized["segment_id"] = requested_segment_id
+        return normalized
+
+    def _record_invalid_segment_id(
+        self,
+        *,
+        tool_name: str,
+        args: Mapping[str, Any],
+        requested_segment_id: str,
+        notes_out: list[NormalizationNote] | None,
+    ) -> None:
+        valid_ids = [segment.segment_id for segment in self.scene_index.segments]
+        visible_ids = valid_ids[:16]
+        suffix = f", ... {len(valid_ids) - len(visible_ids)} more" if len(valid_ids) > len(visible_ids) else ""
+        next_action = (
+            f"Unknown segment_id '{requested_segment_id or '(missing)'}'. Use one exact segment_id from "
+            f"the scene index: {', '.join(visible_ids) or '(none)'}{suffix}. Do not invent segment ids."
+        )
+        self.workspace.write_trace_event(
+            "invalid_segment_id",
+            {
+                "tool": tool_name,
+                "requested_segment_id": requested_segment_id,
+                "valid_segment_ids": visible_ids,
+                "next_action": next_action,
+            },
+        )
+        _append_normalization_note(
+            notes_out,
+            tool=tool_name,
+            reason="invalid_segment_id",
+            original={"tool": tool_name, "args": dict(args)},
+            next_action=next_action,
+        )
+
+    def _try_narration_prefinal_evidence_repair(
+        self,
+        *,
+        question: str,
+        answer: str,
+        citations: Sequence[str],
+    ) -> tuple[list[str], list[str]] | None:
+        if not self._has_tool("read_segment_detail"):
+            self.workspace.write_trace_event(
+                "prefinal_evidence_repair_failed",
+                {"reason": "read_segment_detail_unavailable"},
+            )
+            return None
+        target_refs = _target_refs_for_answer(workspace=self.workspace, answer=answer)
+        if not target_refs:
+            self.workspace.write_trace_event(
+                "prefinal_evidence_repair_failed",
+                {"reason": "no_registered_target_refs", "answer": answer},
+            )
+            return None
+        candidate_segment_ids = self._prefinal_repair_candidate_segment_ids(citations=citations)
+        if not candidate_segment_ids:
+            self.workspace.write_trace_event(
+                "prefinal_evidence_repair_failed",
+                {"reason": "no_candidate_segment", "answer": answer, "target_refs": target_refs},
+            )
+            return None
+        before_ids = set(_supported_evidence_ids_for_answer(workspace=self.workspace, question=question, answer=answer))
+        observation_ids: list[str] = []
+        for segment_id in candidate_segment_ids[:2]:
+            program = [
+                {
+                    "tool": "read_segment_detail",
+                    "args": {
+                        "segment_id": segment_id,
+                        "target_refs": target_refs,
+                        "promote_answer_evidence": True,
+                    },
+                    "assign": "prefinal_evidence_repair",
+                }
+            ]
+            self.workspace.write_trace_event(
+                "prefinal_evidence_repair_requested",
+                {
+                    "segment_id": segment_id,
+                    "target_refs": target_refs,
+                    "answer": answer,
+                },
+            )
+            result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(program)
+            observation_ids.extend(str(obs_id) for obs_id in result.observation_ids)
+        after_ids = _supported_evidence_ids_for_answer(workspace=self.workspace, question=question, answer=answer)
+        new_ids = [evidence_id for evidence_id in after_ids if evidence_id not in before_ids]
+        if not new_ids:
+            self.workspace.write_trace_event(
+                "prefinal_evidence_repair_failed",
+                {
+                    "reason": "no_supported_binding_created",
+                    "answer": answer,
+                    "candidate_segments": candidate_segment_ids[:2],
+                    "target_refs": target_refs,
+                    "observation_ids": observation_ids,
+                },
+            )
+            return None
+        self.workspace.write_trace_event(
+            "sequence_binding_created",
+            {
+                "source": "prefinal_evidence_repair",
+                "answer": answer,
+                "evidence_ids": new_ids,
+                "observation_ids": observation_ids,
+            },
+        )
+        return observation_ids, new_ids
+
+    def _prefinal_repair_candidate_segment_ids(self, *, citations: Sequence[str]) -> list[str]:
+        cited = {str(citation) for citation in citations if str(citation)}
+        segment_ids: list[str] = []
+        for observation in self.workspace.read_observations():
+            if cited and observation.observation_id not in cited:
+                continue
+            segment_ids.extend(_segment_ids_from_observation_payload(observation.raw_output))
+        for observation in reversed(self.workspace.read_observations(tool_name="target_coverage")):
+            coverage = observation.raw_output.get("coverage", [])
+            if not isinstance(coverage, Sequence) or isinstance(coverage, (str, bytes)):
+                continue
+            for row in coverage:
+                if not isinstance(row, Mapping):
+                    continue
+                candidates = row.get("candidates", [])
+                if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+                    continue
+                for candidate in candidates:
+                    if isinstance(candidate, Mapping):
+                        segment_ids.append(str(candidate.get("segment_id", "") or "").strip())
+        segment_ids.extend(segment.segment_id for segment in self.scene_index.segments)
+        valid = {segment.segment_id for segment in self.scene_index.segments}
+        return _unique_preserving_order([segment_id for segment_id in segment_ids if segment_id in valid])
+
     def _repair_skill_route_tool(
         self,
         *,
@@ -1915,7 +2456,7 @@ class IterativeVisualAgent:
             )
         if (
             active_skill is not None
-            and active_skill.name == "timeline_ordering"
+            and active_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}
             and tool_name == "locate_targets_in_segment"
             and self._has_tool("verify_segment_anchors")
         ):
@@ -1928,7 +2469,8 @@ class IterativeVisualAgent:
                 )
         if (
             active_skill is not None
-            and active_skill.name in {"timeline_ordering", "grounded_factual_qa", "mutex_fact_qa"}
+            and active_skill.name
+            in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa", "grounded_factual_qa", "mutex_fact_qa"}
             and tool_name in {"zoom", "expand_window"}
             and self._has_tool("locate_targets_in_segment")
         ):
@@ -1939,7 +2481,8 @@ class IterativeVisualAgent:
             return "locate_targets_in_segment", repaired_args, f"repair_{tool_name}_to_locate_targets_in_segment"
         if (
             active_skill is not None
-            and active_skill.name in {"timeline_ordering", "grounded_factual_qa", "mutex_fact_qa"}
+            and active_skill.name
+            in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa", "grounded_factual_qa", "mutex_fact_qa"}
             and tool_name == "read_segment"
             and self._has_tool("read_segment_detail")
         ):
@@ -1962,7 +2505,7 @@ class IterativeVisualAgent:
             return "vision_read", repaired_args, "repair_mutex_inspect_segment_to_vision_read"
         if (
             active_skill is not None
-            and active_skill.name == "timeline_ordering"
+            and active_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}
             and (
                 tool_name == "caption_segments"
                 or (tool_name == "caption_segment" and args.get("segment_ids") and not args.get("segment_id"))
@@ -2134,7 +2677,7 @@ class IterativeVisualAgent:
 
     def _fallback_visual_tool_name_for_skill(self, planner_skill: SkillSpec | None) -> str | None:
         if planner_skill is not None:
-            if planner_skill.name == "timeline_ordering":
+            if planner_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}:
                 preferences = ["caption_segment", "vision_read", "qa_segment", "inspect_segment"]
             elif planner_skill.name in {"mutex_fact_qa", "grounded_factual_qa"}:
                 preferences = ["vision_read", "qa_segment", "caption_segment", "inspect_segment"]
@@ -2216,13 +2759,28 @@ class IterativeVisualAgent:
                 source=str(observed_segment.get("source") or "observed_tool_segment"),
             )
         if "start_sec" not in args or "end_sec" not in args:
-            self.scene_index.get(requested_segment_id)
-        start_sec, end_sec = _normalize_dynamic_window(
-            start_sec=float(args["start_sec"]),
-            end_sec=float(args["end_sec"]),
-            duration_sec=self.scene_index.duration_sec,
-            label=f"for {requested_segment_id}",
-        )
+            self._record_invalid_segment_id(
+                tool_name=tool_name,
+                args=args,
+                requested_segment_id=requested_segment_id,
+                notes_out=notes_out,
+            )
+            return None
+        try:
+            start_sec, end_sec = _normalize_dynamic_window(
+                start_sec=float(args["start_sec"]),
+                end_sec=float(args["end_sec"]),
+                duration_sec=self.scene_index.duration_sec,
+                label=f"for {requested_segment_id}",
+            )
+        except (TypeError, ValueError):
+            self._record_invalid_segment_id(
+                tool_name=tool_name,
+                args=args,
+                requested_segment_id=requested_segment_id,
+                notes_out=notes_out,
+            )
+            return None
         return VideoSegment(
             segment_id=requested_segment_id,
             start_sec=start_sec,
@@ -3150,6 +3708,60 @@ def _planner_selected_skill(action: Mapping[str, Any]) -> tuple[SkillSpec | None
         return None, {"status": "invalid", "requested_skill": requested}
 
 
+def _initial_skill_runtime_state(question: str) -> SkillRuntimeState:
+    recommended = select_skill(question)
+    state = SkillRuntimeState(
+        recommended_skill=recommended,
+        compatible_skill_ids=_compatible_skill_ids(question=question, recommended=recommended),
+        effective_skill=recommended,
+        locked=True,
+        selected_round=1,
+    )
+    return state
+
+
+def _compatible_skill_ids(*, question: str, recommended: SkillSpec) -> tuple[str, ...]:
+    recommended_id = _skill_id(recommended)
+    if classify_question_route(question) == "temporal_order":
+        if classify_narration_subroute(question) == "narration_timeline":
+            return _unique_tuple(
+                [
+                    recommended_id,
+                    "mixed_asr_visual_qa@v1",
+                    "visual_timeline_qa@v1",
+                ]
+            )
+        return _unique_tuple([recommended_id, "mixed_asr_visual_qa@v1"])
+    return (recommended_id,)
+
+
+def _unique_tuple(values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(_unique_preserving_order([str(value) for value in values if str(value)]))
+
+
+def _skill_id(skill: SkillSpec | None) -> str:
+    if skill is None:
+        return ""
+    return f"{skill.name}@v{skill.version}"
+
+
+def _rationale_mentions_modality_mismatch(rationale: str) -> bool:
+    lowered = str(rationale or "").lower()
+    if "modality" in lowered and any(marker in lowered for marker in ("mismatch", "wrong", "switch", "instead")):
+        return True
+    return any(
+        marker in lowered
+        for marker in (
+            "visual evidence is insufficient",
+            "need narration",
+            "narration is required",
+            "asr is required",
+            "transcript is required",
+            "cannot be verified visually",
+        )
+    )
+
+
 def _extract_json_object(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("{") and stripped.endswith("}"):
@@ -3169,7 +3781,7 @@ def _compact_planner_response(text: str, limit: int = 480) -> str:
 def _segment_ids_from_program(program: Sequence[Mapping[str, Any]]) -> Sequence[str]:
     segment_ids = []
     for step in program:
-        if step.get("tool") not in _SEGMENT_MEDIA_TOOLS:
+        if step.get("tool") not in _SEGMENT_ID_TOOLS:
             continue
         args = step.get("args", {})
         if isinstance(args, Mapping) and args.get("segment_id"):
@@ -3218,7 +3830,12 @@ def _followup_route_for_skill(skill_name: str) -> FollowupRoute:
 
 
 def _is_timeline_skill(skill_name: str) -> bool:
-    return str(skill_name) in {"timeline_ordering", "temporal_ordering"}
+    return str(skill_name) in {
+        "timeline_ordering",
+        "temporal_ordering",
+        "narration_timeline_qa",
+        "visual_timeline_qa",
+    }
 
 
 def _next_followup_chunk(*, scheduler: FollowupScheduler, chunk_size: int) -> list[FollowupTarget]:
@@ -3316,7 +3933,7 @@ def _local_fact_question(
         if extract_candidate_options(question)
         else "Report facts only."
     )
-    if planner_skill.name == "timeline_ordering":
+    if planner_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}:
         return _append_target_attention_block(
             "Openly describe this segment's actual visible artworks, objects, people, scene changes, onscreen text, "
             "and narrated events in presentation order. Include timestamps if possible. "
@@ -3458,6 +4075,9 @@ def _blocked_planner_final_reason(
     planner_skill: SkillSpec | None = None,
 ) -> str:
     final_evidence_refs = _unique_preserving_order([*citations, *evidence_ids])
+    if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
+        if not _has_supported_evidence_binding_id(workspace, evidence_ids):
+            return "planner_final_requires_supported_evidence_id"
     base_reason = _blocked_final_reason(
         question=question,
         has_inspect_with_candidate_options=has_inspect_with_candidate_options,
@@ -3473,8 +4093,7 @@ def _blocked_planner_final_reason(
     if planner_skill is None and classify_question_route(question) != "gist_global":
         return ""
     if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
-        if not _has_supported_evidence_binding_id(workspace, evidence_ids):
-            return "planner_final_requires_supported_evidence_id"
+        return ""
 
     selected_option = _answer_option_letter(answer)
     table = workspace.evidence_table_v2(
@@ -3566,7 +4185,11 @@ def _indexed_transcript_supports_answer(
     for row in table.get("groups", {}).get(selected_option, []):
         if not isinstance(row, Mapping):
             continue
-        if str(row.get("tool", "")) in {"timeline_asr_summary", "asr_cue_detail"} and str(row.get("grounding_quality", "")) == "indexed_transcript":
+        if str(row.get("tool", "")) in {
+            "timeline_asr_summary",
+            "asr_cue_detail",
+            "transcript_evidence_binder",
+        } and str(row.get("grounding_quality", "")) == "indexed_transcript":
             return True
     return False
 
@@ -4716,6 +5339,99 @@ def _program_signature(program: Sequence[Mapping[str, Any]]) -> str:
     return json.dumps(_signature_value(list(program)), ensure_ascii=True, sort_keys=True, default=str)
 
 
+_PROTOCOL_FAILURE_REASONS = frozenset(
+    {
+        "free_text_target_ref",
+        "unknown_target_ref",
+        "unknown_legacy_target_ref",
+        "invalid_segment_id",
+        "unresolved_media_segment",
+        "route_violation",
+        "skill_name_as_tool",
+        "tool_not_in_allowed_actions",
+    }
+)
+
+
+def _normalization_failure_signature(
+    *,
+    planned_program: Any,
+    normalization_notes: Sequence[NormalizationNote],
+    active_skill: SkillSpec | None,
+) -> FailureSignature | None:
+    protocol_notes = [note for note in normalization_notes if note.reason in _PROTOCOL_FAILURE_REASONS]
+    if not protocol_notes:
+        return None
+    reason = protocol_notes[0].reason
+    affected_tools = tuple(_unique_preserving_order([note.tool for note in protocol_notes if note.tool]))
+    signature_payload = {
+        "effective_skill": _skill_id(active_skill),
+        "planned_program": planned_program if isinstance(planned_program, Sequence) else [],
+        "failures": [
+            {
+                "tool": note.tool,
+                "reason": note.reason,
+                "original": note.original,
+            }
+            for note in protocol_notes
+        ],
+    }
+    return FailureSignature(
+        program_signature=json.dumps(_signature_value(signature_payload), ensure_ascii=True, sort_keys=True, default=str),
+        reason=reason,
+        affected_tools=affected_tools,
+    )
+
+
+def _structured_recovery_for_failure(
+    signature: FailureSignature,
+    *,
+    normalization_notes: Sequence[NormalizationNote],
+) -> dict[str, Any]:
+    reasons = {note.reason for note in normalization_notes if note.reason in _PROTOCOL_FAILURE_REASONS}
+    recovery: dict[str, Any] = {
+        "affected_tools": list(signature.affected_tools),
+        "do_not_repeat_failed_program": True,
+    }
+    if reasons & {"free_text_target_ref", "unknown_target_ref", "unknown_legacy_target_ref"}:
+        recovery.update(
+            {
+                "remove_unknown_target_refs": True,
+                "preserve_natural_language_targets": True,
+                "do_not_invent_registry_ids": True,
+            }
+        )
+    if reasons & {"invalid_segment_id", "unresolved_media_segment"}:
+        recovery.update(
+            {
+                "use_exact_scene_segment_id": True,
+                "do_not_invent_segment_ids": True,
+                "do_not_substitute_unknown_segment": True,
+            }
+        )
+    if reasons & {"route_violation", "skill_name_as_tool", "tool_not_in_allowed_actions"}:
+        recovery.update(
+            {
+                "choose_allowed_action_from_active_skill": True,
+                "do_not_call_skill_names_as_tools": True,
+            }
+        )
+    next_actions = _unique_preserving_order(
+        [note.next_action for note in normalization_notes if note.reason in _PROTOCOL_FAILURE_REASONS and note.next_action]
+    )
+    if next_actions:
+        recovery["next_actions"] = next_actions[:3]
+    return recovery
+
+
+def _protocol_recovery_feedback(recovery: Mapping[str, Any]) -> str:
+    return "Repeated invalid tool protocol blocked. Apply this structured recovery: " + json.dumps(
+        dict(recovery),
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+
+
 def _signature_value(value: Any) -> Any:
     generated_keys = {"assign", "trace_id", "observation_id"}
     if isinstance(value, Mapping):
@@ -4897,6 +5613,151 @@ def _has_supported_evidence_binding_id(workspace: EvidenceWorkspace, evidence_id
     return False
 
 
+def _supported_evidence_ids_for_answer(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    answer: str,
+) -> list[str]:
+    evidence_ids: list[str] = []
+    for row in _supported_evidence_rows_for_answer(workspace=workspace, question=question, answer=answer):
+        binding = row.get("evidence_binding")
+        binding_id = binding.get("evidence_id", "") if isinstance(binding, Mapping) else ""
+        evidence_id = str(row.get("evidence_id", "") or binding_id).strip()
+        if evidence_id:
+            evidence_ids.append(evidence_id)
+    return _unique_preserving_order(evidence_ids)
+
+
+def _supported_evidence_rows_for_answer(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    answer: str,
+) -> list[Mapping[str, Any]]:
+    option = _answer_option_letter(answer)
+    if not option:
+        return []
+    table = workspace.evidence_table_v2(
+        question=question,
+        options=extract_candidate_options(question),
+        include_legacy_worker_votes=True,
+    )
+    groups = table.get("groups", {})
+    if not isinstance(groups, Mapping):
+        return []
+    rows = groups.get(option, [])
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        return []
+    supported_rows: list[Mapping[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        binding = row.get("evidence_binding")
+        if not isinstance(binding, Mapping):
+            continue
+        if str(binding.get("status", "")).lower() != "supported":
+            continue
+        supported_rows.append(row)
+    return supported_rows
+
+
+def _bridge_final_evidence_refs(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    answer: str,
+    citations: Sequence[str],
+    evidence_ids: Sequence[str],
+) -> FinalEvidenceBridgeResult:
+    original_citations = _unique_preserving_order([str(citation) for citation in citations if str(citation)])
+    original_evidence_ids = _unique_preserving_order([str(evidence_id) for evidence_id in evidence_ids if str(evidence_id)])
+    citation_list = list(original_citations)
+    evidence_id_list = list(original_evidence_ids)
+    supported_rows = _supported_evidence_rows_for_answer(workspace=workspace, question=question, answer=answer)
+    evidence_to_obs: dict[str, str] = {}
+    obs_to_evidence: dict[str, list[str]] = {}
+    for row in supported_rows:
+        evidence_id = str(row.get("evidence_id", "") or "").strip()
+        obs_id = str(row.get("obs_id", "") or row.get("observation_id", "") or "").strip()
+        if not evidence_id:
+            continue
+        if obs_id:
+            evidence_to_obs[evidence_id] = obs_id
+            obs_to_evidence.setdefault(obs_id, []).append(evidence_id)
+
+    moved_citations: list[str] = []
+    for citation in list(citation_list):
+        if citation in evidence_to_obs or citation.startswith("ev_"):
+            citation_list.remove(citation)
+            evidence_id_list.append(citation)
+            moved_citations.append(citation)
+    for evidence_id in list(evidence_id_list):
+        if evidence_id.startswith("obs_"):
+            evidence_id_list.remove(evidence_id)
+            citation_list.append(evidence_id)
+
+    filled: list[str] = []
+    ambiguous: list[Mapping[str, Any]] = []
+    existing_evidence = set(evidence_id_list)
+    for citation in citation_list:
+        candidates = _unique_preserving_order(obs_to_evidence.get(citation, []))
+        if not candidates or existing_evidence.intersection(candidates):
+            continue
+        if len(candidates) == 1:
+            evidence_id_list.append(candidates[0])
+            existing_evidence.add(candidates[0])
+            filled.append(candidates[0])
+        else:
+            ambiguous.append({"obs_id": citation, "candidate_evidence_ids": candidates})
+
+    citation_list = _unique_preserving_order(citation_list)
+    evidence_id_list = _unique_preserving_order(evidence_id_list)
+    changed = citation_list != original_citations or evidence_id_list != original_evidence_ids
+    return FinalEvidenceBridgeResult(
+        citations=citation_list,
+        evidence_ids=evidence_id_list,
+        filled_evidence_ids=filled,
+        ambiguous=ambiguous,
+        changed=changed,
+    )
+
+
+def _target_refs_for_answer(*, workspace: EvidenceWorkspace, answer: str) -> list[str]:
+    registry = getattr(workspace, "target_registry", None)
+    if registry is None:
+        return []
+    option = _answer_option_letter(answer)
+    options_by_id = getattr(registry, "options_by_id", {})
+    if option and isinstance(options_by_id, Mapping) and option in options_by_id:
+        return [
+            str(target_id)
+            for target_id in getattr(options_by_id[option], "target_sequence", ())
+            if str(target_id).strip()
+        ]
+    targets_by_id = getattr(registry, "targets_by_id", {})
+    if isinstance(targets_by_id, Mapping):
+        return [str(target_id) for target_id in sorted(targets_by_id)]
+    return []
+
+
+def _segment_ids_from_observation_payload(raw_output: Mapping[str, Any]) -> list[str]:
+    segment_ids: list[str] = []
+    direct = str(raw_output.get("segment_id", "") or "").strip()
+    if direct:
+        segment_ids.append(direct)
+    for key in ("regions", "candidates"):
+        values = raw_output.get(key, [])
+        if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+            continue
+        for value in values:
+            if isinstance(value, Mapping):
+                segment_id = str(value.get("segment_id", "") or "").strip()
+                if segment_id:
+                    segment_ids.append(segment_id)
+    return _unique_preserving_order(segment_ids)
+
+
 def _supported_binding_overlaps_route_repair_key(
     row: Mapping[str, Any],
     key: tuple[str, str, tuple[str, ...]],
@@ -4961,6 +5822,21 @@ def _workspace_knows_target_ref(workspace: Any, key: str) -> bool:
         return key in registry
     except TypeError:
         return False
+
+
+def _registered_target_ref_descriptions(workspace: Any) -> list[str]:
+    registry = getattr(workspace, "target_registry", None)
+    if registry is None:
+        return []
+    targets_by_id = getattr(registry, "targets_by_id", {})
+    if isinstance(targets_by_id, Mapping):
+        descriptions = []
+        for target_id in sorted(str(key) for key in targets_by_id):
+            target = targets_by_id.get(target_id)
+            text = str(getattr(target, "canonical_text", "") or "").strip()
+            descriptions.append(f"{target_id}: {text}" if text else target_id)
+        return descriptions
+    return []
 
 
 def _unique_preserving_order(values: Sequence[str]) -> list[str]:

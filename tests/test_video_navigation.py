@@ -119,7 +119,11 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertIn("blue aircraft", coverage["coverage"][0]["candidates"][0]["snippet"])
         self.assertEqual(coverage["coverage"][1]["candidates"][0]["segment_id"], "seg_0001")
         self.assertEqual(coverage["coverage"][2]["status"], "missing")
-        self.assertIn("T1 blue aircraft", coverage["claim"])
+        self.assertEqual(coverage["coverage"][0]["target_id"], "Q1")
+        self.assertEqual(coverage["coverage"][0]["query_id"], "Q1")
+        self.assertEqual(coverage["coverage"][0]["source"], "free_text_query")
+        self.assertNotIn("target_ref", coverage["coverage"][0])
+        self.assertIn("Q1 blue aircraft", coverage["claim"])
 
     def test_target_coverage_resolves_target_refs_and_groups_by_option(self):
         video_map = VideoMap(
@@ -166,11 +170,26 @@ class VideoNavigationTest(unittest.TestCase):
             )
 
         self.assertEqual([row["target_ref"] for row in coverage["coverage"]], ["T1", "T2"])
+        self.assertEqual([row["source"] for row in coverage["coverage"]], ["target_registry", "target_registry"])
         self.assertEqual([row["target"] for row in coverage["coverage"]], ["humble background", "upper class"])
         self.assertEqual(coverage["option_coverage"][0]["option"], "B")
         self.assertEqual(coverage["option_coverage"][0]["target_refs"], ["T1", "T2"])
         self.assertEqual(coverage["option_coverage"][1]["option"], "C")
         self.assertEqual(coverage["option_coverage"][1]["target_refs"], ["T2", "T1"])
+
+    def test_navigation_segment_tools_return_graceful_invalid_segment_error(self):
+        registry = build_video_navigation_registry(demo_video_map())
+
+        for tool_name, args in (
+            ("read_segment", {"segment_id": "seg_0008"}),
+            ("read_segment_detail", {"segment_id": "seg_0008", "targets": ["blue aircraft"]}),
+            ("locate_targets_in_segment", {"segment_id": "seg_0008", "targets": ["blue aircraft"]}),
+        ):
+            result = registry.execute(tool_name, args)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error_code"], "invalid_segment_id")
+            self.assertEqual(result["requested_segment_id"], "seg_0008")
+            self.assertIn("seg_0001", result["valid_segment_ids"])
 
     def test_locate_targets_in_segment_accepts_target_refs_from_registry(self):
         video_map = VideoMap(
@@ -347,6 +366,79 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertTrue(all(row["evidence_binding"]["status"] == "supported" for row in rows))
         self.assertTrue(all(str(row["evidence_id"]).startswith("ev_bind_seg_0001_") for row in rows))
         self.assertTrue(any(relation["relation_id"] == "R1" for row in rows for relation in row["evidence_binding"].get("relation_bindings", [])))
+
+    def test_bound_transcript_relations_promote_option_support_rows(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=10.0,
+                    end_sec=60.0,
+                    asr_text=(
+                        "Goya was a man from a humble background who rose through the ranks to reach the upper "
+                        "class, then withdrew into a farmhouse."
+                    ),
+                )
+            ],
+        )
+        question = (
+            "How was his life journey according to the video?\n"
+            "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+            "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class."
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="bound_relations_option_support")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "humble background", subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T2", "upper class", aliases=("upper",), subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T3", "farmhouse", subject="Goya", modality_hint=ClaimModality.NARRATED_FACT),
+                ],
+                options=[
+                    OptionSpec("B", target_sequence=("T1", "T2", "T3"), required_relations=("R1", "R2")),
+                    OptionSpec("C", target_sequence=("T1", "T3", "T2"), required_relations=("R3", "R4")),
+                ],
+                relations=[
+                    ClaimRelation("R1", "before", "T1", "T2"),
+                    ClaimRelation("R2", "before", "T2", "T3"),
+                    ClaimRelation("R3", "before", "T1", "T3"),
+                    ClaimRelation("R4", "before", "T3", "T2"),
+                ],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+            ProgramInterpreter(registry, workspace).run(
+                [
+                    {
+                        "tool": "read_segment_detail",
+                        "args": {
+                            "segment_id": "seg_0001",
+                            "target_refs": ["T1", "T2", "T3"],
+                            "promote_answer_evidence": True,
+                        },
+                    }
+                ]
+            )
+
+            table = workspace.evidence_table_v2(
+                question=question,
+                options=[
+                    "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.",
+                    "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.",
+                ],
+                include_legacy_worker_votes=True,
+            )
+
+        self.assertTrue(table["groups"]["B"])
+        self.assertFalse(table["groups"]["C"])
+        self.assertTrue(
+            any(
+                row["tool"] == "transcript_evidence_binder"
+                and row["evidence_binding"]["status"] == "supported"
+                for row in table["groups"]["B"]
+            )
+        )
 
     def test_read_segment_detail_returns_full_segment_fields_and_target_hits(self):
         registry = build_video_navigation_registry(demo_video_map())
