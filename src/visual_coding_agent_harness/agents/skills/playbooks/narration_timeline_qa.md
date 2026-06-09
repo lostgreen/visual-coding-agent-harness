@@ -16,5 +16,7 @@ Use this playbook when the question asks for a narrated life story, biography, r
 
 Planner playbook:
 - First look for ASR or transcript segments that state the life stage, motive, or sequence directly.
+- Use read_segment_detail(promote_answer_evidence=true) for narrated biography and life-order claims.
+- Do not visually verify abstract narrated facts such as social class, humble origins, or seclusion as if they were visible objects.
 - Use visual reads to anchor named scenes, people, artworks, or events when the transcript alone leaves the timeline ambiguous.
 - Keep the final answer grounded in cited narrated facts, with visual citations used as corroboration rather than a mandatory gate.

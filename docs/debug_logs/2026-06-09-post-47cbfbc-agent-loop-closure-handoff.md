@@ -1,5 +1,65 @@
 # 2026-06-09 Post-47cbfbc Agent Loop Closure Handoff
 
+## 2026-06-09 Post-7468bef Update
+
+Current goal: continue from the post-7468bef review plan and close the remaining evidence-route failures for VideoMME `605-1`, `611-2`, and `612-1`.
+
+Current evidence is the KML post-closure run:
+
+`/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_closure_7468bef_3demo_20260609_213500_pyenv`
+
+Compact result:
+
+- accuracy `0.3333333333333333`
+- final_rate `0.3333333333333333`
+- `605-1`: final D, correct, 10 rounds
+- `611-2`: `route_repair_exhausted`, no answer, 7 rounds, 12 citations, 0 evidence chains
+- `612-1`: `route_repair_exhausted`, no answer, 8 rounds, 17 citations, 0 evidence chains
+
+Current failure fingerprints:
+
+- `611-2`: locator found ordered-list candidates and focused vision args, but route repair still preferred `verify_segment_anchors`; focused window was not a first-class executable recovery, and normalizer could overwrite focused subwindows.
+- `612-1`: life-journey options did not initialize a canonical narration registry; narration route still repaired repeated locator calls to visual anchor verification instead of transcript promotion.
+- Both failed cases had evidence-like observations but no answer-grade evidence chain.
+
+Current implemented changes after this update:
+
+- `locate_targets_in_segment` now emits top-level `recommended_next_actions[]` with `route_kind=focused_ordered_list_vision`, `candidate_type=ordered_list`, candidate id, target refs or fallback ordered targets, focused `vision_read` args, and `nframes=128`.
+- Locator writes `ordered_list_candidate_detected` and `focused_ordered_list_vision_recommended`.
+- Route repair precedence now selects ordered-list focused `vision_read` before generic anchor verification, and selects narration transcript promotion before visual verifier.
+- Parse-error recovery executes a unique safe pending recommended action once instead of falling back to generic inspector.
+- Normalizer preserves focused ordered-list subwindows and ask_for text instead of expanding them back to the whole segment.
+- Prompt/ledger/playbooks now render route-aware guidance for focused ordered-list vision and narration transcript promotion.
+- Life-journey option parsing now distinguishes `humble background`, `entered upper class`, `seclusion/farmhouse`, and `born in upper class`.
+- 612-style registry initializes narrated `T1..T4`, aliases, fixed before-relations (`R1=T1->T2`, `R2=T2->T3`, etc.), and emits `narration_registry_initialized`.
+
+Current local verification:
+
+- `PYTHONPATH=src:. pytest -q` -> `467 passed in 1.80s`
+- `git diff --check` -> passed
+
+Current files changed:
+
+- `src/visual_coding_agent_harness/agents/iterative_agent.py`
+- `src/visual_coding_agent_harness/agents/prompt_stack.py`
+- `src/visual_coding_agent_harness/agents/question_policy.py`
+- `src/visual_coding_agent_harness/agents/skills/playbooks/narration_timeline_qa.md`
+- `src/visual_coding_agent_harness/agents/skills/playbooks/visual_timeline_qa.md`
+- `src/visual_coding_agent_harness/tools/navigation.py`
+- `src/visual_coding_agent_harness/workspace.py`
+- `tests/test_iterative_agent.py`
+- `tests/test_question_policy.py`
+- `tests/test_video_navigation.py`
+
+Current next actions:
+
+1. Commit and push this post-7468bef implementation.
+2. Pull/update KML with proxy and dedicated Python.
+3. Start detached three-case VideoMME run; do not monitor unless asked.
+4. Return run root, pid path, log path, and summary path.
+
+Older sections below are retained as stale historical context unless explicitly comparing regressions.
+
 ## Current Goal
 
 Continue the VideoMME three-case agent-loop framework after base commit `47cbfbc`, using the post-47cbfbc plan and the completed KML three-demo run as current evidence. Push the implementation and start a new KML run with the dedicated Python path.

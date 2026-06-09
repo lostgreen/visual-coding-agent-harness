@@ -2522,6 +2522,24 @@ def _navigation_entry_suffix(entry: Mapping[str, Any]) -> str:
     raw_output = entry.get("raw_output", {})
     if not isinstance(raw_output, Mapping):
         return ""
+    recommended_actions = raw_output.get("recommended_next_actions")
+    if isinstance(recommended_actions, Sequence) and not isinstance(recommended_actions, (str, bytes)):
+        for action in recommended_actions:
+            if not isinstance(action, Mapping):
+                continue
+            if str(action.get("route_kind") or "") != "focused_ordered_list_vision":
+                continue
+            args = action.get("args")
+            if not isinstance(args, Mapping):
+                continue
+            segment_id = str(args.get("segment_id") or "").strip()
+            start_sec = args.get("start_sec")
+            end_sec = args.get("end_sec")
+            nframes = args.get("nframes")
+            return (
+                " | next: vision_read"
+                f"(segment_id={segment_id}, start_sec={start_sec}, end_sec={end_sec}, nframes={nframes})"
+            )
     verify_args = raw_output.get("verify_call_args")
     if not isinstance(verify_args, Mapping) or not verify_args:
         return ""

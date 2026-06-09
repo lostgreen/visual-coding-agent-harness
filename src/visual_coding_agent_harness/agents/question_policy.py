@@ -314,6 +314,9 @@ def extract_option_sequence_specs(question_or_options: str | Sequence[str]) -> d
         if isinstance(question_or_options, str)
         else [str(option) for option in question_or_options]
     )
+    life_journey_sequences = _life_journey_option_sequence_specs(options)
+    if life_journey_sequences:
+        return life_journey_sequences
     parsed: list[tuple[str, tuple[str, ...]]] = []
     for index, option in enumerate(options):
         letter = _option_letter(option, index=index)
@@ -348,6 +351,79 @@ def extract_option_sequence_specs(question_or_options: str | Sequence[str]) -> d
             ordered_target_refs=refs,
         )
     return sequences
+
+
+_LIFE_JOURNEY_TARGETS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("T1", "humble background", (r"\b(?:born|came|coming|from|with)\b.{0,45}\b(?:humble|modest|lowly)\b.{0,35}\b(?:background|origins?)\b",)),
+    (
+        "T2",
+        "entered upper class",
+        (
+            r"\b(?:entered|entering|rose|risen|reached|became|becoming|joined)\b.{0,55}\b(?:upper class|upper echelons?|high society|royal court|court painter|bourgeois)\b",
+        ),
+    ),
+    (
+        "T3",
+        "seclusion/farmhouse",
+        (
+            r"\b(?:lived|living|withdrew|withdrawn|retired|spent)\b.{0,55}\b(?:seclusion|isolation|isolated|secluded|farmhouse|country house)\b",
+            r"\b(?:seclusion|isolation|isolated|secluded|farmhouse|country house)\b",
+        ),
+    ),
+    (
+        "T4",
+        "born in upper class",
+        (
+            r"\bborn\b.{0,20}\b(?:in|into|to)\b.{0,25}\b(?:upper class|upper echelons?|high society|royal court|bourgeois)\b",
+        ),
+    ),
+)
+
+
+def _life_journey_option_sequence_specs(options: Sequence[str]) -> dict[str, OptionSequenceSpec]:
+    parsed: dict[str, OptionSequenceSpec] = {}
+    for index, option in enumerate(options):
+        letter = _option_letter(option, index=index)
+        events = _life_journey_events_for_option(option)
+        if len(events) < 2:
+            continue
+        parsed[letter] = OptionSequenceSpec(
+            option_letter=letter,
+            ordered_items=tuple(item for _ref, item in events),
+            ordered_target_refs=tuple(ref for ref, _item in events),
+        )
+    if len(parsed) < 2:
+        return {}
+    all_refs = {ref for sequence in parsed.values() for ref in sequence.ordered_target_refs}
+    if {"T1", "T3"}.issubset(all_refs) and ({"T2", "T4"} & all_refs):
+        return parsed
+    return {}
+
+
+def _life_journey_events_for_option(option_text: str) -> list[tuple[str, str]]:
+    text = _strip_option_prefix(option_text)
+    lowered = text.lower()
+    matches: list[tuple[int, str, str]] = []
+    for target_ref, canonical_text, patterns in _LIFE_JOURNEY_TARGETS:
+        target_matches = [
+            match
+            for pattern in patterns
+            for match in [re.search(pattern, lowered)]
+            if match is not None
+        ]
+        if not target_matches:
+            continue
+        first = min(target_matches, key=lambda match: match.start())
+        matches.append((first.start(), target_ref, canonical_text))
+    matches.sort(key=lambda item: item[0])
+    events: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for _position, target_ref, canonical_text in matches:
+        if target_ref in seen:
+            continue
+        seen.add(target_ref)
+        events.append((target_ref, canonical_text))
+    return events
 
 
 def extract_option_target_atoms_for_option(

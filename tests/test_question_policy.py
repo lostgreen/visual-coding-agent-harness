@@ -4,6 +4,7 @@ from visual_coding_agent_harness.agents.question_policy import (
     classify_question_route,
     classify_narration_subroute,
     extract_candidate_options,
+    extract_option_sequence_specs,
     extract_option_target_atom_map,
     extract_option_target_atoms,
     select_question_playbook,
@@ -118,6 +119,23 @@ class QuestionPolicyTest(unittest.TestCase):
 
         self.assertLess(mapping["B"].index("upper class"), mapping["B"].index("seclusion"))
         self.assertLess(mapping["C"].index("seclusion"), mapping["C"].index("upper class"))
+
+    def test_life_journey_option_sequences_distinguish_entered_and_born_upper_class(self):
+        question = (
+            "How was his life journey according to the video?\n"
+            "A. Born with humble background and lived in seclusion in a farmhouse.\n"
+            "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+            "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
+            "D. Born in the upper class and lived in seclusion in a farmhouse."
+        )
+
+        sequences = extract_option_sequence_specs(question)
+
+        self.assertEqual(sequences["B"].ordered_items, ("humble background", "entered upper class", "seclusion/farmhouse"))
+        self.assertEqual(sequences["B"].ordered_target_refs, ("T1", "T2", "T3"))
+        self.assertEqual(sequences["C"].ordered_target_refs, ("T1", "T3", "T2"))
+        self.assertEqual(sequences["D"].ordered_items, ("born in upper class", "seclusion/farmhouse"))
+        self.assertEqual(sequences["D"].ordered_target_refs, ("T4", "T3"))
 
     def test_temporal_route_ignores_formatting_instruction_first(self):
         route = classify_question_route(

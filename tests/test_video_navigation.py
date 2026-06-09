@@ -594,6 +594,20 @@ class VideoNavigationTest(unittest.TestCase):
         ])
         self.assertEqual(raw["recommended_next_tools"][0]["tool"], "vision_read")
         self.assertEqual(raw["recommended_next_tools"][0]["args"], raw["focused_vision_call_args"])
+        self.assertEqual(raw["recommended_next_actions"][0]["route_kind"], "focused_ordered_list_vision")
+        self.assertEqual(raw["recommended_next_actions"][0]["tool"], "vision_read")
+        self.assertEqual(raw["recommended_next_actions"][0]["args"], raw["focused_vision_call_args"])
+        self.assertEqual(raw["recommended_next_actions"][0]["args"]["nframes"], 128)
+        self.assertEqual(
+            raw["recommended_next_actions"][0]["target_refs"],
+            [
+                "Aeneas, Anchises, and Ascanius fleeing Troy",
+                "David",
+                "The rape of Persephone",
+                "Apollo and Daphne",
+            ],
+        )
+        self.assertTrue(str(raw["recommended_next_actions"][0]["candidate_id"]).startswith("cand_"))
         self.assertEqual(raw["focused_vision_call_args"]["segment_id"], "seg_0002")
         self.assertLess(raw["focused_vision_call_args"]["start_sec"], ordered_candidates[0]["start_sec"])
         self.assertGreater(raw["focused_vision_call_args"]["end_sec"], ordered_candidates[0]["end_sec"])
@@ -678,6 +692,8 @@ class VideoNavigationTest(unittest.TestCase):
         ])
         self.assertEqual(observation.raw_output["recommended_next_tools"][0]["tool"], "vision_read")
         self.assertEqual(observation.raw_output["recommended_next_tools"][0]["args"], observation.raw_output["focused_vision_call_args"])
+        self.assertEqual(observation.raw_output["recommended_next_actions"][0]["route_kind"], "focused_ordered_list_vision")
+        self.assertEqual(observation.raw_output["recommended_next_actions"][0]["args"]["nframes"], 128)
         self.assertTrue(
             all(row["confidence_signal"] == "text_inferred" for row in observation.raw_output["ordered_list_timeline_rows"])
         )

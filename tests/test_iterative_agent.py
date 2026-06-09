@@ -126,6 +126,46 @@ def test_ordered_option_sequence_registry_is_visible_in_first_prompt(tmp_path: P
     assert "Q1" not in coverage.claim
 
 
+def test_life_journey_registry_uses_canonical_narrated_refs(tmp_path: Path):
+    question = (
+        "How was his life journey according to the video?\n"
+        "A. Born with humble background and lived in seclusion in a farmhouse.\n"
+        "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+        "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
+        "D. Born in the upper class and lived in seclusion in a farmhouse."
+    )
+    backend = ScriptedPlannerBackend(
+        [
+            '{"status": "continue", "skill": "narration_timeline_qa", "rationale": "inspect", "program": []}',
+        ]
+    )
+    workspace = EvidenceWorkspace.create(tmp_path, "life_journey_registry")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=ToolRegistry(),
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/goya.mp4",
+            duration_sec=600.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=60.0)],
+        ),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    agent.run(question=question, video_path="/videos/goya.mp4")
+
+    registry_state = workspace.target_registry
+    assert registry_state.targets_by_id["T1"].canonical_text == "humble background"
+    assert registry_state.targets_by_id["T2"].canonical_text == "entered upper class"
+    assert registry_state.targets_by_id["T3"].canonical_text == "seclusion/farmhouse"
+    assert registry_state.targets_by_id["T4"].canonical_text == "born in upper class"
+    assert registry_state.targets_by_id["T2"].modality_hint == ClaimModality.NARRATED_FACT
+    assert registry_state.option_for("B").target_sequence == ("T1", "T2", "T3")
+    assert registry_state.option_for("B").required_relations == ("R1", "R2")
+    assert registry_state.option_for("C").target_sequence == ("T1", "T3", "T2")
+    assert registry_state.option_for("D").target_sequence == ("T4", "T3")
+
+
 def test_program_signature_ignores_assign_names_and_trace_ids():
     first = [
         {
@@ -1813,6 +1853,252 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("route_repair_applied", trace)
             self.assertIn("route_repair_recovery_proposed", trace)
             self.assertIn("read_segment_detail", trace)
+
+    def test_ordered_list_recovery_uses_focused_vision_before_anchor_verify(self):
+        repeated_locator = (
+            '{"status": "continue", "skill": "visual_timeline_qa", "program": ['
+            '{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0002", "target_refs": ["T1", "T2", "T3", "T4"]}}'
+            "]}"
+        )
+        backend = ScriptedPlannerBackend([repeated_locator])
+        registry = ToolRegistry()
+        calls = {"vision": 0, "verify": 0}
+
+        @tool(name="locate_targets_in_segment", description="Locate targets in a segment.")
+        def locate_targets_in_segment(segment_id: str, target_refs: list | None = None):
+            return {"claim": f"located {segment_id}: {target_refs}", "confidence": 0.4}
+
+        @tool(name="vision_read", description="Read a focused visual window.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float = 0.0,
+            end_sec: float = 0.0,
+            ask_for: str = "",
+            event_label: str = "",
+            nframes: int = 0,
+        ):
+            calls["vision"] += 1
+            return {
+                "claim": f"focused {segment_id} {start_sec}-{end_sec}",
+                "confidence": 0.8,
+                "grounding_quality": "visually_confirmed",
+                "requested_nframes": nframes,
+            }
+
+        @tool(name="verify_segment_anchors", description="Verify located anchors.")
+        def verify_segment_anchors(segment_id: str, anchors: list, targets: list | None = None):
+            calls["verify"] += 1
+            return {"claim": f"verified {segment_id}", "confidence": 0.8}
+
+        registry.register(locate_targets_in_segment)
+        registry.register(vision_read)
+        registry.register(verify_segment_anchors)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=600.0, window_sec=300.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="ordered_route_repair_focused_vision")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "Aeneas, Anchises, and Ascanius fleeing Troy"),
+                    TargetSpec("T2", "David"),
+                    TargetSpec("T3", "The rape of Persephone"),
+                    TargetSpec("T4", "Apollo and Daphne"),
+                ],
+                options=[OptionSpec("D", target_sequence=("T1", "T2", "T3", "T4"))],
+            )
+            workspace.write_observation(
+                tool_name="locate_targets_in_segment",
+                claim="ordered-list candidate found",
+                confidence=1.0,
+                raw_output={
+                    "segment_id": "seg_0002",
+                    "recommended_next_actions": [
+                        {
+                            "candidate_id": "ordered_list_obs_0001_0",
+                            "candidate_type": "ordered_list",
+                            "route_kind": "focused_ordered_list_vision",
+                            "tool": "vision_read",
+                            "target_refs": ["T1", "T2", "T3", "T4"],
+                            "args": {
+                                "segment_id": "seg_0002",
+                                "start_sec": 536.227,
+                                "end_sec": 569.488,
+                                "ask_for": "Describe the visible artworks in timestamp order.",
+                                "event_label": "focused_ordered_list_candidate_4_items",
+                                "nframes": 128,
+                            },
+                        }
+                    ],
+                    "verify_call_args": {
+                        "segment_id": "seg_0002",
+                        "anchors": [{"anchor_id": "a1", "segment_id": "seg_0002"}],
+                        "targets": ["Aeneas", "David"],
+                    },
+                },
+            )
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            result = agent.run(question=BERNINI_ORDER_QUESTION, video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(calls["vision"], 1)
+            self.assertEqual(calls["verify"], 0)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("route_recovery_selected", trace)
+            self.assertIn("focused_ordered_list_vision_executed", trace)
+            self.assertNotIn("repair_repeated_locator_to_verify_segment_anchors", trace)
+
+    def test_parse_error_executes_unique_safe_pending_action(self):
+        backend = ScriptedPlannerBackend(["not json"])
+        registry = ToolRegistry()
+        calls = {"vision": 0}
+
+        @tool(name="vision_read", description="Read a focused visual window.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float,
+            end_sec: float,
+            ask_for: str,
+            event_label: str = "",
+            nframes: int = 0,
+        ):
+            calls["vision"] += 1
+            return {
+                "claim": f"focused {segment_id} {start_sec}-{end_sec}",
+                "confidence": 0.8,
+                "grounding_quality": "visually_confirmed",
+                "requested_nframes": nframes,
+            }
+
+        registry.register(vision_read)
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=600.0, window_sec=300.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="parse_error_safe_pending_action")
+            workspace.write_observation(
+                tool_name="locate_targets_in_segment",
+                claim="ordered-list candidate found",
+                confidence=1.0,
+                raw_output={
+                    "segment_id": "seg_0002",
+                    "recommended_next_actions": [
+                        {
+                            "candidate_id": "cand_0005",
+                            "candidate_type": "ordered_list",
+                            "route_kind": "focused_ordered_list_vision",
+                            "tool": "vision_read",
+                            "target_refs": ["T1", "T2", "T3", "T4"],
+                            "args": {
+                                "segment_id": "seg_0002",
+                                "start_sec": 536.227,
+                                "end_sec": 569.488,
+                                "ask_for": "Describe the visible artworks in timestamp order.",
+                                "event_label": "focused_ordered_list_candidate_4_items",
+                                "nframes": 128,
+                            },
+                        }
+                    ],
+                },
+            )
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            result = agent.run(question=BERNINI_ORDER_QUESTION, video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(calls["vision"], 1)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("planner_json_parse_error", trace)
+            self.assertIn("planner_parse_error_recovery_selected", trace)
+            self.assertIn("focused_ordered_list_vision_executed", trace)
+
+    def test_narration_recovery_uses_transcript_detail_before_anchor_verify(self):
+        repeated_locator = (
+            '{"status": "continue", "skill": "narration_timeline_qa", "program": ['
+            '{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "target_refs": ["T1", "T2", "T3"]}}'
+            "]}"
+        )
+        backend = ScriptedPlannerBackend([repeated_locator])
+        registry = ToolRegistry()
+        calls = {"detail": 0, "verify": 0}
+
+        @tool(name="locate_targets_in_segment", description="Locate targets in a segment.")
+        def locate_targets_in_segment(segment_id: str, target_refs: list | None = None):
+            return {"claim": f"located {segment_id}: {target_refs}", "confidence": 0.4}
+
+        @tool(name="read_segment_detail", description="Read transcript detail.")
+        def read_segment_detail(segment_id: str, target_refs: list | None = None, promote_answer_evidence: bool = False):
+            calls["detail"] += 1
+            return {
+                "claim": f"detail {segment_id}: {target_refs}",
+                "confidence": 0.8,
+                "answer_evidence_rows": [],
+                "promote_answer_evidence": promote_answer_evidence,
+            }
+
+        @tool(name="verify_segment_anchors", description="Verify located anchors.")
+        def verify_segment_anchors(segment_id: str, anchors: list, targets: list | None = None):
+            calls["verify"] += 1
+            return {"claim": f"verified {segment_id}", "confidence": 0.8}
+
+        registry.register(locate_targets_in_segment)
+        registry.register(read_segment_detail)
+        registry.register(verify_segment_anchors)
+        scene_index = fixed_window_scene_index(video_path="/videos/goya.mp4", duration_sec=600.0, window_sec=300.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="narration_route_repair_transcript")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "humble background", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T2", "entered upper class", modality_hint=ClaimModality.NARRATED_FACT),
+                    TargetSpec("T3", "seclusion/farmhouse", modality_hint=ClaimModality.NARRATED_FACT),
+                ],
+                options=[OptionSpec("B", target_sequence=("T1", "T2", "T3"))],
+            )
+            workspace.write_observation(
+                tool_name="locate_targets_in_segment",
+                claim="locator produced generic anchors",
+                confidence=1.0,
+                raw_output={
+                    "segment_id": "seg_0001",
+                    "verify_call_args": {
+                        "segment_id": "seg_0001",
+                        "anchors": [{"anchor_id": "a1", "segment_id": "seg_0001"}],
+                        "targets": ["humble background"],
+                    },
+                },
+            )
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            result = agent.run(question="How was his life journey according to the video?", video_path="/videos/goya.mp4")
+
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(calls["detail"], 1)
+            self.assertEqual(calls["verify"], 0)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("route_recovery_selected", trace)
+            self.assertIn("narration_transcript_promotion_executed", trace)
+            self.assertNotIn("repair_repeated_locator_to_verify_segment_anchors", trace)
 
     def test_route_repair_third_repeat_hard_stops(self):
         repeated_locator = (

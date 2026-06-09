@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..contracts import ClaimModality, OptionSpec, TargetRegistry, TargetSpec
+from ..contracts import ClaimModality, ClaimRelation, OptionSpec, TargetRegistry, TargetSpec
 from ..interpreter import ProgramInterpreter
 from ..registry import ToolError, ToolRegistry
 from ..video_index import SceneIndex, VideoSegment
@@ -194,6 +194,7 @@ class IterativeVisualAgent:
         self._exploration_target_entities: tuple[str, ...] = ()
         self._route_repair_counts: dict[tuple[str, str, tuple[str, ...]], int] = {}
         self._route_repair_exhausted: Mapping[str, Any] | None = None
+        self._executed_recommended_action_ids: set[str] = set()
         self._no_progress_warning_emitted = False
         self.context_allocator = default_context_budget_allocator(
             total_budget_tokens=self.budget.context_budget_tokens,
@@ -203,6 +204,7 @@ class IterativeVisualAgent:
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
         self._route_repair_counts = {}
         self._route_repair_exhausted = None
+        self._executed_recommended_action_ids = set()
         self._no_progress_warning_emitted = False
         question_context = build_question_context(question)
         raw_question = question_context.raw_question
@@ -361,14 +363,26 @@ class IterativeVisualAgent:
                     failure_tag="planner_json_parse_error",
                     rule="return valid JSON matching the continue/final response contract before using tools",
                 )
-                action = {
-                    "status": "continue",
-                    "rationale": "planner_json_parse_error",
-                    "program": self._fallback_inspector_program(
-                        question=exploration_question_text,
-                        inspected_segment_ids=inspected_segment_ids,
-                    ),
-                }
+                recovery_program = self._safe_parse_error_recovery_program()
+                if recovery_program:
+                    action = {
+                        "status": "continue",
+                        "rationale": "planner_json_parse_error_safe_recovery",
+                        "program": recovery_program,
+                    }
+                    self.workspace.write_trace_event(
+                        "planner_parse_error_recovery_selected",
+                        {"round": round_number, "program": recovery_program},
+                    )
+                else:
+                    action = {
+                        "status": "continue",
+                        "rationale": "planner_json_parse_error",
+                        "program": self._fallback_inspector_program(
+                            question=exploration_question_text,
+                            inspected_segment_ids=inspected_segment_ids,
+                        ),
+                    }
             status = str(action.get("status", "continue"))
             rationale = str(action.get("rationale", ""))
             planned_program: Any = action.get("program", [])
@@ -953,6 +967,11 @@ class IterativeVisualAgent:
             )
             program_result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(program)
             observation_ids = [str(observation_id) for observation_id in program_result.observation_ids]
+            self._write_recovery_execution_traces(
+                round_number=round_number,
+                program=program,
+                observation_ids=observation_ids,
+            )
             citations.extend(observation_ids)
             inspected_segment_ids.update(_segment_ids_from_program(program))
             if _program_has_inspect_with_candidate_options(program):
@@ -1324,20 +1343,49 @@ class IterativeVisualAgent:
                 targets_by_ref.setdefault(str(target_ref), str(item))
         if not targets_by_ref:
             return
+        narration_life_journey = _is_life_journey_sequence_registry(sequences)
+        relation_ids_by_pair: dict[tuple[str, str], str] = {}
+        relations: list[ClaimRelation] = []
+        if narration_life_journey:
+            adjacent_pairs = {
+                (str(source_ref), str(destination_ref))
+                for sequence in sequences.values()
+                for source_ref, destination_ref in zip(sequence.ordered_target_refs, sequence.ordered_target_refs[1:])
+            }
+            for relation_id, pair in _life_journey_relation_pairs():
+                if pair in adjacent_pairs:
+                    relation_ids_by_pair[pair] = relation_id
+                    relations.append(
+                        ClaimRelation(
+                            relation_id=relation_id,
+                            kind="before",
+                            source_target_id=pair[0],
+                            destination_target_id=pair[1],
+                        )
+                    )
         targets = [
             TargetSpec(
                 target_id=target_ref,
                 canonical_text=targets_by_ref[target_ref],
-                modality_hint=ClaimModality.VISUAL_FACT,
+                aliases=_life_journey_aliases_for_target(target_ref) if narration_life_journey else (),
+                modality_hint=ClaimModality.NARRATED_FACT if narration_life_journey else ClaimModality.VISUAL_FACT,
                 source="option_sequence",
             )
             for target_ref in sorted(targets_by_ref, key=lambda ref: int(ref[1:]) if ref.startswith("T") and ref[1:].isdigit() else 10**9)
         ]
         options = [
-            OptionSpec(sequence.option_letter, target_sequence=sequence.ordered_target_refs)
+            OptionSpec(
+                sequence.option_letter,
+                target_sequence=sequence.ordered_target_refs,
+                required_relations=tuple(
+                    relation_ids_by_pair[(str(source_ref), str(destination_ref))]
+                    for source_ref, destination_ref in zip(sequence.ordered_target_refs, sequence.ordered_target_refs[1:])
+                    if (str(source_ref), str(destination_ref)) in relation_ids_by_pair
+                ),
+            )
             for sequence in sequences.values()
         ]
-        self.workspace.target_registry = TargetRegistry.from_specs(targets=targets, options=options)
+        self.workspace.target_registry = TargetRegistry.from_specs(targets=targets, options=options, relations=relations)
         self.workspace.write_trace_event(
             "target_registry_initialized",
             {
@@ -1347,6 +1395,19 @@ class IterativeVisualAgent:
                 "target_refs": [target.target_id for target in targets],
             },
         )
+        if narration_life_journey:
+            self.workspace.write_trace_event(
+                "narration_registry_initialized",
+                {
+                    "target_refs": [target.target_id for target in targets],
+                    "options": {option.option_id: list(option.target_sequence) for option in options},
+                    "required_relations": {
+                        option.option_id: list(option.required_relations)
+                        for option in options
+                        if option.required_relations
+                    },
+                },
+            )
 
     def _verify_planner_final_with_answer_agent(
         self,
@@ -1588,6 +1649,8 @@ class IterativeVisualAgent:
 
             tool_name = str(step["tool"])
             args = dict(step.get("args", {}))
+            route_kind = str(step.get("route_kind") or "")
+            candidate_id = str(step.get("candidate_id") or "")
             alias_repair = self._repair_tool_alias(tool_name=tool_name, args=args)
             if alias_repair is not None:
                 original_tool_name = tool_name
@@ -1676,6 +1739,8 @@ class IterativeVisualAgent:
                 original_tool_name = tool_name
                 original_args = dict(args)
                 tool_name, args, repair_reason = repair
+                route_kind = _route_kind_for_repair_reason(repair_reason)
+                candidate_id = str(args.pop("_candidate_id", "") or candidate_id)
                 repair_action = self._record_route_repair_attempt(
                     reason=repair_reason,
                     original_tool_name=original_tool_name,
@@ -1853,6 +1918,10 @@ class IterativeVisualAgent:
                 normalized_step = {"tool": tool_name, "args": normalized_verify_args}
                 if "assign" in step:
                     normalized_step["assign"] = str(step["assign"])
+                if route_kind:
+                    normalized_step["route_kind"] = route_kind
+                if candidate_id:
+                    normalized_step["candidate_id"] = candidate_id
                 normalized.append(normalized_step)
                 continue
 
@@ -1954,21 +2023,31 @@ class IterativeVisualAgent:
                             "resolved_segment_id": segment.segment_id,
                         },
                     )
+                preserve_focused_ordered_window = (
+                    tool_name == "vision_read"
+                    and (
+                        route_kind == "focused_ordered_list_vision"
+                        or _is_focused_ordered_list_vision_args(args)
+                    )
+                    and _has_explicit_subwindow(args)
+                )
                 args["segment_id"] = segment.segment_id
                 args["video_path"] = video_path
-                args["start_sec"] = segment.start_sec
-                args["end_sec"] = segment.end_sec
+                if not preserve_focused_ordered_window:
+                    args["start_sec"] = segment.start_sec
+                    args["end_sec"] = segment.end_sec
                 if tool_name == "vision_read":
                     args.setdefault("ask_for", args.pop("question", question))
-                    args["ask_for"] = _tool_exploration_question(
-                        str(args["ask_for"]),
-                        route_hint=planner_skill.name if planner_skill else "",
-                        question_context=question,
-                        vlm_safe_question=vlm_safe_question,
-                        forbidden_question=raw_question,
-                        option_blind=self.budget.rewrite_mcq_for_exploration,
-                        target_entities=self._exploration_target_entities,
-                    )
+                    if not preserve_focused_ordered_window:
+                        args["ask_for"] = _tool_exploration_question(
+                            str(args["ask_for"]),
+                            route_hint=planner_skill.name if planner_skill else "",
+                            question_context=question,
+                            vlm_safe_question=vlm_safe_question,
+                            forbidden_question=raw_question,
+                            option_blind=self.budget.rewrite_mcq_for_exploration,
+                            target_entities=self._exploration_target_entities,
+                        )
                 else:
                     args.setdefault("question", question)
                     args["question"] = _tool_exploration_question(
@@ -1984,12 +2063,19 @@ class IterativeVisualAgent:
                 if candidate_options:
                     if tool_name == "vision_read":
                         args.setdefault("event_label", str(args.get("ask_for", "")))
-                args.setdefault("nframes", self.budget.default_nframes)
+                if preserve_focused_ordered_window:
+                    args.setdefault("nframes", 128)
+                else:
+                    args.setdefault("nframes", self.budget.default_nframes)
                 reserved_segment_ids.add(segment.segment_id)
 
             normalized_step: dict[str, Any] = {"tool": tool_name, "args": args}
             if "assign" in step:
                 normalized_step["assign"] = str(step["assign"])
+            if route_kind:
+                normalized_step["route_kind"] = route_kind
+            if candidate_id:
+                normalized_step["candidate_id"] = candidate_id
             normalized.append(normalized_step)
             if tool_name in _ONE_SHOT_TOOLS:
                 pending_one_shot_tools.add(tool_name)
@@ -2593,8 +2679,63 @@ class IterativeVisualAgent:
             active_skill is not None
             and active_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}
             and tool_name == "locate_targets_in_segment"
-            and self._has_tool("verify_segment_anchors")
         ):
+            if active_skill.name in {"timeline_ordering", "visual_timeline_qa"} and self._has_tool("vision_read"):
+                recommended_action = self._latest_locator_recommended_action(
+                    segment_id=str(args.get("segment_id") or ""),
+                    route_kind="focused_ordered_list_vision",
+                )
+                if recommended_action:
+                    recovery_args = dict(recommended_action.get("args") or {})
+                    candidate_id = str(recommended_action.get("candidate_id") or "")
+                    if candidate_id:
+                        recovery_args["_candidate_id"] = candidate_id
+                    self.workspace.write_trace_event(
+                        "route_recovery_selected",
+                        {
+                            "route_kind": "focused_ordered_list_vision",
+                            "candidate_id": candidate_id,
+                            "tool": "vision_read",
+                            "args": dict(recommended_action.get("args") or {}),
+                        },
+                    )
+                    return (
+                        "vision_read",
+                        recovery_args,
+                        "repair_ordered_list_locator_to_focused_ordered_list_vision",
+                    )
+            if active_skill.name == "narration_timeline_qa" and self._has_tool("read_segment_detail"):
+                promotion_args = self._narration_transcript_promotion_args(
+                    segment_id=str(args.get("segment_id") or ""),
+                    original_args=args,
+                )
+                if promotion_args:
+                    candidate_id = f"narration_transcript_promotion:{promotion_args['segment_id']}"
+                    promotion_args["_candidate_id"] = candidate_id
+                    self.workspace.write_trace_event(
+                        "route_recovery_selected",
+                        {
+                            "route_kind": "narration_transcript_promotion",
+                            "candidate_id": candidate_id,
+                            "tool": "read_segment_detail",
+                            "args": {key: value for key, value in promotion_args.items() if not key.startswith("_")},
+                        },
+                    )
+                    self.workspace.write_trace_event(
+                        "narration_transcript_promotion_recommended",
+                        {
+                            "candidate_id": candidate_id,
+                            "segment_id": promotion_args["segment_id"],
+                            "target_refs": list(promotion_args.get("target_refs") or []),
+                        },
+                    )
+                    return (
+                        "read_segment_detail",
+                        promotion_args,
+                        "repair_narration_locator_to_transcript_promotion",
+                    )
+            if not self._has_tool("verify_segment_anchors"):
+                return None
             verify_args = self._latest_locator_verify_args(segment_id=str(args.get("segment_id") or ""))
             if verify_args:
                 return (
@@ -2704,6 +2845,155 @@ class IterativeVisualAgent:
                 continue
             return dict(verify_args)
         return {}
+
+    def _latest_locator_recommended_action(self, *, segment_id: str = "", route_kind: str = "") -> dict[str, Any]:
+        requested_segment = str(segment_id or "").strip()
+        requested_route = str(route_kind or "").strip()
+        for observation in reversed(self.workspace.read_observations(tool_name="locate_targets_in_segment")):
+            raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+            actions = raw_output.get("recommended_next_actions")
+            if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes)):
+                continue
+            for action in actions:
+                if not isinstance(action, Mapping):
+                    continue
+                if requested_route and str(action.get("route_kind") or "") != requested_route:
+                    continue
+                tool_name = str(action.get("tool") or "")
+                if not tool_name or not self._has_tool(tool_name):
+                    continue
+                args = action.get("args")
+                if not isinstance(args, Mapping):
+                    continue
+                located_segment = str(args.get("segment_id") or raw_output.get("segment_id") or "").strip()
+                if requested_segment and located_segment and located_segment != requested_segment:
+                    continue
+                candidate_id = str(action.get("candidate_id") or observation.observation_id).strip()
+                return {
+                    "candidate_id": candidate_id,
+                    "route_kind": str(action.get("route_kind") or ""),
+                    "tool": tool_name,
+                    "args": dict(args),
+                    "target_refs": list(action.get("target_refs") or []),
+                }
+        return {}
+
+    def _narration_transcript_promotion_args(
+        self,
+        *,
+        segment_id: str,
+        original_args: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        resolved_segment = str(segment_id or original_args.get("segment_id") or "").strip()
+        if not resolved_segment:
+            return {}
+        registry = getattr(self.workspace, "target_registry", None)
+        if registry is None:
+            return {}
+        requested_refs = [
+            str(ref).strip()
+            for ref in _coerce_target_arg_list(original_args.get("target_refs"))
+            if str(ref).strip()
+        ]
+        target_refs = [
+            ref
+            for ref in requested_refs
+            if getattr(registry, "known_target_ref", lambda _ref: False)(ref)
+        ]
+        if not target_refs:
+            target_refs = sorted(
+                (str(ref) for ref in registry.targets_by_id),
+                key=lambda ref: int(ref[1:]) if ref.startswith("T") and ref[1:].isdigit() else 10**9,
+            )
+        if not target_refs:
+            return {}
+        return {
+            "segment_id": resolved_segment,
+            "target_refs": target_refs,
+            "promote_answer_evidence": True,
+        }
+
+    def _safe_parse_error_recovery_program(self) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for observation in self.workspace.read_observations():
+            raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+            actions = raw_output.get("recommended_next_actions")
+            if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes)):
+                continue
+            for action in actions:
+                if not isinstance(action, Mapping):
+                    continue
+                route_kind = str(action.get("route_kind") or "")
+                if route_kind not in {"focused_ordered_list_vision", "narration_transcript_promotion"}:
+                    continue
+                tool_name = str(action.get("tool") or "")
+                if not tool_name or not self._has_tool(tool_name):
+                    continue
+                args = action.get("args")
+                if not isinstance(args, Mapping):
+                    continue
+                candidate_id = str(action.get("candidate_id") or observation.observation_id).strip()
+                action_key = f"{route_kind}:{candidate_id}"
+                if action_key in self._executed_recommended_action_ids:
+                    continue
+                candidates.append(
+                    {
+                        "tool": tool_name,
+                        "args": dict(args),
+                        "route_kind": route_kind,
+                        "candidate_id": candidate_id,
+                    }
+                )
+        if len(candidates) != 1:
+            return []
+        selected = candidates[0]
+        self._executed_recommended_action_ids.add(f"{selected['route_kind']}:{selected['candidate_id']}")
+        return [selected]
+
+    def _write_recovery_execution_traces(
+        self,
+        *,
+        round_number: int,
+        program: Sequence[Mapping[str, Any]],
+        observation_ids: Sequence[str],
+    ) -> None:
+        for step, observation_id in zip(program, observation_ids):
+            if not isinstance(step, Mapping):
+                continue
+            route_kind = str(step.get("route_kind") or "")
+            if not route_kind:
+                continue
+            candidate_id = str(step.get("candidate_id") or "")
+            self.workspace.write_trace_event(
+                "recovery_executed",
+                {
+                    "round": round_number,
+                    "route_kind": route_kind,
+                    "candidate_id": candidate_id,
+                    "tool": str(step.get("tool") or ""),
+                    "observation_id": str(observation_id),
+                },
+            )
+            if route_kind == "focused_ordered_list_vision":
+                self.workspace.write_trace_event(
+                    "focused_ordered_list_vision_executed",
+                    {
+                        "round": round_number,
+                        "candidate_id": candidate_id,
+                        "observation_id": str(observation_id),
+                        "args": dict(step.get("args") or {}),
+                    },
+                )
+            elif route_kind == "narration_transcript_promotion":
+                self.workspace.write_trace_event(
+                    "narration_transcript_promotion_executed",
+                    {
+                        "round": round_number,
+                        "candidate_id": candidate_id,
+                        "observation_id": str(observation_id),
+                        "args": dict(step.get("args") or {}),
+                    },
+                )
 
     def _fallback_inspector_program(
         self,
@@ -5725,6 +6015,57 @@ def _route_repair_key(*, reason: str, args: Mapping[str, Any]) -> tuple[str, str
         str(reason),
         str(args.get("segment_id") or ""),
         tuple(_route_repair_target_keys(args)),
+    )
+
+
+def _route_kind_for_repair_reason(reason: str) -> str:
+    if str(reason) == "repair_ordered_list_locator_to_focused_ordered_list_vision":
+        return "focused_ordered_list_vision"
+    if str(reason) == "repair_narration_locator_to_transcript_promotion":
+        return "narration_transcript_promotion"
+    return ""
+
+
+def _is_focused_ordered_list_vision_args(args: Mapping[str, Any]) -> bool:
+    event_label = str(args.get("event_label") or "")
+    return event_label.startswith("focused_ordered_list_candidate_")
+
+
+def _has_explicit_subwindow(args: Mapping[str, Any]) -> bool:
+    try:
+        start_sec = float(args.get("start_sec"))
+        end_sec = float(args.get("end_sec"))
+    except (TypeError, ValueError):
+        return False
+    return end_sec > start_sec
+
+
+def _is_life_journey_sequence_registry(sequences: Mapping[str, Any]) -> bool:
+    canonical_items = {
+        str(item)
+        for sequence in sequences.values()
+        for item in getattr(sequence, "ordered_items", ())
+    }
+    return {"humble background", "entered upper class", "seclusion/farmhouse"}.issubset(canonical_items)
+
+
+def _life_journey_aliases_for_target(target_ref: str) -> tuple[str, ...]:
+    aliases_by_ref = {
+        "T1": ("humble origins", "modest background", "from a humble background"),
+        "T2": ("upper class", "rose through the ranks", "reached high society", "became a royal painter", "court painter"),
+        "T3": ("seclusion", "isolation", "isolated", "secluded", "withdrew from public life", "farmhouse", "country house"),
+        "T4": ("born in upper class", "born into the upper class"),
+    }
+    return aliases_by_ref.get(str(target_ref), ())
+
+
+def _life_journey_relation_pairs() -> tuple[tuple[str, tuple[str, str]], ...]:
+    return (
+        ("R1", ("T1", "T2")),
+        ("R2", ("T2", "T3")),
+        ("R3", ("T1", "T3")),
+        ("R4", ("T3", "T2")),
+        ("R5", ("T4", "T3")),
     )
 
 

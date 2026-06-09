@@ -824,8 +824,9 @@ _ROUTE_SPECIFIC_FINAL_RULES: dict[str, tuple[str, ...]] = {
     ),
     "temporal_order": (
         "- For order/sequence questions, use target_coverage or scene-index ASR hints to pick a candidate segment, then call locate_targets_in_segment(segment_id, targets=[...]).",
-        "- After locate_targets_in_segment returns anchors_for_vlm, call verify_segment_anchors on those anchors before relying on them as evidence.",
-        "- After one verify_segment_anchors observation you can call read_timeline_sorted to read the materialized event order.",
+        "- If locate_targets_in_segment returns recommended_next_actions with route_kind=focused_ordered_list_vision, execute that focused vision_read before anchor verification.",
+        "- Use verify_segment_anchors only for separate individual-event anchors; do not use it as the main route for a single ordered-list scene.",
+        "- For narrated biography/life-order claims, use read_segment_detail(promote_answer_evidence=true) instead of visual-verifying abstract narrated facts.",
     ),
     "needle_local": (
         "- For needle questions, use target_coverage + read_segment_detail to localize the candidate segment.",

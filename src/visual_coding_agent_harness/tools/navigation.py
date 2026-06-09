@@ -276,6 +276,30 @@ def build_video_navigation_registry(
             segment=segment,
             candidates=candidates,
         )
+        recommended_next_actions = _locate_recommended_next_actions(
+            focused_vision_call_args=focused_vision_call_args,
+            candidates=candidates,
+            target_refs=_ordered_candidate_target_refs(candidates=candidates, workspace=workspace),
+        )
+        if workspace is not None and recommended_next_actions:
+            for action in recommended_next_actions:
+                if action.get("route_kind") == "focused_ordered_list_vision":
+                    workspace.write_trace_event(
+                        "ordered_list_candidate_detected",
+                        {
+                            "segment_id": segment.segment_id,
+                            "candidate_id": str(action.get("candidate_id") or ""),
+                            "target_refs": list(action.get("target_refs") or []),
+                        },
+                    )
+                    workspace.write_trace_event(
+                        "focused_ordered_list_vision_recommended",
+                        {
+                            "segment_id": segment.segment_id,
+                            "candidate_id": str(action.get("candidate_id") or ""),
+                            "args": dict(action.get("args") or {}),
+                        },
+                    )
         verify_call_args = {
             "segment_id": segment.segment_id,
             "anchors": anchors,
@@ -302,6 +326,7 @@ def build_video_navigation_registry(
             "ordered_list_timeline_rows": ordered_list_timeline_rows,
             "focused_vision_call_args": focused_vision_call_args,
             "verify_call_args": verify_call_args,
+            "recommended_next_actions": recommended_next_actions,
             "regions": [
                 {
                     "segment_id": segment.segment_id,
@@ -312,6 +337,7 @@ def build_video_navigation_registry(
                     "ordered_list_timeline_rows": ordered_list_timeline_rows,
                     "focused_vision_call_args": focused_vision_call_args,
                     "verify_call_args": verify_call_args,
+                    "recommended_next_actions": recommended_next_actions,
                 }
             ],
             "recommended_next_tools": _locate_recommended_next_tools(
@@ -1851,11 +1877,43 @@ def _focused_vision_call_args_for_ordered_candidate(
         "start_sec": round(start_sec, 3),
         "end_sec": round(end_sec, 3),
         "ask_for": (
-            "Describe the visible scene and transitions in timestamp order. "
-            "Do not infer names that are not shown or narrated."
+            "Inspect only this focused scene. Describe the visible artworks and scene transitions "
+            "in first-visible timestamp order. Identify only targets supported by visible or narrated "
+            "evidence. Do not choose an option. Do not infer names that are not shown or narrated."
         ),
         "event_label": f"focused_ordered_list_candidate_{target_count}_items",
+        "nframes": 128,
     }
+
+
+def _locate_recommended_next_actions(
+    *,
+    focused_vision_call_args: Mapping[str, object],
+    candidates: Sequence[Mapping[str, object]],
+    target_refs: Sequence[str],
+) -> list[dict[str, object]]:
+    if not focused_vision_call_args:
+        return []
+    ordered_candidate = _selected_ordered_list_candidate(candidates)
+    if not ordered_candidate:
+        return []
+    ordered_targets = ordered_candidate.get("ordered_targets", [])
+    fallback_refs = [
+        str(target).strip()
+        for target in (ordered_targets if isinstance(ordered_targets, Sequence) and not isinstance(ordered_targets, (str, bytes)) else [])
+        if str(target).strip()
+    ]
+    refs = [str(ref).strip() for ref in target_refs if str(ref).strip()] or fallback_refs
+    return [
+        {
+            "candidate_id": str(ordered_candidate.get("candidate_id") or ""),
+            "candidate_type": "ordered_list",
+            "route_kind": "focused_ordered_list_vision",
+            "tool": "vision_read",
+            "target_refs": refs,
+            "args": dict(focused_vision_call_args),
+        }
+    ]
 
 
 def _locate_recommended_next_tools(
@@ -1881,6 +1939,46 @@ def _locate_recommended_next_tools(
             }
         )
     return recommendations
+
+
+def _selected_ordered_list_candidate(candidates: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    ordered_candidates = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("match_type", "")) == "ordered_list_mention"
+    ]
+    if not ordered_candidates:
+        return {}
+    return sorted(
+        ordered_candidates,
+        key=lambda candidate: (
+            -len(candidate.get("ordered_targets", []) if isinstance(candidate.get("ordered_targets", []), list) else []),
+            not bool(candidate.get("single_sentence_quoted", False)),
+            -float(candidate.get("confidence", 0.0) or 0.0),
+            float(candidate.get("end_sec", 0.0) or 0.0) - float(candidate.get("start_sec", 0.0) or 0.0),
+        ),
+    )[0]
+
+
+def _ordered_candidate_target_refs(
+    *,
+    candidates: Sequence[Mapping[str, object]],
+    workspace: EvidenceWorkspace | None,
+) -> list[str]:
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    if registry is None:
+        return []
+    selected = _selected_ordered_list_candidate(candidates)
+    ordered_targets = selected.get("ordered_targets", [])
+    if not isinstance(ordered_targets, Sequence) or isinstance(ordered_targets, (str, bytes)):
+        return []
+    refs: list[str] = []
+    for target in ordered_targets:
+        matches = registry.targets_for_canonical(str(target))
+        if len(matches) != 1:
+            return []
+        refs.append(matches[0].target_id)
+    return refs
 
 
 def _dedupe_locate_matches(matches: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
