@@ -1,5 +1,43 @@
 # 2026-06-09 Post-47cbfbc Agent Loop Closure Handoff
 
+## 2026-06-09 Final Evidence Closure Update
+
+Current goal: finish the post-`3de5ae3` final evidence closure plan for VideoMME `605-1`, `611-2`, and `612-1`, push the branch, and launch the KML three-demo rerun without monitoring.
+
+Current evidence is local verification from commit `d9f99c7`:
+
+- `PYTHONPATH=src:. pytest -q` -> `481 passed in 1.79s`
+- `git diff --check` -> passed
+- KML remote branch fast-forwarded to `d9f99c7`
+
+Implemented closure commits:
+
+- `9d0bdb3 feat(evidence): add ordered transcript sequence contract`
+- `1a6b4dd fix(evidence): promote transcript routes and relation bindings`
+- `d9f99c7 fix(final): resolve deterministic evidence ownership`
+
+Current behavior covered by local tests:
+
+- Complete contiguous ASR ordered lists can become `OrderedTranscriptSequence` evidence and map exactly to an option.
+- ASR-complete ordered routes skip unnecessary forced visual verification; partial/ambiguous ASR still falls back to focused visual inspection.
+- Transcript promotion now emits formal evidence and relation bindings.
+- Narration timeline finalization requires complete required relation chains.
+- Deterministic evidence ownership resolves planner/final conflicts without falling into `low_confidence_final`.
+- Candidate IDs include segment/source fingerprints, and pending action lifecycle traces are explicit.
+
+Launched KML rerun:
+
+- code commit: `d9f99c7`
+- command shape: `agent_v2`, cases `605-1,611-2,612-1`, `--max-rounds 20`, `--max-tool-calls-per-round 4`, `--hard-skill-runtime`, `--export-training`
+- Python: `/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python`
+- run root: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_final_closure_d9f99c7_3demo_20260609_233313_pyenv`
+- pid: `69365`
+- pid path: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_final_closure_d9f99c7_3demo_20260609_233313_pyenv/job.pid`
+- log path: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_final_closure_d9f99c7_3demo_20260609_233313_pyenv/job.log`
+- summary path: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_final_closure_d9f99c7_3demo_20260609_233313_pyenv/summary.json`
+
+Do not monitor unless asked. If continuing later, inspect only compact `summary.json` fields, selected trace-event counts, and tiny evidence excerpts from the latest run above. Older runs below are stale unless explicitly comparing regressions.
+
 ## 2026-06-09 Post-7468bef Update
 
 Current goal: continue from the post-7468bef review plan and close the remaining evidence-route failures for VideoMME `605-1`, `611-2`, and `612-1`.
