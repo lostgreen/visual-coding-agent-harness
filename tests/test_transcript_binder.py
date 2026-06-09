@@ -1,5 +1,11 @@
 from visual_coding_agent_harness.agents.transcript_binder import TranscriptEvidenceBinder
-from visual_coding_agent_harness.contracts import ClaimRelation, TargetSpec
+from visual_coding_agent_harness.contracts import (
+    ClaimRelation,
+    OptionSpec,
+    TargetSpec,
+    build_ordered_transcript_sequence,
+    ordered_sequence_exact_option,
+)
 
 
 def _target(target_id: str, canonical_text: str, *, subject: str = "Goya") -> TargetSpec:
@@ -103,3 +109,123 @@ def test_supports_explicit_goya_life_targets_and_order_relation():
     assert statuses == {"T1": "supported", "T2": "supported"}
     assert result.relation_bindings[0].status == "supported"
     assert result.evidence_bindings[0].mention_timestamp_sec == 10.0
+
+
+def test_611_complete_asr_enumeration_creates_supported_sequence():
+    targets = [
+        _target("T1", "Aeneas, Anchises, and Ascanius fleeing Troy", subject=""),
+        _target("T2", "David", subject=""),
+        _target("T3", "The rape of Persephone", subject=""),
+        _target("T4", "Apollo and Daphne", subject=""),
+    ]
+
+    sequence = build_ordered_transcript_sequence(
+        text=(
+            'The narrator presents Bernini works in this order: "Aeneas, Anchises, and Ascanius '
+            'fleeing Troy", "David", "The rape of Persephone", and "Apollo and Daphne".'
+        ),
+        targets=targets,
+        segment_id="seg_0002",
+        obs_id="obs_0003",
+        start_sec=182.0,
+        end_sec=198.0,
+    )
+
+    assert sequence is not None
+    assert sequence.status == "supported"
+    assert sequence.ordered_target_refs == ("T1", "T2", "T3", "T4")
+
+
+def test_order_is_based_on_text_position_not_timestamp():
+    targets = [
+        _target("T1", "first work", subject=""),
+        _target("T2", "second work", subject=""),
+        _target("T3", "third work", subject=""),
+    ]
+
+    sequence = build_ordered_transcript_sequence(
+        text='"third work", "first work", and "second work" are mentioned as a list.',
+        targets=targets,
+        segment_id="seg_0001",
+        start_sec=30.0,
+        end_sec=10.0,
+    )
+
+    assert sequence is not None
+    assert sequence.status == "supported"
+    assert sequence.ordered_target_refs == ("T3", "T1", "T2")
+
+
+def test_missing_target_is_ambiguous():
+    targets = [
+        _target("T1", "Aeneas", subject=""),
+        _target("T2", "David", subject=""),
+        _target("T3", "Persephone", subject=""),
+    ]
+
+    sequence = build_ordered_transcript_sequence(
+        text='The list says "Aeneas" and "David".',
+        targets=targets,
+        segment_id="seg_0001",
+    )
+
+    assert sequence is not None
+    assert sequence.status == "ambiguous"
+
+
+def test_duplicate_target_is_ambiguous():
+    targets = [
+        _target("T1", "Aeneas", subject=""),
+        _target("T2", "David", subject=""),
+        _target("T3", "Persephone", subject=""),
+    ]
+
+    sequence = build_ordered_transcript_sequence(
+        text='The list says "Aeneas", "David", "Aeneas", and "Persephone".',
+        targets=targets,
+        segment_id="seg_0001",
+    )
+
+    assert sequence is not None
+    assert sequence.status == "ambiguous"
+
+
+def test_unrelated_artwork_list_is_rejected():
+    targets = [
+        _target("T1", "Aeneas", subject=""),
+        _target("T2", "David", subject=""),
+        _target("T3", "Persephone", subject=""),
+    ]
+
+    sequence = build_ordered_transcript_sequence(
+        text='The catalogue comparison gives unrelated examples: "Aeneas", "David", and "Persephone".',
+        targets=targets,
+        segment_id="seg_0001",
+    )
+
+    assert sequence is not None
+    assert sequence.status == "rejected"
+
+
+def test_complete_sequence_maps_exactly_to_option_d():
+    targets = [
+        _target("T1", "Aeneas", subject=""),
+        _target("T2", "David", subject=""),
+        _target("T3", "Persephone", subject=""),
+        _target("T4", "Apollo and Daphne", subject=""),
+    ]
+    sequence = build_ordered_transcript_sequence(
+        text='"Aeneas", "David", "Persephone", and "Apollo and Daphne".',
+        targets=targets,
+        segment_id="seg_0001",
+    )
+
+    option = ordered_sequence_exact_option(
+        sequence,
+        [
+            OptionSpec("C", target_sequence=("T1", "T3", "T2", "T4")),
+            OptionSpec("D", target_sequence=("T1", "T2", "T3", "T4")),
+        ],
+    )
+
+    assert option == "D"

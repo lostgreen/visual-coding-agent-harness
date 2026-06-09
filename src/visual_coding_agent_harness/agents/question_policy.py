@@ -374,7 +374,7 @@ _LIFE_JOURNEY_TARGETS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "T4",
         "born in upper class",
         (
-            r"\bborn\b.{0,20}\b(?:in|into|to)\b.{0,25}\b(?:upper class|upper echelons?|high society|royal court|bourgeois)\b",
+            r"\bborn(?:ed)?\b.{0,20}\b(?:in|into|to)\b.{0,25}\b(?:upper class|upper echelons?|high society|royal court|bourgeois)\b",
         ),
     ),
 )

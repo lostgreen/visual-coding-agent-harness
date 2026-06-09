@@ -137,6 +137,20 @@ class QuestionPolicyTest(unittest.TestCase):
         self.assertEqual(sequences["D"].ordered_items, ("born in upper class", "seclusion/farmhouse"))
         self.assertEqual(sequences["D"].ordered_target_refs, ("T4", "T3"))
 
+    def test_real_612_borned_option_creates_t4(self):
+        question = (
+            "How was his life journey according to the video?\n"
+            "A. Born with humble background and lived in seclusion in a farmhouse.\n"
+            "B. Born with a humble background, entered the upper class and then lived in seclusion in a farmhouse.\n"
+            "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
+            "D. Borned in the upper class and lived in seclusion in a farmhouse."
+        )
+
+        sequences = extract_option_sequence_specs(question)
+
+        self.assertEqual(sequences["D"].ordered_items, ("born in upper class", "seclusion/farmhouse"))
+        self.assertEqual(sequences["D"].ordered_target_refs, ("T4", "T3"))
+
     def test_temporal_route_ignores_formatting_instruction_first(self):
         route = classify_question_route(
             "VideoMME multiple-choice question. Answer with exactly one option letter first.\n"
