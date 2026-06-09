@@ -53,10 +53,17 @@ Current files changed:
 
 Current next actions:
 
-1. Commit and push this post-7468bef implementation.
-2. Pull/update KML with proxy and dedicated Python.
-3. Start detached three-case VideoMME run; do not monitor unless asked.
-4. Return run root, pid path, log path, and summary path.
+1. KML detached three-case VideoMME run is launched from commit `3de5ae3`.
+2. Do not monitor unless asked.
+3. If continuing, inspect only compact `summary.json` fields and selected trace-event counts.
+
+Launched KML run:
+
+- run root: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_review_3de5ae3_3demo_20260609_223500_pyenv`
+- pid: `52193`
+- pid path: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_review_3de5ae3_3demo_20260609_223500_pyenv/job.pid`
+- log path: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_review_3de5ae3_3demo_20260609_223500_pyenv/job.log`
+- summary path: `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_post_review_3de5ae3_3demo_20260609_223500_pyenv/summary.json`
 
 Older sections below are retained as stale historical context unless explicitly comparing regressions.
 
