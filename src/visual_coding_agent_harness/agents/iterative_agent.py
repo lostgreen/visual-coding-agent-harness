@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional, Sequence
@@ -215,6 +216,7 @@ class IterativeVisualAgent:
         no_evidence_growth_rounds = 0
         last_evidence_table_row_count = self.workspace.evidence_table_row_count()
         all_segments_answer_attempted = False
+        planner_final_verifier_disagreed = False
         last_selected_skill_id: str | None = None
 
         for round_number in range(len(rounds) + 1, self.budget.max_rounds + 1):
@@ -341,7 +343,7 @@ class IterativeVisualAgent:
                 final_source = "planner_final"
                 if extract_candidate_options(raw_question):
                     self.workspace.write_trace_event(
-                        "planner_final_answer_agent_takeover",
+                        "planner_final_answer_verifier_requested",
                         {
                             "round": round_number,
                             "planner_answer": str(action.get("answer", "")),
@@ -349,23 +351,14 @@ class IterativeVisualAgent:
                             "planner_citations": final_citations,
                         },
                     )
-                    takeover_result = self._try_answer_agent_final(
+                    verifier_blocked_reason = self._verify_planner_final_with_answer_agent(
                         question=raw_question,
-                        video_path=video_path,
-                        rounds=rounds,
                         round_number=round_number,
-                        source="planner_final_takeover",
-                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                    )
-                    if takeover_result is not None:
-                        return takeover_result
-                    if not _has_minimum_non_navigation_visual_citations(
-                        workspace=self.workspace,
-                        question=raw_question,
+                        answer=final_answer,
                         citations=final_citations,
-                        minimum=2,
-                    ):
-                        blocked_reason = "planner_final_requires_answer_agent"
+                    )
+                    if verifier_blocked_reason:
+                        blocked_reason = verifier_blocked_reason
                     else:
                         blocked_reason = _blocked_planner_final_reason(
                             question=raw_question,
@@ -375,7 +368,7 @@ class IterativeVisualAgent:
                             citations=final_citations,
                             planner_skill=planner_skill,
                         )
-                    final_source = "planner_final_after_answer_agent_abstain"
+                    final_source = "planner_final_after_answer_agent_verifier"
                 else:
                     blocked_reason = _blocked_planner_final_reason(
                         question=raw_question,
@@ -386,6 +379,8 @@ class IterativeVisualAgent:
                         planner_skill=planner_skill,
                     )
                 if blocked_reason:
+                    if blocked_reason == "planner_final_verifier_disagrees":
+                        planner_final_verifier_disagreed = True
                     self.workspace.write_trace_event(
                         "iterative_final_blocked",
                         {
@@ -856,17 +851,27 @@ class IterativeVisualAgent:
             "iterative_budget_exhausted",
             {"max_rounds": self.budget.max_rounds, "citations": citations},
         )
-        budget_final = self._try_answer_agent_final(
-            question=raw_question,
-            video_path=video_path,
-            rounds=rounds,
-            round_number=self.budget.max_rounds,
-            source="budget_exhausted",
-            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-        )
-        if budget_final is not None:
-            return budget_final
-        if extract_candidate_options(raw_question) and citations:
+        if not planner_final_verifier_disagreed:
+            budget_final = self._try_answer_agent_final(
+                question=raw_question,
+                video_path=video_path,
+                rounds=rounds,
+                round_number=self.budget.max_rounds,
+                source="budget_exhausted",
+                has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+            )
+            if budget_final is not None:
+                return budget_final
+        else:
+            self.workspace.write_trace_event(
+                "iterative_answer_agent_skipped",
+                {
+                    "round": self.budget.max_rounds,
+                    "source": "budget_exhausted",
+                    "reason": "planner_final_verifier_disagrees",
+                },
+            )
+        if extract_candidate_options(raw_question) and citations and not planner_final_verifier_disagreed:
             answer_result = AnswerAgent(self.backend).run(
                 question=raw_question,
                 evidence_text=self._read_ledger(),
@@ -929,6 +934,65 @@ class IterativeVisualAgent:
             },
         )
         return rewrite.exploration_question or question_context.vlm_safe_question
+
+    def _verify_planner_final_with_answer_agent(
+        self,
+        *,
+        question: str,
+        round_number: int,
+        answer: str,
+        citations: Sequence[str],
+    ) -> str:
+        if not extract_candidate_options(question):
+            return ""
+        answer_result = AnswerAgent(self.backend).run(
+            question=question,
+            evidence_text=self._read_ledger(),
+            evidence_table=self._answer_evidence_table(question),
+        )
+        planner_option = _answer_option_letter(answer)
+        verifier_option = _answer_option_letter(answer_result.answer)
+        verifier_disagrees = (
+            answer_result.status == "final"
+            and planner_option is not None
+            and verifier_option is not None
+            and verifier_option != planner_option
+        )
+        if answer_result.status == "final" and answer_result.candidate_option_relations and not verifier_disagrees:
+            self.workspace.annotate_candidate_option_relations(
+                observation_ids=answer_result.citations,
+                relations=answer_result.candidate_option_relations,
+                assigned_by="answer_agent_verifier",
+            )
+        self.workspace.write_trace_event(
+            "planner_final_answer_verifier",
+            {
+                "round": round_number,
+                "planner_answer": answer,
+                "planner_citations": list(citations),
+                "planner_option": planner_option or "",
+                "verifier_status": answer_result.status,
+                "verifier_answer": answer_result.answer,
+                "verifier_option": verifier_option or "",
+                "verifier_citations": list(answer_result.citations),
+                "missing_evidence": list(answer_result.missing_evidence),
+                "verifier_disagrees": verifier_disagrees,
+            },
+        )
+        self.workspace.write_trace_event(
+            "iterative_answer_agent",
+            {
+                "round": round_number,
+                "source": "planner_final_verifier",
+                "status": answer_result.status,
+                "answer": answer_result.answer,
+                "citations": list(answer_result.citations),
+                "missing_evidence": list(answer_result.missing_evidence),
+            },
+        )
+        if verifier_disagrees:
+            return "planner_final_verifier_disagrees"
+        return ""
 
     def _try_answer_agent_final(
         self,
@@ -1211,6 +1275,7 @@ class IterativeVisualAgent:
                     original={"tool": tool_name, "args": args},
                 )
                 continue
+            args = self._strip_unsupported_tool_args(tool_name=tool_name, args=args, notes_out=notes_out)
             if self._tool_accepts_argument(tool_name, "video_path") and _is_video_path_placeholder(args.get("video_path")):
                 original_args = dict(args)
                 args["video_path"] = video_path
@@ -1463,6 +1528,40 @@ class IterativeVisualAgent:
                     }
                 )
         return normalized
+
+    def _strip_unsupported_tool_args(
+        self,
+        *,
+        tool_name: str,
+        args: Mapping[str, Any],
+        notes_out: list[NormalizationNote] | None,
+    ) -> dict[str, Any]:
+        try:
+            parameters = self.registry.get(tool_name).parameters
+        except ToolError:
+            return dict(args)
+        if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+            return dict(args)
+        unsupported = sorted(str(name) for name in args if str(name) not in parameters)
+        if not unsupported:
+            return dict(args)
+        stripped = {str(name): value for name, value in args.items() if str(name) in parameters}
+        self.workspace.write_trace_event(
+            "exploration_policy_adjustment",
+            {
+                "reason": "strip_unsupported_tool_args",
+                "tool": tool_name,
+                "stripped_args": unsupported,
+            },
+        )
+        _append_normalization_note(
+            notes_out,
+            tool=tool_name,
+            reason="strip_unsupported_tool_args",
+            original={"tool": tool_name, "args": dict(args)},
+            resolved={"tool": tool_name, "args": stripped},
+        )
+        return stripped
 
     def _repair_skill_route_tool(
         self,

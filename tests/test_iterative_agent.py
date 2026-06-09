@@ -1965,10 +1965,11 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_final_blocked", trace)
 
-    def test_planner_final_mcq_is_always_replaced_by_answer_agent_final(self):
-        class FinalTakeoverBackend(VisionLanguageBackend):
+    def test_planner_final_mcq_is_not_replaced_by_answer_agent_final(self):
+        class FinalVerifierBackend(VisionLanguageBackend):
             def __init__(self):
                 self.requests = []
+                self.answer_calls = 0
 
             def generate(self, request: BackendRequest) -> BackendResponse:
                 self.requests.append(request)
@@ -1977,8 +1978,13 @@ class IterativeAgentTest(unittest.TestCase):
                         text='{"status": "final", "answer": "A", "citations": ["obs_0001"], "confidence": 0.99}'
                     )
                 if request.task == "answer_from_evidence":
-                    self.assertIn("A. wrong option", request.prompt)
-                    self.assertIn("B. correct option from evidence", request.prompt)
+                    assert "A. wrong option" in request.prompt
+                    assert "B. correct option from evidence" in request.prompt
+                    self.answer_calls += 1
+                    if self.answer_calls > 1:
+                        return BackendResponse(
+                            text='{"answer": "need_more_evidence", "citations": [], "missing_evidence": ["planner verifier already disagreed"]}'
+                        )
                     return BackendResponse(
                         text=(
                             '{"answer": "B. correct option from evidence", "citations": ["obs_0001"], '
@@ -1995,10 +2001,11 @@ class IterativeAgentTest(unittest.TestCase):
             workspace = EvidenceWorkspace.create(Path(tmp), run_id="planner_final_takeover")
             workspace.write_observation(tool_name="vision_read", claim="Evidence supports B.", confidence=0.9)
             agent = IterativeVisualAgent(
-                backend=FinalTakeoverBackend(),
+                backend=FinalVerifierBackend(),
                 registry=build_segment_test_registry(),
                 workspace=workspace,
                 scene_index=scene_index,
+                budget=AgentBudget(max_rounds=1, reserve_final_round=False),
             )
 
             result = agent.run(
@@ -2006,10 +2013,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertTrue(result.answer.startswith("B"))
+            self.assertNotEqual(result.status, "final")
+            self.assertFalse(result.answer.startswith("B"))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("planner_final_answer_agent_takeover", trace)
-            self.assertIn('"source": "planner_final_takeover"', trace)
+            self.assertIn("planner_final_answer_verifier", trace)
+            self.assertIn("planner_final_verifier_disagrees", trace)
 
     def test_iterative_agent_blocks_main_idea_planner_final_without_structured_support(self):
         backend = ScriptedPlannerBackend(
@@ -2071,8 +2079,8 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertNotEqual(result.status, "final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_final_blocked", trace)
-            self.assertIn("planner_final_answer_agent_takeover", trace)
-            self.assertIn("planner_final_requires_answer_agent", trace)
+            self.assertIn("planner_final_answer_verifier", trace)
+            self.assertIn("selected_option_has_structured_support", trace)
 
     def test_planner_final_is_used_when_answer_agent_abstains_but_visual_citations_are_valid(self):
         class AbstainingAnswerBackend(VisionLanguageBackend):
@@ -2123,14 +2131,6 @@ class IterativeAgentTest(unittest.TestCase):
                 scene_index=scene_index,
                 budget=AgentBudget(max_rounds=1, reserve_final_round=False),
             )
-            original_try_answer_agent_final = agent._try_answer_agent_final
-            takeover_sources = []
-
-            def abstain_from_takeover(*args, **kwargs):
-                takeover_sources.append(str(kwargs.get("source", "")))
-                return None
-
-            agent._try_answer_agent_final = abstain_from_takeover
 
             result = agent.run(
                 question=(
@@ -2145,12 +2145,11 @@ class IterativeAgentTest(unittest.TestCase):
 
             self.assertEqual(result.status, "final")
             self.assertTrue(result.answer.startswith("D"))
-            self.assertEqual(takeover_sources, ["planner_final_takeover"])
-            agent._try_answer_agent_final = original_try_answer_agent_final
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("planner_final_after_answer_agent_abstain", trace)
+            self.assertIn("planner_final_answer_verifier", trace)
+            self.assertIn("planner_final_after_answer_agent_verifier", trace)
 
-    def test_planner_final_after_abstain_requires_distinct_visual_citations(self):
+    def test_planner_final_after_abstain_can_use_single_answer_grade_citation(self):
         class OneObservationCitationBackend(VisionLanguageBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 if request.task == "replan":
@@ -2168,7 +2167,7 @@ class IterativeAgentTest(unittest.TestCase):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
 
         with tempfile.TemporaryDirectory() as tmp:
-            workspace = EvidenceWorkspace.create(Path(tmp), run_id="planner_final_one_distinct_citation")
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="planner_final_one_answer_grade_citation")
             workspace.write_observation(
                 tool_name="vision_read",
                 claim="The video shows the empire's rise and fall as the main arc.",
@@ -2194,7 +2193,6 @@ class IterativeAgentTest(unittest.TestCase):
                 scene_index=scene_index,
                 budget=AgentBudget(max_rounds=1, reserve_final_round=False),
             )
-            agent._try_answer_agent_final = lambda *args, **kwargs: None
 
             result = agent.run(
                 question=(
@@ -2207,9 +2205,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertNotEqual(result.status, "final")
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("D"))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("planner_final_requires_answer_agent", trace)
+            self.assertIn("planner_final_answer_verifier", trace)
+            self.assertIn("planner_final_after_answer_agent_verifier", trace)
 
     def test_iterative_agent_indexes_scene_coverage_for_main_idea_mcq(self):
         class SceneCoverageBackend(VisionLanguageBackend):

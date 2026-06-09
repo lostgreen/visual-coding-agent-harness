@@ -243,6 +243,37 @@ def test_timeline_repairs_read_segment_to_detail_with_targets(tmp_path: Path):
     assert "tool_not_in_allowed_actions" not in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
 
+def test_normalization_strips_unsupported_read_timeline_sorted_args(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="read_timeline_sorted", description="Read sorted timeline.")
+    def read_timeline_sorted():
+        return {"claim": "timeline", "confidence": 1.0}
+
+    registry.register(read_timeline_sorted)
+    workspace = EvidenceWorkspace.create(tmp_path, "strip_timeline_args")
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    normalized = agent._normalize_program(
+        [{"tool": "read_timeline_sorted", "args": {"segment_id": "seg_0006"}}],
+        question="Which event appears first?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+        planner_skill=builtin_skill_registry().get("timeline_ordering"),
+    )
+
+    assert normalized == [{"tool": "read_timeline_sorted", "args": {}}]
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "strip_unsupported_tool_args" in trace
+
+
 def test_mutex_fact_repairs_planner_inspect_segment_to_vision_read(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = SequenceBackend(

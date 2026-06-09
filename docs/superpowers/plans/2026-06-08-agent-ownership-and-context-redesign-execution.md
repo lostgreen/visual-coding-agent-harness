@@ -115,3 +115,37 @@ Next actions:
 2. Sync to KML via GitHub/proxy or a reviewed patch path.
 3. Re-run local/KML full pytest and synthetic three-case replay after sync.
 4. Re-run VideoMME cases `605-1,611-2,612-1`; for `612-1`, check whether `asr_cue_detail` rows support option B before max rounds.
+
+## Update 2026-06-09 verifier follow-up
+
+Current evidence:
+
+- KML rerun root `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_v2_3demo_ded2fe3_20260609_111252` completed with `605-1` final/correct, `611-2` error, and `612-1` max-rounds.
+- `611-2` failure fingerprint: `ToolError: Invalid arguments for read_timeline_sorted: got an unexpected keyword argument 'segment_id'`.
+- `612-1` was not an eval-choice parser failure. Planner round 20 output was valid JSON final with answer `B`, but the agent treated AnswerAgent as a takeover gate. AnswerAgent returned `need_more_evidence`, so planner `B` was blocked and the returned `result.answer` became `Partial evidence summary (budget exhausted)...`, leaving runner `choice=""`.
+
+Decision:
+
+- Planner owns final answers. AnswerAgent is a verifier, not a replacement answerer for planner finals.
+- If planner final and AnswerAgent final disagree on option letter, block the planner final as `planner_final_verifier_disagrees`.
+- If AnswerAgent abstains, do not require AnswerAgent to produce the final; continue to normal answer-grade/hard-skill gates on the planner answer and citations.
+- Verifier candidate-option relations are written back only when verifier agrees with planner, so a verifier disagreement cannot immediately seed a later deterministic AnswerAgent takeover.
+
+Files changed in this follow-up:
+
+- `agents/iterative_agent.py`: planner final now calls `_verify_planner_final_with_answer_agent`; trace event renamed to verifier semantics; unsupported tool args are stripped during normalization; budget-exhausted AnswerAgent auto-final is skipped after a same-run planner/verifier option disagreement.
+- `tests/test_iterative_agent.py`: takeover expectations updated to verifier semantics; planner final can use a single valid answer-grade citation after verifier abstains.
+- `tests/test_route_validator.py`: regression for stripping unsupported `read_timeline_sorted(segment_id=...)` args.
+
+Current verification:
+
+- Focused regression: `PYTHONPATH=src:. pytest -q tests/test_iterative_agent.py tests/test_route_validator.py`
+  - Result: `106 passed in 0.68s`.
+- Local full regression: `PYTHONPATH=src:. pytest -q`
+  - Result: `411 passed in 1.58s`.
+
+Next actions:
+
+1. Commit and push the verifier follow-up patch.
+2. Sync KML to the new commit.
+3. Re-run VideoMME cases `605-1,611-2,612-1` without monitoring; compare `611-2` no longer crashes on `read_timeline_sorted` extra args and `612-1` accepts planner-owned `B` if answer-grade gates pass.
