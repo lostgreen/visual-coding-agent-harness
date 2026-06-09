@@ -67,6 +67,65 @@ def test_temporal_answer_sequence_does_not_map_partial_order():
     assert _answer_option_from_temporal_answer(question=question, answer="The clip mentions red and blue.") is None
 
 
+BERNINI_ORDER_QUESTION = (
+    "VideoMME multiple-choice question. Answer with exactly one option letter (A/B/C/D) first.\n"
+    "Question: As depicted in the video, in what order does the author present Bernini's four masterpieces created for Borghese in a single scene?\n"
+    "Options:\n"
+    'A. "The rape of  Persephone", "Apollo and Daphne", "David" and "Aeneas, Anchises, and Ascanius fleeing Troy".\n'
+    'B. "David", "Aeneas, Anchises, and Ascanius fleeing Troy", "Apollo and Daphne" and "The rape of  Persephone".\n'
+    'C. "Apollo and Daphne", "Aeneas, Anchises, and Ascanius fleeing Troy", "David" and "The rape of  Persephone".\n'
+    'D. "Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The rape of  Persephone" and "Apollo and Daphne".'
+)
+
+
+def test_ordered_option_sequence_registry_is_visible_in_first_prompt(tmp_path: Path):
+    backend = ScriptedPlannerBackend(
+        [
+            '{"status": "continue", "skill": "visual_timeline_qa", "rationale": "inspect", "program": []}',
+        ]
+    )
+    workspace = EvidenceWorkspace.create(tmp_path, "ordered_registry_prompt")
+    video_map = VideoMap(
+        video_path="/videos/bernini.mp4",
+        duration_sec=600.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0002",
+                start_sec=300.0,
+                end_sec=600.0,
+                asr_text=(
+                    '"Aeneas, Anchises, and Ascanius fleeing Troy", "David", '
+                    '"The rape of Persephone" and "Apollo and Daphne".'
+                ),
+            )
+        ],
+    )
+    registry = build_video_navigation_registry(video_map, workspace=workspace)
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/bernini.mp4",
+            duration_sec=600.0,
+            segments=[VideoSegment(segment_id="seg_0002", start_sec=300.0, end_sec=600.0)],
+        ),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    agent.run(question=BERNINI_ORDER_QUESTION, video_path="/videos/bernini.mp4")
+
+    prompt = backend.requests[0].prompt
+    assert "Registered target_refs:" in prompt
+    assert "- T1: Aeneas, Anchises, and Ascanius fleeing Troy" in prompt
+    assert "- T2: David" in prompt
+    assert "- T3: The rape of Persephone" in prompt
+    assert "- T4: Apollo and Daphne" in prompt
+    coverage = workspace.read_observations(tool_name="target_coverage")[0]
+    assert 'David" and "Aeneas' not in coverage.claim
+    assert "Q1" not in coverage.claim
+
+
 def test_program_signature_ignores_assign_names_and_trace_ids():
     first = [
         {
@@ -385,9 +444,9 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("read_segment_detail(segment_id", prompt)
             self.assertIn("promote_answer_evidence", prompt)
             self.assertIn("locate_targets_in_segment(segment_id", prompt)
-            self.assertIn("target_refs: list", prompt)
-            self.assertIn("unknown T<n> ids hard-reject the tool call", prompt)
-            self.assertIn("0 occurrences of T<n> in legacy targets", prompt)
+            self.assertNotIn("target_refs: list", prompt)
+            self.assertIn("No target_refs are registered for this run", prompt)
+            self.assertIn("Coverage-local Q<n> labels are not callable", prompt)
             self.assertIn("verify_segment_anchors(segment_id", prompt)
             self.assertNotIn("expand_window(segment_id", prompt)
             self.assertNotIn("zoom(segment_id", prompt)
@@ -1011,6 +1070,70 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertTrue(any("verify_ledger_answer" in entry or "zoom" in entry for entry in workspace.reflection_memory(max_items=10)))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("segment_pool_exhausted", trace)
+
+    def test_coarse_caption_does_not_block_focused_subwindow(self):
+        backend = ScriptedPlannerBackend(
+            [
+                (
+                    '{"status": "continue", "rationale": "coarse map", '
+                    '"skill": "visual_timeline_qa", '
+                    '"program": [{"tool": "caption_segment", "args": {"segment_id": "seg_0002", "question": "map scene"}, "assign": "c"}]}'
+                ),
+                (
+                    '{"status": "continue", "rationale": "focused order window", '
+                    '"skill": "visual_timeline_qa", '
+                    '"program": [{"tool": "vision_read", "args": {"segment_id": "seg_0002", "start_sec": 70.0, "end_sec": 80.0, "ask_for": "describe order"}, "assign": "v"}]}'
+                ),
+            ]
+        )
+        registry = ToolRegistry()
+
+        @tool(name="caption_segment", description="Caption one segment.")
+        def caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, **kwargs):
+            return {
+                "claim": f"coarse {segment_id}",
+                "confidence": 0.7,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+            }
+
+        @tool(name="vision_read", description="Read a focused visual window.")
+        def vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, **kwargs):
+            return {
+                "claim": f"focused {segment_id} {start_sec}-{end_sec}",
+                "confidence": 0.8,
+                "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec}],
+                "grounding_quality": "visually_confirmed",
+            }
+
+        registry.register(caption_segment)
+        registry.register(vision_read)
+        scene_index = SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=120.0,
+            segments=[
+                VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=60.0),
+                VideoSegment(segment_id="seg_0002", start_sec=60.0, end_sec=120.0),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="coarse_then_focused")
+            agent = IterativeVisualAgent(
+                backend=backend,
+                registry=registry,
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=2, reserve_final_round=False, hard_skill_runtime=True),
+            )
+
+            result = agent.run(question="Which order is shown first?", video_path="/videos/demo.mp4")
+
+            self.assertEqual(result.rounds[1].program[0]["tool"], "vision_read")
+            self.assertEqual(result.rounds[1].program[0]["args"]["segment_id"], "seg_0002")
+            self.assertEqual(result.rounds[1].program[0]["args"]["start_sec"], 70.0)
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 1)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("segment_pool_exhausted", trace)
 
     def test_normalizes_placeholder_video_path_for_global_tools(self):
         backend = ScriptedPlannerBackend(
@@ -3669,10 +3792,13 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "need_more_evidence")
-            self.assertIn("timeline inference requires planner", result.answer)
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertLessEqual(workspace.observation_count(tool_name="caption_segment"), 1)
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("iterative_timeline_temporal_inference", trace)
+            self.assertIn("effective_skill_locked", trace)
+            self.assertIn("visual_timeline_qa@v1", trace)
+            self.assertNotIn("timeline_caption_", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
 
     def test_interactive_timeline_locator_rows_do_not_auto_final(self):
@@ -3962,17 +4088,13 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "need_more_evidence")
-            self.assertIn("timeline inference requires planner", result.answer)
-            self.assertEqual(
-                [step["tool"] for step in result.rounds[0].program],
-                ["caption_segment", "caption_segment", "caption_segment", "vision_read", "vision_read"],
-            )
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.rounds[0].program, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("iterative_timeline_temporal_inference", trace)
+            self.assertIn("effective_skill_locked", trace)
+            self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
-            self.assertNotIn("ground_question", [call[0] for call in calls])
-            self.assertEqual([call[1] for call in calls if call[0] == "vision_read"], ["seg_0001", "seg_0002"])
+            self.assertEqual(calls, [])
 
     def test_timeline_ordering_missing_entity_returns_need_more_evidence(self):
         registry = ToolRegistry()
@@ -4023,8 +4145,9 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "need_more_evidence")
-            self.assertIn("door opens", result.answer)
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertLessEqual(workspace.observation_count(tool_name="caption_segment"), 1)
+            self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
 
     def test_timeline_ordering_ignores_negative_caption_echoes(self):
         registry = ToolRegistry()
@@ -4076,10 +4199,13 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "need_more_evidence")
+            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual([call[0] for call in calls].count("caption_segment"), 1)
             self.assertEqual([call[0] for call in calls].count("vision_read"), 0)
-            self.assertIn("door opens", result.answer)
-            self.assertIn("timeline_ordering_missing_entity", (workspace.root / "trace.jsonl").read_text(encoding="utf-8"))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("effective_skill_locked", trace)
+            self.assertIn("visual_timeline_qa@v1", trace)
+            self.assertNotIn("timeline_ordering_missing_entity", trace)
 
     def test_no_evidence_growth_defers_low_confidence_until_budget(self):
         planner_responses = [
@@ -4373,13 +4499,13 @@ class IterativeAgentTest(unittest.TestCase):
                     "answer_from_evidence",
                     "replan",
                     "answer_from_evidence",
-                    "replan",
-                    "answer_from_evidence",
                 ],
             )
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn('"source": "all_segments_inspected"', trace)
             self.assertIn("iterative_answer_suggestion", trace)
+            self.assertIn('"source": "evidence_table_no_growth"', trace)
+            self.assertIn("iterative_finalization_ready", trace)
 
     def test_model_rewritten_mcq_is_used_for_planner_and_tools_only(self):
         raw_question = (
@@ -4521,7 +4647,7 @@ class IterativeAgentTest(unittest.TestCase):
         self.assertNotIn("A. The fall of Rome", joined)
         self.assertNotIn("Why the Austro-Hungarian Empire was divided", joined)
 
-    def test_repeated_empty_program_does_not_auto_finalize_from_structured_evidence(self):
+    def test_repeated_empty_program_finalizes_from_answer_verifier_when_gate_passes(self):
         class ShouldNotAnswerBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 if request.task == "answer_from_evidence":
@@ -4580,11 +4706,78 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
-            self.assertNotIn("D. How the empire rose and fell", result.answer)
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("D"))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("source\": \"repeated_program_guard", trace)
-            self.assertNotIn("final_answer", trace)
+            self.assertIn("iterative_finalization_ready", trace)
+
+    def test_no_growth_guard_finalizes_from_answer_verifier_before_budget(self):
+        class ShouldNotAnswerBackend(ScriptedPlannerBackend):
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "answer_from_evidence":
+                    raise AssertionError("structured table should arbitrate without backend")
+                return super().generate(request)
+
+        responses = [
+            '{"status": "continue", "program": []}',
+            '{"status": "continue", "program": []}',
+            '{"status": "continue", "program": []}',
+            '{"status": "continue", "program": []}',
+        ]
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=20.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="no_growth_verifier_finalizes")
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": "ev_scene_coverage_1",
+                    "obs_id": "scene_coverage_seg_0001",
+                    "tool": "timeline_asr_summary",
+                    "supported_option": "D",
+                    "claim": "Early transcript covers the rise and formation of the empire.",
+                    "confidence": 0.84,
+                    "grounding_quality": "indexed_transcript",
+                    "candidate_option_relations": [{"option": "D", "relation": "support", "strength": 0.84}],
+                    "time_range": [0.0, 20.0],
+                }
+            )
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": "ev_scene_coverage_2",
+                    "obs_id": "scene_coverage_seg_0003",
+                    "tool": "timeline_asr_summary",
+                    "supported_option": "D",
+                    "claim": "Late transcript covers decline, collapse, and the fall of the empire.",
+                    "confidence": 0.84,
+                    "grounding_quality": "indexed_transcript",
+                    "candidate_option_relations": [{"option": "D", "relation": "support", "strength": 0.84}],
+                    "time_range": [40.0, 60.0],
+                }
+            )
+            agent = IterativeVisualAgent(
+                backend=ShouldNotAnswerBackend(responses),
+                registry=ToolRegistry(),
+                workspace=workspace,
+                scene_index=scene_index,
+                budget=AgentBudget(max_rounds=6, reserve_final_round=False, max_repeated_programs=0),
+            )
+
+            result = agent.run(
+                question=(
+                    "What is the video mainly about?\n"
+                    "B. Why the empire was divided\n"
+                    "D. How the empire rose and fell"
+                ),
+                video_path="/videos/demo.mp4",
+            )
+
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("D"))
+            self.assertLess(len(result.rounds), 6)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("source\": \"evidence_table_no_growth", trace)
+            self.assertIn("iterative_finalization_ready", trace)
 
     def test_navigation_only_no_growth_forces_visual_read_on_requested_segment(self):
         class NavThenAnswerBackend(VisionLanguageBackend):

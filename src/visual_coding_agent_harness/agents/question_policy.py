@@ -22,6 +22,13 @@ class QuestionPlaybook:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class OptionSequenceSpec:
+    option_letter: str
+    ordered_items: tuple[str, ...]
+    ordered_target_refs: tuple[str, ...]
+
+
 def select_question_playbook(question: str) -> QuestionPlaybook:
     route = classify_question_route(question)
     if route == "gist_global":
@@ -253,6 +260,9 @@ def extract_option_target_atoms(
         if isinstance(question_or_options, str)
         else [str(option) for option in question_or_options]
     )
+    quoted_registry = _canonical_quoted_option_items(options, max_targets=max_targets)
+    if quoted_registry:
+        return quoted_registry[:max_targets]
     atoms: list[str] = []
     seen: set[str] = set()
     for option in options:
@@ -296,12 +306,59 @@ def extract_option_target_atom_map(
     return mapping
 
 
+def extract_option_sequence_specs(question_or_options: str | Sequence[str]) -> dict[str, OptionSequenceSpec]:
+    """Parse ordered MCQ option item sequences without splitting quoted titles."""
+
+    options = (
+        list(extract_candidate_options(question_or_options))
+        if isinstance(question_or_options, str)
+        else [str(option) for option in question_or_options]
+    )
+    parsed: list[tuple[str, tuple[str, ...]]] = []
+    for index, option in enumerate(options):
+        letter = _option_letter(option, index=index)
+        items = tuple(_quoted_option_items(option))
+        if not items:
+            items = tuple(
+                _clean_option_atom(chunk)
+                for chunk in _split_option_atom_text(_strip_option_prefix(option))
+                if _is_informative_option_atom(_clean_option_atom(chunk))
+            )
+        if items:
+            parsed.append((letter, items))
+    if not parsed:
+        return {}
+
+    canonical_items = _canonical_items_from_option_sequences([items for _, items in parsed])
+    if not canonical_items:
+        return {}
+    refs_by_key = {
+        _target_atom_key(item): f"T{index}"
+        for index, item in enumerate(canonical_items, start=1)
+        if _target_atom_key(item)
+    }
+    sequences: dict[str, OptionSequenceSpec] = {}
+    for letter, items in parsed:
+        refs = tuple(refs_by_key.get(_target_atom_key(item), "") for item in items)
+        if len(refs) != len(items) or any(not ref for ref in refs):
+            continue
+        sequences[letter] = OptionSequenceSpec(
+            option_letter=letter,
+            ordered_items=tuple(_canonical_item_text(item, canonical_items) for item in items),
+            ordered_target_refs=refs,
+        )
+    return sequences
+
+
 def extract_option_target_atoms_for_option(
     option_text: str,
     *,
     include_synonyms: bool = False,
 ) -> list[str]:
     text = _strip_option_prefix(option_text)
+    quoted_items = _quoted_option_items(text)
+    if quoted_items:
+        return list(quoted_items)
     lowered = text.lower()
     positioned_atoms: list[tuple[int, str]] = []
     for pattern, atom in (
@@ -376,6 +433,54 @@ def _split_option_atom_text(text: str) -> list[str]:
     for part in primary:
         parts.extend(action_splitter.split(part))
     return parts
+
+
+def _quoted_option_items(option_text: str) -> tuple[str, ...]:
+    items = [
+        _clean_option_atom(match.group(1))
+        for match in re.finditer(r"[\"“]([^\"”]+)[\"”]", str(option_text))
+    ]
+    return tuple(item for item in items if _is_informative_option_atom(item))
+
+
+def _canonical_quoted_option_items(options: Sequence[str], *, max_targets: int) -> list[str]:
+    sequences = [_quoted_option_items(option) for option in options]
+    sequences = [sequence for sequence in sequences if sequence]
+    if not sequences:
+        return []
+    return _canonical_items_from_option_sequences(sequences)[:max_targets]
+
+
+def _canonical_items_from_option_sequences(sequences: Sequence[Sequence[str]]) -> list[str]:
+    if not sequences:
+        return []
+    first_keys = {_target_atom_key(item) for item in sequences[0] if _target_atom_key(item)}
+    if not first_keys:
+        return []
+    for sequence in sequences:
+        keys = {_target_atom_key(item) for item in sequence if _target_atom_key(item)}
+        if keys != first_keys:
+            return []
+    canonical_by_key: dict[str, str] = {}
+    for sequence in sequences:
+        for item in sequence:
+            key = _target_atom_key(item)
+            if key and key not in canonical_by_key:
+                canonical_by_key[key] = item
+    ordered_sequences = [
+        tuple(_target_atom_key(item) for item in sequence if _target_atom_key(item))
+        for sequence in sequences
+    ]
+    registry_order = min(ordered_sequences, key=lambda keys: keys[0] if keys else "")
+    return [canonical_by_key[key] for key in registry_order]
+
+
+def _canonical_item_text(item: str, canonical_items: Sequence[str]) -> str:
+    key = _target_atom_key(item)
+    for canonical in canonical_items:
+        if _target_atom_key(canonical) == key:
+            return canonical
+    return item
 
 
 def _clean_option_atom(text: str) -> str:

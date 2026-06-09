@@ -1147,6 +1147,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def config_from_args(args: argparse.Namespace) -> EvalConfig:
     workspace_root = args.workspace_root or (args.run_root / "workspaces")
+    strategies = parse_strategies(args.strategy)
     context_budget_ratios = parse_budget_ratios(args.budget_ratios) if args.budget_ratios else None
     default_nframes = args.contract_nframes if args.contract_nframes is not None else args.default_nframes
     context_budget_tokens = args.context_budget_tokens
@@ -1167,6 +1168,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         max_repeated_programs=max(max_rounds, AgentBudget().max_repeated_programs),
         disable_global_gist_route=args.disable_global_gist_route,
         rewrite_mcq_for_exploration=bool(args.use_global_question_rewrite),
+        hard_skill_runtime="agent_v2" in strategies,
     )
     if args.enable_followup is False:
         budget = replace(budget, hard_skill_runtime=False)
@@ -1192,7 +1194,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         video_dir=args.video_dir,
         subtitle_dir=args.subtitle_dir,
         cases=parse_csv(args.cases),
-        strategies=parse_strategies(args.strategy),
+        strategies=strategies,
         window_sec=args.window_sec,
         scene_index_mode=args.scene_index_mode,
         scene_index_cache_dir=args.scene_index_cache_dir,

@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
+from ..contracts import ClaimModality, OptionSpec, TargetRegistry, TargetSpec
 from ..interpreter import ProgramInterpreter
 from ..registry import ToolError, ToolRegistry
 from ..video_index import SceneIndex, VideoSegment
@@ -24,6 +25,7 @@ from .question_policy import (
     classify_narration_subroute,
     classify_question_route,
     extract_candidate_options,
+    extract_option_sequence_specs,
     extract_option_target_atom_map,
     extract_option_target_atoms,
     select_question_playbook,
@@ -59,6 +61,7 @@ _ANSWER_AGENT_AUTO_FINAL_SOURCES = frozenset(
         "budget_exhausted",
         "prefinal_probe_budget_exhausted",
         "hard_skill_budget_exhausted",
+        "repeated_program_guard",
     }
 )
 
@@ -206,6 +209,7 @@ class IterativeVisualAgent:
         exploration_question_text = self._question_for_exploration(question_context)
         vlm_safe_question = question_context.vlm_safe_question
         self.workspace.ensure_hypothesis(raw_question)
+        self._initialize_option_sequence_registry(raw_question)
         self._seed_target_coverage(raw_question)
         if not self.budget.rewrite_mcq_for_exploration:
             self._seed_scene_coverage_evidence(raw_question)
@@ -309,6 +313,7 @@ class IterativeVisualAgent:
                 active_skill=last_selected_skill_id,
                 route=classify_question_route(raw_question),
                 target_hints=self._exploration_target_entities,
+                target_ref_descriptions=_registered_target_ref_descriptions(self.workspace),
             )
             self.workspace.write_trace_event("context_budget_report", asdict(context_report))
             self.workspace.write_trace_event(
@@ -1052,6 +1057,20 @@ class IterativeVisualAgent:
                 )
                 if low_confidence_result is not None:
                     return low_confidence_result
+                if answer_result.status == "final":
+                    finalization_ready = self._finalize_answer_agent_result(
+                        answer_result=answer_result,
+                        question=raw_question,
+                        video_path=video_path,
+                        rounds=rounds,
+                        round_number=round_number,
+                        source="evidence_table_no_growth",
+                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                        program=program,
+                        observation_ids=observation_ids,
+                    )
+                    if finalization_ready is not None:
+                        return finalization_ready
                 if answer_result.status == "final" or answer_result.has_partial_support():
                     pending_inferences = [
                         _answer_result_pending_inference(answer_result, source="evidence_table_no_growth")
@@ -1291,6 +1310,44 @@ class IterativeVisualAgent:
         )
         return rewrite.exploration_question or question_context.vlm_safe_question
 
+    def _initialize_option_sequence_registry(self, question: str) -> None:
+        if getattr(self.workspace, "target_registry", None) is not None:
+            return
+        if classify_question_route(question) != "temporal_order":
+            return
+        sequences = extract_option_sequence_specs(question)
+        if not sequences:
+            return
+        targets_by_ref: dict[str, str] = {}
+        for sequence in sequences.values():
+            for target_ref, item in zip(sequence.ordered_target_refs, sequence.ordered_items):
+                targets_by_ref.setdefault(str(target_ref), str(item))
+        if not targets_by_ref:
+            return
+        targets = [
+            TargetSpec(
+                target_id=target_ref,
+                canonical_text=targets_by_ref[target_ref],
+                modality_hint=ClaimModality.VISUAL_FACT,
+                source="option_sequence",
+            )
+            for target_ref in sorted(targets_by_ref, key=lambda ref: int(ref[1:]) if ref.startswith("T") and ref[1:].isdigit() else 10**9)
+        ]
+        options = [
+            OptionSpec(sequence.option_letter, target_sequence=sequence.ordered_target_refs)
+            for sequence in sequences.values()
+        ]
+        self.workspace.target_registry = TargetRegistry.from_specs(targets=targets, options=options)
+        self.workspace.write_trace_event(
+            "target_registry_initialized",
+            {
+                "source": "option_sequence",
+                "target_count": len(targets),
+                "option_count": len(options),
+                "target_refs": [target.target_id for target in targets],
+            },
+        )
+
     def _verify_planner_final_with_answer_agent(
         self,
         *,
@@ -1349,6 +1406,75 @@ class IterativeVisualAgent:
         if verifier_disagrees:
             return "planner_final_verifier_disagrees"
         return ""
+
+    def _finalize_answer_agent_result(
+        self,
+        *,
+        answer_result: AnswerAgentResult,
+        question: str,
+        video_path: str,
+        rounds: Sequence[IterativeRound],
+        round_number: int,
+        source: str,
+        has_inspect_with_candidate_options: bool,
+        program: Sequence[Mapping[str, Any]] = (),
+        observation_ids: Sequence[str] = (),
+    ) -> IterativeRunResult | None:
+        blocked_reason = _blocked_final_reason(
+            question=question,
+            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+            workspace=self.workspace,
+            answer=answer_result.answer,
+            citations=answer_result.citations,
+        )
+        if blocked_reason:
+            self.workspace.write_trace_event(
+                "iterative_final_blocked",
+                {
+                    "round": round_number,
+                    "source": source,
+                    "reason": blocked_reason,
+                    "answer": answer_result.answer,
+                    "citations": list(answer_result.citations),
+                },
+            )
+            return None
+        self.workspace.write_trace_event(
+            "iterative_finalization_ready",
+            {
+                "round": round_number,
+                "source": source,
+                "answer": answer_result.answer,
+                "citations": list(answer_result.citations),
+                "confidence": answer_result.confidence,
+            },
+        )
+        final_rounds = list(rounds)
+        final_rounds.append(
+            IterativeRound(
+                round_number=round_number,
+                status="final",
+                planner_text=answer_result.raw_text,
+                rationale=answer_result.rationale,
+                program=program,
+                observation_ids=observation_ids,
+            )
+        )
+        self._write_final_trace(
+            round_number=round_number,
+            answer=answer_result.answer,
+            citations=answer_result.citations,
+            source=source,
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer=answer_result.answer,
+            status="final",
+            citations=list(answer_result.citations),
+            confidence=answer_result.confidence,
+            rounds=final_rounds,
+        )
 
     def _try_answer_agent_final(
         self,
@@ -1418,31 +1544,16 @@ class IterativeVisualAgent:
                 },
             )
             return None
-        final_rounds = list(rounds)
-        final_rounds.append(
-            IterativeRound(
-                round_number=round_number,
-                status="final",
-                planner_text=answer_result.raw_text,
-                rationale=answer_result.rationale,
-                program=program,
-                observation_ids=observation_ids,
-            )
-        )
-        self._write_final_trace(
-            round_number=round_number,
-            answer=answer_result.answer,
-            citations=answer_result.citations,
-            source=source,
-        )
-        return IterativeRunResult(
+        return self._finalize_answer_agent_result(
+            answer_result=answer_result,
             question=question,
             video_path=video_path,
-            answer=answer_result.answer,
-            status="final",
-            citations=list(answer_result.citations),
-            confidence=answer_result.confidence,
-            rounds=final_rounds,
+            rounds=rounds,
+            round_number=round_number,
+            source=source,
+            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+            program=program,
+            observation_ids=observation_ids,
         )
 
     def _normalize_program(
@@ -1966,14 +2077,20 @@ class IterativeVisualAgent:
         resolved_refs: list[str] = []
         legacy_refs: list[str] = []
         free_text_targets: list[Any] = []
+        stripped_query_ids: list[str] = []
 
         for ref in target_refs:
             ref_text = str(ref).strip()
             if not _is_target_ref_key(ref_text):
+                paired_target = _coverage_query_target_for_id(self.workspace, ref_text)
+                if paired_target and any(_same_target_text(paired_target, str(target)) for target in legacy_targets):
+                    stripped_query_ids.append(ref_text)
+                    continue
+                reason = "coverage_query_id_not_callable" if _is_coverage_query_id(ref_text) else "free_text_target_ref"
                 self._record_target_protocol_rejection(
                     tool_name=tool_name,
                     args=original_args,
-                    reason="free_text_target_ref",
+                    reason=reason,
                     invalid_target=str(ref),
                     notes_out=notes_out,
                 )
@@ -2033,6 +2150,24 @@ class IterativeVisualAgent:
             resolved_refs = _unique_preserving_order(resolved_refs)
             normalized["target_refs"] = resolved_refs
             normalized["normalized_target_keys"] = resolved_refs
+        elif stripped_query_ids:
+            normalized.pop("target_refs", None)
+            self.workspace.write_trace_event(
+                "exploration_policy_adjustment",
+                {
+                    "reason": "coverage_query_id_stripped",
+                    "tool": tool_name,
+                    "query_ids": stripped_query_ids,
+                },
+            )
+            _append_normalization_note(
+                notes_out,
+                tool=tool_name,
+                reason="coverage_query_id_stripped",
+                original={"tool": tool_name, "args": original_args},
+                resolved={"tool": tool_name, "args": normalized},
+                next_action="Coverage-local Q<n> labels were stripped because the paired natural-language target was present.",
+            )
 
         return normalized
 
@@ -2711,6 +2846,13 @@ class IterativeVisualAgent:
     ) -> Optional[VideoSegment]:
         scene_segment = _scene_segment_or_none(self.scene_index, requested_segment_id)
         if scene_segment is not None:
+            focused_segment = _focused_window_for_scene_segment(
+                scene_segment,
+                args=args,
+                duration_sec=self.scene_index.duration_sec,
+            )
+            if focused_segment is not None and tool_name in {"vision_read", "qa_segment", "inspect_segment", "verify_segment_anchors"}:
+                return focused_segment
             resolved_segment_id = self._resolve_next_segment_id(requested_segment_id, reserved_segment_ids)
             if resolved_segment_id is None:
                 _append_normalization_note(
@@ -2947,26 +3089,67 @@ class IterativeVisualAgent:
     def _seed_target_coverage(self, question: str) -> None:
         if not extract_candidate_options(question):
             return
-        targets = [str(target).strip() for target in self._exploration_target_entities if str(target).strip()]
-        if not targets:
-            targets = extract_option_target_atoms(question, max_targets=12, include_synonyms=True)
-        if not targets or not self._has_tool("target_coverage"):
+        if not self._has_tool("target_coverage"):
             return
         if self.workspace.observation_count(tool_name="target_coverage") > 0:
             return
-        result = ProgramInterpreter(self.registry, self.workspace).run(
-            [
+        registry = getattr(self.workspace, "target_registry", None)
+        target_refs = []
+        if registry is not None and isinstance(getattr(registry, "targets_by_id", None), Mapping):
+            target_refs = sorted(str(ref) for ref in registry.targets_by_id)
+        targets = [str(target).strip() for target in self._exploration_target_entities if str(target).strip()]
+        if not target_refs and not targets:
+            targets = extract_option_target_atoms(question, max_targets=12, include_synonyms=True)
+        if not target_refs and not targets:
+            return
+        coverage_args: dict[str, Any] = {"top_k": 3}
+        if target_refs:
+            coverage_args["target_refs"] = target_refs
+            coverage_args["group_by_option"] = True
+        else:
+            coverage_args["targets"] = targets
+        try:
+            result = ProgramInterpreter(self.registry, self.workspace).run(
+                [
+                    {
+                        "tool": "target_coverage",
+                        "args": coverage_args,
+                        "assign": "auto_target_coverage",
+                    }
+                ]
+            )
+        except ToolError as exc:
+            if not target_refs:
+                raise
+            fallback_targets = [str(target).strip() for target in self._exploration_target_entities if str(target).strip()]
+            if not fallback_targets:
+                fallback_targets = extract_option_target_atoms(question, max_targets=12, include_synonyms=True)
+            if not fallback_targets:
+                raise
+            self.workspace.write_trace_event(
+                "target_coverage_seed_fallback",
                 {
-                    "tool": "target_coverage",
-                    "args": {"targets": targets, "top_k": 3},
-                    "assign": "auto_target_coverage",
-                }
-            ]
-        )
+                    "reason": "target_refs_unavailable_in_tool_workspace",
+                    "error": str(exc),
+                    "target_refs": target_refs,
+                    "target_count": len(fallback_targets),
+                },
+            )
+            coverage_args = {"targets": fallback_targets, "top_k": 3}
+            result = ProgramInterpreter(self.registry, self.workspace).run(
+                [
+                    {
+                        "tool": "target_coverage",
+                        "args": coverage_args,
+                        "assign": "auto_target_coverage",
+                    }
+                ]
+            )
         self.workspace.write_trace_event(
             "target_coverage_seeded",
             {
-                "target_count": len(targets),
+                "target_count": len(target_refs or targets),
+                "target_refs": target_refs,
                 "observation_ids": list(result.observation_ids),
             },
         )
@@ -3199,13 +3382,12 @@ class IterativeVisualAgent:
         exploration_question: str,
         video_path: str,
     ) -> IterativeRunResult | None:
-        skill = select_skill(question)
-        if skill.name not in {"grounded_factual_qa", "mutex_fact_qa", "timeline_ordering"}:
+        skill = _recommended_effective_skill(question)
+        if skill.name in {"timeline_ordering", "visual_timeline_qa", "narration_timeline_qa"}:
             return None
-        if skill.name == "timeline_ordering":
-            if not self._has_tool("caption_segment") or not self._has_tool("vision_read"):
-                return None
-        elif not self._has_tool("ground_question") or not self._has_tool("vision_read"):
+        if skill.name not in {"grounded_factual_qa", "mutex_fact_qa"}:
+            return None
+        if not self._has_tool("ground_question") or not self._has_tool("vision_read"):
             return None
 
         route = classify_question_route(question)
@@ -3709,7 +3891,7 @@ def _planner_selected_skill(action: Mapping[str, Any]) -> tuple[SkillSpec | None
 
 
 def _initial_skill_runtime_state(question: str) -> SkillRuntimeState:
-    recommended = select_skill(question)
+    recommended = _recommended_effective_skill(question)
     state = SkillRuntimeState(
         recommended_skill=recommended,
         compatible_skill_ids=_compatible_skill_ids(question=question, recommended=recommended),
@@ -3718,6 +3900,21 @@ def _initial_skill_runtime_state(question: str) -> SkillRuntimeState:
         selected_round=1,
     )
     return state
+
+
+def _recommended_effective_skill(question: str) -> SkillSpec:
+    registry = builtin_skill_registry()
+    if classify_question_route(question) == "temporal_order":
+        if classify_narration_subroute(question) == "narration_timeline":
+            try:
+                return registry.get("narration_timeline_qa")
+            except KeyError:
+                pass
+        try:
+            return registry.get("visual_timeline_qa")
+        except KeyError:
+            pass
+    return select_skill(question)
 
 
 def _compatible_skill_ids(*, question: str, recommended: SkillSpec) -> tuple[str, ...]:
@@ -5839,6 +6036,37 @@ def _registered_target_ref_descriptions(workspace: Any) -> list[str]:
     return []
 
 
+def _is_coverage_query_id(value: str) -> bool:
+    return bool(re.fullmatch(r"Q[1-9]\d*", str(value or "").strip()))
+
+
+def _coverage_query_target_for_id(workspace: Any, query_id: str) -> str:
+    query_id = str(query_id or "").strip()
+    if not _is_coverage_query_id(query_id):
+        return ""
+    try:
+        observations = workspace.read_observations(tool_name="target_coverage")
+    except AttributeError:
+        return ""
+    for observation in reversed(observations):
+        raw_output = getattr(observation, "raw_output", {})
+        if not isinstance(raw_output, Mapping):
+            continue
+        rows = raw_output.get("coverage", [])
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("query_id") or row.get("target_id") or "").strip() == query_id:
+                return str(row.get("target") or "").strip()
+    return ""
+
+
+def _same_target_text(left: str, right: str) -> bool:
+    return " ".join(str(left or "").split()) == " ".join(str(right or "").split())
+
+
 def _unique_preserving_order(values: Sequence[str]) -> list[str]:
     seen: set[str] = set()
     unique: list[str] = []
@@ -5947,6 +6175,37 @@ def _normalize_dynamic_window(
     if start_sec < 0 or end_sec <= start_sec or end_sec > duration_sec:
         raise ValueError(f"Invalid dynamic segment window {label}: {start_sec}-{end_sec}")
     return start_sec, end_sec
+
+
+def _focused_window_for_scene_segment(
+    segment: VideoSegment,
+    *,
+    args: Mapping[str, Any],
+    duration_sec: float,
+) -> Optional[VideoSegment]:
+    if "start_sec" not in args or "end_sec" not in args:
+        return None
+    try:
+        start_sec, end_sec = _normalize_dynamic_window(
+            start_sec=float(args["start_sec"]),
+            end_sec=float(args["end_sec"]),
+            duration_sec=duration_sec,
+            label=f"for focused {segment.segment_id}",
+        )
+    except (TypeError, ValueError):
+        return None
+    segment_start = float(segment.start_sec)
+    segment_end = float(segment.end_sec)
+    if start_sec < segment_start - 0.001 or end_sec > segment_end + 0.001:
+        return None
+    if (end_sec - start_sec) >= max(0.0, (segment_end - segment_start) - 1.0):
+        return None
+    return VideoSegment(
+        segment_id=segment.segment_id,
+        start_sec=start_sec,
+        end_sec=end_sec,
+        source="focused_scene_window",
+    )
 
 
 def _segment_from_dynamic_id(segment_id: str, *, duration_sec: float) -> Optional[VideoSegment]:

@@ -503,6 +503,16 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertTrue(config.budget.disable_global_gist_route)
 
+    def test_agent_v2_enables_effective_skill_runtime_by_default(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(["--strategy", "agent_v2", "--cases", "611-2", "--run-root", "/tmp/vcah-default"])
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertTrue(config.budget.hard_skill_runtime)
+
     def test_videomme_runner_disables_global_mcq_rewrite_by_default(self):
         from runs import eval_runner
 

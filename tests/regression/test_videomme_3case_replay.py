@@ -48,13 +48,13 @@ def test_videomme_three_case_replay_contracts(tmp_path: Path, fixture_name: str)
         registry=_build_replay_registry(fixture),
         workspace=workspace,
         scene_index=_scene_index(fixture),
-        budget=AgentBudget(
-            max_rounds=1,
-            max_tool_calls_per_round=2,
-            reserve_final_round=False,
-            hard_skill_runtime=True,
-            default_nframes=8,
-        ),
+            budget=AgentBudget(
+                max_rounds=int(fixture.get("max_rounds", 1)),
+                max_tool_calls_per_round=2,
+                reserve_final_round=False,
+                hard_skill_runtime=True,
+                default_nframes=8,
+            ),
     )
 
     result = agent.run(question=str(fixture["question"]), video_path="/videos/replay.mp4")

@@ -176,15 +176,21 @@ def _playbook_summary(body: str, *, max_chars: int = 220) -> str:
     return summary[: max_chars - 3].rstrip() + "..."
 
 
+_LEGACY_CATALOG_SKILLS = frozenset({"timeline_ordering"})
+
+
 def skill_catalog_prompt(
     *,
     registry: SkillRegistry | None = None,
     exhausted_tools: frozenset[str] | None = None,
+    include_legacy: bool = False,
 ) -> str:
     resolved_registry = registry or builtin_skill_registry()
     blocked = frozenset(exhausted_tools or ())
     lines = ["Available skills:"]
     for skill in resolved_registry.list():
+        if not include_legacy and skill.name in _LEGACY_CATALOG_SKILLS:
+            continue
         marker_text = ", ".join(skill.trigger.markers) if skill.trigger.markers else "(none)"
         remaining = sorted(action for action in skill.allowed_actions if action not in blocked)
         spent = sorted(action for action in skill.allowed_actions if action in blocked)

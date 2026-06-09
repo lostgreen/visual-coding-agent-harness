@@ -272,6 +272,10 @@ def build_video_navigation_registry(
             segment=segment,
             candidates=candidates,
         )
+        focused_vision_call_args = _focused_vision_call_args_for_ordered_candidate(
+            segment=segment,
+            candidates=candidates,
+        )
         verify_call_args = {
             "segment_id": segment.segment_id,
             "anchors": anchors,
@@ -296,6 +300,7 @@ def build_video_navigation_registry(
             "candidates": candidates,
             "anchors_for_vlm": anchors,
             "ordered_list_timeline_rows": ordered_list_timeline_rows,
+            "focused_vision_call_args": focused_vision_call_args,
             "verify_call_args": verify_call_args,
             "regions": [
                 {
@@ -305,21 +310,18 @@ def build_video_navigation_registry(
                     "candidates": candidates,
                     "anchors_for_vlm": anchors,
                     "ordered_list_timeline_rows": ordered_list_timeline_rows,
+                    "focused_vision_call_args": focused_vision_call_args,
                     "verify_call_args": verify_call_args,
                 }
             ],
-            "recommended_next_tools": [
-                {
-                    "tool": "verify_segment_anchors",
-                    "args": verify_call_args,
-                    "reason": "Verify text-located anchors visually before using them as evidence.",
-                }
-            ]
-            if anchors
-            else [],
+            "recommended_next_tools": _locate_recommended_next_tools(
+                focused_vision_call_args=focused_vision_call_args,
+                verify_call_args=verify_call_args,
+            ),
             "limitations": (
                 "Text-only locator (ASR/OCR/visual_caption/entities); does NOT confirm visual presence. "
-                "Call verify_segment_anchors next on anchors_for_vlm to obtain evidence-grade observations."
+                "For ordered-list candidates, call the focused vision_read next to confirm the single visible scene; "
+                "call verify_segment_anchors on anchors_for_vlm when target-level visual verification is needed."
             ),
         }
 
@@ -1808,6 +1810,77 @@ def _ordered_list_timeline_rows(
                 }
             )
     return rows
+
+
+def _focused_vision_call_args_for_ordered_candidate(
+    *,
+    segment: VideoMapSegment,
+    candidates: Sequence[Mapping[str, object]],
+    pad_sec: float = 2.0,
+) -> dict[str, object]:
+    ordered_candidates = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("match_type", "")) == "ordered_list_mention"
+    ]
+    if not ordered_candidates:
+        return {}
+    ranked = sorted(
+        ordered_candidates,
+        key=lambda candidate: (
+            -len(candidate.get("ordered_targets", []) if isinstance(candidate.get("ordered_targets", []), list) else []),
+            not bool(candidate.get("single_sentence_quoted", False)),
+            -float(candidate.get("confidence", 0.0) or 0.0),
+            float(candidate.get("end_sec", segment.end_sec) or segment.end_sec)
+            - float(candidate.get("start_sec", segment.start_sec) or segment.start_sec),
+        ),
+    )
+    selected = ranked[0]
+    start_sec = max(float(segment.start_sec), float(selected.get("start_sec", segment.start_sec) or segment.start_sec) - pad_sec)
+    end_sec = min(float(segment.end_sec), float(selected.get("end_sec", start_sec) or start_sec) + pad_sec)
+    if end_sec <= start_sec:
+        return {}
+    if end_sec - start_sec >= 60.0:
+        midpoint = (start_sec + end_sec) / 2.0
+        start_sec = max(float(segment.start_sec), midpoint - 29.5)
+        end_sec = min(float(segment.end_sec), midpoint + 29.5)
+    ordered_targets = selected.get("ordered_targets", [])
+    target_count = len(ordered_targets) if isinstance(ordered_targets, Sequence) and not isinstance(ordered_targets, (str, bytes)) else 0
+    return {
+        "segment_id": segment.segment_id,
+        "start_sec": round(start_sec, 3),
+        "end_sec": round(end_sec, 3),
+        "ask_for": (
+            "Describe the visible scene and transitions in timestamp order. "
+            "Do not infer names that are not shown or narrated."
+        ),
+        "event_label": f"focused_ordered_list_candidate_{target_count}_items",
+    }
+
+
+def _locate_recommended_next_tools(
+    *,
+    focused_vision_call_args: Mapping[str, object],
+    verify_call_args: Mapping[str, object],
+) -> list[dict[str, object]]:
+    recommendations: list[dict[str, object]] = []
+    if focused_vision_call_args:
+        recommendations.append(
+            {
+                "tool": "vision_read",
+                "args": dict(focused_vision_call_args),
+                "reason": "Confirm the ordered-list candidate in a focused single-scene visual window.",
+            }
+        )
+    if verify_call_args:
+        recommendations.append(
+            {
+                "tool": "verify_segment_anchors",
+                "args": dict(verify_call_args),
+                "reason": "Verify text-located anchors visually before using them as evidence.",
+            }
+        )
+    return recommendations
 
 
 def _dedupe_locate_matches(matches: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:

@@ -95,6 +95,7 @@ def build_replanning_prompt(
     active_skill: str | None = None,
     route: str | None = None,
     target_hints: Sequence[str] = (),
+    target_ref_descriptions: Sequence[str] = (),
 ) -> tuple[str, ContextBudgetReport]:
     slots = compose_replanning_prompt_slots(
         question=question,
@@ -115,6 +116,7 @@ def build_replanning_prompt(
         active_skill=active_skill,
         route=route,
         target_hints=target_hints,
+        target_ref_descriptions=target_ref_descriptions,
     )
     allocated, report = allocator.allocate(
         slots,
@@ -147,6 +149,7 @@ def compose_replanning_prompt_slots(
     active_skill: str | None = None,
     route: str | None = None,
     target_hints: Sequence[str] = (),
+    target_ref_descriptions: Sequence[str] = (),
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
     resolved_route = route or playbook.route
@@ -171,14 +174,7 @@ def compose_replanning_prompt_slots(
         PromptBlock(
             name="skill_catalog",
             title="Skill Catalog",
-            body=(
-                f"{skill_catalog_prompt(exhausted_tools=exhausted_tools)}\n"
-                "Select the skill that best matches this case in every planner JSON as `skill`. "
-                "Choose from the catalog yourself; the route playbook is guidance, not a skill assignment. "
-                "If no catalog skill fits, omit `skill` and use ordinary tool exploration. "
-                "The harness validates tool calls and final evidence only against a skill you explicitly select. "
-                "Tools listed as `=exhausted` are one-shot and cannot be requested again."
-            ),
+            body=_skill_catalog_block(active_skill=active_skill, exhausted_tools=exhausted_tools),
         ),
     ]
     tooling_blocks = [
@@ -189,6 +185,7 @@ def compose_replanning_prompt_slots(
                 option_blind=option_blind,
                 active_skill=active_skill,
                 exhausted=exhausted_tools or frozenset(),
+                target_ref_descriptions=target_ref_descriptions,
             ),
         ),
         PromptBlock(
@@ -198,6 +195,7 @@ def compose_replanning_prompt_slots(
                 final_round_reserved=final_round_reserved,
                 option_blind=option_blind,
                 route=resolved_route,
+                include_target_refs=bool(target_ref_descriptions),
             ),
         ),
         PromptBlock(
@@ -267,6 +265,7 @@ def compose_replanning_prompt_blocks(
     active_skill: str | None = None,
     route: str | None = None,
     target_hints: Sequence[str] = (),
+    target_ref_descriptions: Sequence[str] = (),
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
     resolved_route = route or playbook.route
@@ -291,14 +290,7 @@ def compose_replanning_prompt_blocks(
         PromptBlock(
             name="skill_catalog",
             title="Skill Catalog",
-            body=(
-                f"{skill_catalog_prompt(exhausted_tools=exhausted_tools)}\n"
-                "Select the skill that best matches this case in every planner JSON as `skill`. "
-                "Choose from the catalog yourself; the route playbook is guidance, not a skill assignment. "
-                "If no catalog skill fits, omit `skill` and use ordinary tool exploration. "
-                "The harness validates tool calls and final evidence only against a skill you explicitly select. "
-                "Tools listed as `=exhausted` are one-shot and cannot be requested again."
-            ),
+            body=_skill_catalog_block(active_skill=active_skill, exhausted_tools=exhausted_tools),
         ),
         PromptBlock(
             name="trajectory_snapshot",
@@ -376,10 +368,11 @@ def compose_replanning_prompt_blocks(
                 title="Tool Schema",
                 body=_tool_schema_block(
                     option_blind=option_blind,
-                    active_skill=active_skill,
-                    exhausted=exhausted_tools or frozenset(),
-                ),
+                active_skill=active_skill,
+                exhausted=exhausted_tools or frozenset(),
+                target_ref_descriptions=target_ref_descriptions,
             ),
+        ),
             PromptBlock(
                 name="final_gate",
                 title="Final Gate",
@@ -387,6 +380,7 @@ def compose_replanning_prompt_blocks(
                     final_round_reserved=final_round_reserved,
                     option_blind=option_blind,
                     route=resolved_route,
+                    include_target_refs=bool(target_ref_descriptions),
                 ),
             ),
             PromptBlock(
@@ -408,17 +402,45 @@ def _tool_schema_block(
     option_blind: bool = False,
     active_skill: str | None = None,
     exhausted: frozenset[str] = frozenset(),
+    target_ref_descriptions: Sequence[str] = (),
 ) -> str:
-    signatures = list(_tool_schema_signatures(option_blind=option_blind))
+    has_registered_refs = bool([item for item in target_ref_descriptions if str(item).strip()])
+    signatures = list(_tool_schema_signatures(option_blind=option_blind, include_target_refs=has_registered_refs))
     allowed = allowed_actions_for_skill(active_skill or "") if active_skill else frozenset()
     if allowed:
         signatures = [signature for signature in signatures if _tool_name_from_signature(signature) in allowed]
     rendered = [_maybe_mark_exhausted(signature, exhausted) for signature in signatures]
-    return "Available tools:\n" + "\n".join(f"- {signature}" for signature in rendered)
+    return "\n".join(
+        [
+            _target_registry_contract_block(target_ref_descriptions),
+            "Available tools:",
+            *[f"- {signature}" for signature in rendered],
+        ]
+    )
 
 
-def _tool_schema_signatures(*, option_blind: bool = False) -> tuple[str, ...]:
+def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: bool = False) -> tuple[str, ...]:
     inspect_schema = "inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
+    target_coverage_schema = (
+        "target_coverage(targets: list = [], target_refs: list = [], top_k: int = 3, modalities: list = [], group_by_option: bool = False)"
+        if include_target_refs
+        else "target_coverage(targets: list = [], top_k: int = 3, modalities: list = [], group_by_option: bool = False)"
+    )
+    read_segment_detail_schema = (
+        "read_segment_detail(segment_id: str, targets: list = [], target_refs: list = [], promote_answer_evidence: bool = False)"
+        if include_target_refs
+        else "read_segment_detail(segment_id: str, targets: list = [], promote_answer_evidence: bool = False)"
+    )
+    locate_targets_schema = (
+        "locate_targets_in_segment(segment_id: str, targets: list = [], target_refs: list = [], top_k_per_target: int = 3)"
+        if include_target_refs
+        else "locate_targets_in_segment(segment_id: str, targets: list = [], top_k_per_target: int = 3)"
+    )
+    verify_anchors_schema = (
+        "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [], target_refs: list = [])"
+        if include_target_refs
+        else "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [])"
+    )
     verifier_schema = (
         "verify_ledger_answer(answer: str, question: str = '', min_score: float = 0.6, required_citations: list = [])"
         if option_blind
@@ -426,12 +448,12 @@ def _tool_schema_signatures(*, option_blind: bool = False) -> tuple[str, ...]:
     )
     return (
         "ground_question(query: str, top_k: int = 5, modalities: list = [])",
-        "target_coverage(targets: list = [], target_refs: list = [], top_k: int = 3, modalities: list = [], group_by_option: bool = False)",
+        target_coverage_schema,
         "search_segments(query: str, top_k: int = 5, modalities: list = [])",
         "read_segment(segment_id: str)",
-        "read_segment_detail(segment_id: str, targets: list = [], target_refs: list = [], promote_answer_evidence: bool = False)",
-        "locate_targets_in_segment(segment_id: str, targets: list = [], target_refs: list = [], top_k_per_target: int = 3)",
-        "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [], target_refs: list = [])",
+        read_segment_detail_schema,
+        locate_targets_schema,
+        verify_anchors_schema,
         "global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)",
         "summarize_ledger_evidence(max_claims: int = 5)",
         verifier_schema,
@@ -445,6 +467,49 @@ def _tool_schema_signatures(*, option_blind: bool = False) -> tuple[str, ...]:
         inspect_schema,
         "caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
         "qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
+    )
+
+
+def _skill_catalog_block(*, active_skill: str | None, exhausted_tools: frozenset[str] | None) -> str:
+    lines = [skill_catalog_prompt(exhausted_tools=exhausted_tools)]
+    if active_skill:
+        lines.extend(
+            [
+                "# Effective Skill State",
+                f"recommended_skill: {active_skill}",
+                f"effective_skill: {active_skill}",
+                "skill_locked: true",
+                "unlock_used: false",
+                "The `skill` field in your response must match effective_skill.",
+                "Changing it will not change the active gate.",
+                "The tool schema below is filtered to the effective skill.",
+            ]
+        )
+    else:
+        lines.append(
+            "Select the skill that best matches this case in every planner JSON as `skill`. "
+            "Choose from the catalog yourself; the route playbook is guidance, not a skill assignment. "
+            "If no catalog skill fits, omit `skill` and use ordinary tool exploration."
+        )
+    lines.append("Tools listed as `=exhausted` are one-shot and cannot be requested again.")
+    return "\n".join(lines)
+
+
+def _target_registry_contract_block(target_ref_descriptions: Sequence[str]) -> str:
+    descriptions = [str(item).strip() for item in target_ref_descriptions if str(item).strip()]
+    if not descriptions:
+        return (
+            "Target Registry:\n"
+            "No target_refs are registered for this run. Use natural-language `targets` only. "
+            "Coverage-local Q<n> labels are not callable target_refs."
+        )
+    return "\n".join(
+        [
+            "Target Registry:",
+            "Registered target_refs:",
+            *[f"- {description}" for description in descriptions[:24]],
+            "Use these exact ids in `target_refs`. Coverage-local Q<n> labels are not callable target_refs.",
+        ]
     )
 
 
@@ -732,8 +797,6 @@ def _evidence_only_snapshot_block(
 _ROUTE_AGNOSTIC_FINAL_RULES = (
     "- The compact scene index is the default map; do not call video_ls for short indexed videos.",
     "- Use target_coverage when MCQ/QA targets need a segment coverage matrix.",
-    "- target_refs accepts only known registry ids like T1; free text or unknown T<n> ids hard-reject the tool call.",
-    "- targets is only for natural-language target text; acceptance requires 0 occurrences of T<n> in legacy targets.",
     "- Use read_segment_detail to expand one selected segment before spending VLM calls.",
     "- Use navigation output as a map, then delegate localized visual reading to one focused evidence tool on one candidate segment.",
     "- Do not spend every round on navigation-only tools; gather evidence-grade visual observations before finalizing.",
@@ -742,6 +805,16 @@ _ROUTE_AGNOSTIC_FINAL_RULES = (
     "- Continue when evidence is missing, ambiguous, or too coarse.",
     "- Use verify_ledger_answer before finalizing when answer support is uncertain.",
     "- Final answers must cite observation ids from the ledger.",
+)
+
+_TARGET_REF_FINAL_RULES = (
+    "- target_refs accepts only known registry ids like T1; free text or unknown T<n> ids hard-reject the tool call.",
+    "- targets is only for natural-language target text; acceptance requires 0 occurrences of T<n> in legacy targets.",
+)
+
+_NO_TARGET_REF_FINAL_RULES = (
+    "- No target_refs are registered in this run; do not include target_refs.",
+    "- Coverage-local Q<n> labels are not callable ids; keep natural-language text in targets.",
 )
 
 _ROUTE_SPECIFIC_FINAL_RULES: dict[str, tuple[str, ...]] = {
@@ -781,6 +854,7 @@ def _final_gate_block(
     final_round_reserved: bool,
     option_blind: bool = False,
     route: str | None = None,
+    include_target_refs: bool = False,
 ) -> str:
     final_round_line = (
         "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
@@ -788,6 +862,7 @@ def _final_gate_block(
         else ""
     )
     lines = list(_ROUTE_AGNOSTIC_FINAL_RULES)
+    lines.extend(_TARGET_REF_FINAL_RULES if include_target_refs else _NO_TARGET_REF_FINAL_RULES)
     lines.extend(_ROUTE_SPECIFIC_FINAL_RULES.get(str(route or ""), ()))
     lines.extend(_OPTION_BLIND_FINAL_RULES if option_blind else _OPTION_LABELED_FINAL_RULES)
     lines.append(

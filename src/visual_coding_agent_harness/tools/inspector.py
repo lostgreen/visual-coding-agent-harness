@@ -133,6 +133,13 @@ def build_segment_inspector_registry(
         ordered_visible = _ordered_visible_from_verification_text(str(result.get("claim", "")), {})
         if ordered_visible:
             result["ordered_visible_in_window"] = ordered_visible
+            integrity = _ordered_visible_integrity(str(result.get("claim", "")), ordered_visible)
+            result["observation_integrity"] = integrity
+            if integrity == "internally_inconsistent":
+                result["grounding_quality"] = "weak"
+                for fact in result.get("facts", []):
+                    if isinstance(fact, dict):
+                        fact["grounding_quality"] = "weak"
         if mutex_group_id:
             result["mutex_group_id"] = str(mutex_group_id)
         if mutex_prompt:
@@ -629,6 +636,32 @@ def _split_ordered_visible_items(value: str) -> list[str]:
         for item in re.split(r"\s*(?:->|→|,|;)\s*", str(value or "").strip())
         if item.strip().strip("\"'")
     ]
+
+
+def _ordered_visible_integrity(text: str, ordered_visible: Sequence[str]) -> str:
+    body = re.sub(r"^.*ORDERED_VISIBLE\s*:.*$", "", str(text or ""), flags=re.IGNORECASE | re.MULTILINE)
+    if not body.strip():
+        return "unverifiable"
+    missing = [
+        item
+        for item in ordered_visible
+        if item and not _ordered_visible_item_supported(item=item, body=body)
+    ]
+    if missing:
+        return "internally_inconsistent"
+    return "consistent"
+
+
+def _ordered_visible_item_supported(*, item: str, body: str) -> bool:
+    item_key = _target_order_key(item)
+    body_key = _target_order_key(body)
+    if item_key and item_key in body_key:
+        return True
+    tokens = [token for token in item_key.split() if len(token) >= 4]
+    if not tokens:
+        return bool(re.search(rf"\b{re.escape(str(item).strip())}\b", body, flags=re.IGNORECASE))
+    body_tokens = set(body_key.split())
+    return all(token in body_tokens for token in tokens)
 
 
 def _json_object_from_text(text: str) -> Mapping[str, object]:

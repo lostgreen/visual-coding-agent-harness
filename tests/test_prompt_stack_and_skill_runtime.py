@@ -87,7 +87,8 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn('"skill": string', prompt)
         self.assertIn("Select the skill that best matches this case", prompt)
         self.assertNotIn("Recommended fallback skill", prompt)
-        self.assertIn("timeline_ordering@v1", prompt)
+        self.assertIn("visual_timeline_qa@v1", prompt)
+        self.assertNotIn("timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
         self.assertIn("Final answers require at least one answer-grade citation", prompt)
 
@@ -105,8 +106,11 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("narrated_fact", narration.prompt_context())
         catalog = skill_catalog_prompt()
         self.assertIn("narration_timeline_qa@v1", catalog)
+        self.assertIn("visual_timeline_qa@v1", catalog)
+        self.assertNotIn("timeline_ordering@v1", catalog)
         self.assertIn("default_claim_modality=narrated_fact", catalog)
         self.assertIn("narrated life story", catalog)
+        self.assertEqual(registry.get("timeline_ordering").name, "timeline_ordering")
 
     def test_skill_playbook_parser_keeps_structured_recovery_out_of_markdown_prose(self):
         raw = """---
@@ -206,6 +210,53 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertNotIn("zoom(", rendered)
         self.assertNotIn("expand_window(", rendered)
         self.assertNotIn("read_segment(", rendered)
+
+    def test_tool_schema_hides_target_refs_when_registry_empty(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="visual_timeline_qa@v1",
+            exhausted=frozenset(),
+            target_ref_descriptions=(),
+        )
+
+        self.assertIn("target_coverage(targets: list = []", rendered)
+        self.assertIn("read_segment_detail(segment_id: str, targets: list = []", rendered)
+        self.assertIn("locate_targets_in_segment(segment_id: str, targets: list = []", rendered)
+        self.assertIn("verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = []", rendered)
+        self.assertNotIn("target_refs:", rendered)
+        self.assertNotIn("target_refs accepts", rendered)
+        self.assertIn("No target_refs are registered for this run", rendered)
+
+    def test_tool_schema_lists_registry_refs_when_available(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="visual_timeline_qa@v1",
+            exhausted=frozenset(),
+            target_ref_descriptions=("T1: David", "T2: Apollo and Daphne"),
+        )
+
+        self.assertIn("Registered target_refs:", rendered)
+        self.assertIn("- T1: David", rendered)
+        self.assertIn("- T2: Apollo and Daphne", rendered)
+        self.assertIn("target_refs: list = []", rendered)
+
+    def test_prompt_renders_effective_skill_state(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        allocator = default_context_budget_allocator(total_budget_tokens=800)
+
+        prompt, _report = build_replanning_prompt(
+            question="Which order is shown?\nA. red then blue\nB. blue then red",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\n(none)",
+            round_number=1,
+            budget=AgentBudget(max_rounds=3),
+            allocator=allocator,
+            active_skill="visual_timeline_qa@v1",
+        )
+
+        self.assertIn("effective_skill: visual_timeline_qa@v1", prompt)
+        self.assertIn("skill_locked: true", prompt)
+        self.assertIn("Changing it will not change the active gate", prompt)
 
     def test_tool_schema_marks_exhausted_tools_inline(self):
         rendered = _tool_schema_block(

@@ -581,7 +581,6 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertGreater(raw["anchors_for_vlm"][0]["end_sec"], 448.0)
         self.assertEqual(raw["verify_call_args"]["segment_id"], "seg_0002")
         self.assertEqual(raw["verify_call_args"]["anchors"], raw["anchors_for_vlm"])
-        self.assertEqual(raw["recommended_next_tools"][0]["args"], raw["verify_call_args"])
         ordered_candidates = [
             candidate for candidate in raw["candidates"]
             if candidate["match_type"] == "ordered_list_mention"
@@ -593,8 +592,15 @@ class VideoNavigationTest(unittest.TestCase):
             "The rape of Persephone",
             "Apollo and Daphne",
         ])
+        self.assertEqual(raw["recommended_next_tools"][0]["tool"], "vision_read")
+        self.assertEqual(raw["recommended_next_tools"][0]["args"], raw["focused_vision_call_args"])
+        self.assertEqual(raw["focused_vision_call_args"]["segment_id"], "seg_0002")
+        self.assertLess(raw["focused_vision_call_args"]["start_sec"], ordered_candidates[0]["start_sec"])
+        self.assertGreater(raw["focused_vision_call_args"]["end_sec"], ordered_candidates[0]["end_sec"])
+        self.assertLess(raw["focused_vision_call_args"]["end_sec"] - raw["focused_vision_call_args"]["start_sec"], 60.0)
+        self.assertEqual(raw["recommended_next_tools"][1]["args"], raw["verify_call_args"])
         self.assertIn("verify_segment_anchors", raw["limitations"])
-        self.assertEqual(raw["recommended_next_tools"][0]["tool"], "verify_segment_anchors")
+        self.assertEqual(raw["recommended_next_tools"][1]["tool"], "verify_segment_anchors")
         self.assertEqual(timeline_rows, [])
         self.assertEqual(raw["ordered_list_timeline_rows"], [])
         self.assertEqual(workspace.evidence_table_row_count(), 0)
@@ -670,6 +676,8 @@ class VideoNavigationTest(unittest.TestCase):
             "The rape of Persephone",
             "Apollo and Daphne",
         ])
+        self.assertEqual(observation.raw_output["recommended_next_tools"][0]["tool"], "vision_read")
+        self.assertEqual(observation.raw_output["recommended_next_tools"][0]["args"], observation.raw_output["focused_vision_call_args"])
         self.assertTrue(
             all(row["confidence_signal"] == "text_inferred" for row in observation.raw_output["ordered_list_timeline_rows"])
         )

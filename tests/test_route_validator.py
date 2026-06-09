@@ -2,6 +2,10 @@ import json
 from pathlib import Path
 
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
+from visual_coding_agent_harness.agents.question_policy import (
+    extract_option_sequence_specs,
+    extract_option_target_atoms,
+)
 from visual_coding_agent_harness.agents.skills.specs import builtin_skill_registry
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse
 from visual_coding_agent_harness.registry import ToolRegistry, tool
@@ -43,6 +47,49 @@ def _scene_index() -> SceneIndex:
         duration_sec=12.0,
         segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
     )
+
+
+BERNINI_ORDER_QUESTION = """VideoMME multiple-choice question.
+Question: As depicted in the video, in what order does the author present Bernini's four masterpieces created for Borghese in a single scene?
+Options:
+A. "The rape of  Persephone", "Apollo and Daphne", "David" and "Aeneas, Anchises, and Ascanius fleeing Troy".
+B. "David", "Aeneas, Anchises, and Ascanius fleeing Troy", "Apollo and Daphne" and "The rape of  Persephone".
+C. "Apollo and Daphne", "Aeneas, Anchises, and Ascanius fleeing Troy", "David" and "The rape of  Persephone".
+D. "Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The rape of  Persephone" and "Apollo and Daphne".
+"""
+
+
+def test_quoted_option_parser_preserves_commas_inside_title():
+    sequences = extract_option_sequence_specs(BERNINI_ORDER_QUESTION)
+
+    assert sequences["D"].ordered_items[0] == "Aeneas, Anchises, and Ascanius fleeing Troy"
+    assert sequences["D"].ordered_items == (
+        "Aeneas, Anchises, and Ascanius fleeing Troy",
+        "David",
+        "The rape of Persephone",
+        "Apollo and Daphne",
+    )
+
+
+def test_611_options_each_parse_to_four_items_and_stable_refs():
+    sequences = extract_option_sequence_specs(BERNINI_ORDER_QUESTION)
+
+    assert sorted(sequences) == ["A", "B", "C", "D"]
+    assert all(len(sequence.ordered_items) == 4 for sequence in sequences.values())
+    assert sequences["D"].ordered_target_refs == ("T1", "T2", "T3", "T4")
+    assert sequences["A"].ordered_target_refs == ("T3", "T4", "T2", "T1")
+
+
+def test_611_unique_targets_do_not_include_malformed_artwork_atoms():
+    atoms = extract_option_target_atoms(BERNINI_ORDER_QUESTION, max_targets=16, include_synonyms=False)
+
+    assert atoms == [
+        "Aeneas, Anchises, and Ascanius fleeing Troy",
+        "David",
+        "The rape of Persephone",
+        "Apollo and Daphne",
+    ]
+    assert not any('" and "' in atom or atom.startswith("and ") for atom in atoms)
 
 
 def _inspect_registry(counter: dict[str, int]) -> ToolRegistry:
@@ -497,6 +544,117 @@ def test_free_text_target_ref_rejects_tool_call(tmp_path: Path):
     )
 
     assert normalized == []
+
+
+def test_exact_paired_coverage_query_id_is_stripped_and_step_executes(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="target_coverage", description="Coverage matrix.")
+    def target_coverage(targets: list | None = None, target_refs: list | None = None, top_k: int = 3):
+        return {"claim": f"coverage {targets} {target_refs}", "confidence": 0.5}
+
+    registry.register(target_coverage)
+    workspace = EvidenceWorkspace.create(tmp_path, "coverage_query_stripped")
+    workspace.write_observation(
+        tool_name="target_coverage",
+        claim="Target coverage matrix: Q4 How the Austro-Hungarian Empire rises and falls: seg_0007.",
+        confidence=0.8,
+        raw_output={
+            "coverage": [
+                {
+                    "query_id": "Q4",
+                    "target_id": "Q4",
+                    "target": "How the Austro-Hungarian Empire rises and falls",
+                    "source": "free_text_query",
+                }
+            ]
+        },
+    )
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+    notes = []
+
+    normalized = agent._normalize_program(
+        [
+            {
+                "tool": "target_coverage",
+                "args": {
+                    "targets": ["How the Austro-Hungarian Empire rises and falls"],
+                    "target_refs": ["Q4"],
+                    "top_k": 3,
+                },
+            }
+        ],
+        question="What's the main idea?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+        notes_out=notes,
+    )
+
+    assert normalized == [
+        {
+            "tool": "target_coverage",
+            "args": {"targets": ["How the Austro-Hungarian Empire rises and falls"], "top_k": 3},
+        }
+    ]
+    assert any(note.reason == "coverage_query_id_stripped" for note in notes)
+
+
+def test_unpaired_coverage_query_id_is_rejected(tmp_path: Path):
+    registry = ToolRegistry()
+
+    @tool(name="target_coverage", description="Coverage matrix.")
+    def target_coverage(targets: list | None = None, target_refs: list | None = None, top_k: int = 3):
+        return {"claim": f"coverage {targets} {target_refs}", "confidence": 0.5}
+
+    registry.register(target_coverage)
+    workspace = EvidenceWorkspace.create(tmp_path, "coverage_query_unpaired")
+    workspace.write_observation(
+        tool_name="target_coverage",
+        claim="Target coverage matrix: Q4 How the Austro-Hungarian Empire rises and falls: seg_0007.",
+        confidence=0.8,
+        raw_output={
+            "coverage": [
+                {
+                    "query_id": "Q4",
+                    "target_id": "Q4",
+                    "target": "How the Austro-Hungarian Empire rises and falls",
+                    "source": "free_text_query",
+                }
+            ]
+        },
+    )
+    agent = IterativeVisualAgent(
+        backend=StaticBackend("{}"),
+        registry=registry,
+        workspace=workspace,
+        scene_index=_scene_index(),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+    notes = []
+
+    normalized = agent._normalize_program(
+        [
+            {
+                "tool": "target_coverage",
+                "args": {"targets": ["Why the Austro-Hungarian Empire was divided"], "target_refs": ["Q4"]},
+            }
+        ],
+        question="What's the main idea?",
+        video_path="/videos/demo.mp4",
+        inspected_segment_ids=set(),
+        final_round_reserved=False,
+        notes_out=notes,
+    )
+
+    assert normalized == []
+    assert any(note.reason == "coverage_query_id_not_callable" for note in notes)
 
 
 def test_natural_language_targets_are_preserved(tmp_path: Path):

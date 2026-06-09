@@ -407,6 +407,35 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertIn("ORDERED_VISIBLE", backend.requests[0].prompt)
         self.assertEqual(result["ordered_visible_in_window"], ["c", "a", "b"])
 
+    def test_ordered_visible_without_supporting_body_is_inconsistent(self):
+        backend = FixedTextBackend(
+            "ORDERED_VISIBLE: The rape of Persephone -> Apollo and Daphne -> David -> Aeneas\n"
+            "The scene shows St. Peter's Basilica, a title card, and an unrelated bust."
+        )
+        registry = build_segment_inspector_registry(backend)
+
+        result = registry.execute(
+            "vision_read",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0002",
+                "start_sec": 530.0,
+                "end_sec": 542.0,
+                "ask_for": "visible order of artworks",
+                "nframes": 20,
+            },
+        )
+
+        self.assertEqual(result["ordered_visible_in_window"], [
+            "The rape of Persephone",
+            "Apollo and Daphne",
+            "David",
+            "Aeneas",
+        ])
+        self.assertEqual(result["observation_integrity"], "internally_inconsistent")
+        self.assertEqual(result["grounding_quality"], "weak")
+        self.assertEqual(result["facts"][0]["grounding_quality"], "weak")
+
     def test_verify_segment_anchors_parses_confirmations_into_evidence_and_timeline(self):
         backend = FixedTextBackend(
             json.dumps(

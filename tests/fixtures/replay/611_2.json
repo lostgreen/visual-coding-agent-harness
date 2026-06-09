@@ -2,6 +2,7 @@
   "case_id": "611-2",
   "gt": "D",
   "duration_sec": 60.0,
+  "max_rounds": 2,
   "question": "Which order is shown?\nA. door opens then light turns on\nB. door opens then light turns on\nC. door opens then light turns on\nD. light turns on then door opens",
   "options": [
     "A. door opens then light turns on",
@@ -9,7 +10,16 @@
     "C. door opens then light turns on",
     "D. light turns on then door opens"
   ],
-  "backend_responses": [],
+  "backend_responses": [
+    {
+      "task": "replan",
+      "text": "{\"status\":\"continue\",\"skill\":\"visual_timeline_qa@v1\",\"program\":[{\"tool\":\"vision_read\",\"args\":{\"segment_id\":\"seg_0001\",\"ask_for\":\"At what timestamp does the light turn on?\",\"event_label\":\"light turns on\"}},{\"tool\":\"vision_read\",\"args\":{\"segment_id\":\"seg_0003\",\"ask_for\":\"At what timestamp does the door open?\",\"event_label\":\"door opens\"}}]}"
+    },
+    {
+      "task": "replan",
+      "text": "{\"status\":\"final\",\"skill\":\"visual_timeline_qa@v1\",\"answer\":\"D\",\"citations\":[\"obs_0001\",\"obs_0002\"],\"confidence\":0.9}"
+    }
+  ],
   "segments": [
     {"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 20.0},
     {"segment_id": "seg_0002", "start_sec": 20.0, "end_sec": 40.0},
@@ -25,11 +35,13 @@
       "light turns on": {
         "claim": "light turns on is first visible at 8.0 seconds.",
         "observed_at_sec": 8.0,
+        "supported_option": "D",
         "confidence": 0.94
       },
       "door opens": {
         "claim": "door opens is first visible at 45.0 seconds.",
         "observed_at_sec": 45.0,
+        "supported_option": "D",
         "confidence": 0.94
       }
     }
