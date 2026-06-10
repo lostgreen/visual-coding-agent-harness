@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ...backends.base import BackendRequest, VisionLanguageBackend
+from ...tools.frame_cache import FrameSampler
 from ...video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from .scene_index_cache import SceneIndexCache
 
@@ -40,6 +41,7 @@ class SceneIndexBuilder:
         cache: Optional[SceneIndexCache] = None,
         clip_root: Optional[Path | str] = None,
         clip_extractor: Optional[ClipExtractor] = None,
+        frame_sampler: Optional[FrameSampler] = None,
         schema_version: str = SCENE_INDEX_BUILDER_SCHEMA_VERSION,
     ) -> None:
         self.backend = backend
@@ -50,6 +52,7 @@ class SceneIndexBuilder:
         self.cache = cache
         self.clip_root = Path(clip_root) if clip_root is not None else None
         self.clip_extractor = clip_extractor or _extract_clip_ffmpeg
+        self.frame_sampler = frame_sampler
         self.schema_version = schema_version
 
     def build(
@@ -115,7 +118,13 @@ class SceneIndexBuilder:
             "duration_sec": round(float(duration_sec), 3),
             "window_sec": round(float(self.window_sec), 3),
             "caption_nframes": int(self.caption_nframes),
-            "visual_clip_policy": "physical_clip" if self.clip_root is not None else "whole_video_metadata",
+            "visual_clip_policy": (
+                "precomputed_2fps_frames"
+                if self.frame_sampler is not None
+                else "physical_clip"
+                if self.clip_root is not None
+                else "whole_video_metadata"
+            ),
             "subtitle_hash": subtitle_hash(subtitle_cues),
             "text_model_id": self.text_model_id,
             "vl_model_id": self.vl_model_id,
@@ -162,7 +171,9 @@ class SceneIndexBuilder:
         }
 
     def _caption_scene(self, *, video_id: str, video_path: str, segment: VideoSegment) -> Mapping[str, Any]:
-        media_path = video_path
+        media_path: str | None = video_path
+        media_type = "video"
+        frame_paths: tuple[str, ...] = ()
         metadata: dict[str, Any] = {
             "segment_id": segment.segment_id,
             "start_sec": segment.start_sec,
@@ -170,7 +181,17 @@ class SceneIndexBuilder:
             "nframes": int(self.caption_nframes),
             "model_id": self.vl_model_id,
         }
-        if self.clip_root is not None:
+        if self.frame_sampler is not None:
+            frame_paths = tuple(
+                self.frame_sampler(video_path, float(segment.start_sec), float(segment.end_sec), int(self.caption_nframes))
+            )
+            if frame_paths:
+                media_path = None
+                media_type = "image"
+                metadata["source_video_path"] = video_path
+                metadata["frame_cache_policy"] = "precomputed_2fps"
+                metadata["frame_count"] = len(frame_paths)
+        if not frame_paths and self.clip_root is not None:
             clip_path = _clip_output_path(clip_root=self.clip_root, video_id=video_id, segment=segment)
             media_path = self.clip_extractor(video_path, str(clip_path), segment.start_sec, segment.end_sec)
             metadata["source_video_path"] = video_path
@@ -185,7 +206,8 @@ class SceneIndexBuilder:
                     f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s"
                 ),
                 media_path=media_path,
-                media_type="video",
+                media_type=media_type,
+                frames=frame_paths,
                 max_new_tokens=256,
                 metadata=metadata,
             )

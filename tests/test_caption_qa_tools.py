@@ -156,6 +156,54 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertIn("QA task", request.prompt)
         self.assertEqual(result["regions"][0]["max_pixels"], 200000)
 
+    def test_segment_tools_use_frame_cache_instead_of_physical_clip_when_available(self):
+        backend = CaptionQARecordingBackend()
+        sampled = []
+        extracted = []
+
+        def fake_frame_sampler(video_path, start_sec, end_sec, max_frames):
+            sampled.append((video_path, start_sec, end_sec, max_frames))
+            return ["/frames/demo/frame_000000003.jpg", "/frames/demo/frame_000000004.jpg"]
+
+        def fake_clip_extractor(video_path, output_path, start_sec, end_sec):
+            extracted.append((video_path, output_path, start_sec, end_sec))
+            return output_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="frame_cache_tools")
+            registry = build_segment_vlm_registry(
+                backend,
+                workspace=workspace,
+                extract_clips=True,
+                clip_extractor=fake_clip_extractor,
+                frame_sampler=fake_frame_sampler,
+            )
+
+            result = registry.execute(
+                "caption_segment",
+                {
+                    "video_path": "/videos/demo.mp4",
+                    "segment_id": "seg_0002",
+                    "start_sec": 10.0,
+                    "end_sec": 20.0,
+                    "question": "What is visible?",
+                    "nframes": 12,
+                },
+            )
+
+        request = backend.requests[0]
+        self.assertEqual(sampled, [("/videos/demo.mp4", 10.0, 20.0, 64)])
+        self.assertEqual(extracted, [])
+        self.assertEqual(request.media_path, None)
+        self.assertEqual(request.media_type, "image")
+        self.assertEqual(
+            list(request.frames),
+            ["/frames/demo/frame_000000003.jpg", "/frames/demo/frame_000000004.jpg"],
+        )
+        self.assertEqual(result["input_artifacts"], list(request.frames))
+        self.assertEqual(result["regions"][0]["source_video_path"], "/videos/demo.mp4")
+        self.assertEqual(result["regions"][0]["frame_cache_policy"], "precomputed_2fps")
+
     def test_caption_and_qa_segment_sanitize_full_mcq_before_backend_generate(self):
         backend = CaptionQARecordingBackend()
         registry = build_segment_vlm_registry(backend)

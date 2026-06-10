@@ -12,6 +12,14 @@ from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
 
 
+class FakeFrameCache:
+    fps = 2.0
+    frame_dir = Path("/tmp/frame-cache/fake_2fps")
+
+    def sample_paths(self, video_path, start_sec, end_sec, max_frames):
+        return ()
+
+
 class EvalRunnerTest(unittest.TestCase):
     def test_eval_runner_script_entrypoint_imports_summary_schema(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -80,13 +88,14 @@ class EvalRunnerTest(unittest.TestCase):
                 budget=AgentBudget(max_rounds=8, max_tool_calls_per_round=2, default_nframes=12),
             )
 
-            with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                summary = eval_runner.run_eval_cases(
-                    backend=object(),
-                    rows_by_id=rows_by_id,
-                    config=config,
-                    duration_fn=lambda path: 1896.0,
-                )
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                    summary = eval_runner.run_eval_cases(
+                        backend=object(),
+                        rows_by_id=rows_by_id,
+                        config=config,
+                        duration_fn=lambda path: 1896.0,
+                    )
 
             summary_path = run_root / "summary.json"
             run_config_path = run_root / "run_config.json"
@@ -115,6 +124,91 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(captured["budget"].default_nframes, 12)
             self.assertIsInstance(captured["scene_index"], SceneIndex)
             self.assertEqual(captured["scene_index"].segments[0].source, "fixed_window_empty")
+
+    def test_run_eval_cases_precomputes_two_fps_frame_cache_for_agent_loop(self):
+        from runs import eval_runner
+
+        captured = {}
+        build_calls = []
+
+        class FakeFrameCache:
+            fps = 2.0
+            frame_dir = Path("/tmp/frame-cache/video605_2fps")
+
+            def sample_paths(self, video_path, start_sec, end_sec, max_frames):
+                return [f"/frames/{Path(video_path).stem}_{start_sec:.0f}_{end_sec:.0f}_{max_frames}.jpg"]
+
+        def fake_build_frame_cache_for_video(*, video_path, frame_dir, fps, duration_sec):
+            build_calls.append((video_path, frame_dir, fps, duration_sec))
+            return FakeFrameCache()
+
+        def fake_run_loop(backend, **kwargs):
+            captured["frame_sampler"] = kwargs["frame_sampler"]
+            return {
+                "answer": "B. The visual evidence supports option B.",
+                "choice": "B",
+                "status": "final",
+                "confidence": 0.8,
+                "citations": ["obs_0001"],
+                "rounds": 1,
+                "tools": ["caption_segment"],
+                "segments": ["seg_0001"],
+                "seconds": 1.0,
+            }
+
+        rows_by_id = {
+            "605-1": {
+                "question_id": "605-1",
+                "video_id": "vid605",
+                "videoID": "video605",
+                "task_type": "Information Synopsis",
+                "question": "What is shown?",
+                "options": ["A. one", "B. two", "C. three", "D. four"],
+                "answer": "B",
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "eval"
+            config = eval_runner.EvalConfig(
+                run_root=run_root,
+                workspace_root=run_root / "workspaces",
+                model_path="/model",
+                data_root=Path("/dataset"),
+                parquet_path=Path("/dataset/videomme/test.parquet"),
+                video_dir=Path("/dataset/video"),
+                subtitle_dir=Path("/dataset/subtitle"),
+                cases=("605-1",),
+                strategies=("empty_index_loop",),
+                window_sec=300.0,
+                budget=AgentBudget(max_rounds=8),
+            )
+
+            with patch.object(eval_runner, "build_frame_cache_for_video", side_effect=fake_build_frame_cache_for_video):
+                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                    summary = eval_runner.run_eval_cases(
+                        backend=object(),
+                        rows_by_id=rows_by_id,
+                        config=config,
+                        duration_fn=lambda path: 1896.0,
+                    )
+
+        self.assertEqual(
+            build_calls,
+            [
+                (
+                    Path("/dataset/video/video605.mp4"),
+                    run_root / "frame_cache" / "video605_2fps",
+                    2.0,
+                    1896.0,
+                )
+            ],
+        )
+        self.assertEqual(
+            captured["frame_sampler"]("/dataset/video/video605.mp4", 10.0, 20.0, 4),
+            ["/frames/video605_10_20_4.jpg"],
+        )
+        self.assertEqual(summary["cases"][0]["raw_artifacts"]["frame_cache"], "/tmp/frame-cache/video605_2fps")
 
     def test_summary_payload_aggregates_route_violations_from_workspace_traces(self):
         from runs import eval_runner
@@ -358,13 +452,14 @@ class EvalRunnerTest(unittest.TestCase):
                 budget=AgentBudget(),
             )
 
-            with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                eval_runner.run_eval_cases(
-                    backend=object(),
-                    rows_by_id=rows_by_id,
-                    config=config,
-                    duration_fn=lambda path: 1805.0,
-                )
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                    eval_runner.run_eval_cases(
+                        backend=object(),
+                        rows_by_id=rows_by_id,
+                        config=config,
+                        duration_fn=lambda path: 1805.0,
+                    )
 
             self.assertEqual(captured["scene_index"].segments[0].source, "fixed_window_subtitle")
             self.assertIn("ASR/subtitle excerpt: opening clue", captured["scene_index"].segments[0].low_fps_caption)
@@ -448,14 +543,15 @@ class EvalRunnerTest(unittest.TestCase):
                 budget=AgentBudget(),
             )
 
-            with patch.object(eval_runner, "SceneIndexBuilder", FakeBuilder):
-                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                    eval_runner.run_eval_cases(
-                        backend=object(),
-                        rows_by_id=rows_by_id,
-                        config=config,
-                        duration_fn=lambda path: 1805.0,
-                    )
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                        eval_runner.run_eval_cases(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 1805.0,
+                        )
 
             self.assertEqual(captured["scene_index"].segments[0].source, "dual_source_scene_index")
             self.assertEqual(captured["build_kwargs"]["video_id"], "video611")
@@ -884,13 +980,14 @@ class EvalRunnerTest(unittest.TestCase):
                 export_training=True,
             )
 
-            with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                summary = eval_runner.run_eval_cases(
-                    backend=object(),
-                    rows_by_id=rows_by_id,
-                    config=config,
-                    duration_fn=lambda path: 30.0,
-                )
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                    summary = eval_runner.run_eval_cases(
+                        backend=object(),
+                        rows_by_id=rows_by_id,
+                        config=config,
+                        duration_fn=lambda path: 30.0,
+                    )
 
             case = summary["cases"][0]
             trajectory_path = Path(case["raw_artifacts"]["training_trajectories"]["agent_v2"])

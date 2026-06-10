@@ -9,6 +9,7 @@ from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..video_map import VideoMapStore
 from ..workspace import EvidenceWorkspace
+from .frame_cache import FrameSampler
 from .segments import ClipExtractor, _clip_output_path, _extract_clip_ffmpeg
 
 
@@ -19,6 +20,7 @@ def build_video_enrichment_registry(
     workspace: EvidenceWorkspace | None = None,
     extract_clips: bool = False,
     clip_extractor: ClipExtractor | None = None,
+    frame_sampler: FrameSampler | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -35,7 +37,9 @@ def build_video_enrichment_registry(
         prompt_question = exploration_question(question)
         regions = []
         for segment in selected_segments:
-            media_path = video_map_store.current.video_path
+            media_path: str | None = video_map_store.current.video_path
+            media_type = "video"
+            frame_paths: tuple[str, ...] = ()
             input_artifact = f"{media_path}#t={float(segment.start_sec):.3f},{float(segment.end_sec):.3f}"
             metadata = {
                 "segment_id": segment.segment_id,
@@ -47,7 +51,23 @@ def build_video_enrichment_registry(
             }
             if fps > 0:
                 metadata["fps"] = float(fps)
-            if extract_clips:
+            if frame_sampler is not None:
+                frame_paths = tuple(
+                    frame_sampler(
+                        video_map_store.current.video_path,
+                        float(segment.start_sec),
+                        float(segment.end_sec),
+                        int(nframes),
+                    )
+                )
+                if frame_paths:
+                    media_path = None
+                    media_type = "image"
+                    input_artifact = frame_paths[0]
+                    metadata["source_video_path"] = video_map_store.current.video_path
+                    metadata["frame_cache_policy"] = "precomputed_2fps"
+                    metadata["frame_count"] = len(frame_paths)
+            if not frame_paths and extract_clips:
                 if workspace is None:
                     raise ValueError("extract_clips=True requires an EvidenceWorkspace")
                 output_path = _clip_output_path(
@@ -76,7 +96,8 @@ def build_video_enrichment_registry(
                         question=prompt_question,
                     ),
                     media_path=media_path,
-                    media_type="video",
+                    media_type=media_type,
+                    frames=frame_paths,
                     max_new_tokens=192,
                     metadata=metadata,
                 )
@@ -92,6 +113,8 @@ def build_video_enrichment_registry(
                     "nframes": int(nframes),
                     "max_pixels": int(max_pixels),
                     "input_artifact": input_artifact,
+                    "frame_paths": list(frame_paths),
+                    "frame_cache_policy": metadata.get("frame_cache_policy", ""),
                     "clip_path": metadata.get("clip_path", ""),
                 }
             )
@@ -100,7 +123,11 @@ def build_video_enrichment_registry(
         return {
             "claim": f"Captioned {count} segment{'s' if count != 1 else ''} and updated VideoMap low_fps_caption.",
             "confidence": 0.7 if count else 0.0,
-            "input_artifacts": [str(region["input_artifact"]) for region in regions],
+            "input_artifacts": [
+                str(path)
+                for region in regions
+                for path in (region.get("frame_paths") or [region["input_artifact"]])
+            ],
             "regions": regions,
             "limitations": "VLM-generated coarse captions; use focused QA or OCR/ASR tools for precise claims.",
         }

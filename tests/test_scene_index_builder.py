@@ -135,6 +135,59 @@ def test_builder_captions_physical_segment_clips(tmp_path) -> None:
     assert "video_1_seg_0002_10000_20000.mp4" in calls[1][1]
 
 
+def test_builder_prefers_frame_cache_over_physical_clips(tmp_path) -> None:
+    backend = RecordingBackend()
+    sampled = []
+    extracted = []
+
+    def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
+        sampled.append((video_path, start_sec, end_sec, max_frames))
+        return [
+            f"/frames/video-1/{int(start_sec):04d}_a.jpg",
+            f"/frames/video-1/{int(start_sec):04d}_b.jpg",
+        ]
+
+    def fake_extract(video_path: str, output_path: str, start_sec: float, end_sec: float) -> str:
+        extracted.append((video_path, output_path, start_sec, end_sec))
+        return output_path
+
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=10.0,
+        caption_nframes=12,
+        clip_root=tmp_path / "clips",
+        clip_extractor=fake_extract,
+        frame_sampler=fake_frame_sampler,
+    )
+
+    builder.build(
+        video_id="video 1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=25.0,
+        subtitle_cues=[SubtitleCue(start_sec=0.0, end_sec=1.0, text="Museum aircraft.", cue_id="cue-1")],
+    )
+
+    visual_requests = [request for request in backend.requests if request.task == "caption_scene_segment"]
+
+    assert extracted == []
+    assert [(round(call[1], 3), round(call[2], 3), call[3]) for call in sampled] == [
+        (0.0, 10.0, 12),
+        (10.0, 20.0, 12),
+        (20.0, 25.0, 12),
+    ]
+    assert all(request.media_path is None for request in visual_requests)
+    assert all(request.media_type == "image" for request in visual_requests)
+    assert [list(request.frames) for request in visual_requests] == [
+        ["/frames/video-1/0000_a.jpg", "/frames/video-1/0000_b.jpg"],
+        ["/frames/video-1/0010_a.jpg", "/frames/video-1/0010_b.jpg"],
+        ["/frames/video-1/0020_a.jpg", "/frames/video-1/0020_b.jpg"],
+    ]
+    assert visual_requests[1].metadata["source_video_path"] == "/tmp/video-1.mp4"
+    assert visual_requests[1].metadata["frame_cache_policy"] == "precomputed_2fps"
+
+
 def test_summary_uses_one_line_map_not_full_dual_source_detail() -> None:
     backend = RecordingBackend()
     builder = SceneIndexBuilder(backend=backend, text_model_id="text-mini", vl_model_id="vl-mini")

@@ -8,6 +8,7 @@ from typing import Optional
 
 from .agents.iterative_agent import AgentBudget, IterativeRunResult, IterativeVisualAgent
 from .backends.base import VisionLanguageBackend
+from .tools.frame_cache import FrameSampler
 from .tools.exploration import build_video_exploration_registry
 from .video_index import SceneIndex, fixed_window_scene_index
 from .video_map import VideoMap
@@ -38,6 +39,7 @@ def run_iterative_smoke(
     scene_index: Optional[SceneIndex] = None,
     budget: Optional[AgentBudget] = None,
     extract_clips: bool = False,
+    frame_sampler: Optional[FrameSampler] = None,
 ) -> IterativeRunResult:
     workspace = EvidenceWorkspace.create(base_dir=base_dir, run_id=run_id)
     resolved_index = scene_index or fixed_window_scene_index(
@@ -52,6 +54,7 @@ def run_iterative_smoke(
             backend=backend,
             workspace=workspace,
             extract_clips=extract_clips,
+            frame_sampler=frame_sampler,
         ),
         workspace=workspace,
         scene_index=resolved_index,

@@ -17,6 +17,7 @@ from visual_coding_agent_harness.backends.base import BackendRequest
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
+from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
@@ -45,6 +46,7 @@ WINDOW_SEC = 300.0
 DIRECT_NFRAMES = 64
 SEGMENT_NFRAMES = 8
 MAX_PIXELS = 151200
+FRAME_CACHE_FPS = 2.0
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,8 @@ class EvalConfig:
     scene_index_cache_dir: Path = DEFAULT_SCENE_INDEX_CACHE_DIR
     scene_index_cache_enabled: bool = True
     scene_caption_nframes: int = SEGMENT_NFRAMES
+    frame_cache_fps: float = FRAME_CACHE_FPS
+    frame_cache_root: Path | None = None
     budget: AgentBudget = AgentBudget()
     export_training: bool = False
     ablation_flags: Mapping[str, Any] | None = None
@@ -251,6 +255,7 @@ def run_loop(
     workspace_root: Path,
     budget: AgentBudget,
     extract_clips: bool = True,
+    frame_sampler: FrameSampler | None = None,
 ) -> dict[str, Any]:
     start = time.perf_counter()
     result = run_iterative_smoke(
@@ -264,6 +269,7 @@ def run_loop(
         scene_index=scene_index,
         budget=budget,
         extract_clips=extract_clips,
+        frame_sampler=frame_sampler,
     )
     seconds = time.perf_counter() - start
     workspace = EvidenceWorkspace(root=workspace_root / "runs" / run_id)
@@ -390,6 +396,8 @@ def run_eval_cases(
         "scene_index_cache_dir": str(config.scene_index_cache_dir),
         "scene_index_cache_enabled": config.scene_index_cache_enabled,
         "scene_caption_nframes": config.scene_caption_nframes,
+        "frame_cache_fps": config.frame_cache_fps,
+        "frame_cache_root": str(_frame_cache_root(config)),
         "export_training": config.export_training,
         "ablation_flags": dict(config.ablation_flags or {}),
     }
@@ -413,6 +421,15 @@ def run_eval_cases(
         video_id = str(row_get(row, "videoID") or row_get(row, "video_id"))
         video_path = str(config.video_dir / f"{video_id}.mp4")
         duration_sec = duration_fn(Path(video_path))
+        frame_cache = None
+        if _uses_frame_cache(config.strategies):
+            frame_cache = build_frame_cache_for_video(
+                video_path=Path(video_path),
+                frame_dir=_frame_cache_dir(config=config, video_id=video_id),
+                fps=float(config.frame_cache_fps),
+                duration_sec=duration_sec,
+            )
+        frame_sampler = frame_cache.sample_paths if frame_cache is not None else None
         question = make_question(row)
         gt = str(row_get(row, "answer")).strip().upper()
         case_prefix = f"{qid}_{video_id}"
@@ -429,6 +446,8 @@ def run_eval_cases(
             "strategies": {},
             "raw_artifacts": {"workspaces": {}},
         }
+        if frame_cache is not None:
+            case["raw_artifacts"]["frame_cache"] = str(frame_cache.frame_dir)
         print(
             "CASE_START "
             + json.dumps(
@@ -448,6 +467,7 @@ def run_eval_cases(
                     duration_sec=duration_sec,
                     run_id=f"{case_prefix}_{strategy}",
                     config=config,
+                    frame_sampler=frame_sampler,
                 )
                 case["strategies"][strategy] = summarize_strategy(raw, gt)
                 if strategy != "direct_full_video":
@@ -999,6 +1019,7 @@ def run_strategy(
     duration_sec: float,
     run_id: str,
     config: EvalConfig,
+    frame_sampler: FrameSampler | None = None,
 ) -> dict[str, Any]:
     if strategy not in STRATEGIES:
         raise ValueError(f"Unknown strategy: {strategy}")
@@ -1021,7 +1042,8 @@ def run_strategy(
             window_sec=config.window_sec,
             caption_nframes=config.scene_caption_nframes,
             cache=cache,
-            clip_root=config.scene_index_cache_dir / "clips",
+            clip_root=None if frame_sampler is not None else config.scene_index_cache_dir / "clips",
+            frame_sampler=frame_sampler,
         )
         scene_index = builder.build(
             video_id=video_id,
@@ -1047,11 +1069,26 @@ def run_strategy(
         workspace_root=config.workspace_root,
         budget=config.budget,
         extract_clips=True,
+        frame_sampler=frame_sampler,
     )
 
 
 def parse_csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _uses_frame_cache(strategies: Sequence[str]) -> bool:
+    return any(strategy != "direct_full_video" for strategy in strategies)
+
+
+def _frame_cache_root(config: EvalConfig) -> Path:
+    return config.frame_cache_root or (config.run_root / "frame_cache")
+
+
+def _frame_cache_dir(*, config: EvalConfig, video_id: str) -> Path:
+    safe_video_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(video_id)).strip("_") or "video"
+    fps_label = ("%g" % float(config.frame_cache_fps)).replace(".", "p")
+    return _frame_cache_root(config) / f"{safe_video_id}_{fps_label}fps"
 
 
 def parse_strategies(values: Sequence[str] | None) -> tuple[str, ...]:
@@ -1083,6 +1120,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scene-index-cache-dir", type=Path, default=DEFAULT_SCENE_INDEX_CACHE_DIR)
     parser.add_argument("--no-scene-index-cache", action="store_true")
     parser.add_argument("--scene-caption-nframes", type=int, default=SEGMENT_NFRAMES)
+    parser.add_argument("--frame-cache-root", type=Path, default=None)
+    parser.add_argument("--frame-cache-fps", type=float, default=FRAME_CACHE_FPS)
     parser.add_argument("--max-rounds", type=int, default=8)
     parser.add_argument("--max-tool-calls-per-round", type=int, default=2)
     parser.add_argument("--default-nframes", type=int, default=SEGMENT_NFRAMES)
@@ -1208,6 +1247,8 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         scene_index_cache_dir=args.scene_index_cache_dir,
         scene_index_cache_enabled=not args.no_scene_index_cache,
         scene_caption_nframes=args.scene_caption_nframes,
+        frame_cache_fps=args.frame_cache_fps,
+        frame_cache_root=args.frame_cache_root,
         budget=budget,
         export_training=args.export_training,
         ablation_flags=ablation_flags,

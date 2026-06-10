@@ -9,13 +9,18 @@ from ..agents.contracts import VISUAL_EVIDENCE_NFRAMES, resolve_nframes
 from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
+from .frame_cache import FrameSampler
 
 
 DEFAULT_GLOBAL_NFRAMES = VISUAL_EVIDENCE_NFRAMES
 DEFAULT_MAX_PIXELS = 151200
 
 
-def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
+def build_global_view_registry(
+    backend: VisionLanguageBackend,
+    *,
+    frame_sampler: FrameSampler | None = None,
+) -> ToolRegistry:
     registry = ToolRegistry()
 
     @tool(name="global_gist", description="Inspect a sparse whole-video view before local decomposition.")
@@ -36,6 +41,19 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
             "sample_offset_sec": float(sample_offset_sec),
             "question": prompt_question,
         }
+        media_path: str | None = video_path
+        media_type = "video"
+        frame_paths: tuple[str, ...] = ()
+        input_artifacts = [f"{video_path}#t=0.000,{float(duration_sec):.3f}"]
+        if frame_sampler is not None:
+            frame_paths = tuple(frame_sampler(video_path, 0.0, float(duration_sec), int(resolved_nframes)))
+            if frame_paths:
+                media_path = None
+                media_type = "image"
+                input_artifacts = list(frame_paths)
+                metadata["source_video_path"] = video_path
+                metadata["frame_cache_policy"] = "precomputed_2fps"
+                metadata["frame_count"] = len(frame_paths)
         response = backend.generate(
             BackendRequest(
                 task="global_gist",
@@ -44,8 +62,9 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
                     duration_sec=duration_sec,
                     sample_offset_sec=sample_offset_sec,
                 ),
-                media_path=video_path,
-                media_type="video",
+                media_path=media_path,
+                media_type=media_type,
+                frames=frame_paths,
                 max_new_tokens=256,
                 metadata=metadata,
             )
@@ -65,7 +84,7 @@ def build_global_view_registry(backend: VisionLanguageBackend) -> ToolRegistry:
         return {
             "claim": answer_text,
             "confidence": 0.76,
-            "input_artifacts": [f"{video_path}#t=0.000,{float(duration_sec):.3f}"],
+            "input_artifacts": input_artifacts,
             "regions": [
                 {
                     "tool_role": "global_view",

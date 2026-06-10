@@ -12,6 +12,7 @@ from ..agents.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolError, ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
+from .frame_cache import FrameSampler
 from .segments import ClipExtractor, _clip_output_path, _extract_clip_ffmpeg
 
 
@@ -24,6 +25,7 @@ def build_segment_inspector_registry(
     workspace: Optional[EvidenceWorkspace] = None,
     extract_clips: bool = False,
     clip_extractor: Optional[ClipExtractor] = None,
+    frame_sampler: Optional[FrameSampler] = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -56,6 +58,7 @@ def build_segment_inspector_registry(
             workspace=workspace,
             extract_clips=extract_clips,
             clip_extractor=clip_extractor,
+            frame_sampler=frame_sampler,
         )
 
     @tool(name="vision_read", description="Read typed visual facts from one localized time window without option voting.")
@@ -102,6 +105,7 @@ def build_segment_inspector_registry(
                 workspace=workspace,
                 extract_clips=extract_clips,
                 clip_extractor=clip_extractor,
+                frame_sampler=frame_sampler,
                 task_name="vision_read",
                 prompt_style="vision_read",
                 prompt_override=mutex_prompt,
@@ -200,6 +204,7 @@ def build_segment_inspector_registry(
                     workspace=workspace,
                     extract_clips=extract_clips,
                     clip_extractor=clip_extractor,
+                    frame_sampler=frame_sampler,
                     task_name="verify_segment_anchors",
                     prompt_style="vision_read",
                     prompt_override=prompt,
@@ -334,6 +339,7 @@ def _run_inspector(
     workspace: Optional[EvidenceWorkspace],
     extract_clips: bool,
     clip_extractor: Optional[ClipExtractor],
+    frame_sampler: Optional[FrameSampler],
     task_name: str = "inspect_segment",
     prompt_style: str = "inspect_segment",
     prompt_override: str = "",
@@ -362,12 +368,28 @@ def _run_inspector(
         metadata["no_repeat_ngram_size"] = 6
         max_new_tokens = 384
 
-    media_path = video_path
+    media_path: str | None = video_path
+    media_type = "video"
+    frame_paths: tuple[str, ...] = ()
     input_artifacts = [f"{video_path}#t={float(start_sec):.3f},{float(end_sec):.3f}"]
     limitations = (
         "Inspector distilled one localized observation; intermediate visual reasoning stays outside the main context."
     )
-    if extract_clips:
+    if frame_sampler is not None:
+        frame_paths = tuple(
+            frame_sampler(video_path, float(start_sec), float(end_sec), int(resolved_nframes))
+        )
+        if frame_paths:
+            media_path = None
+            media_type = "image"
+            input_artifacts = list(frame_paths)
+            metadata["source_video_path"] = video_path
+            metadata["frame_cache_policy"] = "precomputed_2fps"
+            metadata["frame_count"] = len(frame_paths)
+            limitations = (
+                "Inspector used precomputed 2fps frame-cache images; no per-call video clipping or decoding."
+            )
+    if not frame_paths and extract_clips:
         if workspace is None:
             raise ValueError("extract_clips=True requires an EvidenceWorkspace")
         output_path = _clip_output_path(
@@ -408,7 +430,8 @@ def _run_inspector(
                 )
             ),
             media_path=media_path,
-            media_type="video",
+            media_type=media_type,
+            frames=frame_paths,
             max_new_tokens=max_new_tokens,
             metadata=metadata,
         )

@@ -13,6 +13,7 @@ from .global_view import build_global_view_registry
 from .inspector import build_segment_inspector_registry
 from .navigation import build_video_navigation_registry
 from .query_context import build_query_context_registry
+from .frame_cache import FrameSampler
 from .segments import ClipExtractor, build_segment_vlm_registry
 from .timeline import build_timeline_registry
 from .verification import build_verification_registry
@@ -26,12 +27,13 @@ def build_video_exploration_registry(
     workspace: Optional[EvidenceWorkspace] = None,
     extract_clips: bool = False,
     clip_extractor: Optional[ClipExtractor] = None,
+    frame_sampler: Optional[FrameSampler] = None,
 ) -> ToolRegistry:
     video_map_store = video_map if isinstance(video_map, VideoMapStore) else VideoMapStore(video_map)
     registry = ToolRegistry()
     registry.extend(build_video_navigation_registry(video_map_store, workspace=workspace))
-    registry.extend(build_query_context_registry(video_map=video_map_store, backend=backend))
-    registry.extend(build_global_view_registry(backend))
+    registry.extend(build_query_context_registry(video_map=video_map_store, backend=backend, frame_sampler=frame_sampler))
+    registry.extend(build_global_view_registry(backend, frame_sampler=frame_sampler))
     registry.extend(
         build_video_enrichment_registry(
             video_map_store=video_map_store,
@@ -39,6 +41,7 @@ def build_video_exploration_registry(
             workspace=workspace,
             extract_clips=extract_clips,
             clip_extractor=clip_extractor,
+            frame_sampler=frame_sampler,
         )
     )
     registry.extend(build_timeline_registry(workspace=workspace))
@@ -50,6 +53,7 @@ def build_video_exploration_registry(
             workspace=workspace,
             extract_clips=extract_clips,
             clip_extractor=clip_extractor,
+            frame_sampler=frame_sampler,
         )
     )
     registry.extend(
@@ -58,6 +62,7 @@ def build_video_exploration_registry(
             workspace=workspace,
             extract_clips=extract_clips,
             clip_extractor=clip_extractor,
+            frame_sampler=frame_sampler,
         )
     )
     return registry

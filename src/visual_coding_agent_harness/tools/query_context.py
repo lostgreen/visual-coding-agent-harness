@@ -9,6 +9,7 @@ from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..video_map import VideoMap, VideoMapStore
+from .frame_cache import FrameSampler
 
 
 DEFAULT_MAX_PIXELS = 151200
@@ -19,6 +20,7 @@ def build_query_context_registry(
     *,
     video_map: VideoMap | VideoMapStore,
     backend: VisionLanguageBackend,
+    frame_sampler: FrameSampler | None = None,
 ) -> ToolRegistry:
     video_map_store = video_map if isinstance(video_map, VideoMapStore) else VideoMapStore(video_map)
     registry = ToolRegistry()
@@ -48,12 +50,26 @@ def build_query_context_registry(
         }
         if prompt_query != str(query or "").strip():
             metadata["original_query"] = query
+        media_path: str | None = video_path
+        media_type = "video"
+        frame_paths: tuple[str, ...] = ()
+        input_artifacts = [f"{video_path}#query_context={scope}"]
+        if frame_sampler is not None:
+            frame_paths = tuple(frame_sampler(video_path, 0.0, resolved_duration, int(resolved_nframes)))
+            if frame_paths:
+                media_path = None
+                media_type = "image"
+                input_artifacts = list(frame_paths)
+                metadata["source_video_path"] = video_path
+                metadata["frame_cache_policy"] = "precomputed_2fps"
+                metadata["frame_count"] = len(frame_paths)
         response = backend.generate(
             BackendRequest(
                 task="query_context",
                 prompt=_query_context_prompt(query=prompt_query, scope=scope),
-                media_path=video_path,
-                media_type="video",
+                media_path=media_path,
+                media_type=media_type,
+                frames=frame_paths,
                 max_new_tokens=256,
                 metadata=metadata,
             )
@@ -72,7 +88,7 @@ def build_query_context_registry(
         return {
             "claim": _format_capsule(capsule=capsule, query=prompt_query),
             "confidence": 0.62,
-            "input_artifacts": [f"{video_path}#query_context={scope}"],
+            "input_artifacts": input_artifacts,
             "regions": regions
             or [
                 {

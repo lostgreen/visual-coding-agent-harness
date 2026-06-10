@@ -13,6 +13,7 @@ from ..agents.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
+from .frame_cache import FrameSampler
 
 
 ClipExtractor = Callable[[str, str, float, float], str]
@@ -24,6 +25,7 @@ def build_segment_vlm_registry(
     workspace: Optional[EvidenceWorkspace] = None,
     extract_clips: bool = False,
     clip_extractor: Optional[ClipExtractor] = None,
+    frame_sampler: Optional[FrameSampler] = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -52,6 +54,7 @@ def build_segment_vlm_registry(
             workspace=workspace,
             extract_clips=extract_clips,
             clip_extractor=clip_extractor,
+            frame_sampler=frame_sampler,
         )
 
     @tool(name="qa_segment", description="Answer a question about a time-bounded video segment with the shared VLM backend.")
@@ -79,6 +82,7 @@ def build_segment_vlm_registry(
             workspace=workspace,
             extract_clips=extract_clips,
             clip_extractor=clip_extractor,
+            frame_sampler=frame_sampler,
         )
 
     registry.register(caption_segment)
@@ -101,6 +105,7 @@ def _run_segment_tool(
     workspace: Optional[EvidenceWorkspace] = None,
     extract_clips: bool = False,
     clip_extractor: Optional[ClipExtractor] = None,
+    frame_sampler: Optional[FrameSampler] = None,
 ) -> Mapping[str, object]:
     resolved_nframes, _ = resolve_nframes(nframes)
     prompt_question = exploration_question(question)
@@ -114,11 +119,25 @@ def _run_segment_tool(
     }
     if fps > 0:
         metadata["fps"] = float(fps)
-    media_path = video_path
+    media_path: str | None = video_path
+    media_type = "video"
+    frame_paths: tuple[str, ...] = ()
     input_artifacts = [f"{video_path}#t={float(start_sec):.3f},{float(end_sec):.3f}"]
     limitations = "Segment VLM observation; backend may need physical clipping for strict temporal isolation."
 
-    if extract_clips:
+    if frame_sampler is not None:
+        frame_paths = tuple(
+            frame_sampler(video_path, float(start_sec), float(end_sec), int(resolved_nframes))
+        )
+        if frame_paths:
+            media_path = None
+            media_type = "image"
+            input_artifacts = list(frame_paths)
+            metadata["source_video_path"] = video_path
+            metadata["frame_cache_policy"] = "precomputed_2fps"
+            metadata["frame_count"] = len(frame_paths)
+            limitations = "Precomputed 2fps frame-cache observation; no per-call video clipping or decoding."
+    if not frame_paths and extract_clips:
         if workspace is None:
             raise ValueError("extract_clips=True requires an EvidenceWorkspace")
         output_path = _clip_output_path(
@@ -146,7 +165,8 @@ def _run_segment_tool(
                 question=prompt_question,
             ),
             media_path=media_path,
-            media_type="video",
+            media_type=media_type,
+            frames=frame_paths,
             max_new_tokens=256,
             metadata=metadata,
         )
