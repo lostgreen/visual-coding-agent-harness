@@ -184,18 +184,23 @@ def test_validate_grounding_plan_requires_planner_owned_central_subjects_and_opt
     assert "option_kind" in messages
 
 
-def test_validate_grounding_plan_requires_exact_raw_option_set_and_text() -> None:
+def test_validate_grounding_plan_requires_exact_option_id_set_but_tolerates_paraphrased_raw_text() -> None:
+    # The compiler authoritatively overwrites raw_option_text with the framework value,
+    # so the validator must not reject a plan solely because the LLM normalized
+    # whitespace / quotes / punctuation in raw_option_text. Otherwise option text
+    # containing literal quotes or double spaces hard-blocks bootstrap and produces
+    # zero planner turns. Option *id* set is still enforced.
     bad_plan = replace(
         _valid_plan(),
         options=(
             GroundingOption(
                 option_id="A",
                 ordered_target_keys=("event_alpha", "event_beta"),
-                raw_option_text="model rewritten option",
+                raw_option_text="model rewritten option",  # paraphrased -- must be tolerated
                 option_kind="sequence",
             ),
             GroundingOption(
-                option_id="C",
+                option_id="C",  # wrong id -- must still be flagged
                 ordered_target_keys=("event_alpha",),
                 raw_option_text="extra option",
                 option_kind="sequence",
@@ -212,7 +217,33 @@ def test_validate_grounding_plan_requires_exact_raw_option_set_and_text() -> Non
     messages = "\n".join(f"{finding.path}: {finding.message}" for finding in result.findings)
     assert "missing option(s): B" in messages
     assert "extra option(s): C" in messages
-    assert "raw_option_text must match framework raw option text" in messages
+    assert "raw_option_text must match" not in messages
+
+
+def test_validate_grounding_plan_accepts_paraphrased_raw_option_text_with_correct_ids() -> None:
+    paraphrased = replace(
+        _valid_plan(),
+        options=(
+            replace(_valid_plan().options[0], raw_option_text="Alpha  then  Beta"),
+            replace(_valid_plan().options[1], raw_option_text="\u201cBeta\u201d then Alpha"),
+        ),
+    )
+
+    result = validate_grounding_plan(
+        paraphrased,
+        raw_options={"A": "Alpha then Beta", "B": '"Beta" then Alpha'},
+    )
+
+    assert result.is_valid, result.feedback()
+
+
+def test_validate_grounding_plan_accepts_central_subject_substring_match() -> None:
+    plan = replace(
+        _valid_plan(),
+        central_subjects=("subject x",),
+    )
+    result = validate_grounding_plan(plan, option_ids=("A", "B"))
+    assert result.is_valid, result.feedback()
 
 
 def test_compile_grounding_plan_assigns_stable_registry_ids_and_hash() -> None:
@@ -300,10 +331,57 @@ def test_grounding_prompt_keeps_task_specific_claim_text_and_neutral_keys() -> N
     assert "recommended_skill must be one of" in prompt
     assert "timeline_ordering" in prompt
     assert "route must be one of" in prompt
+    assert "claim_kind must be one of" in prompt
+    assert "claim_modality must be one of" in prompt
+    assert "polarity must be one of" in prompt
+    assert "relation.kind must be one of" in prompt
+    assert "subjects must be objects" in prompt
+    assert '"subject_key"' in prompt
     assert "Use task-specific, option-faithful canonical claims" in prompt
     assert "Use domain-neutral temporary keys only" in prompt
     assert "Use domain-neutral wording in the plan" not in prompt
     assert backend.requests[0].max_new_tokens >= 2400
+
+
+def test_ground_question_accepts_string_subject_shorthand() -> None:
+    payload = _valid_plan().to_dict()
+    payload["subjects"] = ["subject"]
+    backend = ScriptedGroundingBackend([json.dumps(payload)])
+
+    result = ground_question_with_model(
+        backend,
+        question="Question: Which event happens first?",
+        options=("A. Alpha then Beta", "B. Beta then Alpha"),
+    )
+
+    assert result.plan is not None
+    assert result.validation.is_valid
+    assert result.plan.subjects[0].subject_key == "subject"
+    assert result.plan.subjects[0].canonical_name == "subject"
+
+
+def test_ground_question_canonicalizes_common_grounding_enum_synonyms() -> None:
+    payload = _valid_plan().to_dict()
+    payload["targets"][0]["claim_kind"] = "event"
+    payload["targets"][0]["claim_modality"] = "narrated"
+    payload["targets"][0]["polarity"] = "positive"
+    payload["targets"][1]["claim_kind"] = "fact"
+    payload["targets"][1]["polarity"] = "neutral"
+    backend = ScriptedGroundingBackend([json.dumps(payload)])
+
+    result = ground_question_with_model(
+        backend,
+        question="Question: Which event happens first?",
+        options=("A. Alpha then Beta", "B. Beta then Alpha"),
+    )
+
+    assert result.plan is not None
+    assert result.validation.is_valid
+    assert result.plan.targets[0].claim_kind == "visible_event"
+    assert result.plan.targets[0].claim_modality == "asr"
+    assert result.plan.targets[0].polarity == "affirmed"
+    assert result.plan.targets[1].claim_kind == "narrated_fact"
+    assert result.plan.targets[1].polarity == "unknown"
 
 
 def test_ground_question_falls_back_unstructured_after_retry() -> None:

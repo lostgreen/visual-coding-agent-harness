@@ -1455,6 +1455,7 @@ class IterativeVisualAgent:
                 "fallback_reason": result.fallback_reason,
                 "raw_text_chars": len(result.raw_text or ""),
                 "raw_text_excerpt": raw_text_excerpt if not result.validation.is_valid else "",
+                "feedback": result.validation.feedback() if not result.validation.is_valid else "",
             },
         )
         if result.plan is None:
@@ -1466,6 +1467,7 @@ class IterativeVisualAgent:
                 "reason": result.fallback_reason or "grounding_unavailable",
                 "attempts": result.attempts,
                 "findings": findings,
+                "feedback": result.validation.feedback() if findings else "",
                 "raw_text_chars": len(result.raw_text or ""),
                 "raw_text_excerpt": raw_text_excerpt,
             }

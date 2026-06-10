@@ -9,10 +9,19 @@ from typing import Sequence
 
 from ...backends.base import BackendRequest, VisionLanguageBackend
 from ..skills.specs import builtin_skill_registry
-from .contracts import ALLOWED_EVIDENCE_SOURCES, ALLOWED_GROUNDING_ROUTES, ALLOWED_OPTION_KINDS, GroundingPlan
+from .contracts import (
+    ALLOWED_CLAIM_KINDS,
+    ALLOWED_EVIDENCE_SOURCES,
+    ALLOWED_GROUNDING_MODALITIES,
+    ALLOWED_GROUNDING_POLARITIES,
+    ALLOWED_GROUNDING_ROUTES,
+    ALLOWED_OPTION_KINDS,
+    ALLOWED_RELATION_KINDS,
+    GroundingPlan,
+)
 from .validator import GroundingValidationResult, validate_grounding_plan
 
-GROUNDING_MAX_NEW_TOKENS = 2400
+GROUNDING_MAX_NEW_TOKENS = 4096
 
 
 @dataclass(frozen=True)
@@ -96,6 +105,10 @@ def _grounding_prompt(
     routes = ", ".join(sorted(ALLOWED_GROUNDING_ROUTES))
     evidence_sources = ", ".join(sorted(ALLOWED_EVIDENCE_SOURCES))
     option_kinds = ", ".join(sorted(ALLOWED_OPTION_KINDS))
+    claim_kinds = ", ".join(sorted(ALLOWED_CLAIM_KINDS))
+    modalities = ", ".join(sorted(ALLOWED_GROUNDING_MODALITIES))
+    polarities = ", ".join(sorted(ALLOWED_GROUNDING_POLARITIES))
+    relation_kinds = ", ".join(sorted(ALLOWED_RELATION_KINDS))
     skills = ", ".join(str(skill_id) for skill_id in skill_ids)
     return (
         "Create a GroundingPlan for a long-video question. Do not answer the question and do not choose an option.\n"
@@ -107,12 +120,20 @@ def _grounding_prompt(
         f"route must be one of: {routes}.\n"
         f"recommended_skill must be one of: {skills}.\n"
         f"acceptable_evidence_sources values must be from: {evidence_sources}.\n"
-        "central_subjects is a non-empty list of canonical subject strings copied exactly from a target canonical_claim or alias.\n"
+        f"claim_kind must be one of: {claim_kinds}.\n"
+        f"claim_modality must be one of: {modalities}. Use asr for narration/transcript claims; do not use narrated.\n"
+        f"polarity must be one of: {polarities}. Use affirmed for positive claims; do not use positive or neutral.\n"
+        f"relation.kind must be one of: {relation_kinds}. Every relation object requires relation_key, kind, "
+        "source_target_key, and destination_target_key.\n"
+        "subjects must be objects with keys \"subject_key\", \"canonical_name\", and \"aliases\"; do not output bare strings.\n"
+        "central_subjects is a non-empty list of high-level subject strings that appear in, contain, or are contained by "
+        "a target canonical_claim or alias.\n"
         "Use domain-neutral temporary keys such as subject_main, event_alpha, relation_1; the framework will assign T/R IDs.\n"
         "Use task-specific, option-faithful canonical claims, aliases, and search queries that preserve the words needed for retrieval.\n"
         "Each target requires target_key, canonical_claim, subject_key, claim_kind, claim_modality, aliases, "
         "search_queries, polarity. Each option requires option_id, required_target_keys, ordered_target_keys, "
         f"required_relation_keys, raw_option_text, option_kind. option_kind must be one of: {option_kinds}.\n"
+        "Keep aliases and search_queries short: 1-3 concise strings per target are enough.\n"
         "Do not assert that any claim is true; describe what evidence would need to be checked.\n"
         "Use domain-neutral temporary keys only; do not rely on memorized examples.\n"
         f"{feedback_block}\n"

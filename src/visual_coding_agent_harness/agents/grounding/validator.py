@@ -120,16 +120,23 @@ def validate_grounding_plan(
         if target.target_key.upper() in {"A", "B", "C", "D", "E", "F", "G", "H"}:
             findings.append(GroundingValidationFinding(f"{path}.target_key", "option letter cannot be a target key"))
 
-    target_subject_surfaces: set[str] = set()
+    target_subject_surfaces: list[str] = []
     for target in plan.targets:
-        target_subject_surfaces.add(_normalize_space(target.canonical_claim))
-        target_subject_surfaces.update(_normalize_space(alias) for alias in target.aliases if _normalize_space(alias))
+        canonical = _normalize_space(target.canonical_claim)
+        if canonical:
+            target_subject_surfaces.append(canonical)
+        for alias in target.aliases:
+            alias_text = _normalize_space(alias)
+            if alias_text:
+                target_subject_surfaces.append(alias_text)
+    lowered_surfaces = tuple(surface.lower() for surface in target_subject_surfaces)
     for index, central_subject in enumerate(central_subjects):
-        if central_subject not in target_subject_surfaces:
+        needle = central_subject.lower()
+        if not any(needle == surface or needle in surface or surface in needle for surface in lowered_surfaces):
             findings.append(
                 GroundingValidationFinding(
                     f"central_subjects[{index}]",
-                    "central subject must appear exactly in at least one target canonical claim or alias",
+                    "central subject must appear in (or contain) at least one target canonical claim or alias",
                 )
             )
 
@@ -185,14 +192,12 @@ def validate_grounding_plan(
             findings.append(GroundingValidationFinding(f"{path}.option_kind", "required"))
         elif option_kind not in ALLOWED_OPTION_KINDS:
             findings.append(GroundingValidationFinding(f"{path}.option_kind", f"invalid option kind: {option.option_kind}"))
-        expected_raw_option = normalized_raw_options.get(option.option_id)
-        if expected_raw_option is not None and _normalize_space(option.raw_option_text) != expected_raw_option:
-            findings.append(
-                GroundingValidationFinding(
-                    f"{path}.raw_option_text",
-                    "raw_option_text must match framework raw option text",
-                )
-            )
+        # NOTE: option.raw_option_text is authoritatively overwritten by
+        # compiler._plan_with_framework_raw_options(), so the framework, not the LLM,
+        # is the single source of truth for option surface text. We deliberately do
+        # not enforce string equality here -- doing so makes bootstrap brittle to
+        # benign LLM normalization (smart quotes, double spaces, etc.) and produces
+        # zero planner turns on otherwise structurally valid plans.
         if not option.required_target_keys and not option.ordered_target_keys and not option.required_relation_keys:
             findings.append(GroundingValidationFinding(path, "option has no target or relation requirements"))
         for field_name, keys, known_keys, label in (

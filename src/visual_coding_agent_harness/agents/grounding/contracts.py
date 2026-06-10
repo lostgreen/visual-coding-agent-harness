@@ -98,15 +98,18 @@ class GroundingTarget:
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "GroundingTarget":
+        claim_kind = _canonical_claim_kind(payload.get("claim_kind", "entity"))
+        claim_modality = _canonical_grounding_modality(payload.get("claim_modality", "unknown"))
+        polarity = _canonical_grounding_polarity(payload.get("polarity", "unknown"))
         return cls(
             target_key=str(payload.get("target_key", "")).strip(),
             canonical_claim=str(payload.get("canonical_claim", "")).strip(),
             subject_key=str(payload.get("subject_key", "")).strip() or None,
-            claim_kind=str(payload.get("claim_kind", "entity")).strip() or "entity",
-            claim_modality=str(payload.get("claim_modality", "unknown")).strip() or "unknown",
+            claim_kind=claim_kind,
+            claim_modality=claim_modality,
             aliases=_string_tuple(payload.get("aliases", ())),
             search_queries=_string_tuple(payload.get("search_queries", ())),
-            polarity=str(payload.get("polarity", "unknown")).strip() or "unknown",
+            polarity=polarity,
         )
 
 
@@ -129,7 +132,7 @@ class GroundingRelation:
     def from_mapping(cls, payload: Mapping[str, Any]) -> "GroundingRelation":
         return cls(
             relation_key=str(payload.get("relation_key", "")).strip(),
-            kind=str(payload.get("kind", "")).strip() or "before",
+            kind=_canonical_relation_kind(payload.get("kind", "")),
             source_target_key=str(payload.get("source_target_key", "")).strip(),
             destination_target_key=str(payload.get("destination_target_key", "")).strip(),
         )
@@ -217,10 +220,7 @@ class GroundingPlan:
             route=str(payload.get("route", "")).strip(),
             recommended_skill=str(payload.get("recommended_skill", "")).strip(),
             central_subjects=_string_tuple(payload.get("central_subjects", ())),
-            subjects=tuple(
-                GroundingSubject.from_mapping(item)
-                for item in _mapping_sequence(payload.get("subjects", ()))
-            ),
+            subjects=_subject_sequence(payload.get("subjects", ())),
             targets=tuple(
                 GroundingTarget.from_mapping(item)
                 for item in _mapping_sequence(payload.get("targets", ()))
@@ -245,6 +245,20 @@ def _mapping_sequence(value: Any) -> tuple[Mapping[str, Any], ...]:
     return tuple(item for item in value if isinstance(item, Mapping))
 
 
+def _subject_sequence(value: Any) -> tuple[GroundingSubject, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    subjects: list[GroundingSubject] = []
+    for item in value:
+        if isinstance(item, Mapping):
+            subjects.append(GroundingSubject.from_mapping(item))
+            continue
+        text = _normalize_key_text(item)
+        if text:
+            subjects.append(GroundingSubject(subject_key=text, canonical_name=text))
+    return tuple(subjects)
+
+
 def _string_tuple(value: Any) -> tuple[str, ...]:
     if isinstance(value, (str, bytes)):
         values = [str(value)]
@@ -260,3 +274,71 @@ def _float_value(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _normalize_key_text(value: Any) -> str:
+    return "_".join(str(value or "").strip().split())
+
+
+def _normalized_enum_value(value: Any) -> str:
+    return "_".join(str(value or "").strip().lower().replace("-", " ").split())
+
+
+def _canonical_claim_kind(value: Any) -> str:
+    normalized = _normalized_enum_value(value)
+    aliases = {
+        "event": "visible_event",
+        "visual_event": "visible_event",
+        "action": "visible_event",
+        "fact": "narrated_fact",
+        "narration": "narrated_fact",
+        "narrative_fact": "narrated_fact",
+        "main_idea": "topic",
+        "theme": "topic",
+        "narrative_arc": "topic",
+        "relation": "state_transition",
+        "transition": "state_transition",
+    }
+    return aliases.get(normalized, normalized or "entity")
+
+
+def _canonical_grounding_modality(value: Any) -> str:
+    normalized = _normalized_enum_value(value)
+    aliases = {
+        "narrated": "asr",
+        "narration": "asr",
+        "transcript": "asr",
+        "text": "asr",
+        "caption": "asr",
+        "image": "visual",
+        "video": "visual",
+    }
+    return aliases.get(normalized, normalized or "unknown")
+
+
+def _canonical_grounding_polarity(value: Any) -> str:
+    normalized = _normalized_enum_value(value)
+    aliases = {
+        "positive": "affirmed",
+        "true": "affirmed",
+        "present": "affirmed",
+        "negative": "negated",
+        "false": "negated",
+        "absent": "negated",
+        "neutral": "unknown",
+        "none": "unknown",
+    }
+    return aliases.get(normalized, normalized or "unknown")
+
+
+def _canonical_relation_kind(value: Any) -> str:
+    normalized = _normalized_enum_value(value)
+    aliases = {
+        "earlier_than": "before",
+        "precedes": "before",
+        "later_than": "after",
+        "follows": "after",
+        "then": "transitions_to",
+        "leads_to": "transitions_to",
+    }
+    return aliases.get(normalized, normalized or "before")
