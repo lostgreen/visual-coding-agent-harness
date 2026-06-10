@@ -9,7 +9,7 @@ from visual_coding_agent_harness.registry import ToolError
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
-from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_fields
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -1138,6 +1138,33 @@ class VideoNavigationTest(unittest.TestCase):
 
         self.assertEqual(result["regions"][0]["segment_id"], "seg_0001")
         self.assertEqual(result["regions"][0]["matched_fields"], ["asr_text"])
+
+    def test_resolve_search_fields_ignores_unknown_modality_literals(self):
+        self.assertEqual(_resolve_search_fields(["asr", "visual_fact"]), {"asr_text"})
+        self.assertNotIn("visual_fact", _resolve_search_fields(["visual_fact"]))
+
+    def test_video_map_search_falls_back_to_all_fields_when_modalities_all_unknown(self):
+        video_map = demo_video_map()
+
+        results = video_map.search("blue aircraft", modalities=["visual_fact"], top_k=1)
+
+        self.assertEqual(results[0].segment.segment_id, "seg_0002")
+        self.assertIn("low_fps_caption", results[0].matched_fields)
+
+    def test_search_segments_reports_unknown_modality_limitations(self):
+        registry = build_video_navigation_registry(demo_video_map())
+
+        result = registry.execute(
+            "search_segments",
+            {"query": "welcome aircraft", "modalities": ["asr", "visual_fact"], "top_k": 3},
+        )
+
+        self.assertEqual([region["segment_id"] for region in result["regions"]], ["seg_0001"])
+        self.assertEqual(set(result["modalities"]), {"asr"})
+        self.assertIn(
+            "unknown modality 'visual_fact' ignored; valid: caption|asr|ocr|entities",
+            result["limitations"],
+        )
 
     def test_video_map_from_scene_index_indexes_dual_source_asr_and_tags(self):
         scene_index = SceneIndex(

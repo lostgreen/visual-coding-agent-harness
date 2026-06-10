@@ -451,7 +451,7 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
     return (
         "ground_question(query: str, top_k: int = 5, modalities: list = [])",
         target_coverage_schema,
-        "search_segments(query: str, top_k: int = 5, modalities: list = [], additional_targets: list = [])",
+        "search_segments(query: str, top_k: int = 5, modalities: list[caption|asr|ocr|entities] = [], additional_targets: list = [])",
         "read_segment(segment_id: str)",
         read_segment_detail_schema,
         locate_targets_schema,

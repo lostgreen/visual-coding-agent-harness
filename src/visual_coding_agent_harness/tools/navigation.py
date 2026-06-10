@@ -15,7 +15,7 @@ from ..contracts import (
     build_ordered_transcript_sequence,
 )
 from ..registry import ToolError, ToolRegistry, tool
-from ..video_map import VideoMap, VideoMapSegment, VideoMapStore
+from ..video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_modalities, search_modality_limitations
 from ..workspace import EvidenceWorkspace, MapUpdateProposal
 
 
@@ -66,7 +66,10 @@ def build_video_navigation_registry(
             "raw_video_map": current.to_dict(),
         }
 
-    @tool(name="search_segments", description="Search indexed video segments by text query.")
+    @tool(
+        name="search_segments",
+        description="Search indexed video segments by text query. Valid modalities: caption|asr|ocr|entities.",
+    )
     def search_segments(
         query: str,
         top_k: int = 5,
@@ -87,10 +90,7 @@ def build_video_navigation_registry(
             "input_artifacts": [current.video_path],
             "regions": [result.to_dict() for result in results],
             "modalities": _modality_results(current=current, query=query, top_k=top_k, modalities=modalities),
-            "limitations": (
-                "Training-free VideoMap retrieval over caption/ASR/OCR/entity indexes; "
-                "embedding retrieval can replace the scoring backend without changing this contract."
-            ),
+            "limitations": _search_segments_limitations(modalities),
         }
 
     @tool(name="target_coverage", description="Build a target-to-segment coverage matrix from indexed caption/ASR/OCR/entity fields.")
@@ -723,13 +723,20 @@ def _modality_results(
     top_k: int,
     modalities: Sequence[str],
 ) -> Mapping[str, Sequence[Mapping[str, object]]]:
-    requested = [str(modality).lower() for modality in modalities]
-    channels = requested or ["caption", "asr", "ocr", "entities"]
+    channels = _resolve_search_modalities(modalities)
     grouped = {}
     for channel in channels:
         results = current.search(query=query, top_k=top_k, modalities=[channel])
         grouped[channel] = [result.to_dict() for result in results]
     return grouped
+
+
+def _search_segments_limitations(modalities: Sequence[str]) -> str:
+    base_limitations = (
+        "Training-free VideoMap retrieval over caption/ASR/OCR/entity indexes; "
+        "embedding retrieval can replace the scoring backend without changing this contract."
+    )
+    return " ".join([*search_modality_limitations(modalities), base_limitations])
 
 
 def _grounding_candidate(result: object) -> Mapping[str, object]:

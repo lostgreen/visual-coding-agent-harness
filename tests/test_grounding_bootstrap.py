@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
+from visual_coding_agent_harness.agents.grounding.compiler import compile_fallback_plan, compile_grounding_plan
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.backends.routed import RoutedBackend
 from visual_coding_agent_harness.registry import ToolRegistry
@@ -123,20 +124,65 @@ def test_routed_backend_sends_ground_question_to_text_backend_when_available() -
     assert vl_backend.requests == []
 
 
-def test_bootstrap_failure_emits_grounding_bootstrap_failed_not_planner_prompt(tmp_path: Path) -> None:
-    backend = RecordingBackend({"ground_question": ["not json", "still not json " + "x" * 800]})
-    agent = _agent(tmp_path, backend, "bootstrap_failure")
+def test_fallback_grounding_plan_validates_for_mcq_options() -> None:
+    question = "Which sequence is described?\nA. first then second\nB. second then first"
+
+    plan = compile_fallback_plan(question, ("A. first then second", "B. second then first"), "temporal_order")
+    compiled = compile_grounding_plan(
+        plan,
+        raw_options={"A": "first then second", "B": "second then first"},
+        skill_ids=("visual_timeline_qa", "narration_timeline_qa", "main_idea", "grounded_factual_qa"),
+    )
+
+    assert compiled.route == "temporal_order"
+    assert compiled.recommended_skill_id in {"visual_timeline_qa", "narration_timeline_qa"}
+    assert set(compiled.registry.options_by_id) == {"A", "B"}
+    assert compiled.registry.option_for("A").target_sequence
+
+
+def test_fallback_grounding_plan_uses_narration_skill_for_life_journey() -> None:
+    question = "How was his life journey according to the video?"
+    options = (
+        "A. Born with humble background and lived in seclusion.",
+        "B. Born with humble background, entered upper class, then lived in seclusion.",
+    )
+
+    plan = compile_fallback_plan(question, options, "temporal_order")
+    compiled = compile_grounding_plan(
+        plan,
+        raw_options={
+            "A": "Born with humble background and lived in seclusion.",
+            "B": "Born with humble background, entered upper class, then lived in seclusion.",
+        },
+        skill_ids=("visual_timeline_qa", "narration_timeline_qa", "main_idea", "grounded_factual_qa"),
+    )
+
+    assert compiled.recommended_skill_id == "narration_timeline_qa"
+
+
+def test_bootstrap_invalid_grounding_falls_back_and_enters_planner_loop(tmp_path: Path) -> None:
+    backend = RecordingBackend(
+        {
+            "ground_question": ["not json", "nope", "still not json " + "x" * 800],
+            "replan": ['{"status": "continue", "program": []}'],
+        }
+    )
+    agent = _agent(tmp_path, backend, "bootstrap_fallback")
 
     result = agent.run(
         question="Which sequence is described?\nA. first then second\nB. second then first",
         video_path="/videos/generic.mp4",
     )
 
-    assert result.status == "grounding_bootstrap_failed"
-    assert result.answer == "grounding_bootstrap_failed"
-    assert [request.task for request in backend.requests] == ["ground_question", "ground_question"]
+    assert result.status != "grounding_bootstrap_failed"
+    assert [request.task for request in backend.requests if request.task == "ground_question"] == [
+        "ground_question",
+        "ground_question",
+        "ground_question",
+    ]
+    assert any(request.task == "replan" for request in backend.requests)
     trace = (agent.workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert '"final_decision": "grounding_bootstrap_failed"' in trace
+    assert '"type": "grounding_fallback_compiled"' in trace
     assert '"reason": "grounding_parse_failed"' in trace
     assert '"raw_text_chars": 815' in trace
     assert "still not json" in trace

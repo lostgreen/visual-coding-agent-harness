@@ -19,7 +19,7 @@ from .contracts import OptionEvaluation, VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
 from .final_gate import evaluate_final_candidate
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
-from .grounding import CompiledGroundingPlan, compile_grounding_plan, ground_question_with_model
+from .grounding import CompiledGroundingPlan, compile_fallback_plan, compile_grounding_plan, ground_question_with_model
 from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
 from .output_quality import is_unsupported_claim
 from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
@@ -1458,25 +1458,49 @@ class IterativeVisualAgent:
                 "feedback": result.validation.feedback() if not result.validation.is_valid else "",
             },
         )
-        if result.plan is None:
-            findings = [finding.__dict__ for finding in result.validation.findings]
-            failure = {
-                "status": "grounding_bootstrap_failed",
-                "final_decision": "grounding_bootstrap_failed",
-                "reason_code": "grounding_bootstrap_failed",
-                "reason": result.fallback_reason or "grounding_unavailable",
-                "attempts": result.attempts,
-                "findings": findings,
-                "feedback": result.validation.feedback() if findings else "",
-                "raw_text_chars": len(result.raw_text or ""),
-                "raw_text_excerpt": raw_text_excerpt,
-            }
-            self._grounding_bootstrap_failure = failure
-            self.workspace.write_trace_event("grounding_bootstrap_failed", failure)
-            return None
+        findings = [finding.__dict__ for finding in result.validation.findings]
+        plan = result.plan
+        fallback_reason = ""
+        if plan is None:
+            fallback_reason = result.fallback_reason or "grounding_unavailable"
+            try:
+                plan = compile_fallback_plan(
+                    question_context.raw_question,
+                    question_context.options,
+                    route_hint,
+                )
+            except Exception as exc:  # pragma: no cover - defensive guard for malformed caller state
+                failure = {
+                    "status": "grounding_bootstrap_failed",
+                    "final_decision": "grounding_bootstrap_failed",
+                    "reason_code": "grounding_bootstrap_failed",
+                    "reason": fallback_reason,
+                    "fallback_error": str(exc),
+                    "attempts": result.attempts,
+                    "findings": findings,
+                    "feedback": result.validation.feedback() if findings else "",
+                    "raw_text_chars": len(result.raw_text or ""),
+                    "raw_text_excerpt": raw_text_excerpt,
+                }
+                self._grounding_bootstrap_failure = failure
+                self.workspace.write_trace_event("grounding_bootstrap_failed", failure)
+                return None
+            self.workspace.write_trace_event(
+                "grounding_fallback_compiled",
+                {
+                    "reason": fallback_reason,
+                    "attempts": result.attempts,
+                    "findings": findings,
+                    "feedback": result.validation.feedback(max_findings=5) if findings else "",
+                    "raw_text_chars": len(result.raw_text or ""),
+                    "raw_text_excerpt": raw_text_excerpt,
+                    "option_count": len(question_context.options),
+                    "route_hint": route_hint,
+                },
+            )
         raw_options = _raw_options_by_id(question_context.options)
         skill_ids = tuple(skill.name for skill in builtin_skill_registry().list())
-        compiled = compile_grounding_plan(result.plan, raw_options=raw_options, skill_ids=skill_ids)
+        compiled = compile_grounding_plan(plan, raw_options=raw_options, skill_ids=skill_ids)
         self.workspace.target_registry = compiled.registry
         self.workspace.grounding_runtime = compiled
         self._exploration_target_entities = _target_entities_from_registry(compiled.registry)

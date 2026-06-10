@@ -211,6 +211,16 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertNotIn("expand_window(", rendered)
         self.assertNotIn("read_segment(", rendered)
 
+    def test_search_segments_schema_lists_search_modalities(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill=None,
+            exhausted=frozenset(),
+        )
+
+        self.assertIn("search_segments(query: str", rendered)
+        self.assertIn("modalities: list[caption|asr|ocr|entities]", rendered)
+
     def test_tool_schema_hides_target_refs_when_registry_empty(self):
         rendered = _tool_schema_block(
             option_blind=True,

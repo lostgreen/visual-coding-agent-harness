@@ -9,6 +9,32 @@ from typing import Mapping, Sequence
 from .video_index import SceneIndex
 
 
+_CANONICAL_SEARCH_MODALITIES = ("caption", "asr", "ocr", "entities")
+_SEARCH_MODALITY_VALID_TEXT = "caption|asr|ocr|entities"
+_SEARCH_MODALITY_TO_FIELDS = {
+    "caption": ("low_fps_caption",),
+    "asr": ("asr_text",),
+    "ocr": ("ocr_text",),
+    "entities": ("entities",),
+}
+_SEARCH_MODALITY_ALIASES = {
+    "caption": ("caption",),
+    "captions": ("caption",),
+    "visual": ("caption", "entities"),
+    "asr": ("asr",),
+    "audio": ("asr",),
+    "speech": ("asr",),
+    "ocr": ("ocr",),
+    "screen": ("ocr",),
+    "text": ("caption", "asr", "ocr"),
+    "entities": ("entities",),
+    "objects": ("entities",),
+    "low_fps_caption": ("caption",),
+    "asr_text": ("asr",),
+    "ocr_text": ("ocr",),
+}
+
+
 @dataclass(frozen=True)
 class VideoMapSegment:
     segment_id: str
@@ -276,29 +302,40 @@ def _search_fields(segment: VideoMapSegment) -> Mapping[str, str]:
 
 
 def _resolve_search_fields(modalities: Sequence[str]) -> set[str]:
-    if not modalities:
-        return {"low_fps_caption", "asr_text", "ocr_text", "entities"}
-
-    aliases = {
-        "caption": {"low_fps_caption"},
-        "captions": {"low_fps_caption"},
-        "visual": {"low_fps_caption", "entities"},
-        "asr": {"asr_text"},
-        "audio": {"asr_text"},
-        "speech": {"asr_text"},
-        "ocr": {"ocr_text"},
-        "screen": {"ocr_text"},
-        "text": {"ocr_text", "asr_text", "low_fps_caption"},
-        "entities": {"entities"},
-        "objects": {"entities"},
-        "low_fps_caption": {"low_fps_caption"},
-        "asr_text": {"asr_text"},
-        "ocr_text": {"ocr_text"},
-    }
     fields: set[str] = set()
-    for modality in modalities:
-        fields.update(aliases.get(str(modality).lower(), {str(modality)}))
+    for modality in _resolve_search_modalities(modalities):
+        fields.update(_SEARCH_MODALITY_TO_FIELDS[modality])
     return fields
+
+
+def _resolve_search_modalities(modalities: Sequence[str]) -> tuple[str, ...]:
+    if not modalities:
+        return _CANONICAL_SEARCH_MODALITIES
+
+    resolved: list[str] = []
+    for modality in modalities:
+        normalized = str(modality).strip().lower()
+        for canonical in _SEARCH_MODALITY_ALIASES.get(normalized, ()):
+            if canonical not in resolved:
+                resolved.append(canonical)
+    if not resolved:
+        return _CANONICAL_SEARCH_MODALITIES
+    return tuple(resolved)
+
+
+def search_modality_limitations(modalities: Sequence[str]) -> tuple[str, ...]:
+    unknown = []
+    for modality in modalities:
+        raw = str(modality).strip()
+        if not raw:
+            continue
+        if raw.lower() in _SEARCH_MODALITY_ALIASES:
+            continue
+        if raw not in unknown:
+            unknown.append(raw)
+    return tuple(
+        f"unknown modality '{modality}' ignored; valid: {_SEARCH_MODALITY_VALID_TEXT}" for modality in unknown
+    )
 
 
 def _field_modality(field_name: str) -> str:

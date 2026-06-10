@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from ...contracts import ClaimModality, ClaimRelation, OptionSpec, TargetRegistry, TargetSpec
-from .contracts import GroundingOption, GroundingPlan
+from ..question_policy import classify_narration_subroute, classify_question_route, extract_option_target_atoms_for_option
+from .contracts import ALLOWED_GROUNDING_ROUTES, GroundingOption, GroundingPlan, GroundingSubject, GroundingTarget
 from .validator import validate_grounding_plan
 
 
@@ -106,6 +108,63 @@ def compile_grounding_plan(
     )
 
 
+def compile_fallback_plan(
+    question: str,
+    options: Sequence[str],
+    route_hint: str = "",
+) -> GroundingPlan:
+    route = _fallback_route(question, route_hint)
+    option_items = _fallback_options(options)
+    subject = GroundingSubject(
+        subject_key="subject_main",
+        canonical_name=_fallback_subject(question),
+        aliases=(),
+    )
+    targets: list[GroundingTarget] = []
+    grounding_options: list[GroundingOption] = []
+    for option_id, option_text in option_items:
+        target_key = f"OPT_{option_id}_claim"
+        aliases = tuple(
+            atom
+            for atom in extract_option_target_atoms_for_option(f"{option_id}. {option_text}", include_synonyms=False)
+            if atom
+        )
+        targets.append(
+            GroundingTarget(
+                target_key=target_key,
+                canonical_claim=option_text,
+                subject_key=subject.subject_key,
+                claim_kind=_fallback_claim_kind(route),
+                claim_modality=_fallback_claim_modality(route),
+                aliases=aliases,
+                search_queries=aliases[:3],
+                polarity="unknown",
+            )
+        )
+        grounding_options.append(
+            GroundingOption(
+                option_id=option_id,
+                required_target_keys=(target_key,),
+                ordered_target_keys=(target_key,),
+                required_relation_keys=(),
+                raw_option_text=option_text,
+                option_kind=_fallback_option_kind(route),
+            )
+        )
+    return GroundingPlan(
+        route=route,
+        recommended_skill=_fallback_recommended_skill(question, route),
+        central_subjects=(subject.canonical_name,),
+        subjects=(subject,),
+        targets=tuple(targets),
+        relations=(),
+        options=tuple(grounding_options),
+        acceptable_evidence_sources=_fallback_evidence_sources(route),
+        confidence=0.0,
+        unresolved_ambiguities=("grounding_model_unavailable_or_invalid",),
+    )
+
+
 def _plan_hash(plan: GroundingPlan, *, raw_options: Mapping[str, str]) -> str:
     payload = dict(plan.to_dict())
     if raw_options:
@@ -173,3 +232,80 @@ def _plan_with_framework_raw_options(
         raw_option_text = raw_options.get(option.option_id, option.raw_option_text)
         normalized_options.append(replace(option, raw_option_text=raw_option_text))
     return replace(plan, options=tuple(normalized_options))
+
+
+def _fallback_options(options: Sequence[str]) -> tuple[tuple[str, str], ...]:
+    resolved: list[tuple[str, str]] = []
+    for index, option in enumerate(options):
+        match = re.match(r"\s*([A-H])[\).:-]?\s*(.*?)\s*$", str(option or ""), flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            option_id = match.group(1).upper()
+            option_text = " ".join(match.group(2).split()).strip()
+        else:
+            option_id = chr(ord("A") + index)
+            option_text = " ".join(str(option or "").split()).strip()
+        if not option_text:
+            option_text = option_id
+        resolved.append((option_id, option_text))
+    return tuple(resolved)
+
+
+def _fallback_subject(question: str) -> str:
+    text = re.sub(r"\bOptions\s*:\s*.*", "", str(question or ""), flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"\bQuestion\s*:\s*", "", text, flags=re.IGNORECASE)
+    text = " ".join(text.split()).strip()
+    return text[:160] or "video question"
+
+
+def _fallback_recommended_skill(question: str, route: str) -> str:
+    if route == "gist_global":
+        return "main_idea"
+    if route == "temporal_order":
+        return "narration_timeline_qa" if classify_narration_subroute(question) == "narration_timeline" else "visual_timeline_qa"
+    if route == "mixed_asr_visual":
+        return "mixed_asr_visual_qa"
+    return "grounded_factual_qa"
+
+
+def _fallback_claim_kind(route: str) -> str:
+    if route == "temporal_order":
+        return "ordered_item"
+    if route == "gist_global":
+        return "topic"
+    return "narrated_fact"
+
+
+def _fallback_claim_modality(route: str) -> str:
+    if route in {"temporal_order", "gist_global", "mixed_asr_visual"}:
+        return "mixed"
+    return "unknown"
+
+
+def _fallback_option_kind(route: str) -> str:
+    if route == "temporal_order":
+        return "sequence"
+    if route == "gist_global":
+        return "topic_focus"
+    if route == "mixed_asr_visual":
+        return "mixed_fact"
+    return "narrated_fact"
+
+
+def _fallback_evidence_sources(route: str) -> tuple[str, ...]:
+    if route == "gist_global":
+        return ("asr", "visual", "global")
+    if route == "temporal_order":
+        return ("visual", "asr", "indexed_transcript")
+    if route == "mixed_asr_visual":
+        return ("mixed", "asr", "visual")
+    return ("visual", "asr", "ocr")
+
+
+def _fallback_route(question: str, route_hint: str) -> str:
+    hinted = str(route_hint or "").strip()
+    if hinted in ALLOWED_GROUNDING_ROUTES:
+        return hinted
+    classified = classify_question_route(question)
+    if classified in ALLOWED_GROUNDING_ROUTES:
+        return classified
+    return "needle_local"

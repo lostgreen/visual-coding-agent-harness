@@ -33,10 +33,14 @@ class GroundingValidationResult:
     is_valid: bool
     findings: tuple[GroundingValidationFinding, ...] = ()
 
-    def feedback(self) -> str:
+    def feedback(self, *, max_findings: int | None = None) -> str:
         if not self.findings:
             return "No validation errors."
-        return "\n".join(f"- {finding.path}: {finding.message}" for finding in self.findings)
+        findings = self.findings[:max(0, max_findings)] if max_findings is not None else self.findings
+        suffix = ""
+        if max_findings is not None and len(self.findings) > len(findings):
+            suffix = f"\n- ... {len(self.findings) - len(findings)} more validation finding(s) omitted"
+        return "\n".join(f"- {finding.path}: {finding.message}" for finding in findings) + suffix
 
 
 def validate_grounding_plan(
@@ -58,7 +62,7 @@ def validate_grounding_plan(
     recommended_skill = _skill_name(plan.recommended_skill)
     if allowed_skills and recommended_skill not in allowed_skills:
         findings.append(
-            GroundingValidationFinding("recommended_skill", f"unknown skill: {plan.recommended_skill}")
+            GroundingValidationFinding("recommended_skill", f"unknown skill: {plan.recommended_skill}", "warning")
         )
     for index, source in enumerate(plan.acceptable_evidence_sources):
         normalized_source = _normalized_value(source)
@@ -67,12 +71,15 @@ def validate_grounding_plan(
                 GroundingValidationFinding(
                     f"acceptable_evidence_sources[{index}]",
                     f"invalid evidence source: {source}",
+                    "warning",
                 )
             )
 
     central_subjects = tuple(_normalize_space(subject) for subject in plan.central_subjects if _normalize_space(subject))
     if not central_subjects:
-        findings.append(GroundingValidationFinding("central_subjects", "at least one central subject is required"))
+        findings.append(
+            GroundingValidationFinding("central_subjects", "at least one central subject is required", "warning")
+        )
 
     subject_keys = _unique_keys(
         (subject.subject_key for subject in plan.subjects),
@@ -98,16 +105,19 @@ def validate_grounding_plan(
         _require_key(target.target_key, f"{path}.target_key", findings)
         _require_nonempty(target.canonical_claim, f"{path}.canonical_claim", findings)
         if _normalized_value(target.claim_kind) not in ALLOWED_CLAIM_KINDS:
-            findings.append(GroundingValidationFinding(f"{path}.claim_kind", f"invalid claim kind: {target.claim_kind}"))
+            findings.append(
+                GroundingValidationFinding(f"{path}.claim_kind", f"invalid claim kind: {target.claim_kind}", "warning")
+            )
         if _normalized_value(target.claim_modality) not in ALLOWED_GROUNDING_MODALITIES:
             findings.append(
                 GroundingValidationFinding(
                     f"{path}.claim_modality",
                     f"invalid claim modality: {target.claim_modality}",
+                    "warning",
                 )
             )
         if _normalized_value(target.polarity) not in ALLOWED_GROUNDING_POLARITIES:
-            findings.append(GroundingValidationFinding(f"{path}.polarity", f"invalid polarity: {target.polarity}"))
+            findings.append(GroundingValidationFinding(f"{path}.polarity", f"invalid polarity: {target.polarity}", "warning"))
         if target.subject_key and target.subject_key not in subject_keys:
             findings.append(GroundingValidationFinding(f"{path}.subject_key", f"unknown subject: {target.subject_key}"))
         if len(target.aliases) > max_aliases_per_target:
@@ -115,6 +125,7 @@ def validate_grounding_plan(
                 GroundingValidationFinding(
                     f"{path}.aliases",
                     f"too many aliases: {len(target.aliases)} > {max_aliases_per_target}",
+                    "warning",
                 )
             )
         if target.target_key.upper() in {"A", "B", "C", "D", "E", "F", "G", "H"}:
@@ -137,6 +148,7 @@ def validate_grounding_plan(
                 GroundingValidationFinding(
                     f"central_subjects[{index}]",
                     "central subject must appear in (or contain) at least one target canonical claim or alias",
+                    "warning",
                 )
             )
 
@@ -223,7 +235,10 @@ def validate_grounding_plan(
                     )
                 )
 
-    return GroundingValidationResult(is_valid=not findings, findings=tuple(findings))
+    return GroundingValidationResult(
+        is_valid=not any(finding.severity != "warning" for finding in findings),
+        findings=tuple(findings),
+    )
 
 
 def _unique_keys(

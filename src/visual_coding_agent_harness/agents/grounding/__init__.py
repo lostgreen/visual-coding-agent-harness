@@ -1,6 +1,6 @@
 """Planner-owned grounding contracts and helpers."""
 
-from .compiler import CompiledGroundingPlan, compile_grounding_plan
+from .compiler import CompiledGroundingPlan, compile_fallback_plan, compile_grounding_plan
 from .contracts import (
     GroundingOption,
     GroundingPlan,
@@ -21,6 +21,7 @@ __all__ = [
     "GroundingTarget",
     "GroundingValidationFinding",
     "GroundingValidationResult",
+    "compile_fallback_plan",
     "compile_grounding_plan",
     "ground_question_with_model",
     "validate_grounding_plan",

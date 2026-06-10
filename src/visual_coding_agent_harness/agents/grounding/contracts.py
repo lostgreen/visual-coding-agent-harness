@@ -240,12 +240,27 @@ class GroundingPlan:
 
 
 def _mapping_sequence(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if isinstance(value, Mapping):
+        return tuple(item for item in value.values() if isinstance(item, Mapping))
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return ()
     return tuple(item for item in value if isinstance(item, Mapping))
 
 
 def _subject_sequence(value: Any) -> tuple[GroundingSubject, ...]:
+    if isinstance(value, Mapping):
+        subjects: list[GroundingSubject] = []
+        for key, item in value.items():
+            if isinstance(item, Mapping):
+                payload = dict(item)
+                payload.setdefault("subject_key", str(key))
+                payload.setdefault("canonical_name", str(key))
+                subjects.append(GroundingSubject.from_mapping(payload))
+                continue
+            text = _normalize_key_text(item or key)
+            if text:
+                subjects.append(GroundingSubject(subject_key=text, canonical_name=text))
+        return tuple(subjects)
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return ()
     subjects: list[GroundingSubject] = []

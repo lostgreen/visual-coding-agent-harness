@@ -161,6 +161,11 @@ def test_validate_grounding_plan_rejects_invalid_enums_and_policy_values() -> No
     assert "relations[0].kind" in messages
     assert "acceptable_evidence_sources" in messages
     assert "option_kind" in messages
+    warning_paths = {finding.path for finding in result.findings if finding.severity == "warning"}
+    assert "recommended_skill" in warning_paths
+    assert "targets[0].claim_kind" in warning_paths
+    assert "targets[0].claim_modality" in warning_paths
+    assert "targets[0].polarity" in warning_paths
 
 
 def test_validate_grounding_plan_requires_planner_owned_central_subjects_and_option_kind() -> None:
@@ -244,6 +249,25 @@ def test_validate_grounding_plan_accepts_central_subject_substring_match() -> No
     )
     result = validate_grounding_plan(plan, option_ids=("A", "B"))
     assert result.is_valid, result.feedback()
+
+
+def test_validate_grounding_plan_warnings_do_not_invalidate_plan() -> None:
+    warn_only = replace(
+        _valid_plan(),
+        recommended_skill="unknown_skill",
+        central_subjects=("not present in targets",),
+        acceptable_evidence_sources=("dream",),
+    )
+
+    result = validate_grounding_plan(
+        warn_only,
+        raw_options={"A": "Alpha then Beta", "B": "Beta then Alpha"},
+        skill_ids=("timeline_ordering",),
+    )
+
+    assert result.is_valid
+    assert result.findings
+    assert {finding.severity for finding in result.findings} == {"warning"}
 
 
 def test_compile_grounding_plan_assigns_stable_registry_ids_and_hash() -> None:
@@ -360,6 +384,28 @@ def test_ground_question_accepts_string_subject_shorthand() -> None:
     assert result.plan.subjects[0].canonical_name == "subject"
 
 
+def test_ground_question_accepts_subject_object_map() -> None:
+    payload = _valid_plan().to_dict()
+    payload["subjects"] = {
+        "subject": {
+            "canonical_name": "Subject X",
+            "aliases": ["X"],
+        }
+    }
+    backend = ScriptedGroundingBackend([json.dumps(payload)])
+
+    result = ground_question_with_model(
+        backend,
+        question="Question: Which event happens first?",
+        options=("A. Alpha then Beta", "B. Beta then Alpha"),
+    )
+
+    assert result.plan is not None
+    assert result.validation.is_valid
+    assert result.plan.subjects[0].subject_key == "subject"
+    assert result.plan.subjects[0].canonical_name == "Subject X"
+
+
 def test_ground_question_canonicalizes_common_grounding_enum_synonyms() -> None:
     payload = _valid_plan().to_dict()
     payload["targets"][0]["claim_kind"] = "event"
@@ -389,6 +435,7 @@ def test_ground_question_falls_back_unstructured_after_retry() -> None:
         [
             json.dumps({"route": "temporal_order", "targets": []}),
             json.dumps({"route": "temporal_order", "targets": []}),
+            json.dumps({"route": "temporal_order", "targets": []}),
         ]
     )
 
@@ -401,11 +448,11 @@ def test_ground_question_falls_back_unstructured_after_retry() -> None:
     assert result.plan is None
     assert not result.validation.is_valid
     assert result.fallback_reason == "grounding_validation_failed"
-    assert result.attempts == 2
+    assert result.attempts == 3
 
 
 def test_ground_question_reports_parse_failure_after_retry() -> None:
-    backend = ScriptedGroundingBackend(["not json", "still not json"])
+    backend = ScriptedGroundingBackend(["not json", "still not json", "nope"])
 
     result = ground_question_with_model(
         backend,
@@ -416,7 +463,39 @@ def test_ground_question_reports_parse_failure_after_retry() -> None:
     assert result.plan is None
     assert not result.validation.is_valid
     assert result.fallback_reason == "grounding_parse_failed"
-    assert result.attempts == 2
+    assert result.attempts == 3
+
+
+def test_ground_question_retry_feedback_limits_validation_findings() -> None:
+    backend = ScriptedGroundingBackend(
+        [
+            json.dumps(
+                {
+                    "route": "bad_route",
+                    "recommended_skill": "bad_skill",
+                    "central_subjects": [],
+                    "subjects": [],
+                    "targets": [],
+                    "relations": [],
+                    "options": [],
+                    "acceptable_evidence_sources": ["bad_source"],
+                }
+            ),
+            json.dumps(_valid_plan().to_dict()),
+        ]
+    )
+
+    result = ground_question_with_model(
+        backend,
+        question="Question: Which event happens first?",
+        options=("A. Alpha then Beta", "B. Beta then Alpha"),
+    )
+
+    assert result.plan is not None
+    retry_prompt = backend.requests[1].prompt
+    feedback = retry_prompt.split("Validation feedback from the previous attempt:", 1)[1]
+    assert feedback.count("\n- ") <= 6
+    assert "more validation finding(s) omitted" in feedback
 
 
 def test_ground_question_extracts_final_json_object_from_prose() -> None:

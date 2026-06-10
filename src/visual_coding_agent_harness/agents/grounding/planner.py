@@ -39,7 +39,7 @@ def ground_question_with_model(
     question: str,
     options: Sequence[str],
     route_hint: str = "",
-    max_retries: int = 1,
+    max_retries: int = 2,
 ) -> GroundingPlannerResult:
     option_ids = tuple(_option_id(option) for option in options if _option_id(option))
     raw_options = _raw_options_by_id(options)
@@ -82,7 +82,7 @@ def ground_question_with_model(
         if validation.is_valid:
             return GroundingPlannerResult(plan=plan, validation=validation, raw_text=raw_text, attempts=attempts)
         fallback_reason = "grounding_validation_failed"
-        feedback = validation.feedback()
+        feedback = validation.feedback(max_findings=5)
     return GroundingPlannerResult(
         plan=None,
         validation=validation,
