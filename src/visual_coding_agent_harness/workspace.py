@@ -2610,19 +2610,98 @@ def _normalize_timeline_row(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _compact_recent_tool_payload(value: Any, *, max_string_chars: int = 500, max_items: int = 8) -> Any:
+    return _compact_recent_tool_payload_value(
+        value,
+        max_string_chars=max_string_chars,
+        max_items=max_items,
+        path="raw_output",
+        seen_strings={},
+        seen_items=set(),
+    )
+
+
+def _compact_recent_tool_payload_value(
+    value: Any,
+    *,
+    max_string_chars: int,
+    max_items: int,
+    path: str,
+    seen_strings: dict[str, str],
+    seen_items: set[str],
+) -> Any:
     if isinstance(value, Mapping):
         return {
-            str(key): _compact_recent_tool_payload(item, max_string_chars=max_string_chars, max_items=max_items)
-            for key, item in list(value.items())[:max_items]
+            str(key): _compact_recent_tool_payload_value(
+                item,
+                max_string_chars=max_string_chars,
+                max_items=max_items,
+                path=f"{path}.{key}",
+                seen_strings=seen_strings,
+                seen_items=seen_items,
+            )
+            for key, item in _planner_payload_items(value, max_items=max_items)
         }
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [
-            _compact_recent_tool_payload(item, max_string_chars=max_string_chars, max_items=max_items)
-            for item in list(value)[:max_items]
-        ]
-    if isinstance(value, str) and len(value) > max_string_chars:
-        return value[:max_string_chars] + f"... [truncated {len(value) - max_string_chars} chars]"
+        compacted = []
+        for index, item in enumerate(list(value)[:max_items]):
+            child = _compact_recent_tool_payload_value(
+                item,
+                max_string_chars=max_string_chars,
+                max_items=max_items,
+                path=f"{path}[{index}]",
+                seen_strings=seen_strings,
+                seen_items=seen_items,
+            )
+            item_key = _compact_payload_dedupe_key(child)
+            if item_key in seen_items:
+                continue
+            seen_items.add(item_key)
+            compacted.append(child)
+        return compacted
+    if isinstance(value, str):
+        normalized = _compact_payload_text_key(value)
+        if len(normalized) >= max(80, max_string_chars // 2):
+            first_path = seen_strings.get(normalized)
+            if first_path:
+                return f"[duplicate of {first_path}]"
+            seen_strings[normalized] = path
+        if len(value) > max_string_chars:
+            return value[:max_string_chars] + f"... [truncated {len(value) - max_string_chars} chars]"
     return value
+
+
+def _compact_payload_text_key(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _planner_payload_items(value: Mapping[Any, Any], *, max_items: int) -> list[tuple[Any, Any]]:
+    priority = {
+        "visual_caption": 0,
+        "caption": 1,
+        "summary": 2,
+        "text": 3,
+        "claim": 4,
+    }
+
+    def sort_key(item: tuple[Any, Any]) -> tuple[int, str]:
+        key, child = item
+        key_text = str(key)
+        if key_text in priority:
+            return (priority[key_text], key_text)
+        if isinstance(child, Sequence) and not isinstance(child, (str, bytes)):
+            return (20, key_text)
+        if isinstance(child, Mapping):
+            return (15, key_text)
+        return (10, key_text)
+
+    return sorted(list(value.items())[:max_items], key=sort_key)
+
+
+def _compact_payload_dedupe_key(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        return repr(value)
 
 
 def _normalize_hypothesis_slots(slots: Mapping[str, Any]) -> dict[str, dict[str, str]]:
@@ -3025,11 +3104,17 @@ def _format_rawish_entry(entry: Mapping[str, Any]) -> str:
     artifacts = entry.get("artifacts") or "-"
     limitations = entry.get("limitations") or "-"
     confidence = entry.get("confidence") or "0.00"
-    return (
+    line = (
         f"- `{entry['observation_id']}` | tool: `{entry.get('tool', 'unknown')}` | "
         f"confidence: {confidence} | artifacts: {artifacts} | "
         f"claim: {entry.get('claim', '')} | limitations: {limitations}"
     )
+    raw_output = entry.get("raw_output", {})
+    if isinstance(raw_output, Mapping) and raw_output:
+        compact_raw = _compact_json(raw_output, limit=600)
+        if compact_raw:
+            line += f" | raw_output: {compact_raw}"
+    return line
 
 
 def _utc_now() -> str:

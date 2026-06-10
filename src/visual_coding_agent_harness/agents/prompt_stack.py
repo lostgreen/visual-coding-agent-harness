@@ -716,8 +716,10 @@ def _recent_tool_outputs_block(outputs: Sequence[Mapping[str, Any]]) -> str:
             lines.append(f"claim: {claim}")
         raw_output = output.get("raw_output", {})
         if raw_output:
-            lines.append("raw_output:")
-            lines.append(json.dumps(raw_output, ensure_ascii=True, sort_keys=True, indent=2))
+            compact = json.dumps(raw_output, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            if len(compact) > 600:
+                compact = compact[:597].rstrip() + "..."
+            lines.append(f"raw_output: {compact}")
     return "\n".join(lines).strip()
 
 

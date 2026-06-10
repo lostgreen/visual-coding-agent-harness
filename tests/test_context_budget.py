@@ -6,6 +6,7 @@ from visual_coding_agent_harness.agents.context_budget import (
     NavLatestWinsCompact,
     parse_budget_ratios,
 )
+from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 class TruncateStrategy(CompactStrategy):
@@ -131,6 +132,105 @@ def test_evidence_tiered_keeps_relevant_row():
 
     assert "red car" in allocated["evidence"]
     assert report.compact_events[0]["strategy"] == "evidence_tiered"
+
+
+def test_evidence_tiered_keeps_multiline_ledger_entries_intact():
+    allocator = ContextBudgetAllocator(
+        total_budget_tokens=200,
+        slot_ratios={"evidence": 1.0},
+        token_counter=len,
+    )
+    allocator.register_strategy("evidence", EvidenceTieredCompact())
+    content = "\n".join(
+        [
+            "- obs_0001 | claim: older",
+            "  raw_output:",
+            "  {",
+            '    "target": "red car",',
+            '    "status": "supported"',
+            "  }",
+            "- obs_0002 | claim: newer unrelated",
+            "  raw_output:",
+            "  {",
+            '    "target": "blue cup"',
+            "  }",
+        ]
+    )
+
+    allocated, _report = allocator.allocate(
+        {"evidence": content},
+        ctx={"active_followup_target_query": "red car"},
+    )
+
+    red_block_start = allocated["evidence"].index("- obs_0001")
+    red_block_end = allocated["evidence"].find("- obs_0002")
+    red_block = allocated["evidence"][red_block_start:] if red_block_end < 0 else allocated["evidence"][red_block_start:red_block_end]
+    assert "{\n" in red_block
+    assert '"target": "red car"' in red_block
+    assert "}\n" in red_block or red_block.rstrip().endswith("}")
+
+
+def test_evidence_tiered_keeps_relevant_ledger_block_intact():
+    allocator = ContextBudgetAllocator(
+        total_budget_tokens=80,
+        slot_ratios={"evidence": 1.0},
+        token_counter=len,
+    )
+    allocator.register_strategy("evidence", EvidenceTieredCompact())
+    content = "\n\n".join(
+        [
+            "\n".join(
+                [
+                    "- `obs_0001` | tool: `vision_read` | claim: A blue cup is on the table.",
+                    "  raw_output: visual_caption=blue cup; detected_objects=[cup]",
+                ]
+            ),
+            "\n".join(
+                [
+                    "- `obs_0002` | tool: `vision_read` | claim: A red car passes the camera.",
+                    "  raw_output: visual_caption=red car; detected_objects=[red car]",
+                ]
+            ),
+        ]
+    )
+
+    allocated, _report = allocator.allocate(
+        {"evidence": content},
+        ctx={"active_followup_target_query": "red car"},
+    )
+
+    assert "`obs_0002`" in allocated["evidence"]
+    assert "raw_output: visual_caption=red car" in allocated["evidence"]
+    assert "`obs_0001`" not in allocated["evidence"]
+
+
+def test_recent_tool_outputs_compacts_and_deduplicates_raw_output_for_planner(tmp_path):
+    workspace = EvidenceWorkspace.create(tmp_path, "planner_raw_output_compact")
+    repeated = "same repeated caption " * 40
+    workspace.write_observation(
+        tool_name="vision_read",
+        claim="A red car passes the camera.",
+        confidence=0.82,
+        raw_output={
+            "visual_caption": repeated,
+            "summary": repeated,
+            "candidates": [
+                {"segment_id": "seg_0001", "score": 0.9, "reason": repeated},
+                {"segment_id": "seg_0001", "score": 0.9, "reason": repeated},
+                {"segment_id": "seg_0002", "score": 0.3, "reason": "blue cup"},
+            ],
+        },
+    )
+
+    output = workspace.recent_tool_outputs(limit=1)[0]["raw_output"]
+
+    assert output["visual_caption"].endswith("chars]")
+    assert output["summary"] == "[duplicate of raw_output.visual_caption]"
+    assert output["candidates"][0]["reason"] == "[duplicate of raw_output.visual_caption]"
+    assert output["candidates"] == [
+        output["candidates"][0],
+        {"segment_id": "seg_0002", "score": 0.3, "reason": "blue cup"},
+    ]
 
 
 def test_feedback_latest_only_compacts_history():

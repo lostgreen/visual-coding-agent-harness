@@ -147,10 +147,17 @@ class EvidenceTieredCompact(CompactStrategy):
         if not rows:
             return _truncate_to_budget(content, budget)
         active_query = str(ctx.get("active_followup_target_query", ""))
-        scored = [
-            (_relevance(row, active_query) + index / max(len(rows), 1), row)
+        row_scores = [
+            (_relevance(row, active_query), index / max(len(rows), 1), row)
             for index, row in enumerate(rows, start=1)
         ]
+        if active_query and any(relevance > 0 for relevance, _recency, _row in row_scores):
+            row_scores = [
+                (relevance, recency, row)
+                for relevance, recency, row in row_scores
+                if relevance > 0
+            ]
+        scored = [(relevance + recency, row) for relevance, recency, row in row_scores]
         scored.sort(key=lambda item: item[0], reverse=True)
         out: list[str] = []
         remaining = max(0, budget)
@@ -232,11 +239,23 @@ def _split_blocks(content: str) -> list[str]:
 
 
 def _ledger_rows(content: str) -> list[str]:
-    return [
-        line.strip()
-        for line in (content or "").splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    rows: list[str] = []
+    current: list[str] = []
+    for raw_line in (content or "").splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        if raw_line.lstrip().startswith("- "):
+            if current:
+                rows.append("\n".join(current).strip())
+            current = [raw_line.rstrip()]
+            continue
+        if current:
+            current.append(raw_line.rstrip())
+        else:
+            rows.append(raw_line.strip())
+    if current:
+        rows.append("\n".join(current).strip())
+    return rows
 
 
 def _relevance(row: str, query: str) -> float:

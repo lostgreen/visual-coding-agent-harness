@@ -191,6 +191,8 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("obs_0007", prompt)
         self.assertIn("anchors_for_vlm", prompt)
         self.assertIn("seg_0002", prompt)
+        self.assertIn('raw_output: {"anchors_for_vlm"', prompt)
+        self.assertNotIn("raw_output:\n{", prompt)
 
     def test_tool_schema_filters_to_active_skill_allowed_actions(self):
         rendered = _tool_schema_block(
