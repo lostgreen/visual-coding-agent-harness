@@ -4191,7 +4191,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual(result.answer, "B")
             self.assertEqual(result.citations, ["obs_0001"])
-            self.assertAlmostEqual(result.confidence, 0.56)
+            self.assertAlmostEqual(result.confidence, 0.5)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("budget_exhausted", trace)
             self.assertIn("low_confidence_final", trace)

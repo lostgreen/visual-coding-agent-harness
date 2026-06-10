@@ -194,6 +194,25 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn('raw_output: {"anchors_for_vlm"', prompt)
         self.assertNotIn("raw_output:\n{", prompt)
 
+    def test_pending_inferences_collapse_repeated_answer_suggestions(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        allocator = default_context_budget_allocator(total_budget_tokens=600)
+        repeated = "AnswerAgent partial-support suggestion from no_progress: option/answer B (confidence 0.50)."
+
+        prompt, _report = build_replanning_prompt(
+            question="What is shown?",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\nolder claim",
+            round_number=2,
+            budget=AgentBudget(max_rounds=3),
+            allocator=allocator,
+            pending_inferences=[repeated, repeated],
+        )
+
+        self.assertIn("# Pending Inference", prompt)
+        self.assertIn("previous suggestion unchanged (x2 rounds)", prompt)
+        self.assertEqual(prompt.count("AnswerAgent partial-support suggestion"), 1)
+
     def test_tool_schema_filters_to_active_skill_allowed_actions(self):
         rendered = _tool_schema_block(
             option_blind=True,

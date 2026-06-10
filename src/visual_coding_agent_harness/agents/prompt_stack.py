@@ -663,11 +663,12 @@ def _feedback_slot(
 ) -> str:
     blocks = []
     if pending_inferences:
+        rendered_pending = _dedupe_pending_inferences(pending_inferences)
         blocks.append(
             PromptBlock(
                 name="pending_inference",
                 title="Pending Inference",
-                body="\n".join(f"- {item}" for item in pending_inferences[:3]),
+                body="\n".join(f"- {item}" for item in rendered_pending[:3]),
             ).render()
         )
     if normalization_notes:
@@ -698,6 +699,24 @@ def _feedback_slot(
             ).render()
         )
     return "\n".join(blocks).strip() or "(none)"
+
+
+def _dedupe_pending_inferences(pending_inferences: Sequence[str]) -> list[str]:
+    counts: dict[str, int] = {}
+    order: list[str] = []
+    for item in pending_inferences:
+        text = " ".join(str(item or "").split())
+        if not text:
+            continue
+        if text not in counts:
+            order.append(text)
+            counts[text] = 0
+        counts[text] += 1
+    rendered = []
+    for text in order:
+        count = counts[text]
+        rendered.append(f"{text} previous suggestion unchanged (x{count} rounds)" if count > 1 else text)
+    return rendered
 
 
 def _recent_tool_outputs_block(outputs: Sequence[Mapping[str, Any]]) -> str:

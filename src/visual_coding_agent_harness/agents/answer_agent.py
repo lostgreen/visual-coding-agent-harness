@@ -39,17 +39,25 @@ class AnswerAgentResult:
         if not counts:
             return self
         option, strengths = sorted(counts.items(), key=lambda item: (-len(item[1]), -sum(item[1]), item[0]))[0]
-        confidence = (sum(strengths) / len(strengths)) * 0.7 if strengths else 0.0
-        citations = [
-            str(relation.get("observation_id", ""))
+        winning_supports = [
+            relation
             for relation in supports
             if str(relation.get("option", "")).strip().upper().startswith(option)
-            and str(relation.get("observation_id", ""))
         ]
+        answer_grade = any(_is_answer_grade_relation(relation) for relation in winning_supports)
+        confidence = (sum(strengths) / len(strengths)) * 0.7 if strengths else 0.0
+        if not answer_grade:
+            confidence = min(confidence, 0.5)
+        citations = [
+            str(relation.get("observation_id", ""))
+            for relation in winning_supports
+            if str(relation.get("observation_id", ""))
+        ]
+        rationale_suffix = "" if answer_grade else " (navigation-only, not answer-grade)"
         return AnswerAgentResult(
             status="low_confidence_final",
             answer=option,
-            rationale=f"Follow-up budget exhausted; option {option} has partial visually confirmed support.",
+            rationale=f"Follow-up budget exhausted; option {option} has partial support{rationale_suffix}.",
             citations=citations,
             candidate_option_relations=list(self.candidate_option_relations),
             missing_evidence=list(self.missing_evidence),
@@ -371,6 +379,21 @@ def _is_visual_support_relation(relation: Mapping[str, Any]) -> bool:
         or ""
     ).strip()
     return grounding in {"", "visually_confirmed", "indexed_transcript"}
+
+
+def _is_answer_grade_relation(relation: Mapping[str, Any]) -> bool:
+    grounding = str(
+        relation.get("grounding_quality")
+        or relation.get("support_grounding_quality")
+        or relation.get("grounding")
+        or ""
+    ).strip()
+    return grounding == "indexed_transcript" or bool(
+        relation.get("evidence_id")
+        or relation.get("evidence_binding")
+        or relation.get("answer_grade")
+        or relation.get("structured_support")
+    )
 
 
 def _strong_mutex_conflict(table: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any], str] | None:

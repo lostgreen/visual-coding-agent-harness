@@ -498,7 +498,24 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(low_conf.status, "low_confidence_final")
         self.assertEqual(low_conf.answer, "B")
         self.assertEqual(low_conf.citations, ["obs_0002", "obs_0003"])
+        self.assertAlmostEqual(low_conf.confidence, 0.5)
+        self.assertIn("navigation-only, not answer-grade", low_conf.rationale)
+
+    def test_low_conf_indexed_transcript_support_is_not_navigation_capped(self):
+        backend = StaticBackend(
+            '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '
+            '"candidate_option_relations": ['
+            '{"option": "B", "relation": "support", "strength": 0.8, "observation_id": "obs_0002", "grounding_quality": "indexed_transcript"},'
+            '{"option": "B", "relation": "support", "strength": 0.7, "observation_id": "obs_0003", "grounding_quality": "indexed_transcript"}'
+            '], "missing_evidence": ["need one more window"], "confidence": 0.0}'
+        )
+        result = AnswerAgent(backend).run(question="Which option?", evidence_text="- partial evidence")
+
+        low_conf = result.as_low_confidence_final()
+
+        self.assertEqual(low_conf.status, "low_confidence_final")
         self.assertAlmostEqual(low_conf.confidence, 0.525)
+        self.assertNotIn("navigation-only", low_conf.rationale)
 
     def test_low_conf_requires_at_least_one_visual(self):
         backend = StaticBackend(
