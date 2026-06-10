@@ -187,7 +187,7 @@ class SceneIndexBuilder:
             )
             if frame_paths:
                 media_path = None
-                media_type = "image"
+                media_type = "video"
                 metadata["source_video_path"] = video_path
                 metadata["frame_cache_policy"] = "precomputed_2fps"
                 metadata["frame_count"] = len(frame_paths)

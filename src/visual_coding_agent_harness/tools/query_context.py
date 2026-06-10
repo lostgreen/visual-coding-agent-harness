@@ -58,7 +58,7 @@ def build_query_context_registry(
             frame_paths = tuple(frame_sampler(video_path, 0.0, resolved_duration, int(resolved_nframes)))
             if frame_paths:
                 media_path = None
-                media_type = "image"
+                media_type = "video"
                 input_artifacts = list(frame_paths)
                 metadata["source_video_path"] = video_path
                 metadata["frame_cache_policy"] = "precomputed_2fps"

@@ -381,7 +381,7 @@ def _run_inspector(
         )
         if frame_paths:
             media_path = None
-            media_type = "image"
+            media_type = "video"
             input_artifacts = list(frame_paths)
             metadata["source_video_path"] = video_path
             metadata["frame_cache_policy"] = "precomputed_2fps"

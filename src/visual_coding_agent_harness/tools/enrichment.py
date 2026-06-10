@@ -62,7 +62,7 @@ def build_video_enrichment_registry(
                 )
                 if frame_paths:
                     media_path = None
-                    media_type = "image"
+                    media_type = "video"
                     input_artifact = frame_paths[0]
                     metadata["source_video_path"] = video_map_store.current.video_path
                     metadata["frame_cache_policy"] = "precomputed_2fps"

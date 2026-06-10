@@ -178,7 +178,7 @@ def test_builder_prefers_frame_cache_over_physical_clips(tmp_path) -> None:
         (20.0, 25.0, 12),
     ]
     assert all(request.media_path is None for request in visual_requests)
-    assert all(request.media_type == "image" for request in visual_requests)
+    assert all(request.media_type == "video" for request in visual_requests)
     assert [list(request.frames) for request in visual_requests] == [
         ["/frames/video-1/0000_a.jpg", "/frames/video-1/0000_b.jpg"],
         ["/frames/video-1/0010_a.jpg", "/frames/video-1/0010_b.jpg"],

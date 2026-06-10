@@ -118,12 +118,19 @@ def _resolve_dtype(*, torch_dtype: str, torch_module: Any) -> Any:
 def _message_content(request: BackendRequest) -> list[Mapping[str, Any]]:
     content: list[Mapping[str, Any]] = []
     if request.frames:
-        for frame_path in request.frames:
-            image_item: dict[str, Any] = {"type": "image", "image": str(frame_path)}
-            for key in ["max_pixels", "min_pixels"]:
+        if request.media_type == "video":
+            video_item: dict[str, Any] = {"type": "video", "video": [str(frame) for frame in request.frames]}
+            for key in ["nframes", "fps", "max_pixels", "min_pixels"]:
                 if key in request.metadata:
-                    image_item[key] = request.metadata[key]
-            content.append(image_item)
+                    video_item[key] = request.metadata[key]
+            content.append(video_item)
+        else:
+            for frame_path in request.frames:
+                image_item: dict[str, Any] = {"type": "image", "image": str(frame_path)}
+                for key in ["max_pixels", "min_pixels"]:
+                    if key in request.metadata:
+                        image_item[key] = request.metadata[key]
+                content.append(image_item)
     if request.media_path:
         if request.media_type == "video":
             video_item: dict[str, Any] = {"type": "video", "video": request.media_path}

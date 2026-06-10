@@ -46,6 +46,24 @@ def test_frame_cache_uniformly_downsamples_large_windows() -> None:
     assert [round(frame.timestamp_sec, 3) for frame in selected] == [0.0, 1.5, 3.0, 4.5]
 
 
+def test_frame_cache_uses_requested_frame_budget_without_extra_image_cap() -> None:
+    cache = FrameCache(
+        video_path="/videos/demo.mp4",
+        frame_dir=Path("/frames/demo"),
+        fps=2.0,
+        frames=tuple(
+            FrameSample(timestamp_sec=index * 0.5, path=f"/frames/demo/frame_{index + 1:09d}.jpg")
+            for index in range(80)
+        ),
+    )
+
+    selected = cache.sample(start_sec=0.0, end_sec=40.0, max_frames=64)
+
+    assert len(selected) == 64
+    assert round(selected[0].timestamp_sec, 3) == 0.0
+    assert round(selected[-1].timestamp_sec, 3) == 39.5
+
+
 def test_extract_frame_cache_command_caps_video_at_two_fps() -> None:
     command = build_extract_frame_cache_command(
         video_path="/videos/demo.mp4",

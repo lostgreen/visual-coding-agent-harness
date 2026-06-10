@@ -195,7 +195,7 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(sampled, [("/videos/demo.mp4", 10.0, 20.0, 64)])
         self.assertEqual(extracted, [])
         self.assertEqual(request.media_path, None)
-        self.assertEqual(request.media_type, "image")
+        self.assertEqual(request.media_type, "video")
         self.assertEqual(
             list(request.frames),
             ["/frames/demo/frame_000000003.jpg", "/frames/demo/frame_000000004.jpg"],

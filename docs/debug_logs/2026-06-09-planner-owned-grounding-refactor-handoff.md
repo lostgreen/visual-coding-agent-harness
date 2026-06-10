@@ -11,13 +11,16 @@ Replace the previous VideoMME 605/611/612-oriented semantic shortcuts with a gen
 ## Current evidence
 
 - Current local branch: `codex/agent-ownership-context-redesign`.
-- Latest local verification: `PYTHONPATH=src:. pytest -q` => `502 passed in 1.99s`.
+- Latest local verification: `PYTHONPATH=src:. pytest -q` => `503 passed in 1.90s`.
 - Whitespace check: `git diff --check` => clean.
 - The previous KML run based on older code is stale for this refactor:
   - `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_final_closure_d9f99c7_3demo_20260609_233313_pyenv`
 - The interrupted KML run from commit `43dddd2` is stale and was stopped after it blocked in per-segment ffmpeg re-encoding:
   - `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_grounding_43dddd2_3demo_20260610_100525_pyenv`
   - latest failure fingerprint: child `ffmpeg` was re-encoding a 300s segment clip for `611-2` with `libx264`; the main python process was killed and remained only as a defunct zombie under the launcher shell.
+- The first KML frame-cache run from commit `8af3f91` is stale and was stopped after an OOM:
+  - `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_framecache_8af3f91_3demo_20260610_104929_pyenv`
+  - latest failure fingerprint: `OutOfMemoryError` after the 605 case attempted to send cached frames as separate Qwen-VL image items; old `87192` and current `101568` were zombies afterward and `nvidia-smi` showed no compute process after stopping.
 
 ## Files changed
 
@@ -58,7 +61,8 @@ Replace the previous VideoMME 605/611/612-oriented semantic shortcuts with a gen
 - VideoMME long-video visual reads now use a run-level precomputed 2fps frame cache:
   - runner builds `run_root/frame_cache/<video_id>_2fps` before non-direct strategies;
   - scene-index visual captioning, global/query context, segment caption/QA, inspector, vision_read, enrichment, and anchor verification all prefer sampled frame paths over per-call mp4 clips;
-  - Qwen-VL backend serializes frame requests as multi-image inputs;
+  - frame-cache sampling obeys the tool/contract `nframes` budget over the 2fps frame directory instead of sending every cached frame;
+  - Qwen-VL backend serializes cached frame requests as one `video` item with `video=[frame_paths...]`, not as independent image items;
   - old physical clip extraction remains as a compatibility fallback only when no frame sampler is available.
 
 ## Tests added or updated

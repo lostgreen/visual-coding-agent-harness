@@ -27,16 +27,17 @@ class FrameCache:
     frames: Sequence[FrameSample]
 
     def sample(self, *, start_sec: float, end_sec: float, max_frames: int) -> tuple[FrameSample, ...]:
-        if max_frames <= 0:
+        limit = max(0, int(max_frames))
+        if limit <= 0:
             return ()
         start = max(0.0, float(start_sec))
         end = max(start, float(end_sec))
         candidates = [frame for frame in self.frames if start <= float(frame.timestamp_sec) < end]
         if not candidates:
             candidates = _nearest_frames(self.frames, start_sec=start, end_sec=end)
-        if len(candidates) <= max_frames:
+        if len(candidates) <= limit:
             return tuple(candidates)
-        return tuple(candidates[index] for index in _uniform_indices(len(candidates), max_frames))
+        return tuple(candidates[index] for index in _uniform_indices(len(candidates), limit))
 
     def sample_paths(self, video_path: str, start_sec: float, end_sec: float, max_frames: int) -> tuple[str, ...]:
         return tuple(frame.path for frame in self.sample(start_sec=start_sec, end_sec=end_sec, max_frames=max_frames))
