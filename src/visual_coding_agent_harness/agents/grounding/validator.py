@@ -19,6 +19,13 @@ from .contracts import (
 
 _KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_:-]{0,63}$")
 _OPTION_RE = re.compile(r"^[A-H]$")
+_PREDECIDED_CLAIM_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:the\s+)?(?:main\s+idea|answer|correct\s+answer)\s+(?:of\s+the\s+video\s+)?(?:is|was|would\s+be)\b|"
+    r"option\s+[A-H]\s+(?:is|was)\s+(?:correct|the\s+answer)\b"
+    r")",
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -104,6 +111,14 @@ def validate_grounding_plan(
         path = f"targets[{index}]"
         _require_key(target.target_key, f"{path}.target_key", findings)
         _require_nonempty(target.canonical_claim, f"{path}.canonical_claim", findings)
+        if _predecides_answer(target.canonical_claim):
+            findings.append(
+                GroundingValidationFinding(
+                    f"{path}.canonical_claim",
+                    "canonical claim appears to pre-decide an option instead of naming a checkable video fact",
+                    "warning",
+                )
+            )
         if _normalized_value(target.claim_kind) not in ALLOWED_CLAIM_KINDS:
             findings.append(
                 GroundingValidationFinding(f"{path}.claim_kind", f"invalid claim kind: {target.claim_kind}", "warning")
@@ -292,6 +307,10 @@ def _normalize_space(value: object) -> str:
 
 def _normalized_value(value: object) -> str:
     return _normalize_space(value).lower()
+
+
+def _predecides_answer(value: object) -> bool:
+    return bool(_PREDECIDED_CLAIM_RE.search(_normalize_space(value)))
 
 
 def _skill_name(value: object) -> str:

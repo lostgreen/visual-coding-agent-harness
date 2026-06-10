@@ -270,6 +270,26 @@ def test_validate_grounding_plan_warnings_do_not_invalidate_plan() -> None:
     assert {finding.severity for finding in result.findings} == {"warning"}
 
 
+def test_validate_grounding_plan_warns_on_predecided_canonical_claim() -> None:
+    plan = replace(
+        _valid_plan(),
+        targets=(
+            replace(_valid_plan().targets[0], canonical_claim="The main idea is Alpha then Beta"),
+            _valid_plan().targets[1],
+        ),
+    )
+
+    result = validate_grounding_plan(plan, option_ids=("A", "B"))
+
+    assert result.is_valid
+    assert any(
+        finding.path == "targets[0].canonical_claim"
+        and finding.severity == "warning"
+        and "pre-decide" in finding.message
+        for finding in result.findings
+    )
+
+
 def test_compile_grounding_plan_assigns_stable_registry_ids_and_hash() -> None:
     compiled = compile_grounding_plan(_valid_plan())
 
@@ -362,6 +382,8 @@ def test_grounding_prompt_keeps_task_specific_claim_text_and_neutral_keys() -> N
     assert "subjects must be objects" in prompt
     assert '"subject_key"' in prompt
     assert "Use task-specific, option-faithful canonical claims" in prompt
+    assert "directly checkable fact probe" in prompt
+    assert "Do not make a target canonical_claim that pre-decides an option" in prompt
     assert "Use domain-neutral temporary keys only" in prompt
     assert "Use domain-neutral wording in the plan" not in prompt
     assert backend.requests[0].max_new_tokens >= 2400
