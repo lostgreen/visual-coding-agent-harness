@@ -295,9 +295,15 @@ def test_grounding_prompt_keeps_task_specific_claim_text_and_neutral_keys() -> N
     prompt = backend.requests[0].prompt
     assert "central_subjects" in prompt
     assert "option_kind must be one of" in prompt
+    assert "Return ONLY one JSON object" in prompt
+    assert "Do not wrap it in markdown fences" in prompt
+    assert "recommended_skill must be one of" in prompt
+    assert "timeline_ordering" in prompt
+    assert "route must be one of" in prompt
     assert "Use task-specific, option-faithful canonical claims" in prompt
     assert "Use domain-neutral temporary keys only" in prompt
     assert "Use domain-neutral wording in the plan" not in prompt
+    assert backend.requests[0].max_new_tokens >= 2400
 
 
 def test_ground_question_falls_back_unstructured_after_retry() -> None:
@@ -318,3 +324,39 @@ def test_ground_question_falls_back_unstructured_after_retry() -> None:
     assert not result.validation.is_valid
     assert result.fallback_reason == "grounding_validation_failed"
     assert result.attempts == 2
+
+
+def test_ground_question_reports_parse_failure_after_retry() -> None:
+    backend = ScriptedGroundingBackend(["not json", "still not json"])
+
+    result = ground_question_with_model(
+        backend,
+        question="Question: Which event happens first?",
+        options=("A. Alpha then Beta", "B. Beta then Alpha"),
+    )
+
+    assert result.plan is None
+    assert not result.validation.is_valid
+    assert result.fallback_reason == "grounding_parse_failed"
+    assert result.attempts == 2
+
+
+def test_ground_question_extracts_final_json_object_from_prose() -> None:
+    payload = json.dumps(_valid_plan().to_dict())
+    backend = ScriptedGroundingBackend(
+        [
+            "I will follow the schema {route, targets}.\n```json\n"
+            + payload
+            + "\n```\nNo answer selected."
+        ]
+    )
+
+    result = ground_question_with_model(
+        backend,
+        question="Question: Which event happens first?",
+        options=("A. Alpha then Beta", "B. Beta then Alpha"),
+    )
+
+    assert result.plan is not None
+    assert result.validation.is_valid
+    assert result.attempts == 1

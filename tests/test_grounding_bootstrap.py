@@ -124,7 +124,7 @@ def test_routed_backend_sends_ground_question_to_text_backend_when_available() -
 
 
 def test_bootstrap_failure_emits_grounding_bootstrap_failed_not_planner_prompt(tmp_path: Path) -> None:
-    backend = RecordingBackend({"ground_question": ["not json", "{}"]})
+    backend = RecordingBackend({"ground_question": ["not json", "still not json " + "x" * 800]})
     agent = _agent(tmp_path, backend, "bootstrap_failure")
 
     result = agent.run(
@@ -137,6 +137,10 @@ def test_bootstrap_failure_emits_grounding_bootstrap_failed_not_planner_prompt(t
     assert [request.task for request in backend.requests] == ["ground_question", "ground_question"]
     trace = (agent.workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert '"final_decision": "grounding_bootstrap_failed"' in trace
+    assert '"reason": "grounding_parse_failed"' in trace
+    assert '"raw_text_chars": 815' in trace
+    assert "still not json" in trace
+    assert "x" * 700 not in trace
 
 
 def test_bootstrap_success_prompt_exposes_target_refs_without_empty_registry_line(tmp_path: Path) -> None:

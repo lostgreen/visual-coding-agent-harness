@@ -9,8 +9,10 @@ from typing import Sequence
 
 from ...backends.base import BackendRequest, VisionLanguageBackend
 from ..skills.specs import builtin_skill_registry
-from .contracts import GroundingPlan
+from .contracts import ALLOWED_EVIDENCE_SOURCES, ALLOWED_GROUNDING_ROUTES, ALLOWED_OPTION_KINDS, GroundingPlan
 from .validator import GroundingValidationResult, validate_grounding_plan
+
+GROUNDING_MAX_NEW_TOKENS = 2400
 
 
 @dataclass(frozen=True)
@@ -36,14 +38,21 @@ def ground_question_with_model(
     validation = GroundingValidationResult(is_valid=False)
     raw_text = ""
     feedback = ""
+    fallback_reason = ""
     attempts = 0
     for attempt in range(max(0, int(max_retries)) + 1):
         attempts = attempt + 1
         response = backend.generate(
             BackendRequest(
                 task="ground_question",
-                prompt=_grounding_prompt(question=question, options=options, route_hint=route_hint, feedback=feedback),
-                max_new_tokens=1200,
+                prompt=_grounding_prompt(
+                    question=question,
+                    options=options,
+                    route_hint=route_hint,
+                    feedback=feedback,
+                    skill_ids=skill_ids,
+                ),
+                max_new_tokens=GROUNDING_MAX_NEW_TOKENS,
                 temperature=0.0,
             )
         )
@@ -52,6 +61,7 @@ def ground_question_with_model(
             plan = GroundingPlan.from_mapping(json.loads(_extract_json_object(raw_text)))
         except (json.JSONDecodeError, ValueError):
             validation = GroundingValidationResult(is_valid=False)
+            fallback_reason = "grounding_parse_failed"
             feedback = "Previous response was not a valid JSON object matching the GroundingPlan schema."
             continue
         validation = validate_grounding_plan(
@@ -62,13 +72,14 @@ def ground_question_with_model(
         )
         if validation.is_valid:
             return GroundingPlannerResult(plan=plan, validation=validation, raw_text=raw_text, attempts=attempts)
+        fallback_reason = "grounding_validation_failed"
         feedback = validation.feedback()
     return GroundingPlannerResult(
         plan=None,
         validation=validation,
         raw_text=raw_text,
         attempts=attempts,
-        fallback_reason="grounding_validation_failed",
+        fallback_reason=fallback_reason or "grounding_validation_failed",
     )
 
 
@@ -78,22 +89,30 @@ def _grounding_prompt(
     options: Sequence[str],
     route_hint: str,
     feedback: str,
+    skill_ids: Sequence[str],
 ) -> str:
     option_text = "\n".join(str(option) for option in options)
     feedback_block = f"\nValidation feedback from the previous attempt:\n{feedback}\n" if feedback else ""
+    routes = ", ".join(sorted(ALLOWED_GROUNDING_ROUTES))
+    evidence_sources = ", ".join(sorted(ALLOWED_EVIDENCE_SOURCES))
+    option_kinds = ", ".join(sorted(ALLOWED_OPTION_KINDS))
+    skills = ", ".join(str(skill_id) for skill_id in skill_ids)
     return (
         "Create a GroundingPlan for a long-video question. Do not answer the question and do not choose an option.\n"
+        "Return ONLY one JSON object. Do not wrap it in markdown fences. Do not include explanations or schema notes.\n"
         "Identify only the minimal subjects, claims, events, states, and relations needed to distinguish the options.\n"
         "Preserve semantic differences between initial states, later transitions, attributes, and ordered events.\n"
         "Output strict JSON with keys: route, recommended_skill, central_subjects, subjects, targets, relations, options, "
         "acceptable_evidence_sources, confidence, unresolved_ambiguities.\n"
+        f"route must be one of: {routes}.\n"
+        f"recommended_skill must be one of: {skills}.\n"
+        f"acceptable_evidence_sources values must be from: {evidence_sources}.\n"
         "central_subjects is a non-empty list of canonical subject strings copied exactly from a target canonical_claim or alias.\n"
         "Use domain-neutral temporary keys such as subject_main, event_alpha, relation_1; the framework will assign T/R IDs.\n"
         "Use task-specific, option-faithful canonical claims, aliases, and search queries that preserve the words needed for retrieval.\n"
         "Each target requires target_key, canonical_claim, subject_key, claim_kind, claim_modality, aliases, "
         "search_queries, polarity. Each option requires option_id, required_target_keys, ordered_target_keys, "
-        "required_relation_keys, raw_option_text, option_kind. option_kind must be one of: "
-        "topic_arc, topic_focus, sequence, mutex_fact, narrated_fact, mixed_fact.\n"
+        f"required_relation_keys, raw_option_text, option_kind. option_kind must be one of: {option_kinds}.\n"
         "Do not assert that any claim is true; describe what evidence would need to be checked.\n"
         "Use domain-neutral temporary keys only; do not rely on memorized examples.\n"
         f"{feedback_block}\n"
@@ -105,12 +124,48 @@ def _grounding_prompt(
 
 def _extract_json_object(text: str) -> str:
     raw = str(text or "").strip()
-    if raw.startswith("{") and raw.endswith("}"):
-        return raw
-    match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-    if not match:
-        raise ValueError("No JSON object found")
-    return match.group(0)
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE).strip()
+        raw = re.sub(r"\s*```$", "", raw).strip()
+    for candidate in _balanced_json_object_candidates(raw):
+        try:
+            json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        return candidate
+    raise ValueError("No JSON object found")
+
+
+def _balanced_json_object_candidates(raw: str) -> tuple[str, ...]:
+    candidates: list[str] = []
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+            continue
+        if char != "}" or depth == 0:
+            continue
+        depth -= 1
+        if depth == 0 and start is not None:
+            candidates.append(raw[start : index + 1])
+            start = None
+    return tuple(candidates)
 
 
 def _option_id(value: object) -> str:
