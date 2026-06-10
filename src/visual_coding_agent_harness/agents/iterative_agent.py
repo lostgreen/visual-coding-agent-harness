@@ -1803,12 +1803,38 @@ class IterativeVisualAgent:
         blocked_route_violation = False
         pool_exhausted_logged = False
         pending_one_shot_tools: set[str] = set()
-        for step in program:
+        for step_index, step in enumerate(program):
             if not isinstance(step, Mapping):
                 raise ValueError("Planner program steps must be objects")
             if "tool" not in step:
                 raise ValueError("Planner program step is missing required 'tool'")
             if len(normalized) >= self.budget.max_tool_calls_per_round:
+                remaining_steps = [
+                    str(item.get("tool", "") or "")
+                    for item in program[step_index:]
+                    if isinstance(item, Mapping)
+                ]
+                _append_normalization_note(
+                    notes_out,
+                    tool="program",
+                    reason="max_tool_calls_per_round_exceeded",
+                    original={
+                        "max_tool_calls_per_round": self.budget.max_tool_calls_per_round,
+                        "dropped_tools": remaining_steps,
+                    },
+                    next_action=(
+                        f"Your previous program exceeded max_tool_calls_per_round={self.budget.max_tool_calls_per_round}; "
+                        "submit at most that many tool calls and prioritize the single highest-value evidence action."
+                    ),
+                )
+                self.workspace.write_trace_event(
+                    "tool_call_budget_exceeded",
+                    {
+                        "max_tool_calls_per_round": self.budget.max_tool_calls_per_round,
+                        "kept_count": len(normalized),
+                        "dropped_tools": remaining_steps,
+                    },
+                )
                 break
 
             tool_name = str(step["tool"])

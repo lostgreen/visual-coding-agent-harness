@@ -148,7 +148,13 @@ def build_video_navigation_registry(
             "input_artifacts": [current.video_path],
             "coverage": rows,
             "option_coverage": option_coverage,
-            "limitations": "Index coverage only; use read_segment_detail and visual tools to confirm facts before final answers.",
+            "modalities_used": _resolve_search_modalities(modalities),
+            "limitations": " ".join(
+                [
+                    *search_modality_limitations(modalities),
+                    "Index coverage only; use read_segment_detail and visual tools to confirm facts before final answers.",
+                ]
+            ),
         }
 
     @tool(name="ground_question", description="Ground a question or event into candidate video windows without answering.")
@@ -180,7 +186,13 @@ def build_video_navigation_registry(
                 }
                 for candidate in candidates
             ],
-            "limitations": "Grounding only localizes candidates from indexes; it does not choose MCQ options or produce final answers.",
+            "modalities_used": _resolve_search_modalities(modalities),
+            "limitations": " ".join(
+                [
+                    *search_modality_limitations(modalities),
+                    "Grounding only localizes candidates from indexes; it does not choose MCQ options or produce final answers.",
+                ]
+            ),
         }
 
     @tool(name="read_segment", description="Read compact indexed metadata for one segment.")

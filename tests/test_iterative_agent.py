@@ -2037,6 +2037,12 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(len(result.rounds[0].program), 1)
             self.assertEqual(result.rounds[0].program[0]["args"]["segment_id"], "seg_0001")
             self.assertEqual(result.rounds[0].observation_ids, ["obs_0001"])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("tool_call_budget_exceeded", trace)
+            self.assertIn("caption_segment", trace)
+            self.assertIn("# Last Round Adjustments", backend.requests[1].prompt)
+            self.assertIn("max_tool_calls_per_round=1", backend.requests[1].prompt)
+            self.assertIn("prioritize the single highest-value evidence action", backend.requests[1].prompt)
 
     def test_iterative_agent_allows_multiple_visual_tools_within_round_cap(self):
         backend = ScriptedPlannerBackend(

@@ -1221,6 +1221,20 @@ class VideoNavigationTest(unittest.TestCase):
             result["limitations"],
         )
 
+    def test_ground_question_and_target_coverage_report_unknown_modality_limitations(self):
+        registry = build_video_navigation_registry(demo_video_map())
+
+        grounded = registry.execute("ground_question", {"query": "welcome", "modalities": ["asr", "visual_fact"]})
+        coverage = registry.execute(
+            "target_coverage",
+            {"targets": ["blue aircraft"], "modalities": ["visual_fact"], "top_k": 1},
+        )
+
+        self.assertEqual(grounded["modalities_used"], ("asr",))
+        self.assertIn("unknown modality 'visual_fact' ignored", grounded["limitations"])
+        self.assertEqual(coverage["modalities_used"], ("caption", "asr", "ocr", "entities"))
+        self.assertIn("unknown modality 'visual_fact' ignored", coverage["limitations"])
+
     def test_video_map_from_scene_index_indexes_dual_source_asr_and_tags(self):
         scene_index = SceneIndex(
             video_path="/videos/goya.mp4",
