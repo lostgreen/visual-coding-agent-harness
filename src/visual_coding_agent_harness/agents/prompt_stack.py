@@ -412,13 +412,16 @@ def _tool_schema_block(
     if allowed:
         signatures = [signature for signature in signatures if _tool_name_from_signature(signature) in allowed]
     rendered = [_maybe_mark_exhausted(signature, exhausted) for signature in signatures]
-    return "\n".join(
-        [
-            _target_registry_contract_block(target_ref_descriptions),
-            "Available tools:",
-            *[f"- {signature}" for signature in rendered],
-        ]
-    )
+    lines = [
+        _target_registry_contract_block(target_ref_descriptions),
+        "Available tools:",
+    ]
+    if any(_tool_name_from_signature(signature) == "bind_asr_claim" for signature in signatures):
+        lines.append(
+            "Use bind_asr_claim to promote indexed ASR cue_ids into supported evidence for registered target_refs."
+        )
+    lines.extend(f"- {signature}" for signature in rendered)
+    return "\n".join(lines)
 
 
 def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: bool = False) -> tuple[str, ...]:
@@ -443,6 +446,7 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         if include_target_refs
         else "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [])"
     )
+    bind_asr_claim_schema = "bind_asr_claim(segment_id: str, target_refs: list)" if include_target_refs else ""
     verifier_schema = (
         "verify_ledger_answer(answer: str, question: str = '', min_score: float = 0.6, required_citations: list = [])"
         if option_blind
@@ -456,6 +460,7 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         read_segment_detail_schema,
         locate_targets_schema,
         verify_anchors_schema,
+        *([bind_asr_claim_schema] if bind_asr_claim_schema else []),
         "global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)",
         "summarize_ledger_evidence(max_claims: int = 5)",
         verifier_schema,

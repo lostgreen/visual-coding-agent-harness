@@ -15,6 +15,7 @@ from ..contracts import (
     build_ordered_transcript_sequence,
 )
 from ..registry import ToolError, ToolRegistry, tool
+from ..text_norm import token_spans, unique_tokens
 from ..video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_modalities, search_modality_limitations
 from ..workspace import EvidenceWorkspace, MapUpdateProposal
 
@@ -1034,7 +1035,7 @@ def _answer_evidence_rows_from_indexed_detail(
                             f"Indexed ASR in {segment.segment_id} presents a target sequence in order: "
                             + " -> ".join(ordered_targets[:6])
                         ),
-                        confidence=0.9,
+                        confidence=0.6,
                         assigned_by="asr_cue_sequence",
                     )
                 )
@@ -1051,7 +1052,7 @@ def _answer_evidence_rows_from_indexed_detail(
                         f"Indexed ASR in {segment.segment_id} directly mentions target '{target}'. "
                         f"Snippet: {match.get('snippet', '')}"
                     ),
-                    confidence=min(0.86, float(match.get("confidence", 0.0) or 0.0)),
+                    confidence=min(0.6, float(match.get("confidence", 0.0) or 0.0)),
                     assigned_by="asr_cue_detail",
                 )
             )
@@ -1276,6 +1277,7 @@ def _indexed_asr_matches_for_target(
     matches: list[Mapping[str, object]] = []
     for alias in _indexed_asr_target_aliases(target):
         matches.extend(_find_target_text_matches(target=alias, sources=sources, top_k=top_k))
+        matches.extend(_find_stemmed_target_text_matches(target=alias, sources=sources, top_k=top_k))
     deduped = _dedupe_locate_matches([dict(match) for match in matches])
     return sorted(
         deduped,
@@ -1643,6 +1645,79 @@ def _find_target_text_matches(
         ),
     )
     return ranked[: max(1, int(top_k or 1))]
+
+
+def _find_stemmed_target_text_matches(
+    *,
+    target: str,
+    sources: Sequence[Mapping[str, object]],
+    top_k: int = 3,
+) -> list[Mapping[str, object]]:
+    target_terms = _target_tokens(target)
+    if not target_terms:
+        return []
+    min_overlap = min(2, len(target_terms))
+    matches: list[dict[str, object]] = []
+    for source in sources:
+        text = str(source.get("text") or "")
+        spans = list(token_spans(text))
+        if not spans:
+            continue
+        by_term: dict[str, list[tuple[int, int]]] = {}
+        for term, start, end in spans:
+            by_term.setdefault(term, []).append((start, end))
+        overlap = target_terms.intersection(by_term)
+        if len(overlap) < min_overlap:
+            continue
+        selected_spans = [span for term in sorted(overlap) for span in by_term.get(term, [])]
+        if not selected_spans:
+            continue
+        start = min(span[0] for span in selected_spans)
+        end = max(span[1] for span in selected_spans)
+        confidence = min(0.6, len(overlap) / max(len(target_terms), 1))
+        matches.append(
+            {
+                "source": str(source.get("source") or ""),
+                "source_priority": _locate_source_priority(str(source.get("source") or "")),
+                "match_type": "stemmed_token_overlap",
+                "match_priority": _locate_match_priority("stemmed_token_overlap"),
+                "match_start": start,
+                "match_end": end,
+                "source_span_start": start,
+                "source_span_end": end,
+                "timestamp_start": (
+                    float(source.get("start_sec", 0.0) or 0.0)
+                    if _source_has_concrete_timestamp(source)
+                    else None
+                ),
+                "timestamp_end": (
+                    float(source.get("end_sec", source.get("start_sec", 0.0)) or 0.0)
+                    if _source_has_concrete_timestamp(source)
+                    else None
+                ),
+                "forward_reference": _is_forward_reference_span(
+                    text=text,
+                    start=start,
+                    end=end,
+                    has_concrete_coanchor=_source_has_concrete_timestamp(source),
+                ),
+                "start_sec": float(source.get("start_sec", 0.0) or 0.0),
+                "end_sec": float(source.get("end_sec", source.get("start_sec", 0.0)) or 0.0),
+                "snippet": _match_snippet(text, start=start, end=end),
+                "confidence": confidence,
+                "matched_terms": sorted(overlap),
+            }
+        )
+    matches = _dedupe_locate_matches(matches)
+    return sorted(
+        matches,
+        key=lambda item: (
+            int(item.get("source_priority", 9)),
+            int(item.get("match_priority", 9)),
+            -float(item.get("confidence", 0.0) or 0.0),
+            float(item.get("start_sec", 0.0) or 0.0),
+        ),
+    )[: max(1, int(top_k or 1))]
 
 
 def _ordered_list_candidates(
@@ -2440,6 +2515,7 @@ def _locate_match_priority(match_type: str) -> int:
         "cleaned_name": 1,
         "phrase_alias": 2,
         "contextual_single_name": 3,
+        "stemmed_token_overlap": 4,
     }.get(str(match_type), 9)
 
 
@@ -2577,7 +2653,7 @@ def _locate_candidate_label(candidate: Mapping[str, object]) -> str:
 
 
 def _target_tokens(text: str) -> set[str]:
-    return {token.lower() for token in re.findall(r"[A-Za-z0-9]+", str(text or ""))}
+    return unique_tokens(text)
 
 
 def _detail_search_fields(segment: VideoMapSegment) -> Mapping[str, str]:

@@ -9,10 +9,13 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _blocked_final_reason,
     _blocked_planner_final_reason,
     _exhausted_one_shot_tools,
+    _latest_asr_binding_candidates,
     _planner_final_answer_with_option,
     _program_signature,
     _sanitize_option_blind_feedback,
+    _supported_binding_no_growth_feedback,
 )
+from visual_coding_agent_harness.agents.answer_agent import AnswerAgentResult
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import ClaimRelation, ClaimModality, OptionSpec, TargetRegistry, TargetSpec
@@ -38,6 +41,200 @@ class ScriptedPlannerBackend(VisionLanguageBackend):
         if not self.responses:
             return BackendResponse(text='{"status": "final", "answer": "No more scripted responses.", "citations": []}')
         return BackendResponse(text=self.responses.pop(0))
+
+
+class StaticTaskBackend(VisionLanguageBackend):
+    def __init__(self, responses):
+        self.responses = dict(responses)
+        self.requests = []
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        return BackendResponse(text=self.responses.get(request.task, "{}"))
+
+
+def _trace_events(workspace: EvidenceWorkspace):
+    trace_path = workspace.root / "trace.jsonl"
+    if not trace_path.exists():
+        return []
+    return [json.loads(line) for line in trace_path.read_text().splitlines() if line.strip()]
+
+
+def test_supported_binding_no_growth_feedback_recommends_asr_binding_without_route_change():
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="no_growth_feedback")
+        workspace.write_observation(
+            tool_name="target_coverage",
+            claim="coverage",
+            confidence=1.0,
+            raw_output={
+                "coverage": [
+                    {
+                        "target_id": "T1",
+                        "target_ref": "T1",
+                        "target": "Austria Hungary rises and falls",
+                        "candidates": [
+                            {
+                                "segment_id": "seg_0007",
+                                "score": 0.8,
+                                "source": "asr_text",
+                                "snippet": "Austria Hungary rose and fell.",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+        candidates = _latest_asr_binding_candidates(workspace=workspace, target_refs=(), limit=2)
+        feedback = _supported_binding_no_growth_feedback(candidates=candidates, skill_locked=True)
+
+    joined = "\n".join(feedback)
+    assert "bind_asr_claim(segment_id='seg_0007', target_refs=['T1'])" in joined
+    assert "change route" not in joined.lower()
+
+
+def test_low_confidence_near_exhaustion_auto_promotes_asr_binding_before_final():
+    video_map = VideoMap(
+        video_path="/videos/asr.mp4",
+        duration_sec=30.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=30.0,
+                asr_sentences=[
+                    {
+                        "cue_id": "cue_0001",
+                        "start_sec": 3.0,
+                        "end_sec": 7.0,
+                        "text": "The video explains how Austria Hungary rose and fell.",
+                    }
+                ],
+            )
+        ],
+    )
+    backend = StaticTaskBackend(
+        {
+            "asr_claim_binding": '{"T1": {"verdict": "supports", "cue_ids": ["cue_0001"], "quote": "Austria Hungary rose and fell"}}'
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="auto_promote")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[
+                TargetSpec(
+                    "T1",
+                    "Austria Hungary rises and falls",
+                    modality_hint=ClaimModality.NARRATED_FACT,
+                )
+            ],
+            options=[OptionSpec("D", target_sequence=("T1",))],
+        )
+        workspace.write_observation(
+            tool_name="target_coverage",
+            claim="coverage",
+            confidence=1.0,
+            raw_output={
+                "coverage": [
+                    {
+                        "target_id": "T1",
+                        "target_ref": "T1",
+                        "target": "Austria Hungary rises and falls",
+                        "candidates": [
+                            {
+                                "segment_id": "seg_0001",
+                                "score": 0.8,
+                                "source": "asr_sentence",
+                                "snippet": "Austria Hungary rose and fell.",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+        registry = build_video_exploration_registry(video_map=video_map, backend=backend, workspace=workspace)
+        agent = IterativeVisualAgent(
+            backend=backend,
+            registry=registry,
+            workspace=workspace,
+            scene_index=fixed_window_scene_index(video_path="/videos/asr.mp4", duration_sec=30.0),
+        )
+        answer = AnswerAgentResult(
+            status="need_more_evidence",
+            candidate_option_relations=[
+                {
+                    "option": "D",
+                    "relation": "support",
+                    "strength": 0.8,
+                    "grounding_quality": "indexed_transcript",
+                    "observation_id": "obs_0001",
+                }
+            ],
+            raw_text="partial",
+        )
+
+        result = agent._try_low_confidence_final(
+            answer_result=answer,
+            question="Question?\nD. How Austria Hungary rises and falls.",
+            video_path="/videos/asr.mp4",
+            rounds=[],
+            round_number=8,
+            source="evidence_table_no_growth",
+            remaining_rounds=2,
+            supported_binding_no_growth_rounds=5,
+        )
+        rows = workspace.read_evidence_table_v3(question="Question?", options=[]).get("rows", [])
+        trace = _trace_events(workspace)
+
+    assert result is None
+    assert backend.requests[0].task == "asr_claim_binding"
+    assert any(row.get("evidence_binding", {}).get("status") == "supported" for row in rows)
+    assert any(
+        event["type"] == "auto_evidence_promotion_attempted" and event["payload"].get("succeeded") is True
+        for event in trace
+    )
+
+
+def test_low_confidence_near_exhaustion_allows_final_after_auto_promotion_failure():
+    answer = AnswerAgentResult(
+        status="need_more_evidence",
+        candidate_option_relations=[
+                {
+                    "option": "D",
+                    "relation": "support",
+                    "strength": 0.8,
+                    "grounding_quality": "indexed_transcript",
+                    "observation_id": "obs_0001",
+            }
+        ],
+        raw_text="partial",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="auto_promote_fail")
+        backend = StaticTaskBackend({})
+        registry = build_video_exploration_registry(video_map=VideoMap("/videos/asr.mp4", 30.0, []), backend=backend, workspace=workspace)
+        agent = IterativeVisualAgent(
+            backend=backend,
+            registry=registry,
+            workspace=workspace,
+            scene_index=fixed_window_scene_index(video_path="/videos/asr.mp4", duration_sec=30.0),
+        )
+
+        result = agent._try_low_confidence_final(
+            answer_result=answer,
+            question="Question?\nD. How Austria Hungary rises and falls.",
+            video_path="/videos/asr.mp4",
+            rounds=[],
+            round_number=8,
+            source="evidence_table_no_growth",
+            remaining_rounds=2,
+            supported_binding_no_growth_rounds=5,
+        )
+
+    assert result is not None
+    assert result.status == "low_confidence_final"
+    assert result.answer == "D"
 
 
 def test_planner_final_keeps_temporal_free_text_for_verifier():

@@ -398,6 +398,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 self_check=("global_gist is not an option vote", "decision cites coverage evidence"),
                 allowed_actions=frozenset(
                     {"global_gist", "query_context", "vision_read", "target_coverage", "read_segment_detail", "search_segments"}
+                    | {"bind_asr_claim"}
                     | {"verify_ledger_answer"}
                 ),
             ),
@@ -477,7 +478,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 procedure=timeline_steps,
                 sufficiency=("narrated_fact_sequence_has_asr_or_transcript_support", "timeline_conflicts_resolved"),
                 verifier_checks=("narrated_fact_support_present", "selected_option_has_structured_support"),
-                allowed_actions=timeline_allowed_actions,
+                allowed_actions=timeline_allowed_actions | {"bind_asr_claim"},
             ),
             _load_builtin_playbook(
                 "visual_timeline_qa.md",
@@ -497,7 +498,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 procedure=grounded_steps,
                 sufficiency=("asr_claim_and_visual_anchor_are_consistent",),
                 verifier_checks=("selected_option_has_structured_support", "no_unaddressed_conflict"),
-                allowed_actions=grounded_allowed_actions | timeline_allowed_actions,
+                allowed_actions=grounded_allowed_actions | timeline_allowed_actions | {"bind_asr_claim"},
             ),
             _load_builtin_playbook(
                 "grounded_factual_qa.md",

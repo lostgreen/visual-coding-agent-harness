@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Mapping, Sequence
 
+from .text_norm import unique_tokens
 from .video_index import SceneIndex
 
 
@@ -435,7 +436,7 @@ def _recommended_next_tools(*, query: str, candidates: Sequence[VideoSearchResul
 
 
 def _tokens(text: str) -> set[str]:
-    return {token.lower() for token in re.findall(r"[A-Za-z0-9]+", text)}
+    return unique_tokens(text)
 
 
 def _unique_texts(values: Sequence[str]) -> list[str]:

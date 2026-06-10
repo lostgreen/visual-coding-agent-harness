@@ -197,6 +197,7 @@ class IterativeVisualAgent:
         self._route_repair_counts: dict[tuple[str, str, tuple[str, ...]], int] = {}
         self._route_repair_exhausted: Mapping[str, Any] | None = None
         self._executed_recommended_action_ids: set[str] = set()
+        self._auto_evidence_promotion_attempted_keys: set[tuple[str, str, tuple[str, ...]]] = set()
         self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure: Mapping[str, Any] | None = None
         self.context_allocator = default_context_budget_allocator(
@@ -208,6 +209,7 @@ class IterativeVisualAgent:
         self._route_repair_counts = {}
         self._route_repair_exhausted = None
         self._executed_recommended_action_ids = set()
+        self._auto_evidence_promotion_attempted_keys = set()
         self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure = None
         question_context = build_question_context(question)
@@ -1127,6 +1129,11 @@ class IterativeVisualAgent:
                     )
             if supported_binding_no_growth_rounds >= 3 and not self._no_progress_warning_emitted:
                 self._no_progress_warning_emitted = True
+                promotion_candidates = _latest_asr_binding_candidates(
+                    workspace=self.workspace,
+                    target_refs=(),
+                    limit=2,
+                )
                 self.workspace.write_trace_event(
                     "iterative_no_progress_warning",
                     {
@@ -1134,12 +1141,13 @@ class IterativeVisualAgent:
                         "reason": "supported_evidence_binding_no_growth",
                         "no_growth_rounds": supported_binding_no_growth_rounds,
                         "supported_binding_count": current_supported_binding_count,
+                        "promotion_candidates": promotion_candidates,
                     },
                 )
-                answer_feedback = [
-                    "No new supported evidence bindings appeared for three rounds; promote answer-grade "
-                    "evidence with evidence_binding.status=supported or change route."
-                ]
+                answer_feedback = _supported_binding_no_growth_feedback(
+                    candidates=promotion_candidates,
+                    skill_locked=bool(skill_runtime is not None and skill_runtime.locked),
+                )
             if no_evidence_growth_rounds >= 2 and not final_round_reserved:
                 answer_result = AnswerAgent(self.backend).run(
                     question=raw_question,
@@ -1165,6 +1173,8 @@ class IterativeVisualAgent:
                     source="evidence_table_no_growth",
                     program=program,
                     observation_ids=observation_ids,
+                    remaining_rounds=self.budget.max_rounds - round_number,
+                    supported_binding_no_growth_rounds=supported_binding_no_growth_rounds,
                 )
                 if low_confidence_result is not None:
                     return low_confidence_result
@@ -3889,13 +3899,27 @@ class IterativeVisualAgent:
         source: str,
         program: Sequence[Mapping[str, Any]] = (),
         observation_ids: Sequence[str] = (),
+        remaining_rounds: int | None = None,
+        supported_binding_no_growth_rounds: int = 0,
     ) -> IterativeRunResult | None:
         if answer_result.status != "need_more_evidence" or not answer_result.has_partial_support():
             return None
         low_confidence = answer_result.as_low_confidence_final()
         if low_confidence.status != "low_confidence_final":
             return None
-        if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES:
+        auto_promotion_guard_active = (
+            supported_binding_no_growth_rounds >= 5
+            and remaining_rounds is not None
+            and remaining_rounds <= 3
+        )
+        if auto_promotion_guard_active and self._try_auto_evidence_promotion(
+            answer=low_confidence.answer,
+            question=question,
+            round_number=round_number,
+            source=source,
+        ):
+            return None
+        if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES and not auto_promotion_guard_active:
             self.workspace.write_trace_event(
                 "iterative_answer_suggestion",
                 {
@@ -3909,7 +3933,7 @@ class IterativeVisualAgent:
                 },
             )
             return None
-        if not _has_answer_grade_citation(
+        if not auto_promotion_guard_active and not _has_answer_grade_citation(
             workspace=self.workspace,
             question=question,
             answer=low_confidence.answer,
@@ -3952,6 +3976,104 @@ class IterativeVisualAgent:
             confidence=low_confidence.confidence,
             rounds=final_rounds,
         )
+
+    def _try_auto_evidence_promotion(
+        self,
+        *,
+        answer: str,
+        question: str,
+        round_number: int,
+        source: str,
+    ) -> bool:
+        if not self._has_tool("bind_asr_claim"):
+            self.workspace.write_trace_event(
+                "auto_evidence_promotion_attempted",
+                {"round": round_number, "source": source, "answer": answer, "succeeded": False, "reason": "tool_unavailable"},
+            )
+            return False
+        target_refs = _target_refs_for_answer(workspace=self.workspace, answer=answer)
+        if not target_refs:
+            self.workspace.write_trace_event(
+                "auto_evidence_promotion_attempted",
+                {"round": round_number, "source": source, "answer": answer, "succeeded": False, "reason": "no_target_refs"},
+            )
+            return False
+        candidate = _latest_asr_binding_candidates(workspace=self.workspace, target_refs=target_refs, limit=1)
+        if not candidate:
+            self.workspace.write_trace_event(
+                "auto_evidence_promotion_attempted",
+                {
+                    "round": round_number,
+                    "source": source,
+                    "answer": answer,
+                    "target_refs": target_refs,
+                    "succeeded": False,
+                    "reason": "no_coverage_candidate",
+                },
+            )
+            return False
+        segment_id = str(candidate[0].get("segment_id", "") or "").strip()
+        candidate_target_refs = [
+            str(ref).strip()
+            for ref in candidate[0].get("target_refs", target_refs)
+            if str(ref).strip()
+        ]
+        key = (str(_answer_option_letter(answer) or answer), segment_id, tuple(candidate_target_refs))
+        if key in self._auto_evidence_promotion_attempted_keys:
+            self.workspace.write_trace_event(
+                "auto_evidence_promotion_attempted",
+                {
+                    "round": round_number,
+                    "source": source,
+                    "answer": answer,
+                    "segment_id": segment_id,
+                    "target_refs": candidate_target_refs,
+                    "succeeded": False,
+                    "reason": "already_attempted",
+                },
+            )
+            return False
+        self._auto_evidence_promotion_attempted_keys.add(key)
+        before = self._supported_evidence_binding_count()
+        try:
+            result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(
+                [
+                    {
+                        "tool": "bind_asr_claim",
+                        "args": {"segment_id": segment_id, "target_refs": candidate_target_refs},
+                    }
+                ]
+            )
+        except Exception as exc:
+            self.workspace.write_trace_event(
+                "auto_evidence_promotion_attempted",
+                {
+                    "round": round_number,
+                    "source": source,
+                    "answer": answer,
+                    "segment_id": segment_id,
+                    "target_refs": candidate_target_refs,
+                    "succeeded": False,
+                    "reason": f"tool_error:{type(exc).__name__}",
+                },
+            )
+            return False
+        after = self._supported_evidence_binding_count()
+        succeeded = after > before
+        self.workspace.write_trace_event(
+            "auto_evidence_promotion_attempted",
+            {
+                "round": round_number,
+                "source": source,
+                "answer": answer,
+                "segment_id": segment_id,
+                "target_refs": candidate_target_refs,
+                "observation_ids": list(result.observation_ids),
+                "succeeded": succeeded,
+                "reason": "supported_binding_created" if succeeded else "no_supported_binding_created",
+            },
+        )
+        return succeeded
 
     def _try_global_gist_route(self, *, question: str, video_path: str) -> IterativeRunResult | None:
         first_step = {
@@ -6608,6 +6730,99 @@ def _target_refs_for_answer(*, workspace: EvidenceWorkspace, answer: str) -> lis
     if isinstance(targets_by_id, Mapping):
         return [str(target_id) for target_id in sorted(targets_by_id)]
     return []
+
+
+def _latest_asr_binding_candidates(
+    *,
+    workspace: EvidenceWorkspace,
+    target_refs: Sequence[str] = (),
+    limit: int = 2,
+) -> list[dict[str, Any]]:
+    requested_refs = {str(ref).strip() for ref in target_refs if str(ref).strip()}
+    candidates: list[dict[str, Any]] = []
+    for observation in reversed(workspace.read_observations(tool_name="target_coverage")):
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        coverage = raw_output.get("coverage", [])
+        if not isinstance(coverage, Sequence) or isinstance(coverage, (str, bytes)):
+            continue
+        for row in coverage:
+            if not isinstance(row, Mapping):
+                continue
+            row_ref = str(row.get("target_ref") or row.get("target_id") or "").strip()
+            is_registry_ref = bool(_TARGET_REF_RE.fullmatch(row_ref))
+            if requested_refs and row_ref not in requested_refs:
+                continue
+            row_candidates = row.get("candidates", [])
+            if not isinstance(row_candidates, Sequence) or isinstance(row_candidates, (str, bytes)):
+                continue
+            for candidate in row_candidates:
+                if not isinstance(candidate, Mapping):
+                    continue
+                segment_id = str(candidate.get("segment_id", "") or "").strip()
+                if not segment_id:
+                    continue
+                target_refs_for_candidate = [row_ref] if is_registry_ref else []
+                candidates.append(
+                    {
+                        "segment_id": segment_id,
+                        "target_refs": target_refs_for_candidate,
+                        "target": str(row.get("target", "") or "").strip(),
+                        "score": float(candidate.get("score", 0.0) or 0.0),
+                        "source": str(candidate.get("source", "") or "").strip(),
+                        "snippet": str(candidate.get("snippet", "") or "").strip(),
+                    }
+                )
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for candidate in sorted(candidates, key=lambda item: (-float(item.get("score", 0.0) or 0.0), str(item.get("segment_id", "")))):
+        refs = tuple(str(ref) for ref in candidate.get("target_refs", []) if str(ref))
+        key = (str(candidate.get("segment_id", "")), refs)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+        if len(deduped) >= max(1, int(limit or 1)):
+            break
+    return deduped
+
+
+def _supported_binding_no_growth_feedback(
+    *,
+    candidates: Sequence[Mapping[str, Any]],
+    skill_locked: bool,
+) -> list[str]:
+    base = (
+        "No new supported evidence bindings appeared for three rounds; stay within the effective skill and "
+        "promote answer-grade evidence with evidence_binding.status=supported."
+        if skill_locked
+        else "No new supported evidence bindings appeared for three rounds; promote answer-grade evidence with evidence_binding.status=supported."
+    )
+    lines = [base]
+    actionable = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("segment_id", "") or "").strip()
+        and any(str(ref).strip() for ref in candidate.get("target_refs", []) if str(ref).strip())
+    ]
+    if actionable:
+        suggestions = []
+        for candidate in actionable[:2]:
+            segment_id = str(candidate.get("segment_id", "") or "").strip()
+            refs = [str(ref).strip() for ref in candidate.get("target_refs", []) if str(ref).strip()]
+            suggestions.append(f"bind_asr_claim(segment_id='{segment_id}', target_refs={refs})")
+        lines.append("Suggested next action: " + "; ".join(suggestions) + ".")
+    elif candidates:
+        compact = []
+        for candidate in candidates[:2]:
+            compact.append(
+                f"{candidate.get('target', 'target')} -> {candidate.get('segment_id', 'segment')}"
+            )
+        lines.append(
+            "Top coverage candidates were found but lack registry target_refs for automatic binding: "
+            + "; ".join(compact)
+            + "."
+        )
+    return lines
 
 
 def _segment_ids_from_observation_payload(raw_output: Mapping[str, Any]) -> list[str]:

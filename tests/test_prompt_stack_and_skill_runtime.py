@@ -9,7 +9,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _semantic_question_text,
     _skill_target_facts,
 )
-from visual_coding_agent_harness.agents.skills.specs import SkillSpec, builtin_skill_registry, skill_catalog_prompt
+from visual_coding_agent_harness.agents.skills.specs import SkillSpec, allowed_actions_for_skill, builtin_skill_registry, skill_catalog_prompt
 from visual_coding_agent_harness.agents.prompt_stack import (
     _final_gate_block,
     _normalization_notes_body,
@@ -263,6 +263,21 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("read_segment_detail(segment_id: str, targets: list = [], target_refs: list = []", rendered)
         self.assertIn("locate_targets_in_segment(segment_id: str, targets: list = [], target_refs: list = []", rendered)
         self.assertNotIn("No target_refs are registered for this run", rendered)
+
+    def test_asr_binding_schema_and_skill_filtering(self):
+        for skill_id in ("main_idea@v1", "narration_timeline_qa@v1", "mixed_asr_visual_qa@v1"):
+            self.assertIn("bind_asr_claim", allowed_actions_for_skill(skill_id))
+
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="narration_timeline_qa@v1",
+            exhausted=frozenset(),
+            target_ref_descriptions=("T1: Goya came from a humble background",),
+        )
+
+        self.assertIn("bind_asr_claim(segment_id: str, target_refs: list)", rendered)
+        self.assertIn("Use bind_asr_claim", rendered)
+        self.assertIn("indexed ASR", rendered)
 
     def test_prompt_renders_effective_skill_state(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)

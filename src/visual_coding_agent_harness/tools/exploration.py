@@ -8,6 +8,7 @@ from ..backends.base import VisionLanguageBackend
 from ..registry import ToolRegistry
 from ..video_map import VideoMap, VideoMapStore
 from ..workspace import EvidenceWorkspace
+from .asr_binding import build_asr_binding_registry
 from .enrichment import build_video_enrichment_registry
 from .global_view import build_global_view_registry
 from .inspector import build_segment_inspector_registry
@@ -47,6 +48,7 @@ def build_video_exploration_registry(
     registry.extend(build_timeline_registry(workspace=workspace))
     registry.extend(build_workspace_primitives_registry(workspace=workspace))
     registry.extend(build_verification_registry(workspace=workspace))
+    registry.extend(build_asr_binding_registry(video_map_store=video_map_store, backend=backend, workspace=workspace))
     registry.extend(
         build_segment_inspector_registry(
             backend,

@@ -14,6 +14,7 @@ TEXT_TASKS = {
     "ground_question",
     "rewrite_exploration_question",
     "verify_from_evidence",
+    "asr_claim_binding",
     "summarize_subtitle_segment",
     "summarize_scene_map_segment",
 }

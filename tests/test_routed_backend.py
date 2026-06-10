@@ -22,6 +22,7 @@ def test_routed_backend_sends_text_tasks_to_text_backend():
     for task in [
         "replan",
         "answer_from_evidence",
+        "asr_claim_binding",
         "verify_from_evidence",
         "summarize_subtitle_segment",
         "summarize_scene_map_segment",
@@ -33,6 +34,7 @@ def test_routed_backend_sends_text_tasks_to_text_backend():
     assert [request.task for request in text.requests] == [
         "replan",
         "answer_from_evidence",
+        "asr_claim_binding",
         "verify_from_evidence",
         "summarize_subtitle_segment",
         "summarize_scene_map_segment",

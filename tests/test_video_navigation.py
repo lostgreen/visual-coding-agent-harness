@@ -392,6 +392,61 @@ class VideoNavigationTest(unittest.TestCase):
 
         self.assertEqual(detail["answer_evidence_rows"], [])
 
+    def test_read_segment_detail_uses_content_tokens_for_index_hits(self):
+        video_map = VideoMap(
+            video_path="/videos/asr.mp4",
+            duration_sec=30.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=30.0,
+                    asr_text="of the is a",
+                )
+            ],
+        )
+        registry = build_video_navigation_registry(video_map)
+
+        detail = registry.execute("read_segment_detail", {"segment_id": "seg_0001", "targets": ["of the is a"]})
+
+        self.assertFalse(detail["target_hits"][0]["matched"])
+
+    def test_indexed_asr_promotion_uses_light_stemming_with_low_confidence(self):
+        video_map = VideoMap(
+            video_path="/videos/asr.mp4",
+            duration_sec=30.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=30.0,
+                    asr_text="The video explains how Austria Hungary rose and fell.",
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="stemmed_indexed_asr")
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            result = ProgramInterpreter(registry=registry, workspace=workspace).run(
+                [
+                    {
+                        "tool": "read_segment_detail",
+                        "args": {
+                            "segment_id": "seg_0001",
+                            "option_targets": {"D": ["Austria Hungary rises and falls"]},
+                        },
+                    }
+                ]
+            )
+            observation = workspace.get_observation(result.observation_ids[0])
+
+        assert observation is not None
+        rows = observation.raw_output["answer_evidence_rows"]
+        self.assertEqual(rows[0]["tool"], "asr_cue_detail")
+        self.assertLessEqual(float(rows[0]["confidence"]), 0.6)
+        self.assertIn("rose and fell", rows[0]["snippet"])
+
     def test_read_segment_detail_rejects_unknown_target_refs_directly(self):
         video_map = VideoMap(
             video_path="/videos/goya.mp4",
