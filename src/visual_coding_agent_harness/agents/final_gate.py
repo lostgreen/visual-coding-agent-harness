@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 from .contracts import FinalGateDecision, FinalRejectionReason, OptionEvaluation
 from .skills.policy_constants import (
+    MAIN_IDEA_RECOVERY_TOP_K,
     SkillPolicy,
     SkillPolicyName,
     TRANSCRIPT_MODALITIES,
@@ -22,6 +23,8 @@ class _NormalizedEvidence:
     relation_ref: str | None
     option_id: str | None
     modality: str
+    source: str
+    grounding_quality: str
     timestamp_start: float | None
     timestamp_end: float | None
     support_status: str
@@ -58,6 +61,7 @@ def evaluate_final_candidate(
     evidence = tuple(_normalize_evidence(binding) for binding in evidence_bindings)
     relations = tuple(_normalize_relation(binding, evidence) for binding in relation_bindings)
     option_eval_by_id = _option_evaluation_by_id(option_evaluations or ())
+    expected_option_ids = _registry_option_ids(registry)
 
     selected_evidence = tuple(binding for binding in evidence if _applies_to_option(binding, option_id))
     conflicting_ids = tuple(
@@ -77,7 +81,8 @@ def evaluate_final_candidate(
             target_refs=target_refs,
             evidence=selected_evidence,
             option_evaluation=option_eval_by_id.get(option_id),
-            has_option_evaluations=bool(option_eval_by_id),
+            option_eval_by_id=option_eval_by_id,
+            expected_option_ids=expected_option_ids,
             central_subjects=central_subjects,
         )
 
@@ -150,11 +155,19 @@ def _evaluate_main_idea(
     target_refs: tuple[str, ...],
     evidence: Sequence[_NormalizedEvidence],
     option_evaluation: OptionEvaluation | Any | None,
-    has_option_evaluations: bool,
+    option_eval_by_id: dict[str, OptionEvaluation | Any],
+    expected_option_ids: tuple[str, ...],
     central_subjects: Sequence[str],
 ) -> FinalGateDecision:
-    if policy.requires_per_option_coverage and not has_option_evaluations:
-        return _reject(option_id, "no_per_option_coverage")
+    if policy.requires_per_option_coverage:
+        missing_option_evaluations = bool(expected_option_ids) and not set(expected_option_ids).issubset(option_eval_by_id)
+        single_option_chase = len(option_eval_by_id) <= 1 and len(expected_option_ids) > 1
+        if missing_option_evaluations or single_option_chase or option_evaluation is None:
+            return _reject(
+                option_id,
+                "no_per_option_coverage",
+                actionable_next_program=_per_option_coverage_program(registry),
+            )
 
     option_kind = _option_kind(option)
     if option_kind is not None and option_kind not in policy.requires_option_kind:
@@ -163,15 +176,16 @@ def _evaluate_main_idea(
     if central_subjects and not _subjects_overlap(registry, target_refs, central_subjects):
         return _reject(option_id, "wrong_subject")
 
+    answer_grade_evidence = tuple(binding for binding in evidence if _is_answer_grade_main_idea_evidence(binding))
     missing_target_refs, unsupported_modality_refs, supporting_evidence_ids = _target_support(
         target_refs=target_refs,
-        evidence=evidence,
+        evidence=answer_grade_evidence,
         policy=policy,
         require_timestamp=False,
     )
     supported = tuple(
         binding
-        for binding in evidence
+        for binding in answer_grade_evidence
         if (
             binding.target_ref in target_refs
             and binding.support_status == "supported"
@@ -211,7 +225,9 @@ def _evaluate_main_idea(
     rejection_reason = _field(option_evaluation, "rejection_reason")
     if rejection_reason == "wrong_subject":
         return _reject(option_id, "wrong_subject", supporting_evidence_ids=supporting_evidence_ids)
-    if rejection_reason == "insufficient_breadth":
+    if rejection_reason == "off_topic":
+        return _reject(option_id, "wrong_subject", supporting_evidence_ids=supporting_evidence_ids)
+    if rejection_reason in {"insufficient_breadth", "narrower", "wrong_arc"}:
         return _reject(
             option_id,
             "insufficient_breadth",
@@ -460,6 +476,8 @@ def _normalize_evidence(binding: Any) -> _NormalizedEvidence:
         relation_ref=_string_or_none(_field(binding, "relation_ref", "relation_id")),
         option_id=_string_or_none(_field(binding, "option_id")),
         modality=_normalize_modality(_field(binding, "modality", "claim_modality", "source")),
+        source=str(_field(binding, "source", "tool", "obs_id", default="") or "").strip(),
+        grounding_quality=_normalize_modality(_field(binding, "grounding_quality", default="")),
         timestamp_start=timestamp,
         timestamp_end=_float_or_none(_field(binding, "timestamp_end", default=timestamp)),
         support_status=_normalize_status(_field(binding, "support_status", "status")),
@@ -496,12 +514,29 @@ def _option_evaluation_by_id(evaluations: Sequence[OptionEvaluation | Any]) -> d
     return result
 
 
+def _registry_option_ids(registry: Any) -> tuple[str, ...]:
+    options_by_id = _field(registry, "options_by_id", default={})
+    if hasattr(options_by_id, "keys"):
+        return tuple(str(option_id) for option_id in options_by_id.keys())
+    return ()
+
+
 def _applies_to_option(binding: _NormalizedEvidence, option_id: str) -> bool:
     return binding.option_id in (None, "", option_id)
 
 
 def _modality_allowed(binding_modality: str | None, policy: SkillPolicy) -> bool:
     return str(binding_modality or "").strip().lower() in policy.allowed_modalities
+
+
+def _is_answer_grade_main_idea_evidence(binding: _NormalizedEvidence) -> bool:
+    marker_values = {
+        _normalize_text(binding.modality),
+        _normalize_text(binding.source),
+        _normalize_text(binding.grounding_quality),
+    }
+    context_only_markers = {"global_gist", "global_sparse", "query_global_context"}
+    return not (marker_values & context_only_markers)
 
 
 def _relation_modality_allowed(relation: _NormalizedRelation, policy: SkillPolicy) -> bool:
@@ -567,6 +602,8 @@ def _has_timestamp(binding: _NormalizedEvidence) -> bool:
 
 
 def _segment_key(binding: _NormalizedEvidence) -> tuple[Any, ...]:
+    if binding.source:
+        return (binding.source,)
     if binding.timestamp_start is not None or binding.timestamp_end is not None:
         return (
             round(binding.timestamp_start or 0.0, 3),
@@ -653,12 +690,51 @@ def _unique_ids(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _all_option_target_refs(registry: Any) -> tuple[str, ...]:
+    refs: list[str] = []
+    option_ref_index = _field(registry, "option_ref_index", default={})
+    if hasattr(option_ref_index, "values"):
+        for value in option_ref_index.values():
+            refs.extend(_coerce_refs(value))
+    options_by_id = _field(registry, "options_by_id", default={})
+    if hasattr(options_by_id, "values"):
+        for option in options_by_id.values():
+            refs.extend(_option_target_refs(option))
+    if not refs:
+        targets_by_id = _field(registry, "targets_by_id", default={})
+        if hasattr(targets_by_id, "keys"):
+            refs.extend(str(target_ref) for target_ref in targets_by_id.keys())
+    return _unique_ids(refs)
+
+
+def _coerce_refs(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        return (str(value),)
+    try:
+        return tuple(str(item) for item in value)
+    except TypeError:
+        return (str(value),)
+
+
+def _per_option_coverage_program(registry: Any) -> tuple[dict[str, Any], ...]:
+    target_refs = _all_option_target_refs(registry)
+    args: dict[str, Any] = {
+        "target_refs": list(target_refs),
+        "group_by_option": True,
+        "top_k": MAIN_IDEA_RECOVERY_TOP_K,
+    }
+    return ({"tool": "target_coverage", "args": args},)
+
+
 def _accept(option_id: str, *, supporting_evidence_ids: Sequence[str]) -> FinalGateDecision:
-    return FinalGateDecision(
+    decision = FinalGateDecision(
         proposed_option=option_id,
         gate_status="accepted",
         supporting_evidence_ids=_unique_ids(supporting_evidence_ids),
     )
+    return _attach_feedback_fields(decision)
 
 
 def _reject(
@@ -668,8 +744,10 @@ def _reject(
     supporting_evidence_ids: Sequence[str] = (),
     missing_target_refs: Sequence[str] = (),
     missing_relation_refs: Sequence[str] = (),
+    actionable_next_program: Sequence[dict[str, Any]] = (),
+    do_not_repeat: Sequence[str] = (),
 ) -> FinalGateDecision:
-    return FinalGateDecision(
+    decision = FinalGateDecision(
         proposed_option=option_id,
         gate_status="rejected",
         reason_code=reason_code,
@@ -677,3 +755,19 @@ def _reject(
         missing_target_refs=tuple(missing_target_refs),
         missing_relation_refs=tuple(missing_relation_refs),
     )
+    return _attach_feedback_fields(
+        decision,
+        actionable_next_program=actionable_next_program,
+        do_not_repeat=do_not_repeat,
+    )
+
+
+def _attach_feedback_fields(
+    decision: FinalGateDecision,
+    *,
+    actionable_next_program: Sequence[dict[str, Any]] = (),
+    do_not_repeat: Sequence[str] = (),
+) -> FinalGateDecision:
+    object.__setattr__(decision, "actionable_next_program", tuple(actionable_next_program))
+    object.__setattr__(decision, "do_not_repeat", tuple(do_not_repeat))
+    return decision

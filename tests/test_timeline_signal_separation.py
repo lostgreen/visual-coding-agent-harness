@@ -51,14 +51,14 @@ def test_locate_ordered_list_rows_are_text_candidates_not_confirmed_timeline(tmp
 
     observation = workspace.read_observations(tool_name="locate_targets_in_segment")[0]
     rows = observation.raw_output["ordered_list_timeline_rows"]
-    assert rows
-    assert {row["confidence_signal"] for row in rows} == {"text_inferred"}
-    assert all(row["requires_visual_verification"] for row in rows)
+    assert rows == []
+    actions = observation.raw_output["recommended_next_actions"]
+    assert actions
+    assert actions[0]["route_kind"] in {"focused_ordered_list_vision", "partial_ordered_list"}
     assert workspace.read_timeline_sorted() == []
     assert _confirmed_timeline_rows(workspace.read_timeline_sorted()) == []
     candidate_path = workspace.root / "timeline_candidates.md"
-    assert candidate_path.exists()
-    assert "text_inferred" in candidate_path.read_text(encoding="utf-8")
+    assert not candidate_path.exists()
 
 
 def test_visual_verifier_rows_are_confirmed_timeline(tmp_path: Path):

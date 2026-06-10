@@ -240,6 +240,20 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("- T2: Apollo and Daphne", rendered)
         self.assertIn("target_refs: list = []", rendered)
 
+    def test_tool_schema_exposes_target_refs_without_empty_registry_warning_after_registry_exists(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="visual_timeline_qa@v1",
+            exhausted=frozenset(),
+            target_ref_descriptions=("T1: central subject", "T2: first event", "T3: second event"),
+        )
+
+        self.assertIn("Registered target_refs:", rendered)
+        self.assertIn("target_coverage(targets: list = [], target_refs: list = []", rendered)
+        self.assertIn("read_segment_detail(segment_id: str, targets: list = [], target_refs: list = []", rendered)
+        self.assertIn("locate_targets_in_segment(segment_id: str, targets: list = [], target_refs: list = []", rendered)
+        self.assertNotIn("No target_refs are registered for this run", rendered)
+
     def test_prompt_renders_effective_skill_state(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
         allocator = default_context_budget_allocator(total_budget_tokens=800)

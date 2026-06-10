@@ -11,6 +11,7 @@ from .base import BackendRequest, BackendResponse
 TEXT_TASKS = {
     "replan",
     "answer_from_evidence",
+    "ground_question",
     "rewrite_exploration_question",
     "verify_from_evidence",
     "summarize_subtitle_segment",
@@ -47,7 +48,7 @@ class RoutedBackend:
     def _route_name(self, request: BackendRequest) -> str:
         if request.media_path or request.frames:
             return "vl"
-        if request.task in TEXT_TASKS:
+        if request.task in TEXT_TASKS and self.text_backend is not None:
             return "text"
         if request.task in VISION_TASKS:
             return "vl"

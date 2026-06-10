@@ -5,13 +5,20 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .agents.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
 from .agents.output_quality import is_unsupported_claim
+from .agents.transcript_binder import TranscriptEvidenceBinder
+from .contracts import (
+    ClaimModality,
+    ClaimRelation,
+    TargetSpec,
+    build_ordered_transcript_sequence,
+)
 from .schemas import EvidenceRowV2
 
 
@@ -269,7 +276,144 @@ class EvidenceWorkspace:
             frame_set_id=frame_set_id,
         )
         self._append_jsonl("observations.jsonl", asdict(observation))
-        return observation
+        return self._apply_post_observation_hooks(observation)
+
+    def promote_textual_answer_evidence_payload(
+        self,
+        *,
+        tool_name: str,
+        raw_output: Mapping[str, Any],
+        observation_id: str = "",
+    ) -> dict[str, Any]:
+        """Return raw_output plus deterministic registry-backed transcript bindings."""
+
+        promoted, _generated_rows = self._promoted_textual_answer_evidence(
+            tool_name=tool_name,
+            raw_output=raw_output,
+            observation_id=observation_id,
+        )
+        return promoted
+
+    def _apply_post_observation_hooks(self, observation: Observation) -> Observation:
+        promoted_raw_output, generated_rows = self._promoted_textual_answer_evidence(
+            tool_name=observation.tool,
+            raw_output=observation.raw_output,
+            observation_id=observation.observation_id,
+        )
+        if promoted_raw_output == observation.raw_output:
+            return observation
+
+        promoted = replace(observation, raw_output=promoted_raw_output)
+        rows = self._read_jsonl_dicts("observations.jsonl")
+        for row in rows:
+            if str(row.get("observation_id", "")) != observation.observation_id:
+                continue
+            row["raw_output"] = dict(promoted_raw_output)
+            row["confidence_signal"] = str(
+                row.get("confidence_signal", "")
+                or promoted_raw_output.get("confidence_signal", "")
+            )
+            break
+        self._write_jsonl("observations.jsonl", rows)
+
+        written = 0
+        for index, row in enumerate(generated_rows, start=1):
+            payload = dict(row)
+            payload.setdefault("obs_id", promoted.observation_id)
+            payload.setdefault("observation_id", promoted.observation_id)
+            payload.setdefault("evidence_id", f"ev_answer_{promoted.observation_id}_{index:02d}")
+            self.write_evidence_row(payload)
+            written += 1
+        if written:
+            self.write_trace_event(
+                "post_observation_textual_evidence_promoted",
+                {
+                    "tool": promoted.tool,
+                    "observation_id": promoted.observation_id,
+                    "row_count": written,
+                },
+            )
+        return promoted
+
+    def _promoted_textual_answer_evidence(
+        self,
+        *,
+        tool_name: str,
+        raw_output: Mapping[str, Any],
+        observation_id: str,
+    ) -> tuple[dict[str, Any], list[Mapping[str, Any]]]:
+        if not _tool_allows_textual_promotion(tool_name=tool_name, raw_output=raw_output):
+            return dict(raw_output), []
+
+        targets = _workspace_registry_targets(self)
+        if not targets:
+            return dict(raw_output), []
+
+        text_sources = _promotion_text_sources(raw_output)
+        if not text_sources:
+            return dict(raw_output), []
+
+        relations = _workspace_registry_relations(self, targets=targets)
+        options = _workspace_registry_options(self)
+        evidence_bindings: list[dict[str, Any]] = []
+        relation_bindings: list[dict[str, Any]] = []
+        answer_rows: list[Mapping[str, Any]] = []
+        for source in text_sources:
+            source_targets = _targets_for_text_source(targets=targets, source=source)
+            if not source_targets:
+                continue
+            result = TranscriptEvidenceBinder().bind(
+                text=str(source["text"]),
+                targets=source_targets,
+                relations=relations,
+                obs_id=observation_id,
+                segment_id=str(raw_output.get("segment_id", "")),
+                start_sec=_optional_float(source.get("start_sec")) or _optional_float(raw_output.get("start_sec")),
+                source=str(source["source"]),
+            )
+            binding_payloads = [_binding_payload(binding) for binding in result.evidence_bindings]
+            relation_payloads = [
+                *_ordered_sequence_relation_bindings(
+                    text=str(source["text"]),
+                    targets=source_targets,
+                    relations=relations,
+                    options=options,
+                    raw_output=raw_output,
+                    observation_id=observation_id,
+                    source=source,
+                ),
+                *[dict(asdict(binding)) for binding in result.relation_bindings],
+            ]
+            evidence_bindings.extend(binding_payloads)
+            relation_bindings.extend(relation_payloads)
+            answer_rows.extend(
+                _answer_rows_from_bindings(
+                    raw_output=raw_output,
+                    bindings=binding_payloads,
+                    relations=relation_payloads,
+                    all_relations=relations,
+                    source=source,
+                )
+            )
+
+        promoted = dict(raw_output)
+        existing_evidence = _mapping_list(raw_output.get("evidence_bindings"))
+        existing_relations = _mapping_list(raw_output.get("relation_bindings"))
+        existing_rows = _mapping_list(raw_output.get("answer_evidence_rows"))
+        merged_evidence = _dedupe_mapping_rows([*existing_evidence, *evidence_bindings], keys=("evidence_id", "target_id", "source"))
+        merged_relations = _dedupe_mapping_rows([*relation_bindings, *existing_relations], keys=("relation_id", "binding_id", "source"))
+        merged_rows = _dedupe_mapping_rows([*answer_rows, *existing_rows], keys=("evidence_id", "tool", "event_label"))
+        promoted["evidence_bindings"] = merged_evidence
+        promoted["relation_bindings"] = merged_relations
+        promoted["answer_evidence_rows"] = merged_rows
+
+        existing_row_keys = {_mapping_key(row, keys=("evidence_id", "tool", "event_label")) for row in existing_rows}
+        generated_rows = [
+            row
+            for row in merged_rows
+            if _mapping_key(row, keys=("evidence_id", "tool", "event_label")) not in existing_row_keys
+        ]
+        return promoted, generated_rows
 
     def annotate_candidate_option_relations(
         self,
@@ -1604,6 +1748,325 @@ class EvidenceWorkspace:
             if observation_id and frame_set_id:
                 links[observation_id] = frame_set_id
         return links
+
+
+def _tool_allows_textual_promotion(*, tool_name: str, raw_output: Mapping[str, Any]) -> bool:
+    if tool_name == "read_segment_detail":
+        return bool(raw_output.get("promote_answer_evidence"))
+    return tool_name in {"read_segment", "locate_targets_in_segment"}
+
+
+def _workspace_registry_targets(workspace: EvidenceWorkspace) -> list[TargetSpec]:
+    registry = getattr(workspace, "target_registry", None)
+    targets_by_id = getattr(registry, "targets_by_id", None)
+    if not isinstance(targets_by_id, Mapping):
+        return []
+    return [target for target in targets_by_id.values() if isinstance(target, TargetSpec)]
+
+
+def _workspace_registry_relations(workspace: EvidenceWorkspace, *, targets: Sequence[TargetSpec]) -> list[ClaimRelation]:
+    target_ids = {target.target_id for target in targets}
+    registry = getattr(workspace, "target_registry", None)
+    relations_by_id = getattr(registry, "relations_by_id", {})
+    values = relations_by_id.values() if hasattr(relations_by_id, "values") else ()
+    return [
+        relation
+        for relation in values
+        if isinstance(relation, ClaimRelation)
+        and relation.source_target_id in target_ids
+        and relation.destination_target_id in target_ids
+    ]
+
+
+def _workspace_registry_options(workspace: EvidenceWorkspace) -> list[Any]:
+    registry = getattr(workspace, "target_registry", None)
+    options_by_id = getattr(registry, "options_by_id", {})
+    values = options_by_id.values() if hasattr(options_by_id, "values") else ()
+    return list(values)
+
+
+def _promotion_text_sources(raw_output: Mapping[str, Any]) -> list[dict[str, Any]]:
+    segment_id = str(raw_output.get("segment_id", ""))
+    start_sec = _optional_float(raw_output.get("start_sec"))
+    end_sec = _optional_float(raw_output.get("end_sec"))
+    sources: list[dict[str, Any]] = []
+    for key in ("raw_asr_excerpt", "asr_summary", "asr_text"):
+        text = str(raw_output.get(key) or "").strip()
+        if text:
+            sources.append(
+                {
+                    "text": text,
+                    "source": "indexed_transcript",
+                    "modality": "asr",
+                    "segment_id": segment_id,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                }
+            )
+            break
+    ocr_text = str(raw_output.get("ocr_text") or "").strip()
+    if ocr_text:
+        sources.append(
+            {
+                "text": ocr_text,
+                "source": "indexed_ocr",
+                "modality": "ocr",
+                "segment_id": segment_id,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+            }
+        )
+    for region in _mapping_list(raw_output.get("regions")):
+        region_segment_id = str(region.get("segment_id") or segment_id)
+        region_start = _optional_float(region.get("start_sec")) or start_sec
+        region_end = _optional_float(region.get("end_sec")) or end_sec
+        for field, source_name, modality in (
+            ("asr_text", "indexed_transcript", "asr"),
+            ("ocr_text", "indexed_ocr", "ocr"),
+        ):
+            text = str(region.get(field) or "").strip()
+            if not text:
+                continue
+            sources.append(
+                {
+                    "text": text,
+                    "source": source_name,
+                    "modality": modality,
+                    "segment_id": region_segment_id,
+                    "start_sec": region_start,
+                    "end_sec": region_end,
+                }
+            )
+    for candidate in _mapping_list(raw_output.get("candidates")):
+        source_name = str(candidate.get("source") or "")
+        if not source_name.startswith(("asr", "ocr")):
+            continue
+        snippet = str(candidate.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        modality = "ocr" if source_name.startswith("ocr") else "asr"
+        sources.append(
+            {
+                "text": snippet,
+                "source": "indexed_ocr" if modality == "ocr" else "indexed_transcript",
+                "modality": modality,
+                "segment_id": str(candidate.get("segment_id") or segment_id),
+                "start_sec": _optional_float(candidate.get("start_sec")) or start_sec,
+                "end_sec": _optional_float(candidate.get("end_sec")) or end_sec,
+            }
+        )
+    return _dedupe_text_sources(sources)
+
+
+def _targets_for_text_source(*, targets: Sequence[TargetSpec], source: Mapping[str, Any]) -> list[TargetSpec]:
+    modality = str(source.get("modality") or "")
+    allowed = {
+        "asr": {ClaimModality.NARRATED_FACT, ClaimModality.MIXED, ClaimModality.UNKNOWN},
+        "ocr": {ClaimModality.OCR_FACT, ClaimModality.MIXED, ClaimModality.UNKNOWN},
+    }.get(modality, {ClaimModality.UNKNOWN, ClaimModality.MIXED})
+    return [target for target in targets if target.modality_hint in allowed]
+
+
+def _binding_payload(binding: Any) -> dict[str, Any]:
+    payload = dict(asdict(binding))
+    modality = payload.get("claim_modality")
+    if isinstance(modality, ClaimModality):
+        payload["claim_modality"] = modality.value
+    return payload
+
+
+def _ordered_sequence_relation_bindings(
+    *,
+    text: str,
+    targets: Sequence[TargetSpec],
+    relations: Sequence[ClaimRelation],
+    options: Sequence[Any],
+    raw_output: Mapping[str, Any],
+    observation_id: str,
+    source: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    if str(source.get("modality") or "") != "asr":
+        return []
+    segment_id = str(source.get("segment_id") or raw_output.get("segment_id") or "")
+    relation_by_id = {relation.relation_id: relation for relation in relations}
+    target_by_id = {target.target_id: target for target in targets}
+    rows: list[dict[str, Any]] = []
+    for option in options:
+        ordered_refs = tuple(str(ref) for ref in getattr(option, "target_sequence", ()) if str(ref))
+        ordered_targets = [target_by_id[ref] for ref in ordered_refs if ref in target_by_id]
+        if len(ordered_targets) != len(ordered_refs) or len(ordered_targets) < 2:
+            continue
+        sequence = build_ordered_transcript_sequence(
+            text=text,
+            targets=ordered_targets,
+            segment_id=segment_id,
+            obs_id=observation_id,
+            start_sec=_optional_float(source.get("start_sec")),
+            end_sec=_optional_float(source.get("end_sec")),
+        )
+        if sequence is None or sequence.status != "supported" or sequence.ordered_target_refs != ordered_refs:
+            continue
+        timestamp_order = [
+            item.mention_start_sec
+            for item in sequence.items
+            if item.mention_start_sec is not None
+        ]
+        for relation_id in getattr(option, "required_relations", ()):
+            relation = relation_by_id.get(str(relation_id))
+            if relation is None:
+                continue
+            rows.append(
+                {
+                    "binding_id": f"rel_bind_{relation.relation_id}",
+                    "obs_id": observation_id,
+                    "relation_id": relation.relation_id,
+                    "status": "supported",
+                    "source": sequence.source,
+                    "snippet": sequence.snippet,
+                    "mention_timestamp_sec": _optional_float(source.get("start_sec")),
+                    "ordered_target_refs": list(sequence.ordered_target_refs),
+                    "evidence_ids": [sequence.evidence_id],
+                    "timestamp_order": timestamp_order,
+                    "modality": ClaimModality.NARRATED_FACT.value,
+                }
+            )
+    return rows
+
+
+def _answer_rows_from_bindings(
+    *,
+    raw_output: Mapping[str, Any],
+    bindings: Sequence[Mapping[str, Any]],
+    relations: Sequence[Mapping[str, Any]],
+    all_relations: Sequence[ClaimRelation],
+    source: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    supported_relations = [
+        relation
+        for relation in relations
+        if str(relation.get("status", "")).strip().lower() == "supported"
+    ]
+    rows: list[Mapping[str, Any]] = []
+    segment_id = str(source.get("segment_id") or raw_output.get("segment_id") or "")
+    start_sec = _optional_float(source.get("start_sec")) or _optional_float(raw_output.get("start_sec"))
+    end_sec = _optional_float(source.get("end_sec")) or _optional_float(raw_output.get("end_sec"))
+    for binding in bindings:
+        if str(binding.get("status", "")).strip().lower() != "supported":
+            continue
+        target_id = str(binding.get("target_id") or "")
+        if not target_id:
+            continue
+        scoped_relations = [
+            relation
+            for relation in supported_relations
+            if _relation_touches_target_id(
+                relation_id=str(relation.get("relation_id", "")),
+                target_id=target_id,
+                relations=all_relations,
+            )
+        ]
+        binding_payload = dict(binding)
+        binding_payload["segment_id"] = segment_id
+        binding_payload["relation_bindings"] = scoped_relations
+        rows.append(
+            {
+                "evidence_id": str(binding.get("evidence_id") or ""),
+                "tool": "transcript_evidence_binder",
+                "segment_id": segment_id,
+                "time_range": [start_sec, end_sec] if start_sec is not None and end_sec is not None else None,
+                "event_label": target_id,
+                "claim": (
+                    f"TranscriptEvidenceBinder marked {target_id} as supported in "
+                    f"{segment_id or 'segment'}: {binding.get('snippet', '')}"
+                ),
+                "confidence": 0.88,
+                "grounding_quality": "indexed_transcript" if source.get("modality") == "asr" else "ocr_textual",
+                "confidence_signal": "explicit transcript binding",
+                "limitations": "Conservative registry-backed textual binding; no raw option text is promoted as a target.",
+                "source": str(source.get("source") or ""),
+                "snippet": str(binding.get("snippet") or ""),
+                "evidence_binding": binding_payload,
+            }
+        )
+    return rows
+
+
+def _relation_touches_target_id(*, relation_id: str, target_id: str, relations: Sequence[ClaimRelation]) -> bool:
+    for relation in relations:
+        if relation.relation_id != relation_id:
+            continue
+        return target_id in {relation.source_target_id, relation.destination_target_id}
+    return False
+
+
+def _mapping_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _dedupe_mapping_rows(rows: Sequence[Mapping[str, Any]], *, keys: Sequence[str]) -> list[dict[str, Any]]:
+    seen = set()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        key = _mapping_key(row, keys=keys)
+        if key in seen:
+            for index, existing in enumerate(result):
+                if _mapping_key(existing, keys=keys) != key:
+                    continue
+                if _prefer_mapping_row(row, existing):
+                    result[index] = dict(row)
+                break
+            continue
+        seen.add(key)
+        result.append(dict(row))
+    return result
+
+
+def _prefer_mapping_row(candidate: Mapping[str, Any], existing: Mapping[str, Any]) -> bool:
+    candidate_rank = _support_rank(candidate.get("status") or candidate.get("support_status"))
+    existing_rank = _support_rank(existing.get("status") or existing.get("support_status"))
+    if candidate_rank != existing_rank:
+        return candidate_rank > existing_rank
+    candidate_relation_count = len(_mapping_list(candidate.get("relation_bindings")))
+    existing_relation_count = len(_mapping_list(existing.get("relation_bindings")))
+    if candidate_relation_count != existing_relation_count:
+        return candidate_relation_count > existing_relation_count
+    candidate_ordered = len(candidate.get("ordered_target_refs") or candidate.get("ordered_targets") or [])
+    existing_ordered = len(existing.get("ordered_target_refs") or existing.get("ordered_targets") or [])
+    return candidate_ordered > existing_ordered
+
+
+def _support_rank(value: Any) -> int:
+    status = str(value or "").strip().lower()
+    return {
+        "supported": 4,
+        "partial": 3,
+        "ambiguous": 2,
+        "rejected": 1,
+        "unsupported": 1,
+        "conflicting": 0,
+    }.get(status, 0)
+
+
+def _mapping_key(row: Mapping[str, Any], *, keys: Sequence[str]) -> tuple[str, ...]:
+    return tuple(str(row.get(key) or "").strip() for key in keys)
+
+
+def _dedupe_text_sources(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    seen = set()
+    result: list[dict[str, Any]] = []
+    for source in sources:
+        key = (
+            str(source.get("source") or ""),
+            str(source.get("text") or ""),
+            str(source.get("segment_id") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(dict(source))
+    return result
 
 
 def _iter_segment_window_dicts(value: Any):

@@ -71,6 +71,7 @@ class EvalConfig:
     budget: AgentBudget = AgentBudget()
     export_training: bool = False
     ablation_flags: Mapping[str, Any] | None = None
+    source_config_path: Path | None = None
 
 
 def validate_python(*, expected: str = REMOTE_PYTHON, allow_any_python: bool = False) -> None:
@@ -386,12 +387,18 @@ def run_eval_cases(
     summary_path = config.run_root / "summary.json"
     results = []
     config_payload = {
+        "run_root": str(config.run_root),
+        "workspace_root": str(config.workspace_root),
         "cases": list(config.cases),
         "strategies": list(config.strategies),
         "window_sec": config.window_sec,
         "budget": asdict(config.budget),
         "model_path": config.model_path,
         "planner_model_path": config.planner_model_path,
+        "data_root": str(config.data_root),
+        "parquet_path": str(config.parquet_path),
+        "video_dir": str(config.video_dir),
+        "subtitle_dir": str(config.subtitle_dir),
         "scene_index_mode": config.scene_index_mode,
         "scene_index_cache_dir": str(config.scene_index_cache_dir),
         "scene_index_cache_enabled": config.scene_index_cache_enabled,
@@ -400,8 +407,13 @@ def run_eval_cases(
         "frame_cache_root": str(_frame_cache_root(config)),
         "export_training": config.export_training,
         "ablation_flags": dict(config.ablation_flags or {}),
+        "source_config_path": str(config.source_config_path) if config.source_config_path else "",
     }
     (config.run_root / "run_config.json").write_text(
+        json.dumps(config_payload, ensure_ascii=True, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    (config.run_root / "resolved_config.json").write_text(
         json.dumps(config_payload, ensure_ascii=True, indent=2, sort_keys=True),
         encoding="utf-8",
     )
@@ -1103,56 +1115,174 @@ def parse_strategies(values: Sequence[str] | None) -> tuple[str, ...]:
     return tuple(strategies)
 
 
+def load_experiment_config(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    text = path.read_text(encoding="utf-8")
+    try:
+        import yaml  # type: ignore
+    except Exception:
+        return _parse_minimal_yaml(text)
+    payload = yaml.safe_load(text) or {}
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"Config must be a mapping: {path}")
+    return dict(payload)
+
+
+def _parse_minimal_yaml(text: str) -> dict[str, Any]:
+    root: dict[str, Any] = {}
+    current_mapping: dict[str, Any] | None = None
+    current_indent = 0
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        line = raw_line.strip()
+        if ":" not in line:
+            continue
+        key, raw_value = line.split(":", 1)
+        key = key.strip()
+        value = raw_value.strip()
+        if not value:
+            mapping: dict[str, Any] = {}
+            root[key] = mapping
+            current_mapping = mapping
+            current_indent = indent
+            continue
+        target = current_mapping if current_mapping is not None and indent > current_indent else root
+        target[key] = _parse_minimal_yaml_scalar(value)
+    return root
+
+
+def _parse_minimal_yaml_scalar(value: str) -> Any:
+    value = value.split(" #", 1)[0].strip()
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        return [_parse_minimal_yaml_scalar(item.strip()) for item in inner.split(",") if item.strip()]
+    if (value.startswith("'") and value.endswith("'")) or (value.startswith('"') and value.endswith('"')):
+        return value[1:-1]
+    lowered = value.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    if lowered in {"null", "none"}:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
+
+def _config_lookup(config: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if "." in key:
+            current: Any = config
+            for part in key.split("."):
+                if not isinstance(current, Mapping) or part not in current:
+                    current = None
+                    break
+                current = current[part]
+            if current is not None:
+                return current
+        elif key in config:
+            return config[key]
+    return None
+
+
+def _arg_or_config(args: argparse.Namespace, config: Mapping[str, Any], attr: str, *keys: str, default: Any = None) -> Any:
+    value = getattr(args, attr, None)
+    if value is not None:
+        return value
+    value = _config_lookup(config, *(keys or (attr,)))
+    return default if value is None else value
+
+
+def _as_path(value: Any) -> Path:
+    return value if isinstance(value, Path) else Path(str(value))
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _as_sequence_args(value: Any) -> Sequence[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence):
+        return tuple(str(item) for item in value)
+    return (str(value),)
+
+
+def _as_cases(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return parse_csv(value)
+    if isinstance(value, Sequence):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    return parse_csv(str(value))
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run reproducible VideoMME strategy evaluations.")
+    parser.add_argument("--config", type=Path, default=None, help="YAML experiment config; CLI flags override values.")
     parser.add_argument("--strategy", action="append", help="Strategy to run. Repeat or pass comma-separated values.")
-    parser.add_argument("--cases", default=",".join(DEFAULT_CASES), help="Comma-separated VideoMME question ids.")
-    parser.add_argument("--run-root", type=Path, default=DEFAULT_RUN_ROOT)
+    parser.add_argument("--cases", default=None, help="Comma-separated VideoMME question ids.")
+    parser.add_argument("--run-root", type=Path, default=None)
     parser.add_argument("--workspace-root", type=Path, default=None)
-    parser.add_argument("--model-path", default=MODEL_PATH)
-    parser.add_argument("--planner-model-path", default=PLANNER_MODEL_PATH)
-    parser.add_argument("--data-root", type=Path, default=DATA_ROOT)
-    parser.add_argument("--parquet-path", type=Path, default=DEFAULT_PARQUET_PATH)
-    parser.add_argument("--video-dir", type=Path, default=DEFAULT_VIDEO_DIR)
-    parser.add_argument("--subtitle-dir", type=Path, default=DEFAULT_SUBTITLE_DIR)
-    parser.add_argument("--window-sec", type=float, default=WINDOW_SEC)
-    parser.add_argument("--scene-index-mode", choices=("subtitle", "dual-source"), default="dual-source")
-    parser.add_argument("--scene-index-cache-dir", type=Path, default=DEFAULT_SCENE_INDEX_CACHE_DIR)
-    parser.add_argument("--no-scene-index-cache", action="store_true")
-    parser.add_argument("--scene-caption-nframes", type=int, default=SEGMENT_NFRAMES)
+    parser.add_argument("--model-path", default=None)
+    parser.add_argument("--planner-model-path", default=None)
+    parser.add_argument("--data-root", type=Path, default=None)
+    parser.add_argument("--parquet-path", type=Path, default=None)
+    parser.add_argument("--video-dir", type=Path, default=None)
+    parser.add_argument("--subtitle-dir", type=Path, default=None)
+    parser.add_argument("--window-sec", type=float, default=None)
+    parser.add_argument("--scene-index-mode", choices=("subtitle", "dual-source"), default=None)
+    parser.add_argument("--scene-index-cache-dir", type=Path, default=None)
+    parser.add_argument("--no-scene-index-cache", action="store_true", default=None)
+    parser.add_argument("--scene-caption-nframes", type=int, default=None)
     parser.add_argument("--frame-cache-root", type=Path, default=None)
-    parser.add_argument("--frame-cache-fps", type=float, default=FRAME_CACHE_FPS)
-    parser.add_argument("--max-rounds", type=int, default=8)
-    parser.add_argument("--max-tool-calls-per-round", type=int, default=2)
-    parser.add_argument("--default-nframes", type=int, default=SEGMENT_NFRAMES)
+    parser.add_argument("--frame-cache-fps", type=float, default=None)
+    parser.add_argument("--max-rounds", type=int, default=None)
+    parser.add_argument("--max-tool-calls-per-round", type=int, default=None)
+    parser.add_argument("--default-nframes", type=int, default=None)
     parser.add_argument("--contract-nframes", type=int, default=None)
-    parser.add_argument("--high-fps-nframes", type=int, default=32)
-    parser.add_argument("--context-budget-tokens", type=int, default=12000)
+    parser.add_argument("--high-fps-nframes", type=int, default=None)
+    parser.add_argument("--context-budget-tokens", type=int, default=None)
     parser.add_argument(
         "--budget-ratios",
         default=None,
         help="Comma-separated slot ratios, e.g. task:0.1,navigation:0.15,evidence:0.5,feedback:0.25",
     )
-    parser.add_argument("--planner-receives-media", action="store_true")
-    parser.add_argument("--no-reserve-final-round", action="store_true")
-    parser.add_argument("--cheap-tool-budget", type=int, default=16, help=argparse.SUPPRESS)
+    parser.add_argument("--planner-receives-media", action="store_true", default=None)
+    parser.add_argument("--no-reserve-final-round", action="store_true", default=None)
+    parser.add_argument("--cheap-tool-budget", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--expensive-tool-budget", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--verifier-tool-budget", type=int, default=2, help=argparse.SUPPRESS)
     parser.add_argument(
         "--hard-skill-runtime",
         action="store_true",
+        default=None,
         help="Use deterministic skill runtime for supported routes before falling back to planner loop.",
     )
     parser.add_argument(
         "--disable-global-gist-route",
         action="store_true",
+        default=None,
         help="Skip the automatic gist_global shortcut so debugging runs capture planner-loop IO.",
     )
     parser.add_argument(
         "--use-global-question-rewrite",
         dest="use_global_question_rewrite",
         action="store_true",
-        default=False,
+        default=None,
         help="Use legacy text-model MCQ-to-open-question rewriting as the canonical planner task.",
     )
     parser.add_argument(
@@ -1177,48 +1307,97 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--free-explore",
         action="store_true",
+        default=None,
         help="Legacy alias: use the free max-round/tool-call caps and disable the reserved final round.",
     )
-    parser.add_argument("--free-max-rounds", type=int, default=24)
-    parser.add_argument("--free-max-tool-calls-per-round", type=int, default=4)
-    parser.add_argument("--export-training", action="store_true", help="Export compact TrainingTrajectory JSON per case.")
+    parser.add_argument("--free-max-rounds", type=int, default=None)
+    parser.add_argument("--free-max-tool-calls-per-round", type=int, default=None)
+    parser.add_argument("--export-training", action="store_true", default=None, help="Export compact TrainingTrajectory JSON per case.")
     parser.add_argument("--allow-any-python", action="store_true", help="Skip the remote Python executable assertion.")
     return parser
 
 
 def config_from_args(args: argparse.Namespace) -> EvalConfig:
-    workspace_root = args.workspace_root or (args.run_root / "workspaces")
-    strategies = parse_strategies(args.strategy)
-    context_budget_ratios = parse_budget_ratios(args.budget_ratios) if args.budget_ratios else None
-    default_nframes = args.contract_nframes if args.contract_nframes is not None else args.default_nframes
-    context_budget_tokens = args.context_budget_tokens
-    if args.enable_context_budget is False:
+    config_data = load_experiment_config(args.config)
+    run_root = _as_path(_arg_or_config(args, config_data, "run_root", default=DEFAULT_RUN_ROOT))
+    workspace_root = _as_path(_arg_or_config(args, config_data, "workspace_root", default=run_root / "workspaces"))
+    strategies = parse_strategies(_as_sequence_args(_arg_or_config(args, config_data, "strategy", "strategies")))
+    cases = _as_cases(_arg_or_config(args, config_data, "cases", default=DEFAULT_CASES))
+    budget_ratios = _arg_or_config(args, config_data, "budget_ratios", "budget.ratios")
+    context_budget_ratios = parse_budget_ratios(str(budget_ratios)) if budget_ratios else None
+    default_nframes_value = _arg_or_config(
+        args,
+        config_data,
+        "default_nframes",
+        "nframes",
+        "budget.nframes",
+        "budget.default_nframes",
+        default=SEGMENT_NFRAMES,
+    )
+    contract_nframes = _arg_or_config(args, config_data, "contract_nframes", "budget.contract_nframes")
+    default_nframes = contract_nframes if contract_nframes is not None else default_nframes_value
+    context_budget_tokens = int(
+        _arg_or_config(args, config_data, "context_budget_tokens", "budget.context_budget_tokens", default=12000)
+    )
+    if args.enable_context_budget is False or _config_lookup(config_data, "enable_context_budget") is False:
         context_budget_tokens = 10**9
-    max_rounds = int(args.free_max_rounds if args.free_explore else args.max_rounds)
-    max_tool_calls = int(args.free_max_tool_calls_per_round if args.free_explore else args.max_tool_calls_per_round)
-    reserve_final_round = False if args.free_explore else not args.no_reserve_final_round
+    free_explore = _as_bool(_arg_or_config(args, config_data, "free_explore", default=False))
+    free_max_rounds = int(_arg_or_config(args, config_data, "free_max_rounds", "budget.free_max_rounds", default=24))
+    free_max_tool_calls = int(
+        _arg_or_config(args, config_data, "free_max_tool_calls_per_round", "budget.free_max_tool_calls_per_round", default=4)
+    )
+    max_rounds = int(
+        free_max_rounds
+        if free_explore
+        else _arg_or_config(args, config_data, "max_rounds", "max_rounds", "budget.max_rounds", default=8)
+    )
+    max_tool_calls = int(
+        free_max_tool_calls
+        if free_explore
+        else _arg_or_config(
+            args,
+            config_data,
+            "max_tool_calls_per_round",
+            "max_tool_calls_per_round",
+            "max_tool_calls",
+            "budget.max_tool_calls_per_round",
+            "budget.max_tool_calls",
+            default=2,
+        )
+    )
+    no_reserve_final_round = _as_bool(_arg_or_config(args, config_data, "no_reserve_final_round", default=False))
+    reserve_final_round = False if free_explore else not no_reserve_final_round
+    planner_owned_grounding = _arg_or_config(
+        args,
+        config_data,
+        "planner_owned_grounding",
+        "planner_owned_grounding",
+        "budget.planner_owned_grounding",
+        default="agent_v2" in strategies,
+    )
+    use_global_question_rewrite = _as_bool(
+        _arg_or_config(args, config_data, "use_global_question_rewrite", "enable_mcq_rewrite", default=False)
+    )
     budget = AgentBudget(
         max_rounds=max_rounds,
         max_tool_calls_per_round=max_tool_calls,
-        default_nframes=default_nframes,
-        high_fps_nframes=args.high_fps_nframes,
+        default_nframes=int(default_nframes),
+        high_fps_nframes=int(_arg_or_config(args, config_data, "high_fps_nframes", "budget.high_fps_nframes", default=32)),
         context_budget_tokens=context_budget_tokens,
         context_budget_ratios=context_budget_ratios,
-        planner_receives_media=args.planner_receives_media,
+        planner_receives_media=_as_bool(_arg_or_config(args, config_data, "planner_receives_media", default=False)),
         reserve_final_round=reserve_final_round,
         max_repeated_programs=max(max_rounds, AgentBudget().max_repeated_programs),
-        disable_global_gist_route=args.disable_global_gist_route,
-        rewrite_mcq_for_exploration=bool(args.use_global_question_rewrite),
+        disable_global_gist_route=_as_bool(_arg_or_config(args, config_data, "disable_global_gist_route", default=False)),
+        rewrite_mcq_for_exploration=use_global_question_rewrite,
         hard_skill_runtime="agent_v2" in strategies,
-        planner_owned_grounding=(
-            bool(args.planner_owned_grounding)
-            if args.planner_owned_grounding is not None
-            else "agent_v2" in strategies
-        ),
+        planner_owned_grounding=_as_bool(planner_owned_grounding),
     )
     if args.enable_followup is False:
         budget = replace(budget, hard_skill_runtime=False)
-    elif args.hard_skill_runtime or args.enable_followup is True:
+    elif _as_bool(
+        _arg_or_config(args, config_data, "hard_skill_runtime", "hard_skill_runtime", "budget.hard_skill_runtime", default=False)
+    ) or args.enable_followup is True:
         budget = replace(budget, hard_skill_runtime=True)
     ablation_flags = {
         "enable_query_context": args.enable_query_context,
@@ -1227,31 +1406,49 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         "enable_map_reflux": args.enable_map_reflux,
         "enable_evidence_staging": args.enable_evidence_staging,
         "planner_owned_grounding": budget.planner_owned_grounding,
-        "enable_mcq_rewrite": bool(args.use_global_question_rewrite),
-        "contract_nframes": args.contract_nframes,
-        "followup_budget": args.followup_budget,
+        "enable_mcq_rewrite": use_global_question_rewrite,
+        "contract_nframes": contract_nframes,
+        "followup_budget": _arg_or_config(args, config_data, "followup_budget", "budget.followup_budget"),
     }
+    scene_index_cache_enabled = _arg_or_config(
+        args,
+        config_data,
+        "scene_index_cache_enabled",
+        "scene_index_cache_enabled",
+        default=None,
+    )
+    if scene_index_cache_enabled is None:
+        scene_index_cache_enabled = not _as_bool(_arg_or_config(args, config_data, "no_scene_index_cache", default=False))
     return EvalConfig(
-        run_root=args.run_root,
+        run_root=run_root,
         workspace_root=workspace_root,
-        model_path=args.model_path,
-        planner_model_path=args.planner_model_path,
-        data_root=args.data_root,
-        parquet_path=args.parquet_path,
-        video_dir=args.video_dir,
-        subtitle_dir=args.subtitle_dir,
-        cases=parse_csv(args.cases),
+        model_path=str(_arg_or_config(args, config_data, "model_path", default=MODEL_PATH)),
+        planner_model_path=str(_arg_or_config(args, config_data, "planner_model_path", default=PLANNER_MODEL_PATH)),
+        data_root=_as_path(_arg_or_config(args, config_data, "data_root", default=DATA_ROOT)),
+        parquet_path=_as_path(_arg_or_config(args, config_data, "parquet_path", default=DEFAULT_PARQUET_PATH)),
+        video_dir=_as_path(_arg_or_config(args, config_data, "video_dir", default=DEFAULT_VIDEO_DIR)),
+        subtitle_dir=_as_path(_arg_or_config(args, config_data, "subtitle_dir", default=DEFAULT_SUBTITLE_DIR)),
+        cases=cases,
         strategies=strategies,
-        window_sec=args.window_sec,
-        scene_index_mode=args.scene_index_mode,
-        scene_index_cache_dir=args.scene_index_cache_dir,
-        scene_index_cache_enabled=not args.no_scene_index_cache,
-        scene_caption_nframes=args.scene_caption_nframes,
-        frame_cache_fps=args.frame_cache_fps,
-        frame_cache_root=args.frame_cache_root,
+        window_sec=float(_arg_or_config(args, config_data, "window_sec", default=WINDOW_SEC)),
+        scene_index_mode=str(_arg_or_config(args, config_data, "scene_index_mode", default="dual-source")),
+        scene_index_cache_dir=_as_path(
+            _arg_or_config(args, config_data, "scene_index_cache_dir", default=DEFAULT_SCENE_INDEX_CACHE_DIR)
+        ),
+        scene_index_cache_enabled=_as_bool(scene_index_cache_enabled),
+        scene_caption_nframes=int(
+            _arg_or_config(args, config_data, "scene_caption_nframes", "caption_nframes", default=SEGMENT_NFRAMES)
+        ),
+        frame_cache_fps=float(_arg_or_config(args, config_data, "frame_cache_fps", default=FRAME_CACHE_FPS)),
+        frame_cache_root=(
+            _as_path(_arg_or_config(args, config_data, "frame_cache_root"))
+            if _arg_or_config(args, config_data, "frame_cache_root") is not None
+            else None
+        ),
         budget=budget,
-        export_training=args.export_training,
+        export_training=_as_bool(_arg_or_config(args, config_data, "export_training", default=False)),
         ablation_flags=ablation_flags,
+        source_config_path=args.config,
     )
 
 

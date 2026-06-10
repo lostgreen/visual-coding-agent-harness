@@ -20,6 +20,8 @@ AnswerGradeTranscriptPolicy = Literal["allowed", "required", "not_allowed"]
 VISUAL_MODALITIES = frozenset({"visual", "vision", "frame", "frames", "qa", "caption", "ocr"})
 TRANSCRIPT_MODALITIES = frozenset({"asr", "transcript", "indexed_transcript", "narration"})
 MIXED_MODALITIES = frozenset({"mixed"})
+MAIN_IDEA_RECOVERY_TOP_K = 3
+MAIN_IDEA_ALLOWED_OPTION_KINDS = frozenset({"topic_arc", "topic_focus"})
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,7 @@ SKILL_POLICIES: Mapping[str, SkillPolicy] = MappingProxyType(
             visual_verification_mandatory=False,
             transcript_answer_grade="allowed",
             requires_per_option_coverage=True,
-            requires_option_kind=frozenset({"topic_arc", "topic_focus"}),
+            requires_option_kind=MAIN_IDEA_ALLOWED_OPTION_KINDS,
             requires_central_subject_overlap=True,
         ),
         "narration_timeline_qa": SkillPolicy(

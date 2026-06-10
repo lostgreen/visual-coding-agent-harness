@@ -1,0 +1,160 @@
+import tempfile
+from pathlib import Path
+
+from visual_coding_agent_harness.contracts import ClaimModality, ClaimRelation, OptionSpec, TargetRegistry, TargetSpec
+from visual_coding_agent_harness.interpreter import ProgramInterpreter
+from visual_coding_agent_harness.registry import ToolRegistry, tool
+from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
+from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
+from visual_coding_agent_harness.workspace import EvidenceWorkspace
+
+
+def _sequence_map(text: str = "The narration lists alpha event, then beta event, then gamma event.") -> VideoMap:
+    return VideoMap(
+        video_path="/videos/generic.mp4",
+        duration_sec=90.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=10.0,
+                end_sec=40.0,
+                asr_text=text,
+            )
+        ],
+    )
+
+
+def _sequence_registry() -> TargetRegistry:
+    return TargetRegistry.from_specs(
+        targets=[
+            TargetSpec("T1", "alpha event", modality_hint=ClaimModality.NARRATED_FACT),
+            TargetSpec("T2", "beta event", modality_hint=ClaimModality.NARRATED_FACT),
+            TargetSpec("T3", "gamma event", modality_hint=ClaimModality.NARRATED_FACT),
+        ],
+        options=[
+            OptionSpec(
+                "B",
+                target_sequence=("T1", "T2", "T3"),
+                required_relations=("R1", "R2"),
+                option_kind="sequence",
+            )
+        ],
+        relations=[
+            ClaimRelation("R1", "before", "T1", "T2"),
+            ClaimRelation("R2", "before", "T2", "T3"),
+        ],
+    )
+
+
+def test_read_segment_detail_promotes_registry_targets_without_explicit_target_refs():
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="promote_registry_targets")
+        workspace.target_registry = _sequence_registry()
+        registry = build_video_navigation_registry(_sequence_map(), workspace=workspace)
+
+        detail = registry.execute(
+            "read_segment_detail",
+            {"segment_id": "seg_0001", "promote_answer_evidence": True},
+        )
+
+    assert {binding["target_id"]: binding["status"] for binding in detail["evidence_bindings"]} == {
+        "T1": "supported",
+        "T2": "supported",
+        "T3": "supported",
+    }
+    assert {binding["relation_id"]: binding["status"] for binding in detail["relation_bindings"]} == {
+        "R1": "supported",
+        "R2": "supported",
+    }
+    assert detail["answer_evidence_rows"]
+
+
+def test_ordered_full_sequence_produces_supported_relation_binding():
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="ordered_relation_binding")
+        workspace.target_registry = _sequence_registry()
+        registry = build_video_navigation_registry(_sequence_map(), workspace=workspace)
+
+        detail = registry.execute(
+            "read_segment_detail",
+            {"segment_id": "seg_0001", "promote_answer_evidence": True},
+        )
+
+    ordered_relations = [
+        relation
+        for relation in detail["relation_bindings"]
+        if relation.get("ordered_target_refs") == ["T1", "T2", "T3"]
+    ]
+    assert {relation["relation_id"] for relation in ordered_relations} == {"R1", "R2"}
+    assert all(relation["status"] == "supported" for relation in ordered_relations)
+
+
+def test_promote_answer_evidence_does_not_bind_raw_option_text_as_target():
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="no_raw_option_target_binding")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[TargetSpec("T1", "canonical target", modality_hint=ClaimModality.NARRATED_FACT)],
+            options=[OptionSpec("B", target_sequence=("T1",), raw_option_text="raw option text only")],
+        )
+        registry = build_video_navigation_registry(
+            _sequence_map("The narrator says raw option text only."),
+            workspace=workspace,
+        )
+
+        detail = registry.execute(
+            "read_segment_detail",
+            {
+                "segment_id": "seg_0001",
+                "promote_answer_evidence": True,
+                "option_targets": {"B": ["raw option text only"]},
+            },
+        )
+
+    assert all(binding["target_id"] == "T1" for binding in detail["evidence_bindings"])
+    assert all(row.get("event_label") != "raw option text only" for row in detail["answer_evidence_rows"])
+    assert not any(
+        row.get("evidence_binding", {}).get("target_id") == "raw option text only"
+        for row in detail["answer_evidence_rows"]
+    )
+
+
+def test_post_observation_hook_grows_answer_evidence_after_one_detail_observation():
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="post_observation_growth")
+        workspace.target_registry = _sequence_registry()
+        registry = ToolRegistry()
+
+        @tool(name="read_segment_detail", description="Scripted detail packet.")
+        def read_segment_detail(segment_id: str, promote_answer_evidence: bool = False):
+            return {
+                "claim": f"detail {segment_id}",
+                "confidence": 1.0,
+                "segment_id": segment_id,
+                "start_sec": 10.0,
+                "end_sec": 40.0,
+                "raw_asr_excerpt": "The narration lists alpha event, then beta event, then gamma event.",
+                "evidence_bindings": [],
+                "relation_bindings": [],
+                "answer_evidence_rows": [],
+                "promote_answer_evidence": promote_answer_evidence,
+            }
+
+        registry.register(read_segment_detail)
+
+        ProgramInterpreter(registry, workspace).run(
+            [
+                {
+                    "tool": "read_segment_detail",
+                    "args": {"segment_id": "seg_0001", "promote_answer_evidence": True},
+                }
+            ]
+        )
+
+        observation = workspace.read_observations(tool_name="read_segment_detail")[0]
+        table = workspace.read_evidence_table_v3(question="generic question", options=["B. generic sequence"])
+        row_count = workspace.evidence_table_row_count()
+
+    assert observation.raw_output["evidence_bindings"]
+    assert observation.raw_output["relation_bindings"]
+    assert row_count > 0
+    assert any(row["tool"] == "transcript_evidence_binder" for row in table["rows"])

@@ -43,31 +43,74 @@ def build_verification_registry(*, workspace: Optional[EvidenceWorkspace] = None
         ledger_text: str = "",
         question: str = "",
         candidate_options: Sequence[str] = (),
+        target_refs: Sequence[str] = (),
         min_score: float = 0.6,
         required_citations: Sequence[str] = (),
         requires_visual_evidence: bool = True,
     ) -> Mapping[str, object]:
         resolved_ledger = ledger_text or _read_workspace_ledger(workspace)
-        answer_terms = _tokens(answer)
+        resolved_answer = _resolve_answer_claim(
+            answer=answer,
+            candidate_options=candidate_options,
+            target_refs=target_refs,
+            workspace=workspace,
+        )
+        answer_terms = _tokens(str(resolved_answer["claim_text"]))
         ledger_terms = _tokens(resolved_ledger)
         supported_terms = sorted(answer_terms.intersection(ledger_terms))
         missing_terms = sorted(answer_terms.difference(ledger_terms))
         score = len(supported_terms) / max(1, len(answer_terms))
         cited_observations = _observation_ids(resolved_ledger)
         observation_tools = _observation_tools(resolved_ledger)
+        structured_support = _structured_binding_support(
+            workspace=workspace,
+            question=question,
+            candidate_options=candidate_options,
+            resolved_answer=resolved_answer,
+        )
+        if structured_support["satisfies_answer_grade"]:
+            score = max(score, 1.0)
         visual_observation_ids = [
             observation_id
             for observation_id in cited_observations
             if observation_tools.get(observation_id) in _VISUAL_EVIDENCE_TOOLS
         ]
-        missing_citations = [citation for citation in required_citations if citation not in cited_observations]
+        answer_grade_citation_ids = set(visual_observation_ids)
+        answer_grade_citation_ids.update(str(item) for item in structured_support["supporting_observation_ids"])
+        known_citation_ids = set(cited_observations)
+        known_citation_ids.update(str(item) for item in structured_support["known_observation_ids"])
+        invalid_citations = [citation for citation in required_citations if citation not in known_citation_ids]
+        missing_citations = [
+            citation for citation in required_citations if citation not in answer_grade_citation_ids
+        ]
         gate_reasons = []
+        reason_codes = []
+        if invalid_citations:
+            gate_reasons.append("invalid citation id")
+            reason_codes.append("invalid_citation_id")
         if missing_citations:
-            gate_reasons.append("missing required citations")
-        if requires_visual_evidence and not visual_observation_ids:
+            gate_reasons.append("missing answer-grade citation")
+            reason_codes.append("missing_answer_grade_citation")
+        if (
+            requires_visual_evidence
+            and not visual_observation_ids
+            and not structured_support["satisfies_answer_grade"]
+        ):
             gate_reasons.append("no non-navigation visual evidence")
-        if score < min_score:
+            gate_reasons.append("no answer-grade visual or structured binding evidence")
+            reason_codes.append("no_supported_binding")
+        if score < min_score and not structured_support["satisfies_answer_grade"]:
             gate_reasons.append("low lexical support")
+            reason_codes.append("unsupported_selected_option")
+        if (
+            resolved_answer["option_id"]
+            and not supported_terms
+            and not structured_support["satisfies_answer_grade"]
+        ):
+            if "unsupported_selected_option" not in reason_codes:
+                reason_codes.append("unsupported_selected_option")
+            if "selected option has no resolved claim support" not in gate_reasons:
+                gate_reasons.append("selected option has no resolved claim support")
         gate_reasons.extend(
             _mcq_answer_gate(
                 answer=answer,
@@ -81,6 +124,7 @@ def build_verification_registry(*, workspace: Optional[EvidenceWorkspace] = None
             question=question,
             candidate_options=candidate_options,
             required_citations=required_citations,
+            selected_has_structured_support=bool(structured_support["satisfies_answer_grade"]),
         )
         gate_reasons.extend(option_gate["reasons"])
         temporal_gate = _temporal_order_gate(
@@ -90,7 +134,7 @@ def build_verification_registry(*, workspace: Optional[EvidenceWorkspace] = None
             candidate_options=candidate_options,
         )
         gate_reasons.extend(temporal_gate["reasons"])
-        verdict = "supported" if not gate_reasons else "insufficient"
+        verdict = "supported" if not gate_reasons and not reason_codes else "insufficient"
         return {
             "claim": f"Ledger support is {verdict} with lexical score {score:.2f}.",
             "confidence": round(score, 3),
@@ -106,9 +150,13 @@ def build_verification_registry(*, workspace: Optional[EvidenceWorkspace] = None
                     "evidence_gate": {
                         "required_citations": list(required_citations),
                         "missing_citations": missing_citations,
+                        "invalid_citations": invalid_citations,
                         "requires_visual_evidence": requires_visual_evidence,
                         "visual_observation_ids": visual_observation_ids,
                         "reasons": gate_reasons,
+                        "reason_codes": sorted(set(reason_codes)),
+                        "resolved_answer": resolved_answer,
+                        "structured_support": structured_support,
                         "option_relations": option_gate["option_relations"],
                         "top_conflicting_observation": option_gate["top_conflicting_observation"],
                         "top_conflict_relation": option_gate["top_conflict_relation"],
@@ -188,6 +236,130 @@ def _ledger_claims(ledger_text: str, *, max_claims: int) -> list[Mapping[str, st
     return claims
 
 
+def _resolve_answer_claim(
+    *,
+    answer: str,
+    candidate_options: Sequence[str],
+    target_refs: Sequence[str],
+    workspace: Optional[EvidenceWorkspace],
+) -> dict[str, Any]:
+    answer_option = _answer_option(answer)
+    explicit_target_refs = [str(ref).strip() for ref in target_refs if str(ref).strip()]
+    option = None
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
+    if answer_option and isinstance(options_by_id, Mapping):
+        option = options_by_id.get(answer_option)
+
+    option_target_refs = [str(ref) for ref in getattr(option, "target_sequence", ()) if str(ref)]
+    resolved_target_refs = explicit_target_refs or option_target_refs
+    required_relation_refs = [str(ref) for ref in getattr(option, "required_relations", ()) if str(ref)]
+    claim_text = ""
+    source = "answer"
+    if option is not None and str(getattr(option, "raw_option_text", "")).strip():
+        claim_text = str(getattr(option, "raw_option_text", "")).strip()
+        source = "registry_option"
+    elif answer_option:
+        option_map = _candidate_option_text_map(candidate_options)
+        if answer_option in option_map:
+            claim_text = _strip_option_prefix(option_map[answer_option])
+            source = "candidate_option"
+    if not claim_text:
+        claim_text = _strip_option_prefix(answer) if answer_option else str(answer).strip()
+
+    return {
+        "answer": answer,
+        "option_id": answer_option,
+        "claim_text": claim_text,
+        "target_refs": resolved_target_refs,
+        "required_relation_refs": required_relation_refs,
+        "source": source,
+    }
+
+
+def _structured_binding_support(
+    *,
+    workspace: Optional[EvidenceWorkspace],
+    question: str,
+    candidate_options: Sequence[str],
+    resolved_answer: Mapping[str, Any],
+) -> dict[str, Any]:
+    default: dict[str, Any] = {
+        "satisfies_answer_grade": False,
+        "supported_target_refs": [],
+        "missing_target_refs": list(resolved_answer.get("target_refs", [])),
+        "supported_relation_refs": [],
+        "missing_relation_refs": list(resolved_answer.get("required_relation_refs", [])),
+        "supporting_observation_ids": [],
+        "known_observation_ids": [],
+        "supporting_evidence_ids": [],
+    }
+    if workspace is None:
+        return default
+    target_refs = [str(ref) for ref in resolved_answer.get("target_refs", []) if str(ref)]
+    if not target_refs:
+        return default
+    required_relation_refs = [str(ref) for ref in resolved_answer.get("required_relation_refs", []) if str(ref)]
+    table = workspace.evidence_table_v2(question=question, options=candidate_options)
+    rows = table.get("rows", []) if isinstance(table.get("rows", []), Sequence) else []
+    supported_targets: set[str] = set()
+    supported_relations: set[str] = set()
+    known_observation_ids: set[str] = set()
+    supporting_observation_ids: set[str] = set()
+    supporting_evidence_ids: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        observation_id = str(row.get("obs_id", "")).strip()
+        if observation_id:
+            known_observation_ids.add(observation_id)
+        binding = row.get("evidence_binding", {})
+        if not isinstance(binding, Mapping):
+            binding = {}
+        target_ref = str(binding.get("target_id") or row.get("event_label") or row.get("entity") or "").strip()
+        if target_ref not in target_refs:
+            continue
+        if str(binding.get("status") or "").strip().lower() != "supported":
+            continue
+        supported_targets.add(target_ref)
+        if observation_id:
+            supporting_observation_ids.add(observation_id)
+        evidence_id = str(binding.get("evidence_id") or row.get("evidence_id") or "").strip()
+        if evidence_id:
+            supporting_evidence_ids.add(evidence_id)
+        for relation in _binding_relation_rows(binding):
+            relation_ref = str(relation.get("relation_id") or relation.get("relation_ref") or "").strip()
+            if not relation_ref:
+                continue
+            if str(relation.get("status") or relation.get("support_status") or "").strip().lower() != "supported":
+                continue
+            supported_relations.add(relation_ref)
+            for relation_evidence_id in relation.get("evidence_ids", []) or []:
+                if str(relation_evidence_id).strip():
+                    supporting_evidence_ids.add(str(relation_evidence_id).strip())
+
+    missing_targets = [ref for ref in target_refs if ref not in supported_targets]
+    missing_relations = [ref for ref in required_relation_refs if ref not in supported_relations]
+    return {
+        "satisfies_answer_grade": bool(target_refs) and not missing_targets and not missing_relations,
+        "supported_target_refs": [ref for ref in target_refs if ref in supported_targets],
+        "missing_target_refs": missing_targets,
+        "supported_relation_refs": [ref for ref in required_relation_refs if ref in supported_relations]
+        or sorted(supported_relations),
+        "missing_relation_refs": missing_relations,
+        "supporting_observation_ids": sorted(supporting_observation_ids),
+        "known_observation_ids": sorted(known_observation_ids),
+        "supporting_evidence_ids": sorted(supporting_evidence_ids),
+    }
+
+
+def _binding_relation_rows(binding: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    relation_rows = binding.get("relation_bindings", [])
+    if not isinstance(relation_rows, Sequence) or isinstance(relation_rows, (str, bytes)):
+        return []
+    return [row for row in relation_rows if isinstance(row, Mapping)]
+
+
 def _option_conflict_gate(
     *,
     workspace: Optional[EvidenceWorkspace],
@@ -195,6 +367,7 @@ def _option_conflict_gate(
     question: str,
     candidate_options: Sequence[str],
     required_citations: Sequence[str],
+    selected_has_structured_support: bool = False,
 ) -> Mapping[str, Any]:
     default = {
         "reasons": [],
@@ -210,9 +383,11 @@ def _option_conflict_gate(
 
     table = workspace.evidence_table_v2(question=question, options=candidate_options)
     rows = table.get("rows", []) if isinstance(table.get("rows", []), Sequence) else []
+    if not rows:
+        return default
     cited = set(str(item) for item in required_citations)
     option_relations = {}
-    selected_support = 0.0
+    selected_support = 1.0 if selected_has_structured_support else 0.0
     conflicts = []
     for row in rows:
         if not isinstance(row, Mapping):
@@ -237,11 +412,12 @@ def _option_conflict_gate(
         top_conflict_relation = conflicts[0][2]
 
     predicate_results = [
-        selected_option_has_structured_support(table, selected_option=answer_option),
         no_decisive_weak_grounding(table, selected_option=answer_option),
         no_unaddressed_conflict(table, selected_option=answer_option, cited_obs_ids=required_citations),
         direct_floor_holds(table, selected_option=answer_option),
     ]
+    if not selected_has_structured_support:
+        predicate_results.insert(0, selected_option_has_structured_support(table, selected_option=answer_option))
     for result in predicate_results:
         if result.passed:
             continue
@@ -252,7 +428,7 @@ def _option_conflict_gate(
         observation_ids=required_citations,
         selected_option=answer_option,
     )
-    if mapped_records:
+    if mapped_records and not selected_has_structured_support:
         grounding_reason = grounding_quality_floor(
             mapped_records,
             workspace=workspace,

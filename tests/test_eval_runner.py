@@ -210,6 +210,107 @@ class EvalRunnerTest(unittest.TestCase):
         )
         self.assertEqual(summary["cases"][0]["raw_artifacts"]["frame_cache"], "/tmp/frame-cache/video605_2fps")
 
+    def test_config_file_values_are_loaded_cli_overrides_and_resolved_config_is_written(self):
+        from runs import eval_runner
+
+        rows_by_id = {
+            "605-1": {
+                "question_id": "605-1",
+                "video_id": "vid605",
+                "videoID": "video605",
+                "task_type": "Information Synopsis",
+                "question": "What is shown?",
+                "options": ["A. one", "B. two", "C. three", "D. four"],
+                "answer": "B",
+            }
+        }
+
+        def fake_run_loop(backend, **kwargs):
+            return {
+                "answer": "B. The visual evidence supports option B.",
+                "choice": "B",
+                "status": "final",
+                "confidence": 0.8,
+                "citations": ["obs_0001"],
+                "rounds": 1,
+                "tools": ["target_coverage"],
+                "segments": ["seg_0001"],
+                "seconds": 1.0,
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "experiment.yaml"
+            run_root = tmp_path / "configured-run"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "cases: [605-1, 611-2]",
+                        "strategies: [agent_v2]",
+                        f"run_root: {run_root}",
+                        "model_path: /models/vl",
+                        "planner_model_path: /models/planner",
+                        "data_root: /dataset",
+                        "parquet_path: /dataset/videomme/test.parquet",
+                        "video_dir: /dataset/video",
+                        "subtitle_dir: /dataset/subtitle",
+                        "frame_cache_fps: 1.5",
+                        "nframes: 6",
+                        "max_rounds: 5",
+                        "max_tool_calls_per_round: 3",
+                        "hard_skill_runtime: true",
+                        "export_training: true",
+                        "planner_owned_grounding: true",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            args = eval_runner.build_arg_parser().parse_args(
+                [
+                    "--config",
+                    str(config_path),
+                    "--cases",
+                    "605-1",
+                    "--max-rounds",
+                    "7",
+                    "--allow-any-python",
+                ]
+            )
+
+            config = eval_runner.config_from_args(args)
+
+            self.assertEqual(config.cases, ("605-1",))
+            self.assertEqual(config.strategies, ("agent_v2",))
+            self.assertEqual(config.run_root, run_root)
+            self.assertEqual(config.model_path, "/models/vl")
+            self.assertEqual(config.planner_model_path, "/models/planner")
+            self.assertEqual(config.frame_cache_fps, 1.5)
+            self.assertEqual(config.budget.default_nframes, 6)
+            self.assertEqual(config.budget.max_rounds, 7)
+            self.assertEqual(config.budget.max_tool_calls_per_round, 3)
+            self.assertTrue(config.budget.hard_skill_runtime)
+            self.assertTrue(config.budget.planner_owned_grounding)
+            self.assertTrue(config.export_training)
+
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                    eval_runner.run_eval_cases(
+                        backend=object(),
+                        rows_by_id=rows_by_id,
+                        config=config,
+                        duration_fn=lambda path: 60.0,
+                    )
+
+            resolved_path = run_root / "resolved_config.json"
+            self.assertTrue(resolved_path.exists())
+            resolved = json.loads(resolved_path.read_text(encoding="utf-8"))
+            self.assertEqual(resolved["cases"], ["605-1"])
+            self.assertEqual(resolved["strategies"], ["agent_v2"])
+            self.assertEqual(resolved["budget"]["default_nframes"], 6)
+            self.assertEqual(resolved["budget"]["max_rounds"], 7)
+            self.assertEqual(resolved["frame_cache_fps"], 1.5)
+            self.assertEqual(resolved["source_config_path"], str(config_path))
+
     def test_summary_payload_aggregates_route_violations_from_workspace_traces(self):
         from runs import eval_runner
 

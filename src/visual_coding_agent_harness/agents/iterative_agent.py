@@ -198,6 +198,7 @@ class IterativeVisualAgent:
         self._route_repair_exhausted: Mapping[str, Any] | None = None
         self._executed_recommended_action_ids: set[str] = set()
         self._no_progress_warning_emitted = False
+        self._grounding_bootstrap_failure: Mapping[str, Any] | None = None
         self.context_allocator = default_context_budget_allocator(
             total_budget_tokens=self.budget.context_budget_tokens,
             slot_ratios=dict(self.budget.context_budget_ratios) if self.budget.context_budget_ratios else None,
@@ -208,11 +209,18 @@ class IterativeVisualAgent:
         self._route_repair_exhausted = None
         self._executed_recommended_action_ids = set()
         self._no_progress_warning_emitted = False
+        self._grounding_bootstrap_failure = None
         question_context = build_question_context(question)
         raw_question = question_context.raw_question
         vlm_safe_question = question_context.vlm_safe_question
         self.workspace.ensure_hypothesis(raw_question)
         grounding_runtime = self._initialize_planner_owned_grounding(question_context)
+        if self._grounding_bootstrap_failure is not None:
+            return self._grounding_bootstrap_failed_result(
+                question=raw_question,
+                video_path=video_path,
+                failure=self._grounding_bootstrap_failure,
+            )
         effective_route = self._effective_route(raw_question)
         exploration_question_text = self._question_for_exploration(
             question_context,
@@ -1447,13 +1455,17 @@ class IterativeVisualAgent:
             },
         )
         if result.plan is None:
-            self.workspace.write_trace_event(
-                "grounding_unstructured_fallback",
-                {
-                    "reason": result.fallback_reason or "grounding_unavailable",
-                    "findings": [finding.__dict__ for finding in result.validation.findings],
-                },
-            )
+            findings = [finding.__dict__ for finding in result.validation.findings]
+            failure = {
+                "status": "grounding_bootstrap_failed",
+                "final_decision": "grounding_bootstrap_failed",
+                "reason_code": "grounding_bootstrap_failed",
+                "reason": result.fallback_reason or "grounding_unavailable",
+                "attempts": result.attempts,
+                "findings": findings,
+            }
+            self._grounding_bootstrap_failure = failure
+            self.workspace.write_trace_event("grounding_bootstrap_failed", failure)
             return None
         raw_options = _raw_options_by_id(question_context.options)
         skill_ids = tuple(skill.name for skill in builtin_skill_registry().list())
@@ -1485,6 +1497,35 @@ class IterativeVisualAgent:
             },
         )
         return compiled
+
+    def _grounding_bootstrap_failed_result(
+        self,
+        *,
+        question: str,
+        video_path: str,
+        failure: Mapping[str, Any],
+    ) -> IterativeRunResult:
+        self.workspace.write_trace_event(
+            "iterative_final_rejected",
+            {
+                "status": "grounding_bootstrap_failed",
+                "final_decision": "grounding_bootstrap_failed",
+                "reason_code": "grounding_bootstrap_failed",
+                "reason": failure.get("reason", "grounding_unavailable"),
+                "attempts": failure.get("attempts", 0),
+                "findings": list(failure.get("findings", ())),
+            },
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer="grounding_bootstrap_failed",
+            status="grounding_bootstrap_failed",
+            citations=(),
+            evidence_ids=(),
+            confidence=0.0,
+            rounds=(),
+        )
 
     def _effective_route(self, raw_question: str) -> str:
         runtime = getattr(self.workspace, "grounding_runtime", None)

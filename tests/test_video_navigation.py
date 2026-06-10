@@ -303,7 +303,7 @@ class VideoNavigationTest(unittest.TestCase):
 
         self.assertEqual(located["answer_evidence_rows"], [])
         self.assertTrue(
-            any(action.get("route_kind") == "focused_ordered_list_vision" for action in located["recommended_next_actions"])
+            any(action.get("route_kind") == "partial_ordered_list" for action in located["recommended_next_actions"])
         )
 
     def test_read_segment_detail_promotes_matching_asr_cues_to_answer_evidence(self):
@@ -922,12 +922,9 @@ class VideoNavigationTest(unittest.TestCase):
             "Apollo and Daphne",
         ])
         self.assertEqual(timeline_rows, [])
-        self.assertEqual([row["entity"] for row in observation.raw_output["ordered_list_timeline_rows"]], [
-            "Aeneas, Anchises, and Ascanius fleeing Troy",
-            "David",
-            "The rape of Persephone",
-            "Apollo and Daphne",
-        ])
+        self.assertEqual(observation.raw_output["ordered_list_timeline_rows"], [])
+        self.assertEqual(ordered_candidates[0]["text_span_window"], [497.12, 546.0])
+        self.assertTrue(all(hit.get("timestamp_start") is None for hit in ordered_candidates[0]["ordered_target_hits"]))
         self.assertEqual(observation.raw_output["recommended_next_tools"][0]["tool"], "vision_read")
         self.assertEqual(observation.raw_output["recommended_next_tools"][0]["args"], observation.raw_output["focused_vision_call_args"])
         self.assertEqual(observation.raw_output["recommended_next_actions"][0]["route_kind"], "focused_ordered_list_vision")

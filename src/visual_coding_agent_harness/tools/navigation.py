@@ -6,6 +6,7 @@ import re
 from dataclasses import asdict
 from typing import Any, Mapping, Sequence
 
+from ..agents.grounding.lexicon import FUTURE_PROSPECTIVE_MARKERS
 from ..agents.transcript_binder import TranscriptEvidenceBinder
 from ..contracts import (
     ClaimModality,
@@ -19,6 +20,12 @@ from ..workspace import EvidenceWorkspace, MapUpdateProposal
 
 
 _TARGET_REF_RE = re.compile(r"^T[1-9]\d*$")
+_FUTURE_PROSPECTIVE_RE = re.compile(
+    r"\b(?:"
+    + "|".join(re.escape(marker).replace(r"\ ", r"\s+") for marker in FUTURE_PROSPECTIVE_MARKERS)
+    + r")\b",
+    flags=re.IGNORECASE,
+)
 
 
 def build_video_navigation_registry(
@@ -210,6 +217,8 @@ def build_video_navigation_registry(
             target_refs=target_refs,
             workspace=workspace,
         )
+        if promote_answer_evidence and not binding_targets:
+            binding_targets, binding_relations = _all_registry_binding_specs(workspace=workspace)
         target_ref_texts = [target.canonical_text for target in binding_targets]
         if target_ref_texts:
             resolved_targets = _unique_nonempty_texts(target_ref_texts)
@@ -229,9 +238,13 @@ def build_video_navigation_registry(
         target_matches = [_detail_target_match(hit) for hit in target_hits if bool(hit.get("matched"))]
         unmatched_targets = [str(hit.get("target", "")) for hit in target_hits if not bool(hit.get("matched"))]
         nav_digest = _segment_nav_digest(segment=segment, target_matches=target_matches)
-        answer_evidence_rows = _answer_evidence_rows_from_indexed_detail(
-            segment=segment,
-            option_targets=resolved_option_targets,
+        answer_evidence_rows = (
+            []
+            if promote_answer_evidence
+            else _answer_evidence_rows_from_indexed_detail(
+                segment=segment,
+                option_targets=resolved_option_targets,
+            )
         )
         evidence_bindings: list[Mapping[str, object]] = []
         relation_bindings: list[Mapping[str, object]] = []
@@ -262,7 +275,7 @@ def build_video_navigation_registry(
                     binding_result=binding_result,
                 ),
             ]
-        return {
+        result = {
             "claim": f"{_segment_detail_claim(segment, target_hits=target_hits)} {nav_digest}",
             "confidence": 1.0,
             "input_artifacts": [current.video_path],
@@ -281,11 +294,19 @@ def build_video_navigation_registry(
             "evidence_bindings": evidence_bindings,
             "relation_bindings": relation_bindings,
             "answer_evidence_rows": answer_evidence_rows,
+            "promote_answer_evidence": bool(promote_answer_evidence),
+            "target_refs": [target.target_id for target in binding_targets],
             "nav_digest": nav_digest,
             "regions": [segment.to_dict()],
             "recommended_next_tools": _detail_recommended_next_tools(segment=segment, target_matches=target_matches),
             "limitations": "Indexed segment detail only; call vision_read or caption_segment for fresh visual evidence.",
         }
+        if workspace is not None:
+            return workspace.promote_textual_answer_evidence_payload(
+                tool_name="read_segment_detail",
+                raw_output=result,
+            )
+        return result
 
     @tool(name="locate_targets_in_segment", description="Text-only target locator over ASR/OCR/caption indexes for one segment.")
     def locate_targets_in_segment(
@@ -957,6 +978,27 @@ def _resolve_binding_specs(
     return selected_targets, selected_relations
 
 
+def _all_registry_binding_specs(
+    *,
+    workspace: EvidenceWorkspace | None,
+) -> tuple[list[TargetSpec], list[ClaimRelation]]:
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    targets_by_id = getattr(registry, "targets_by_id", None)
+    if not isinstance(targets_by_id, Mapping):
+        return [], []
+    targets = [target for target in targets_by_id.values() if isinstance(target, TargetSpec)]
+    target_ids = {target.target_id for target in targets}
+    relations_by_id = getattr(registry, "relations_by_id", {})
+    relations = [
+        relation
+        for relation in getattr(relations_by_id, "values", lambda: ())()
+        if isinstance(relation, ClaimRelation)
+        and relation.source_target_id in target_ids
+        and relation.destination_target_id in target_ids
+    ]
+    return targets, relations
+
+
 def _answer_evidence_rows_from_indexed_detail(
     *,
     segment: VideoMapSegment,
@@ -1394,6 +1436,11 @@ def _locate_target_candidates(
                     "target": target,
                     "source": match["source"],
                     "match_type": match["match_type"],
+                    "source_span_start": int(match.get("source_span_start", match.get("match_start", 0)) or 0),
+                    "source_span_end": int(match.get("source_span_end", match.get("match_end", 0)) or 0),
+                    "timestamp_start": match.get("timestamp_start"),
+                    "timestamp_end": match.get("timestamp_end"),
+                    "forward_reference": bool(match.get("forward_reference", False)),
                     "start_sec": float(match["start_sec"]),
                     "end_sec": float(match["end_sec"]),
                     "snippet": match["snippet"],
@@ -1549,6 +1596,24 @@ def _find_target_text_matches(
                         "match_priority": _locate_match_priority(str(alias["match_type"])),
                         "match_start": int(match.start()),
                         "match_end": int(match.end()),
+                        "source_span_start": int(match.start()),
+                        "source_span_end": int(match.end()),
+                        "timestamp_start": (
+                            float(source.get("start_sec", 0.0) or 0.0)
+                            if _source_has_concrete_timestamp(source)
+                            else None
+                        ),
+                        "timestamp_end": (
+                            float(source.get("end_sec", source.get("start_sec", 0.0)) or 0.0)
+                            if _source_has_concrete_timestamp(source)
+                            else None
+                        ),
+                        "forward_reference": _is_forward_reference_span(
+                            text=text,
+                            start=int(match.start()),
+                            end=int(match.end()),
+                            has_concrete_coanchor=_source_has_concrete_timestamp(source),
+                        ),
                         "start_sec": float(source.get("start_sec", 0.0) or 0.0),
                         "end_sec": float(source.get("end_sec", source.get("start_sec", 0.0)) or 0.0),
                         "snippet": _match_snippet(text, start=match.start(), end=match.end()),
@@ -1603,7 +1668,7 @@ def _ordered_list_candidates(
                 targets=target_list,
                 fallback_sec=window_start,
             )
-            if source_end - effective_window_start > max_window_sec:
+            if pieces and source_end - effective_window_start > max_window_sec:
                 break
             text = str(source.get("text") or "").strip()
             if not text:
@@ -1617,6 +1682,9 @@ def _ordered_list_candidates(
                     "source_start_sec": source_start,
                     "source_end_sec": source_end,
                     "source_text_len": len(text),
+                    "source": str(source.get("source") or ""),
+                    "text": text,
+                    "has_concrete_timestamp": _source_has_concrete_timestamp(source),
                 }
             )
             source_name = str(source.get("source") or "")
@@ -1625,25 +1693,23 @@ def _ordered_list_candidates(
             window_end = max(window_end, source_end)
             previous_end = source_end
             combined = " ".join(pieces)
-            list_match = _preferred_ordered_list_match(combined, target_list)
+            list_match = _preferred_ordered_list_match(combined, target_list, source_spans=piece_spans)
             ordered_targets = list(list_match.get("ordered_targets", [])) if list_match else []
-            if len(ordered_targets) < min(3, len(target_list)):
+            if len(ordered_targets) < min(2, len(target_list)):
                 continue
             order_source = str(list_match.get("order_source", "text"))
             directness = "ordered_list_navigation" if order_source == "quoted_list" else "text_position_inference"
+            route_kind = "ordered_list" if len(ordered_targets) == len(target_list) else "partial_ordered_list"
             if order_source == "quoted_list":
                 confidence = 0.98 if len(ordered_targets) == len(target_list) else 0.82
             else:
                 confidence = min(0.6, 0.72 + 0.02 * len(ordered_targets))
-            list_start_sec = _combined_char_time(
+            list_start_sec, list_end_sec = _combined_char_window(
                 int(list_match.get("start_char", 0)),
-                source_spans=piece_spans,
-                fallback_sec=window_start,
-            )
-            list_end_sec = _combined_char_time(
                 int(list_match.get("end_char", len(combined))),
                 source_spans=piece_spans,
-                fallback_sec=window_end,
+                fallback_start_sec=window_start,
+                fallback_end_sec=window_end,
             )
             candidates.append(
                 {
@@ -1659,6 +1725,9 @@ def _ordered_list_candidates(
                     "temporal_density": float(len(ordered_targets)),
                     "directness": directness,
                     "ordered_targets": ordered_targets,
+                    "ordered_target_hits": list(list_match.get("ordered_target_hits", [])),
+                    "route_kind": route_kind,
+                    "text_span_window": [round(list_start_sec, 3), round(max(list_start_sec, list_end_sec), 3)],
                     "quoted_target_count": int(list_match.get("quoted_target_count", 0)),
                     "target_span_chars": int(list_match.get("target_span_chars", 0)),
                     "list_order_source": order_source,
@@ -1668,13 +1737,19 @@ def _ordered_list_candidates(
     return _dedupe_ordered_list_candidates(candidates, target_count=len(target_list))
 
 
-def _preferred_ordered_list_match(text: str, targets: Sequence[str]) -> Mapping[str, object] | None:
-    quoted_mentions = _quoted_target_mentions(text=text, targets=targets)
+def _preferred_ordered_list_match(
+    text: str,
+    targets: Sequence[str],
+    *,
+    source_spans: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    quoted_mentions = _quoted_target_mentions(text=text, targets=targets, source_spans=source_spans)
+    quoted_mentions = [mention for mention in quoted_mentions if not bool(mention.get("forward_reference", False))]
     quoted_window = _best_quoted_target_window(quoted_mentions, text=str(text or ""), target_count=len(targets))
     if quoted_window is not None:
         return quoted_window
 
-    positioned: list[tuple[int, int, str]] = []
+    positioned: list[Mapping[str, object]] = []
     for target in targets:
         position = _target_first_position(
             text=text,
@@ -1684,16 +1759,26 @@ def _preferred_ordered_list_match(text: str, targets: Sequence[str]) -> Mapping[
         if position is None:
             continue
         end = position + len(str(target))
-        positioned.append((position, end, str(target)))
+        hit = _ordered_target_hit(
+            text=text,
+            target=str(target),
+            start=position,
+            end=end,
+            source_spans=source_spans,
+        )
+        if bool(hit.get("forward_reference", False)):
+            continue
+        positioned.append(hit)
     if not positioned:
         return None
-    positioned = sorted(positioned, key=lambda item: item[0])
+    positioned = sorted(positioned, key=lambda item: int(item["source_span_start"]))
     return {
-        "ordered_targets": [target for _, _, target in positioned],
-        "start_char": int(positioned[0][0]),
-        "end_char": int(positioned[-1][1]),
+        "ordered_targets": [str(hit["target"]) for hit in positioned],
+        "ordered_target_hits": positioned,
+        "start_char": int(positioned[0]["source_span_start"]),
+        "end_char": int(positioned[-1]["source_span_end"]),
         "quoted_target_count": 0,
-        "target_span_chars": max(0, int(positioned[-1][1]) - int(positioned[0][0])),
+        "target_span_chars": max(0, int(positioned[-1]["source_span_end"]) - int(positioned[0]["source_span_start"])),
         "order_source": "text_first_position",
     }
 
@@ -1704,7 +1789,7 @@ def _best_quoted_target_window(
     text: str,
     target_count: int,
 ) -> Mapping[str, object] | None:
-    min_unique = min(3, int(target_count))
+    min_unique = min(2, int(target_count))
     if len(mentions) < min_unique:
         return None
     best: tuple[tuple[int, int, int, int], Mapping[str, object]] | None = None
@@ -1724,6 +1809,7 @@ def _best_quoted_target_window(
             rank = (-unique_count, span, duplicate_count, start_char)
             candidate = {
                 "ordered_targets": ordered_targets,
+                "ordered_target_hits": _unique_ordered_target_hits(window),
                 "start_char": start_char,
                 "end_char": end_char,
                 "quoted_target_count": len(window),
@@ -1744,7 +1830,12 @@ def _quoted_window_has_list_continuity(*, text: str, window: Sequence[Mapping[st
     return True
 
 
-def _quoted_target_mentions(*, text: str, targets: Sequence[str]) -> list[Mapping[str, object]]:
+def _quoted_target_mentions(
+    *,
+    text: str,
+    targets: Sequence[str],
+    source_spans: Sequence[Mapping[str, object]] = (),
+) -> list[Mapping[str, object]]:
     target_by_key = {
         _target_text_key(target): str(target).strip()
         for target in targets
@@ -1757,11 +1848,13 @@ def _quoted_target_mentions(*, text: str, targets: Sequence[str]) -> list[Mappin
         if not target:
             continue
         mentions.append(
-            {
-                "start": int(match.start(1)),
-                "end": int(match.end(1)),
-                "target": target,
-            }
+            _ordered_target_hit(
+                text=str(text or ""),
+                target=target,
+                start=int(match.start(1)),
+                end=int(match.end(1)),
+                source_spans=source_spans,
+            )
         )
     return sorted(mentions, key=lambda item: int(item["start"]))
 
@@ -1777,6 +1870,52 @@ def _unique_ordered_targets(mentions: Sequence[Mapping[str, object]]) -> list[st
         seen.add(key)
         ordered.append(target)
     return ordered
+
+
+def _unique_ordered_target_hits(mentions: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
+    ordered: list[Mapping[str, object]] = []
+    seen: set[str] = set()
+    for mention in sorted(mentions, key=lambda item: int(item.get("source_span_start", item.get("start", 0)))):
+        target = str(mention.get("target", "")).strip()
+        key = _target_text_key(target)
+        if not target or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(dict(mention))
+    return ordered
+
+
+def _ordered_target_hit(
+    *,
+    text: str,
+    target: str,
+    start: int,
+    end: int,
+    source_spans: Sequence[Mapping[str, object]],
+) -> Mapping[str, object]:
+    source_span = _source_span_for_combined_char(int(start), source_spans=source_spans)
+    has_concrete_timestamp = bool(source_span.get("has_concrete_timestamp", False))
+    forward_reference = _is_forward_reference_span(
+        text=text,
+        start=int(start),
+        end=int(end),
+        has_concrete_coanchor=has_concrete_timestamp,
+    )
+    timestamp_start: float | None = None
+    timestamp_end: float | None = None
+    if has_concrete_timestamp:
+        timestamp_start = float(source_span.get("source_start_sec", 0.0) or 0.0)
+        timestamp_end = float(source_span.get("source_end_sec", timestamp_start) or timestamp_start)
+    return {
+        "start": int(start),
+        "end": int(end),
+        "target": str(target).strip(),
+        "source_span_start": int(start),
+        "source_span_end": int(end),
+        "timestamp_start": timestamp_start,
+        "timestamp_end": timestamp_end,
+        "forward_reference": forward_reference,
+    }
 
 
 def _ordered_list_effective_start_sec(
@@ -1813,6 +1952,74 @@ def _combined_char_time(
         offset = min(max(0, int(char_index) - combined_start), source_len)
         return source_start + (source_end - source_start) * (offset / source_len)
     return float(fallback_sec)
+
+
+def _combined_char_window(
+    start_char: int,
+    end_char: int,
+    *,
+    source_spans: Sequence[Mapping[str, object]],
+    fallback_start_sec: float,
+    fallback_end_sec: float,
+) -> tuple[float, float]:
+    start_span = _source_span_for_combined_char(int(start_char), source_spans=source_spans)
+    end_span = _source_span_for_combined_char(max(int(start_char), int(end_char) - 1), source_spans=source_spans)
+    if not start_span or not end_span:
+        return float(fallback_start_sec), float(fallback_end_sec)
+    return (
+        float(start_span.get("source_start_sec", fallback_start_sec) or fallback_start_sec),
+        float(end_span.get("source_end_sec", fallback_end_sec) or fallback_end_sec),
+    )
+
+
+def _source_span_for_combined_char(
+    char_index: int,
+    *,
+    source_spans: Sequence[Mapping[str, object]],
+) -> Mapping[str, object]:
+    for span in source_spans:
+        combined_start = int(span.get("combined_start", 0))
+        combined_end = int(span.get("combined_end", combined_start))
+        if combined_start <= int(char_index) <= combined_end:
+            return span
+    return {}
+
+
+def _source_has_concrete_timestamp(source: Mapping[str, object]) -> bool:
+    source_name = str(source.get("source") or "")
+    if source_name != "ocr_frame":
+        return False
+    return float(source.get("start_sec", 0.0) or 0.0) == float(source.get("end_sec", 0.0) or 0.0)
+
+
+def _is_forward_reference_span(
+    *,
+    text: str,
+    start: int,
+    end: int,
+    has_concrete_coanchor: bool,
+) -> bool:
+    if has_concrete_coanchor:
+        return False
+    sentence_start, sentence_end = _sentence_bounds(text=text, start=start, end=end)
+    sentence = str(text or "")[sentence_start:sentence_end]
+    relative_start = max(0, int(start) - sentence_start)
+    relative_end = max(relative_start, int(end) - sentence_start)
+    for marker in _FUTURE_PROSPECTIVE_RE.finditer(sentence):
+        if marker.end() <= relative_start and relative_start - marker.end() <= 32:
+            return True
+        if marker.start() >= relative_end and marker.start() - relative_end <= 32:
+            return True
+    return False
+
+
+def _sentence_bounds(*, text: str, start: int, end: int) -> tuple[int, int]:
+    value = str(text or "")
+    left = max(value.rfind(".", 0, int(start)), value.rfind("!", 0, int(start)), value.rfind("?", 0, int(start)))
+    right_candidates = [position for position in (value.find(".", int(end)), value.find("!", int(end)), value.find("?", int(end))) if position >= 0]
+    sentence_start = 0 if left < 0 else left + 1
+    sentence_end = min(right_candidates) + 1 if right_candidates else len(value)
+    return sentence_start, sentence_end
 
 
 def _target_text_key(text: str) -> str:
@@ -1908,19 +2115,25 @@ def _ordered_list_timeline_rows(
         targets = [str(target).strip() for target in ordered_targets if str(target).strip()]
         if len(targets) < 2:
             continue
+        ordered_hits = candidate.get("ordered_target_hits", [])
+        if not isinstance(ordered_hits, Sequence) or isinstance(ordered_hits, (str, bytes)):
+            continue
+        hit_rows = [dict(hit) for hit in ordered_hits if isinstance(hit, Mapping)]
+        if len(hit_rows) != len(targets):
+            continue
+        if any(hit.get("timestamp_start") is None for hit in hit_rows):
+            continue
         start_sec = float(candidate.get("start_sec", segment.start_sec) or segment.start_sec)
         end_sec = float(candidate.get("end_sec", start_sec) or start_sec)
-        span = max(0.0, end_sec - start_sec)
-        step_sec = span / max(1, len(targets) - 1) if span else 0.001
         claim = (
             f"Indexed transcript ordered list in {segment.segment_id} mentions targets in order: "
             + " -> ".join(targets)
         )
-        for index, target in enumerate(targets):
+        for target, hit in zip(targets, hit_rows):
             rows.append(
                 {
                     "entity": target,
-                    "observed_at_sec": round(start_sec + index * step_sec, 3),
+                    "observed_at_sec": round(float(hit["timestamp_start"]), 3),
                     "window": [start_sec, end_sec],
                     "confidence_signal": "text_inferred",
                     "claim": claim,
@@ -2004,6 +2217,26 @@ def _locate_recommended_next_actions(
     ]
     refs = [str(ref).strip() for ref in target_refs if str(ref).strip()]
     complete_rows = [row for row in ordered_transcript_rows if isinstance(row, Mapping)]
+    if str(ordered_candidate.get("route_kind") or "") == "partial_ordered_list":
+        return [
+            {
+                "candidate_id": _ordered_candidate_stable_id(
+                    segment_id=segment_id,
+                    candidate=ordered_candidate,
+                    route_kind="partial_ordered_list",
+                ),
+                "candidate_type": "ordered_list",
+                "route_kind": "partial_ordered_list",
+                "tool": "locate_targets_in_segment",
+                "target_refs": refs,
+                "ordered_targets": ordered_target_texts,
+                "args": {
+                    "segment_id": str(segment_id or ordered_candidate.get("segment_id") or ""),
+                    "target_refs": refs,
+                },
+                "reason": "Only a partial ordered list was found in this text span; do not treat it as a supported sequence relation.",
+            }
+        ]
     if complete_rows and refs:
         row = dict(complete_rows[0])
         return [
