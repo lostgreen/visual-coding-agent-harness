@@ -103,40 +103,41 @@ def test_option_b_requires_complete_relation_chain():
                 ClaimRelation("R5", "before", "T4", "T3"),
             ],
         )
-        workspace.write_evidence_row(
-            {
-                "evidence_id": "ev_bind_seg_0001_T2",
-                "obs_id": "obs_0001",
-                "tool": "transcript_evidence_binder",
-                "segment_id": "seg_0001",
-                "claim": "Transcript supports only T1 before T2.",
-                "confidence": 0.9,
-                "grounding_quality": "indexed_transcript",
-                "supported_option": "B",
-                "evidence_binding": {
-                    "evidence_id": "ev_bind_seg_0001_T2",
-                    "status": "supported",
-                    "claim_modality": "narrated_fact",
-                    "target_id": "T2",
+        for target_id in ("T1", "T2", "T3"):
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": f"ev_bind_seg_0001_{target_id}",
+                    "obs_id": f"obs_{target_id}",
+                    "tool": "transcript_evidence_binder",
                     "segment_id": "seg_0001",
-                    "relation_bindings": [
-                        {"relation_id": "R1", "status": "supported", "binding_id": "rel_bind_R1"}
-                    ],
-                },
-            }
-        )
+                    "claim": "Transcript supports the target but only T1 before T2.",
+                    "confidence": 0.9,
+                    "grounding_quality": "indexed_transcript",
+                    "supported_option": "B",
+                    "evidence_binding": {
+                        "evidence_id": f"ev_bind_seg_0001_{target_id}",
+                        "status": "supported",
+                        "claim_modality": "narrated_fact",
+                        "target_id": target_id,
+                        "segment_id": "seg_0001",
+                        "relation_bindings": [
+                            {"relation_id": "R1", "status": "supported", "binding_id": "rel_bind_R1"}
+                        ],
+                    },
+                }
+            )
 
         reason = _blocked_planner_final_reason(
             question=question,
             has_inspect_with_candidate_options=False,
             workspace=workspace,
             answer="B",
-            citations=["obs_0001"],
-            evidence_ids=["ev_bind_seg_0001_T2"],
+            citations=["obs_T1", "obs_T2", "obs_T3"],
+            evidence_ids=["ev_bind_seg_0001_T1", "ev_bind_seg_0001_T2", "ev_bind_seg_0001_T3"],
             planner_skill=skill,
         )
 
-    assert reason == "planner_final_missing_required_relations:R2"
+    assert reason == "final_gate:missing_relation_binding"
 
 
 def test_612_complete_chain_maps_to_b_gate():
@@ -164,37 +165,38 @@ def test_612_complete_chain_maps_to_b_gate():
                 ClaimRelation("R2", "before", "T2", "T3"),
             ],
         )
-        workspace.write_evidence_row(
-            {
-                "evidence_id": "ev_bind_seg_0001_T2",
-                "obs_id": "obs_0001",
-                "tool": "transcript_evidence_binder",
-                "segment_id": "seg_0001",
-                "claim": "Transcript supports T1 before T2 and T2 before T3.",
-                "confidence": 0.9,
-                "grounding_quality": "indexed_transcript",
-                "supported_option": "B",
-                "evidence_binding": {
-                    "evidence_id": "ev_bind_seg_0001_T2",
-                    "status": "supported",
-                    "claim_modality": "narrated_fact",
-                    "target_id": "T2",
+        for target_id in ("T1", "T2", "T3"):
+            workspace.write_evidence_row(
+                {
+                    "evidence_id": f"ev_bind_seg_0001_{target_id}",
+                    "obs_id": f"obs_{target_id}",
+                    "tool": "transcript_evidence_binder",
                     "segment_id": "seg_0001",
-                    "relation_bindings": [
-                        {"relation_id": "R1", "status": "supported", "binding_id": "rel_bind_R1"},
-                        {"relation_id": "R2", "status": "supported", "binding_id": "rel_bind_R2"},
-                    ],
-                },
-            }
-        )
+                    "claim": "Transcript supports T1 before T2 and T2 before T3.",
+                    "confidence": 0.9,
+                    "grounding_quality": "indexed_transcript",
+                    "supported_option": "B",
+                    "evidence_binding": {
+                        "evidence_id": f"ev_bind_seg_0001_{target_id}",
+                        "status": "supported",
+                        "claim_modality": "narrated_fact",
+                        "target_id": target_id,
+                        "segment_id": "seg_0001",
+                        "relation_bindings": [
+                            {"relation_id": "R1", "status": "supported", "binding_id": "rel_bind_R1"},
+                            {"relation_id": "R2", "status": "supported", "binding_id": "rel_bind_R2"},
+                        ],
+                    },
+                }
+            )
 
         reason = _blocked_planner_final_reason(
             question=question,
             has_inspect_with_candidate_options=False,
             workspace=workspace,
             answer="B",
-            citations=["obs_0001"],
-            evidence_ids=["ev_bind_seg_0001_T2"],
+            citations=["obs_T1", "obs_T2", "obs_T3"],
+            evidence_ids=["ev_bind_seg_0001_T1", "ev_bind_seg_0001_T2", "ev_bind_seg_0001_T3"],
             planner_skill=skill,
         )
 
@@ -338,6 +340,173 @@ def test_life_journey_registry_is_not_semantically_canonicalized_before_groundin
     assert "target_registry_compiled" not in trace
 
 
+def test_banned_additional_targets_are_rejected_with_protocol_note(tmp_path: Path):
+    backend = ScriptedPlannerBackend(
+        [
+            json.dumps(
+                {
+                    "status": "continue",
+                    "rationale": "Try detail.",
+                    "program": [
+                        {
+                            "tool": "read_segment_detail",
+                            "args": {
+                                "segment_id": "seg_0001",
+                                "additional_targets": ["visible medal"],
+                            },
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    workspace = EvidenceWorkspace.create(tmp_path, "banned_additional_targets")
+    registry = build_video_navigation_registry(
+        VideoMap(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+        ),
+        workspace=workspace,
+    )
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+        ),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    result = agent.run(question="What is visible?", video_path="/videos/demo.mp4")
+
+    assert result.rounds[0].program == []
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "additional_targets_not_allowed" in trace
+    assert "read_segment_detail" in trace
+
+
+def test_target_refs_reject_coverage_query_id_even_when_legacy_target_matches(tmp_path: Path):
+    backend = ScriptedPlannerBackend(
+        [
+            json.dumps(
+                {
+                    "status": "continue",
+                    "rationale": "Try detail.",
+                    "program": [
+                        {
+                            "tool": "read_segment_detail",
+                            "args": {
+                                "segment_id": "seg_0001",
+                                "target_refs": ["Q1"],
+                                "targets": ["humble background"],
+                            },
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    workspace = EvidenceWorkspace.create(tmp_path, "query_id_rejected")
+    workspace.write_observation(
+        tool_name="target_coverage",
+        claim="coverage",
+        confidence=1.0,
+        raw_output={"coverage": [{"query_id": "Q1", "target": "humble background"}]},
+    )
+    registry = build_video_navigation_registry(
+        VideoMap(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+        ),
+        workspace=workspace,
+    )
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+        ),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    result = agent.run(question="What is mentioned?", video_path="/videos/demo.mp4")
+
+    assert result.rounds[0].program == []
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "coverage_query_id_not_callable" in trace
+    assert "coverage_query_id_stripped" not in trace
+
+
+def test_target_refs_take_precedence_over_legacy_targets_in_bound_tool_prompts(tmp_path: Path):
+    backend = ScriptedPlannerBackend(
+        [
+            json.dumps(
+                {
+                    "status": "continue",
+                    "rationale": "Focused read.",
+                    "program": [
+                        {
+                            "tool": "read_segment_detail",
+                            "args": {
+                                "segment_id": "seg_0001",
+                                "target_refs": ["T1"],
+                                "targets": ["unrelated free text"],
+                            },
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    workspace = EvidenceWorkspace.create(tmp_path, "target_refs_precedence")
+    workspace.target_registry = TargetRegistry.from_specs(
+        targets=[TargetSpec("T1", "humble background", aliases=("poor origins",))]
+    )
+    registry = build_video_navigation_registry(
+        VideoMap(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=30.0,
+                    asr_text="The narration mentions humble background.",
+                )
+            ],
+        ),
+        workspace=workspace,
+    )
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=30.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+        ),
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    result = agent.run(question="What is mentioned?", video_path="/videos/demo.mp4")
+
+    args = result.rounds[0].program[0]["args"]
+    assert args["target_refs"] == ["T1"]
+    assert "targets" not in args
+    detail = workspace.read_observations(tool_name="read_segment_detail")[0].raw_output
+    assert detail["target_hits"][0]["target"] == "humble background"
+    assert "unrelated free text" not in detail["unmatched_targets"]
+
+
 def test_planner_owned_grounding_controls_runtime_route_skill_and_target_hints(tmp_path: Path):
     class GroundingThenPlanBackend(VisionLanguageBackend):
         def __init__(self) -> None:
@@ -351,6 +520,7 @@ def test_planner_owned_grounding_controls_runtime_route_skill_and_target_hints(t
                         {
                             "route": "temporal_order",
                             "recommended_skill": "narration_timeline_qa",
+                            "central_subjects": ["Planner Subject"],
                             "subjects": [
                                 {
                                     "subject_key": "subject_main",
@@ -365,7 +535,7 @@ def test_planner_owned_grounding_controls_runtime_route_skill_and_target_hints(t
                                     "subject_key": "subject_main",
                                     "claim_kind": "narrated_fact",
                                     "claim_modality": "asr",
-                                    "aliases": ["planner alpha"],
+                                    "aliases": ["planner alpha", "Planner Subject"],
                                     "search_queries": ["planner alpha transcript"],
                                     "polarity": "affirmed",
                                 },
@@ -395,6 +565,7 @@ def test_planner_owned_grounding_controls_runtime_route_skill_and_target_hints(t
                                     "ordered_target_keys": ["event_alpha", "event_beta"],
                                     "required_relation_keys": ["alpha_before_beta"],
                                     "raw_option_text": "legacy option chunk alpha",
+                                    "option_kind": "sequence",
                                 },
                                 {
                                     "option_id": "B",
@@ -402,6 +573,7 @@ def test_planner_owned_grounding_controls_runtime_route_skill_and_target_hints(t
                                     "ordered_target_keys": ["event_beta", "event_alpha"],
                                     "required_relation_keys": [],
                                     "raw_option_text": "legacy option chunk beta",
+                                    "option_kind": "sequence",
                                 },
                             ],
                             "acceptable_evidence_sources": ["asr"],
@@ -1140,11 +1312,12 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "final_rejected")
             self.assertEqual(workspace.observation_count(tool_name="global_gist"), 1)
             self.assertIn("replan", [request.task for request in backend.requests])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("global_gist_topic_seeded", trace)
+            self.assertIn("iterative_final_rejected", trace)
 
     def test_budget_can_disable_global_gist_shortcut_for_planner_trace_debugging(self):
         backend = ScriptedPlannerBackend(
@@ -4360,7 +4533,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "final_rejected")
             self.assertLessEqual(workspace.observation_count(tool_name="caption_segment"), 1)
             self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -4368,6 +4541,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("timeline_caption_", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
+            self.assertIn("iterative_final_rejected", trace)
 
     def test_interactive_timeline_locator_rows_do_not_auto_final(self):
         video_map = VideoMap(
@@ -4656,7 +4830,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "final_rejected")
             self.assertEqual(result.rounds[0].program, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("effective_skill_locked", trace)

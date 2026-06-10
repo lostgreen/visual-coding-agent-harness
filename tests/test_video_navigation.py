@@ -411,6 +411,62 @@ class VideoNavigationTest(unittest.TestCase):
                     {"segment_id": "seg_0001", "target_refs": ["T99"], "promote_answer_evidence": True},
                 )
 
+    def test_target_refs_reject_option_ids_and_canonical_text_directly(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_text="Goya rose from a humble background.",
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="target_refs_exact_direct")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[TargetSpec("T1", "humble background", subject="Goya")],
+                options=[OptionSpec("B", target_sequence=("T1",))],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            for bad_ref in ("B", "humble background", "t1", "Q1"):
+                with self.subTest(bad_ref=bad_ref):
+                    with self.assertRaises(ToolError):
+                        registry.execute(
+                            "read_segment_detail",
+                            {"segment_id": "seg_0001", "target_refs": [bad_ref]},
+                        )
+
+    def test_target_refs_take_precedence_over_legacy_targets_directly(self):
+        video_map = VideoMap(
+            video_path="/videos/goya.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_text="Goya rose from a humble background.",
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="target_refs_precedence_direct")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[TargetSpec("T1", "humble background", subject="Goya")]
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            detail = registry.execute(
+                "read_segment_detail",
+                {"segment_id": "seg_0001", "target_refs": ["T1"], "targets": ["unrelated free text"]},
+            )
+
+        self.assertEqual([hit["target"] for hit in detail["target_hits"]], ["humble background"])
+
     def test_read_segment_detail_promotes_bound_target_refs_when_requested(self):
         video_map = VideoMap(
             video_path="/videos/goya.mp4",

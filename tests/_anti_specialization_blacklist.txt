@@ -1,0 +1,8 @@
+# Case-specific semantic literals/regexes for tests/test_no_case_specific_logic.py.
+# Entries are compiled case-insensitively and applied only to src runtime files.
+Austro
+Hungarian
+Bernini
+farmhouse
+humble background
+upper class

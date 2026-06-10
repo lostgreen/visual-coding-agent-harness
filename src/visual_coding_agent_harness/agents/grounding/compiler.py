@@ -20,6 +20,7 @@ class CompiledGroundingPlan:
     plan_hash: str
     route: str
     recommended_skill_id: str
+    central_subjects: tuple[str, ...]
     acceptable_evidence_sources: tuple[str, ...]
     unresolved_ambiguities: tuple[str, ...]
     raw_options: dict[str, str]
@@ -80,6 +81,8 @@ def compile_grounding_plan(
                 option.option_id,
                 target_sequence=tuple(target_key_to_id[key] for key in ordered_keys),
                 required_relations=tuple(relation_key_to_id[key] for key in option.required_relation_keys),
+                raw_option_text=option.raw_option_text,
+                option_kind=option.option_kind,
             )
         )
 
@@ -96,6 +99,7 @@ def compile_grounding_plan(
         plan_hash=plan_hash,
         route=plan.route,
         recommended_skill_id=_skill_id(plan.recommended_skill),
+        central_subjects=tuple(plan.central_subjects),
         acceptable_evidence_sources=acceptable_evidence_sources,
         unresolved_ambiguities=tuple(plan.unresolved_ambiguities),
         raw_options=normalized_raw_options,

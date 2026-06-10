@@ -18,6 +18,9 @@ from ..video_map import VideoMap, VideoMapSegment, VideoMapStore
 from ..workspace import EvidenceWorkspace, MapUpdateProposal
 
 
+_TARGET_REF_RE = re.compile(r"^T[1-9]\d*$")
+
+
 def build_video_navigation_registry(
     video_map: VideoMap | VideoMapStore,
     *,
@@ -57,8 +60,14 @@ def build_video_navigation_registry(
         }
 
     @tool(name="search_segments", description="Search indexed video segments by text query.")
-    def search_segments(query: str, top_k: int = 5, modalities: Sequence[str] = ()) -> Mapping[str, object]:
+    def search_segments(
+        query: str,
+        top_k: int = 5,
+        modalities: Sequence[str] = (),
+        additional_targets: Sequence[str] = (),
+    ) -> Mapping[str, object]:
         current = video_map_store.current
+        query = _query_with_additional_targets(query=query, additional_targets=additional_targets)
         results = current.search(query=query, top_k=top_k, modalities=modalities)
         if results:
             ids = ", ".join(result.segment.segment_id for result in results)
@@ -81,10 +90,12 @@ def build_video_navigation_registry(
     def target_coverage(
         targets: Sequence[str] = (),
         target_refs: Sequence[str] = (),
+        additional_targets: Sequence[str] = (),
         top_k: int = 3,
         modalities: Sequence[str] = (),
         group_by_option: bool = False,
     ) -> Mapping[str, object]:
+        _reject_additional_targets(additional_targets)
         current = video_map_store.current
         rows = []
         coverage_targets = _coverage_target_specs(targets=targets, target_refs=target_refs, workspace=workspace)
@@ -184,9 +195,11 @@ def build_video_navigation_registry(
         segment_id: str,
         targets: Sequence[str] = (),
         target_refs: Sequence[str] = (),
+        additional_targets: Sequence[str] = (),
         promote_answer_evidence: bool = False,
         option_targets: Mapping[str, Sequence[str]] | None = None,
     ) -> Mapping[str, object]:
+        _reject_additional_targets(additional_targets)
         current = video_map_store.current
         invalid = _invalid_segment_result(current=current, segment_id=segment_id)
         if invalid is not None:
@@ -197,14 +210,17 @@ def build_video_navigation_registry(
             target_refs=target_refs,
             workspace=workspace,
         )
-        resolved_targets = _detail_targets(
-            targets=[
-                *list(targets),
-                *_flatten_option_targets(resolved_option_targets),
-                *[target.canonical_text for target in binding_targets],
-            ],
-            workspace=workspace,
-        )
+        target_ref_texts = [target.canonical_text for target in binding_targets]
+        if target_ref_texts:
+            resolved_targets = _unique_nonempty_texts(target_ref_texts)
+        else:
+            resolved_targets = _detail_targets(
+                targets=[
+                    *list(targets),
+                    *_flatten_option_targets(resolved_option_targets),
+                ],
+                workspace=workspace,
+            )
         target_hits = [
             _target_hit_for_segment(segment=segment, target=str(target))
             for target in resolved_targets
@@ -276,18 +292,24 @@ def build_video_navigation_registry(
         segment_id: str,
         targets: Sequence[str] = (),
         target_refs: Sequence[str] = (),
+        additional_targets: Sequence[str] = (),
         top_k_per_target: int = 3,
     ) -> Mapping[str, object]:
+        _reject_additional_targets(additional_targets)
         current = video_map_store.current
         invalid = _invalid_segment_result(current=current, segment_id=segment_id)
         if invalid is not None:
             return invalid
         segment = current.get(segment_id)
         binding_targets, _binding_relations = _resolve_binding_specs(target_refs=target_refs, workspace=workspace)
-        resolved_targets = _detail_targets(
-            targets=[*list(targets), *[target.canonical_text for target in binding_targets]],
-            workspace=workspace,
-        )
+        target_ref_texts = [target.canonical_text for target in binding_targets]
+        if target_ref_texts:
+            resolved_targets = _unique_nonempty_texts(target_ref_texts)
+        else:
+            resolved_targets = _detail_targets(
+                targets=list(targets),
+                workspace=workspace,
+            )
         candidates = _locate_target_candidates(
             segment=segment,
             targets=resolved_targets,
@@ -912,16 +934,8 @@ def _resolve_binding_specs(
         ref = str(raw_ref or "").strip()
         if not ref:
             continue
-        options_by_id = getattr(registry, "options_by_id", {})
-        if ref in options_by_id:
-            option = registry.option_for(ref)
-            for target_id in option.target_sequence:
-                target = registry.resolve_target_ref(target_id)
-                if target.target_id not in selected_target_ids:
-                    selected_targets.append(target)
-                    selected_target_ids.add(target.target_id)
-            relation_ids.update(str(relation_id) for relation_id in option.required_relations)
-            continue
+        if not _TARGET_REF_RE.fullmatch(ref):
+            raise ToolError(f"Unknown target_ref: {ref}")
         try:
             target = registry.resolve_target_ref(ref)
         except KeyError as exc:
@@ -2361,6 +2375,20 @@ def _unique_nonempty_texts(values: Sequence[str]) -> list[str]:
         items.append(text)
         seen.add(text)
     return items
+
+
+def _reject_additional_targets(additional_targets: Sequence[str]) -> None:
+    if _unique_nonempty_texts(additional_targets):
+        raise ToolError("invalid_tool_args(reason_code=additional_targets_not_allowed)")
+
+
+def _query_with_additional_targets(*, query: str, additional_targets: Sequence[str]) -> str:
+    extras = _unique_nonempty_texts(additional_targets)
+    if not extras:
+        return str(query)
+    base = str(query or "").strip()
+    suffix = " ".join(extras)
+    return f"{base} {suffix}".strip()
 
 
 def _coerce_text_sequence(value: object) -> list[str]:

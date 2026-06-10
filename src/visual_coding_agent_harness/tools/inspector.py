@@ -68,6 +68,7 @@ def build_segment_inspector_registry(
         start_sec: float,
         end_sec: float,
         ask_for: str,
+        additional_targets: Sequence[str] = (),
         event_label: str = "",
         nframes: int | None = None,
         max_pixels: int = 360 * 420,
@@ -78,6 +79,7 @@ def build_segment_inspector_registry(
         mutex_option_y: str = "",
         mutex_option_y_text: str = "",
     ) -> Mapping[str, object]:
+        ask_for = _append_additional_targets_to_question(ask_for, additional_targets)
         mutex_prompt = ""
         if mutex_option_x_text and mutex_option_y_text:
             mutex_prompt = _mutex_read_prompt(
@@ -156,12 +158,15 @@ def build_segment_inspector_registry(
         question: str = "",
         targets: Sequence[str] = (),
         target_refs: Sequence[str] = (),
+        additional_targets: Sequence[str] = (),
         start_sec: float = 0.0,
         end_sec: float = 0.0,
         nframes: int | None = 8,
         max_pixels: int = 360 * 420,
         fps: float = 0.0,
     ) -> Mapping[str, object]:
+        if additional_targets:
+            raise ToolError("invalid_tool_args(reason_code=additional_targets_not_allowed)")
         resolved_targets = _resolve_target_ref_texts(target_refs=target_refs, targets=targets, workspace=workspace)
         anchor_list = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)]
         _validate_anchor_segment_ids(segment_id=segment_id, anchors=anchor_list)
@@ -306,14 +311,16 @@ def _resolve_target_ref_texts(
     targets: Sequence[str],
     workspace: Optional[EvidenceWorkspace],
 ) -> list[str]:
-    resolved = [str(target).strip() for target in targets if str(target).strip()]
     refs = [str(ref).strip() for ref in target_refs if str(ref).strip()]
+    resolved = [] if refs else [str(target).strip() for target in targets if str(target).strip()]
     if not refs:
         return resolved
     registry = getattr(workspace, "target_registry", None) if workspace is not None else None
     if registry is None:
         raise ToolError("target_refs require a workspace TargetRegistry")
     for ref in refs:
+        if not re.fullmatch(r"T[1-9]\d*", ref):
+            raise ToolError(f"Unknown target_ref: {ref}")
         try:
             target = registry.resolve_target_ref(ref)
         except KeyError as exc:
@@ -322,6 +329,27 @@ def _resolve_target_ref_texts(
         if canonical and canonical not in resolved:
             resolved.append(canonical)
     return resolved
+
+
+def _append_additional_targets_to_question(question: str, additional_targets: Sequence[str]) -> str:
+    extras = _unique_nonempty_texts(additional_targets)
+    if not extras:
+        return str(question)
+    base = str(question or "").strip()
+    suffix = "Additional targets: " + "; ".join(extras)
+    return f"{base}\n{suffix}" if base else suffix
+
+
+def _unique_nonempty_texts(values: Sequence[str]) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        items.append(text)
+        seen.add(text)
+    return items
 
 
 def _run_inspector(

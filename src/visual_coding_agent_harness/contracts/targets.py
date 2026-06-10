@@ -46,10 +46,15 @@ class OptionSpec:
     option_id: str
     target_sequence: Sequence[str] = field(default_factory=tuple)
     required_relations: Sequence[str] = field(default_factory=tuple)
+    raw_option_text: str = ""
+    option_kind: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "target_sequence", tuple(self.target_sequence))
         object.__setattr__(self, "required_relations", tuple(self.required_relations))
+        object.__setattr__(self, "raw_option_text", str(self.raw_option_text or "").strip())
+        option_kind = str(self.option_kind or "").strip() or None
+        object.__setattr__(self, "option_kind", option_kind)
 
 
 @dataclass(frozen=True)

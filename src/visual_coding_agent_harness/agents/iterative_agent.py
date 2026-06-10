@@ -15,8 +15,9 @@ from ..registry import ToolError, ToolRegistry
 from ..video_index import SceneIndex, VideoSegment
 from ..workspace import EvidenceWorkspace
 from .answer_agent import AnswerAgent, AnswerAgentResult
-from .contracts import VISUAL_EVIDENCE_NFRAMES
+from .contracts import OptionEvaluation, VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
+from .final_gate import evaluate_final_candidate
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
 from .grounding import CompiledGroundingPlan, compile_grounding_plan, ground_question_with_model
 from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
@@ -586,6 +587,37 @@ class IterativeVisualAgent:
                         failure_tag=blocked_reason,
                         rule=_reflection_rule_for_failure(blocked_reason),
                     )
+                    if final_round_reserved:
+                        final_decision = f"final_rejected:{_final_rejection_reason_code(blocked_reason)}"
+                        self.workspace.write_trace_event(
+                            "iterative_final_rejected",
+                            {
+                                "round": round_number,
+                                "final_decision": final_decision,
+                                "reason": blocked_reason,
+                                "answer": final_answer,
+                                "citations": final_citations,
+                                "evidence_ids": final_evidence_ids,
+                            },
+                        )
+                        rounds.append(
+                            IterativeRound(
+                                round_number=round_number,
+                                status="final_rejected",
+                                planner_text=planner_response.text,
+                                rationale=blocked_reason,
+                            )
+                        )
+                        return IterativeRunResult(
+                            question=raw_question,
+                            video_path=video_path,
+                            answer=final_decision,
+                            status="final_rejected",
+                            citations=final_citations,
+                            evidence_ids=final_evidence_ids,
+                            confidence=float(action.get("confidence", 0.0) or 0.0),
+                            rounds=rounds,
+                        )
                     planned_program = []
                     if prefinal_evidence_repair_failed and post_repair_action_rounds_remaining > 0:
                         answer_feedback = [
@@ -1437,6 +1469,7 @@ class IterativeVisualAgent:
                 "plan_hash": compiled.plan_hash,
                 "route": compiled.route,
                 "recommended_skill": _skill_id_from_name(compiled.recommended_skill_id),
+                "central_subjects": list(compiled.central_subjects),
                 "acceptable_evidence_sources": list(compiled.acceptable_evidence_sources),
                 "unresolved_ambiguities": list(compiled.unresolved_ambiguities),
                 "target_key_to_id": dict(compiled.target_key_to_id),
@@ -1933,6 +1966,7 @@ class IterativeVisualAgent:
                 if (
                     self._exploration_target_entities
                     and self._tool_accepts_argument(tool_name, "targets")
+                    and not args.get("target_refs")
                     and not args.get("targets")
                 ):
                     args["targets"] = list(self._exploration_target_entities)
@@ -2211,20 +2245,43 @@ class IterativeVisualAgent:
     ) -> dict[str, Any] | None:
         normalized = dict(args)
         original_args = dict(args)
+        additional_targets = (
+            _coerce_target_arg_list(normalized.get("additional_targets"))
+            if "additional_targets" in normalized
+            else []
+        )
+        if additional_targets:
+            if not _additional_targets_allowed(tool_name=tool_name, args=normalized):
+                self._record_additional_targets_rejection(
+                    tool_name=tool_name,
+                    args=original_args,
+                    notes_out=notes_out,
+                )
+                return None
+            normalized["additional_targets"] = _unique_nonempty_strings(
+                str(target).strip() for target in additional_targets
+            )
+            if tool_name == "search_segments":
+                normalized["query"] = _append_additional_targets_to_text(
+                    normalized.get("query"),
+                    normalized["additional_targets"],
+                )
+            elif tool_name in {"vision_read", "caption_segment"}:
+                field_name = "ask_for" if tool_name == "vision_read" else "question"
+                normalized[field_name] = _append_additional_targets_to_text(
+                    normalized.get(field_name),
+                    normalized["additional_targets"],
+                )
+            normalized.pop("additional_targets", None)
         target_refs = _coerce_target_arg_list(normalized.get("target_refs")) if "target_refs" in normalized else []
         legacy_targets = _coerce_target_arg_list(normalized.get("targets")) if "targets" in normalized else []
         resolved_refs: list[str] = []
         legacy_refs: list[str] = []
         free_text_targets: list[Any] = []
-        stripped_query_ids: list[str] = []
 
         for ref in target_refs:
             ref_text = str(ref).strip()
             if not _is_target_ref_key(ref_text):
-                paired_target = _coverage_query_target_for_id(self.workspace, ref_text)
-                if paired_target and any(_same_target_text(paired_target, str(target)) for target in legacy_targets):
-                    stripped_query_ids.append(ref_text)
-                    continue
                 reason = "coverage_query_id_not_callable" if _is_coverage_query_id(ref_text) else "free_text_target_ref"
                 self._record_target_protocol_rejection(
                     tool_name=tool_name,
@@ -2245,19 +2302,46 @@ class IterativeVisualAgent:
                 return None
             resolved_refs.append(ref_text)
 
+        if resolved_refs:
+            normalized["target_refs"] = _unique_preserving_order(resolved_refs)
+            normalized["normalized_target_keys"] = normalized["target_refs"]
+            if legacy_targets:
+                normalized.pop("targets", None)
+                self.workspace.write_trace_event(
+                    "exploration_policy_adjustment",
+                    {
+                        "reason": "target_refs_precedence_over_legacy_targets",
+                        "tool": tool_name,
+                        "target_refs": normalized["target_refs"],
+                        "legacy_target_count": len(legacy_targets),
+                    },
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=tool_name,
+                    reason="target_refs_precedence_over_legacy_targets",
+                    original={"tool": tool_name, "args": original_args},
+                    resolved={"tool": tool_name, "args": normalized},
+                    next_action="target_refs are source of truth; legacy targets were retained only as audit text.",
+                )
+            return normalized
+
         for target in legacy_targets:
             target_text = str(target).strip()
-            if _is_target_ref_key(target_text):
-                if not _workspace_knows_target_ref(self.workspace, target_text):
-                    self._record_target_protocol_rejection(
-                        tool_name=tool_name,
-                        args=original_args,
-                        reason="unknown_legacy_target_ref",
-                        invalid_target=target_text,
-                        notes_out=notes_out,
-                    )
-                    return None
-                legacy_refs.append(target_text)
+            if not target_text:
+                continue
+            if _is_target_ref_key(target_text) and not _workspace_knows_target_ref(self.workspace, target_text):
+                self._record_target_protocol_rejection(
+                    tool_name=tool_name,
+                    args=original_args,
+                    reason="unknown_legacy_target_ref",
+                    invalid_target=target_text,
+                    notes_out=notes_out,
+                )
+                return None
+            upgraded_ref = _exact_registry_ref_for_legacy_target(self.workspace, target_text)
+            if upgraded_ref:
+                legacy_refs.append(upgraded_ref)
             else:
                 free_text_targets.append(target)
 
@@ -2266,7 +2350,15 @@ class IterativeVisualAgent:
             normalized["target_refs"] = resolved_refs
             normalized["normalized_target_keys"] = resolved_refs
             if free_text_targets:
-                normalized["targets"] = free_text_targets
+                normalized = self._apply_additional_targets(
+                    tool_name=tool_name,
+                    normalized=normalized,
+                    original_args=original_args,
+                    additional_targets=free_text_targets,
+                    notes_out=notes_out,
+                )
+                if normalized is None:
+                    return None
             else:
                 normalized.pop("targets", None)
             self.workspace.write_trace_event(
@@ -2285,30 +2377,78 @@ class IterativeVisualAgent:
                 resolved={"tool": tool_name, "args": normalized},
                 next_action="Use target_refs for registry target ids; keep targets for natural-language text only.",
             )
-        elif resolved_refs:
-            resolved_refs = _unique_preserving_order(resolved_refs)
-            normalized["target_refs"] = resolved_refs
-            normalized["normalized_target_keys"] = resolved_refs
-        elif stripped_query_ids:
-            normalized.pop("target_refs", None)
-            self.workspace.write_trace_event(
-                "exploration_policy_adjustment",
-                {
-                    "reason": "coverage_query_id_stripped",
-                    "tool": tool_name,
-                    "query_ids": stripped_query_ids,
-                },
+        elif free_text_targets and _workspace_has_target_registry(self.workspace):
+            normalized = self._apply_additional_targets(
+                tool_name=tool_name,
+                normalized=normalized,
+                original_args=original_args,
+                additional_targets=free_text_targets,
+                notes_out=notes_out,
             )
-            _append_normalization_note(
-                notes_out,
-                tool=tool_name,
-                reason="coverage_query_id_stripped",
-                original={"tool": tool_name, "args": original_args},
-                resolved={"tool": tool_name, "args": normalized},
-                next_action="Coverage-local Q<n> labels were stripped because the paired natural-language target was present.",
-            )
+            if normalized is None:
+                return None
 
         return normalized
+
+    def _apply_additional_targets(
+        self,
+        *,
+        tool_name: str,
+        normalized: dict[str, Any],
+        original_args: Mapping[str, Any],
+        additional_targets: Sequence[Any],
+        notes_out: list[NormalizationNote] | None,
+    ) -> dict[str, Any] | None:
+        if not _additional_targets_allowed(tool_name=tool_name, args=normalized):
+            self._record_additional_targets_rejection(
+                tool_name=tool_name,
+                args=original_args,
+                notes_out=notes_out,
+            )
+            return None
+        extras = _unique_nonempty_strings(additional_targets)
+        if not extras:
+            normalized.pop("targets", None)
+            return normalized
+        if tool_name == "search_segments":
+            normalized["query"] = _append_additional_targets_to_text(normalized.get("query"), extras)
+        elif tool_name == "vision_read":
+            normalized["ask_for"] = _append_additional_targets_to_text(normalized.get("ask_for"), extras)
+        elif tool_name == "caption_segment":
+            source_field = "question" if "question" in normalized else "ask_for"
+            normalized["question"] = _append_additional_targets_to_text(normalized.get(source_field), extras)
+        normalized.pop("targets", None)
+        normalized.pop("additional_targets", None)
+        return normalized
+
+    def _record_additional_targets_rejection(
+        self,
+        *,
+        tool_name: str,
+        args: Mapping[str, Any],
+        notes_out: list[NormalizationNote] | None,
+    ) -> None:
+        next_action = (
+            "additional_targets is allowed only for discovery-only calls: search_segments(query), "
+            "vision_read(ask_for), and caption_segment(question). Use target_refs for bound-target tools."
+        )
+        self.workspace.write_trace_event(
+            "exploration_policy_adjustment",
+            {
+                "error_code": "invalid_tool_args",
+                "reason": "additional_targets_not_allowed",
+                "reason_code": "additional_targets_not_allowed",
+                "tool": tool_name,
+                "next_action": next_action,
+            },
+        )
+        _append_normalization_note(
+            notes_out,
+            tool=tool_name,
+            reason="additional_targets_not_allowed",
+            original={"tool": tool_name, "args": dict(args)},
+            next_action=next_action,
+        )
 
     def _record_target_protocol_rejection(
         self,
@@ -4735,6 +4875,28 @@ def _blocked_planner_final_reason(
     if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
         if not _has_supported_evidence_binding_id(workspace, evidence_ids):
             return "planner_final_requires_supported_evidence_id"
+    gate_decision = _structured_final_gate_decision(
+        workspace=workspace,
+        question=question,
+        answer=answer,
+        final_refs=final_evidence_refs,
+        planner_skill=planner_skill,
+    )
+    if gate_decision is not None:
+        workspace.write_trace_event(
+            "structured_final_gate",
+            {
+                "proposed_option": gate_decision.proposed_option,
+                "gate_status": gate_decision.gate_status,
+                "reason_code": gate_decision.reason_code or "",
+                "supporting_evidence_ids": list(gate_decision.supporting_evidence_ids),
+                "missing_target_refs": list(gate_decision.missing_target_refs),
+                "missing_relation_refs": list(gate_decision.missing_relation_refs),
+            },
+        )
+        if gate_decision.accepted:
+            return ""
+        return "final_gate:" + str(gate_decision.reason_code or "verifier_failed")
     base_reason = _blocked_final_reason(
         question=question,
         has_inspect_with_candidate_options=has_inspect_with_candidate_options,
@@ -4774,6 +4936,224 @@ def _blocked_planner_final_reason(
         selected_option=selected_option,
         citations=final_evidence_refs,
     )
+
+
+def _structured_final_gate_decision(
+    *,
+    workspace: EvidenceWorkspace,
+    question: str,
+    answer: str,
+    final_refs: Sequence[str],
+    planner_skill: SkillSpec | None,
+) -> Any | None:
+    registry = getattr(workspace, "target_registry", None)
+    if registry is None:
+        return None
+    selected_option = _answer_option_letter(answer)
+    options_by_id = getattr(registry, "options_by_id", {})
+    if not selected_option or not isinstance(options_by_id, Mapping) or selected_option not in options_by_id:
+        return None
+    policy_name = _final_gate_policy_name(question=question, planner_skill=planner_skill)
+    if not policy_name:
+        return None
+    table = workspace.evidence_table_v2(
+        question=question,
+        options=extract_candidate_options(question),
+        include_legacy_worker_votes=True,
+    )
+    rows = _final_gate_rows_for_option(table=table, selected_option=selected_option, final_refs=final_refs)
+    grounding_runtime = getattr(workspace, "grounding_runtime", None)
+    try:
+        return evaluate_final_candidate(
+            selected_option=selected_option,
+            registry=registry,
+            evidence_bindings=_final_gate_evidence_bindings(rows=rows, selected_option=selected_option),
+            relation_bindings=_final_gate_relation_bindings(rows=rows),
+            skill_name=policy_name,
+            option_evaluations=_final_gate_option_evaluations(table),
+            central_subjects=tuple(getattr(grounding_runtime, "central_subjects", ()) or ()),
+        )
+    except KeyError:
+        return None
+
+
+def _final_gate_policy_name(*, question: str, planner_skill: SkillSpec | None) -> str:
+    policy_names = {
+        "main_idea",
+        "visual_timeline_qa",
+        "narration_timeline_qa",
+        "mixed_asr_visual_qa",
+        "grounded_factual_qa",
+        "mutex_fact_qa",
+    }
+    skill_name = str(getattr(planner_skill, "name", "") or "").strip()
+    if skill_name in policy_names:
+        return skill_name
+    if skill_name == "timeline_ordering":
+        return "narration_timeline_qa" if classify_narration_subroute(question) == "narration_timeline" else "visual_timeline_qa"
+    route = classify_question_route(question)
+    if route == "gist_global":
+        return "main_idea"
+    if route == "mixed_asr_visual":
+        return "mixed_asr_visual_qa"
+    if route == "needle_local":
+        return "grounded_factual_qa"
+    if route == "temporal_order":
+        return "narration_timeline_qa" if classify_narration_subroute(question) == "narration_timeline" else "visual_timeline_qa"
+    return ""
+
+
+def _final_gate_rows_for_option(
+    *,
+    table: Mapping[str, Any],
+    selected_option: str,
+    final_refs: Sequence[str],
+) -> list[Mapping[str, Any]]:
+    refs = {str(ref).strip() for ref in final_refs if str(ref).strip()}
+    rows = table.get("rows", [])
+    if refs and isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
+        return [row for row in rows if isinstance(row, Mapping) and _evidence_row_matches_any_ref(row, refs)]
+    groups = table.get("groups", {})
+    if isinstance(groups, Mapping):
+        grouped = groups.get(selected_option, [])
+        if isinstance(grouped, Sequence) and not isinstance(grouped, (str, bytes)):
+            return [row for row in grouped if isinstance(row, Mapping)]
+    return []
+
+
+def _final_gate_evidence_bindings(
+    *,
+    rows: Sequence[Mapping[str, Any]],
+    selected_option: str,
+) -> list[dict[str, Any]]:
+    bindings: list[dict[str, Any]] = []
+    for row in rows:
+        binding = row.get("evidence_binding")
+        if not isinstance(binding, Mapping):
+            continue
+        evidence_id = str(row.get("evidence_id", "") or binding.get("evidence_id", "") or row.get("obs_id", "")).strip()
+        start, end = _row_time_bounds(row=row, binding=binding)
+        bindings.append(
+            {
+                "evidence_id": evidence_id,
+                "target_ref": binding.get("target_ref") or binding.get("target_id"),
+                "relation_ref": binding.get("relation_ref") or binding.get("relation_id"),
+                "option_id": row.get("supported_option") or binding.get("option_id") or selected_option,
+                "modality": binding.get("modality") or binding.get("claim_modality") or row.get("grounding_quality") or row.get("tool"),
+                "source": binding.get("source") or row.get("source") or row.get("tool"),
+                "timestamp_start": start,
+                "timestamp_end": end,
+                "support_status": binding.get("support_status") or binding.get("status"),
+                "confidence": row.get("confidence"),
+                "rationale": row.get("claim", ""),
+            }
+        )
+    return bindings
+
+
+def _final_gate_relation_bindings(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    relation_bindings: list[dict[str, Any]] = []
+    for row in rows:
+        binding = row.get("evidence_binding")
+        if not isinstance(binding, Mapping):
+            continue
+        relations = binding.get("relation_bindings", [])
+        if not isinstance(relations, Sequence) or isinstance(relations, (str, bytes)):
+            continue
+        evidence_id = str(row.get("evidence_id", "") or binding.get("evidence_id", "") or row.get("obs_id", "")).strip()
+        for relation in relations:
+            if not isinstance(relation, Mapping):
+                continue
+            relation_bindings.append(
+                {
+                    "relation_ref": relation.get("relation_ref") or relation.get("relation_id"),
+                    "ordered_target_refs": relation.get("ordered_target_refs") or relation.get("ordered_targets") or (),
+                    "evidence_ids": relation.get("evidence_ids") or ([evidence_id] if evidence_id else []),
+                    "support_status": relation.get("support_status") or relation.get("status"),
+                    "timestamp_order": relation.get("timestamp_order") or (),
+                    "modality": relation.get("modality") or relation.get("claim_modality") or binding.get("claim_modality"),
+                    "source": relation.get("source") or binding.get("source") or row.get("tool"),
+                }
+            )
+    return relation_bindings
+
+
+def _final_gate_option_evaluations(table: Mapping[str, Any]) -> list[OptionEvaluation]:
+    groups = table.get("groups", {})
+    if not isinstance(groups, Mapping):
+        return []
+    evaluations: list[OptionEvaluation] = []
+    for option_id, rows in groups.items():
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            continue
+        supporting_ids: list[str] = []
+        target_refs: set[str] = set()
+        conflict = False
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            binding = row.get("evidence_binding")
+            if not isinstance(binding, Mapping):
+                continue
+            status = str(binding.get("support_status") or binding.get("status") or "").strip().lower()
+            if status == "conflicting":
+                conflict = True
+            if status != "supported":
+                continue
+            evidence_id = str(row.get("evidence_id", "") or binding.get("evidence_id", "") or row.get("obs_id", "")).strip()
+            if evidence_id:
+                supporting_ids.append(evidence_id)
+            target_ref = str(binding.get("target_ref") or binding.get("target_id") or "").strip()
+            if target_ref:
+                target_refs.add(target_ref)
+        binding_status = "conflicting" if conflict else ("supported" if supporting_ids else ("partial" if rows else "unsupported"))
+        evaluations.append(
+            OptionEvaluation(
+                option_id=str(option_id),
+                binding_status=binding_status,
+                rejection_reason=None,
+                coverage_breadth=len(target_refs),
+                supporting_evidence_ids=_unique_preserving_order(supporting_ids),
+            )
+        )
+    return evaluations
+
+
+def _row_time_bounds(*, row: Mapping[str, Any], binding: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    start = _float_or_none(row.get("t_start"))
+    end = _float_or_none(row.get("t_end"))
+    if start is None or end is None:
+        time_range = row.get("time_range")
+        if isinstance(time_range, Sequence) and not isinstance(time_range, (str, bytes)) and len(time_range) >= 2:
+            start = start if start is not None else _float_or_none(time_range[0])
+            end = end if end is not None else _float_or_none(time_range[1])
+    if start is None:
+        start = _float_or_none(binding.get("timestamp_start") or binding.get("mention_timestamp_sec"))
+    if end is None:
+        end = _float_or_none(binding.get("timestamp_end")) or start
+    return start, end
+
+
+def _final_rejection_reason_code(blocked_reason: str) -> str:
+    text = str(blocked_reason or "")
+    if text.startswith("final_gate:"):
+        return text.split(":", 1)[1] or "verifier_failed"
+    if "missing_required_relations" in text or "missing_required_relations" in text:
+        return "missing_relation_binding"
+    if "requires_supported_evidence_id" in text or "answer_grade" in text:
+        return "no_answer_grade_citation"
+    if "verifier_disagrees" in text:
+        return "verifier_failed"
+    return "verifier_failed"
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _has_minimum_non_navigation_visual_citations(
@@ -5728,8 +6108,10 @@ def _program_signature(program: Sequence[Mapping[str, Any]]) -> str:
 _PROTOCOL_FAILURE_REASONS = frozenset(
     {
         "free_text_target_ref",
+        "coverage_query_id_not_callable",
         "unknown_target_ref",
         "unknown_legacy_target_ref",
+        "additional_targets_not_allowed",
         "invalid_segment_id",
         "unresolved_media_segment",
         "route_violation",
@@ -5785,6 +6167,13 @@ def _structured_recovery_for_failure(
                 "remove_unknown_target_refs": True,
                 "preserve_natural_language_targets": True,
                 "do_not_invent_registry_ids": True,
+            }
+        )
+    if "additional_targets_not_allowed" in reasons:
+        recovery.update(
+            {
+                "remove_additional_targets_from_bound_tools": True,
+                "use_additional_targets_only_for_discovery": True,
             }
         )
     if reasons & {"invalid_segment_id", "unresolved_media_segment"}:
@@ -6230,6 +6619,65 @@ def _workspace_knows_target_ref(workspace: Any, key: str) -> bool:
         return key in registry
     except TypeError:
         return False
+
+
+def _workspace_has_target_registry(workspace: Any) -> bool:
+    registry = getattr(workspace, "target_registry", None)
+    return isinstance(getattr(registry, "targets_by_id", None), Mapping)
+
+
+def _additional_targets_allowed(*, tool_name: str, args: Mapping[str, Any]) -> bool:
+    if tool_name == "search_segments":
+        return "query" in args
+    if tool_name == "vision_read":
+        return "ask_for" in args
+    if tool_name == "caption_segment":
+        return "question" in args or "ask_for" in args
+    return False
+
+
+def _append_additional_targets_to_text(value: Any, additional_targets: Sequence[str]) -> str:
+    base = str(value or "").strip()
+    extras = _unique_nonempty_strings(additional_targets)
+    if not extras:
+        return base
+    suffix = "Additional targets: " + "; ".join(extras)
+    return f"{base}\n{suffix}" if base else suffix
+
+
+def _exact_registry_ref_for_legacy_target(workspace: Any, target_text: str) -> str:
+    registry = getattr(workspace, "target_registry", None)
+    if registry is None:
+        return ""
+    text = str(target_text).strip()
+    if not text:
+        return ""
+    if _is_target_ref_key(text) and _workspace_knows_target_ref(workspace, text):
+        return text
+    targets_by_id = getattr(registry, "targets_by_id", None)
+    if isinstance(targets_by_id, Mapping):
+        if text in targets_by_id:
+            return text
+        for target_id, target in targets_by_id.items():
+            surfaces = [
+                str(getattr(target, "canonical_text", "")).strip(),
+                *[str(alias).strip() for alias in getattr(target, "aliases", ())],
+            ]
+            if any(text == surface for surface in surfaces if surface):
+                return str(target_id)
+    return ""
+
+
+def _unique_nonempty_strings(values: Sequence[Any]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
 
 
 def _registered_target_ref_descriptions(workspace: Any) -> list[str]:

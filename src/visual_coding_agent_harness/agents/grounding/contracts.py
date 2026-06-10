@@ -20,11 +20,20 @@ ClaimKind = Literal[
 GroundingModality = Literal["visual", "asr", "ocr", "mixed", "unknown"]
 GroundingPolarity = Literal["affirmed", "negated", "unknown"]
 RelationKind = Literal["before", "after", "same_scene", "causes", "contradicts", "equivalent", "transitions_to"]
+OptionKind = Literal[
+    "topic_arc",
+    "topic_focus",
+    "sequence",
+    "mutex_fact",
+    "narrated_fact",
+    "mixed_fact",
+]
 
 ALLOWED_CLAIM_KINDS = frozenset(ClaimKind.__args__)  # type: ignore[attr-defined]
 ALLOWED_GROUNDING_MODALITIES = frozenset(GroundingModality.__args__)  # type: ignore[attr-defined]
 ALLOWED_GROUNDING_POLARITIES = frozenset(GroundingPolarity.__args__)  # type: ignore[attr-defined]
 ALLOWED_RELATION_KINDS = frozenset(RelationKind.__args__)  # type: ignore[attr-defined]
+ALLOWED_OPTION_KINDS = frozenset(OptionKind.__args__)  # type: ignore[attr-defined]
 ALLOWED_GROUNDING_ROUTES = frozenset({"gist_global", "needle_local", "temporal_order", "mixed_asr_visual"})
 ALLOWED_EVIDENCE_SOURCES = frozenset({"visual", "asr", "ocr", "mixed", "qa", "indexed_transcript", "global"})
 
@@ -133,12 +142,15 @@ class GroundingOption:
     ordered_target_keys: Sequence[str] = field(default_factory=tuple)
     required_relation_keys: Sequence[str] = field(default_factory=tuple)
     raw_option_text: str = ""
+    option_kind: OptionKind | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "option_id", str(self.option_id).strip().upper()[:1])
         object.__setattr__(self, "required_target_keys", _string_tuple(self.required_target_keys))
         object.__setattr__(self, "ordered_target_keys", _string_tuple(self.ordered_target_keys))
         object.__setattr__(self, "required_relation_keys", _string_tuple(self.required_relation_keys))
+        option_kind = str(self.option_kind or "").strip() or None
+        object.__setattr__(self, "option_kind", option_kind)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -147,6 +159,7 @@ class GroundingOption:
             "ordered_target_keys": list(self.ordered_target_keys),
             "required_relation_keys": list(self.required_relation_keys),
             "raw_option_text": self.raw_option_text,
+            "option_kind": self.option_kind,
         }
 
     @classmethod
@@ -157,6 +170,7 @@ class GroundingOption:
             ordered_target_keys=_string_tuple(payload.get("ordered_target_keys", ())),
             required_relation_keys=_string_tuple(payload.get("required_relation_keys", ())),
             raw_option_text=str(payload.get("raw_option_text", "")).strip(),
+            option_kind=str(payload.get("option_kind", "")).strip() or None,
         )
 
 
@@ -164,6 +178,7 @@ class GroundingOption:
 class GroundingPlan:
     route: str
     recommended_skill: str
+    central_subjects: Sequence[str] = field(default_factory=tuple)
     subjects: Sequence[GroundingSubject] = field(default_factory=tuple)
     targets: Sequence[GroundingTarget] = field(default_factory=tuple)
     relations: Sequence[GroundingRelation] = field(default_factory=tuple)
@@ -173,6 +188,7 @@ class GroundingPlan:
     unresolved_ambiguities: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "central_subjects", _string_tuple(self.central_subjects))
         object.__setattr__(self, "subjects", tuple(self.subjects))
         object.__setattr__(self, "targets", tuple(self.targets))
         object.__setattr__(self, "relations", tuple(self.relations))
@@ -185,6 +201,7 @@ class GroundingPlan:
         return {
             "route": self.route,
             "recommended_skill": self.recommended_skill,
+            "central_subjects": list(self.central_subjects),
             "subjects": [subject.to_dict() for subject in self.subjects],
             "targets": [target.to_dict() for target in self.targets],
             "relations": [relation.to_dict() for relation in self.relations],
@@ -199,6 +216,7 @@ class GroundingPlan:
         return cls(
             route=str(payload.get("route", "")).strip(),
             recommended_skill=str(payload.get("recommended_skill", "")).strip(),
+            central_subjects=_string_tuple(payload.get("central_subjects", ())),
             subjects=tuple(
                 GroundingSubject.from_mapping(item)
                 for item in _mapping_sequence(payload.get("subjects", ()))

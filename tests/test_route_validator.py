@@ -546,7 +546,7 @@ def test_free_text_target_ref_rejects_tool_call(tmp_path: Path):
     assert normalized == []
 
 
-def test_exact_paired_coverage_query_id_is_stripped_and_step_executes(tmp_path: Path):
+def test_exact_paired_coverage_query_id_is_rejected_even_with_matching_text(tmp_path: Path):
     registry = ToolRegistry()
 
     @tool(name="target_coverage", description="Coverage matrix.")
@@ -597,13 +597,8 @@ def test_exact_paired_coverage_query_id_is_stripped_and_step_executes(tmp_path: 
         notes_out=notes,
     )
 
-    assert normalized == [
-        {
-            "tool": "target_coverage",
-            "args": {"targets": ["How the Austro-Hungarian Empire rises and falls"], "top_k": 3},
-        }
-    ]
-    assert any(note.reason == "coverage_query_id_stripped" for note in notes)
+    assert normalized == []
+    assert any(note.reason == "coverage_query_id_not_callable" for note in notes)
 
 
 def test_unpaired_coverage_query_id_is_rejected(tmp_path: Path):

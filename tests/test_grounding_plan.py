@@ -33,6 +33,7 @@ def _valid_plan() -> GroundingPlan:
     return GroundingPlan(
         route="temporal_order",
         recommended_skill="timeline_ordering",
+        central_subjects=("Subject X",),
         subjects=(GroundingSubject(subject_key="subject", canonical_name="Subject X", aliases=("X",)),),
         targets=(
             GroundingTarget(
@@ -41,7 +42,7 @@ def _valid_plan() -> GroundingPlan:
                 subject_key="subject",
                 claim_kind="visible_event",
                 claim_modality="visual",
-                aliases=("Alpha event",),
+                aliases=("Alpha event", "Subject X"),
                 search_queries=("Event Alpha",),
                 polarity="affirmed",
             ),
@@ -70,11 +71,13 @@ def _valid_plan() -> GroundingPlan:
                 ordered_target_keys=("event_alpha", "event_beta"),
                 required_relation_keys=("alpha_before_beta",),
                 raw_option_text="Alpha then Beta",
+                option_kind="sequence",
             ),
             GroundingOption(
                 option_id="B",
                 ordered_target_keys=("event_beta", "event_alpha"),
                 raw_option_text="Beta then Alpha",
+                option_kind="sequence",
             ),
         ),
         acceptable_evidence_sources=("visual", "asr"),
@@ -98,6 +101,7 @@ def test_validate_grounding_plan_rejects_unknown_target_ref() -> None:
                 option_id="A",
                 ordered_target_keys=("event_alpha", "missing_event"),
                 raw_option_text="Alpha then missing",
+                option_kind="sequence",
             ),
         ),
     )
@@ -135,6 +139,7 @@ def test_validate_grounding_plan_rejects_invalid_enums_and_policy_values() -> No
                 required_target_keys=("event_alpha",),
                 required_relation_keys=("bad_relation",),
                 raw_option_text="Alpha then Beta",
+                option_kind="dream_kind",
             ),
         ),
         acceptable_evidence_sources=("dream",),
@@ -155,6 +160,28 @@ def test_validate_grounding_plan_rejects_invalid_enums_and_policy_values() -> No
     assert "polarity" in messages
     assert "relations[0].kind" in messages
     assert "acceptable_evidence_sources" in messages
+    assert "option_kind" in messages
+
+
+def test_validate_grounding_plan_requires_planner_owned_central_subjects_and_option_kind() -> None:
+    bad_plan = replace(
+        _valid_plan(),
+        central_subjects=("Subject not in any target",),
+        options=(
+            replace(_valid_plan().options[0], option_kind=None),
+            replace(_valid_plan().options[1], option_kind="sequence"),
+        ),
+    )
+
+    result = validate_grounding_plan(
+        bad_plan,
+        raw_options={"A": "Alpha then Beta", "B": "Beta then Alpha"},
+    )
+
+    assert not result.is_valid
+    messages = "\n".join(f"{finding.path}: {finding.message}" for finding in result.findings)
+    assert "central_subjects[0]" in messages
+    assert "option_kind" in messages
 
 
 def test_validate_grounding_plan_requires_exact_raw_option_set_and_text() -> None:
@@ -165,11 +192,13 @@ def test_validate_grounding_plan_requires_exact_raw_option_set_and_text() -> Non
                 option_id="A",
                 ordered_target_keys=("event_alpha", "event_beta"),
                 raw_option_text="model rewritten option",
+                option_kind="sequence",
             ),
             GroundingOption(
                 option_id="C",
                 ordered_target_keys=("event_alpha",),
                 raw_option_text="extra option",
+                option_kind="sequence",
             ),
         ),
     )
@@ -192,7 +221,7 @@ def test_compile_grounding_plan_assigns_stable_registry_ids_and_hash() -> None:
     assert compiled.target_key_to_id == {"event_alpha": "T1", "event_beta": "T2"}
     assert compiled.relation_key_to_id == {"alpha_before_beta": "R1"}
     assert compiled.registry.resolve_target_ref("T1").canonical_text == "Event Alpha occurs"
-    assert compiled.registry.resolve_target_ref("T1").aliases == ("Alpha event", "Event Alpha")
+    assert compiled.registry.resolve_target_ref("T1").aliases == ("Alpha event", "Subject X", "Event Alpha")
     assert compiled.registry.resolve_target_ref("T1").modality_hint == ClaimModality.VISUAL_FACT
     assert compiled.registry.option_for("A").target_sequence == ("T1", "T2")
     assert compiled.registry.option_for("A").required_relations == ("R1",)
@@ -220,9 +249,12 @@ def test_compile_grounding_plan_preserves_runtime_policy_and_target_metadata() -
 
     assert compiled.route == "temporal_order"
     assert compiled.recommended_skill_id == "timeline_ordering"
+    assert compiled.central_subjects == ("Subject X",)
     assert compiled.acceptable_evidence_sources == ("visual", "asr")
     assert compiled.unresolved_ambiguities == ("needs transcript confirmation",)
     assert compiled.raw_options == {"A": "Alpha then Beta", "B": "Beta then Alpha"}
+    assert compiled.registry.option_for("A").raw_option_text == "Alpha then Beta"
+    assert compiled.registry.option_for("A").option_kind == "sequence"
     target = compiled.registry.resolve_target_ref("T1")
     assert target.claim_kind == "visible_event"
     assert target.polarity == "affirmed"
@@ -261,6 +293,8 @@ def test_grounding_prompt_keeps_task_specific_claim_text_and_neutral_keys() -> N
     )
 
     prompt = backend.requests[0].prompt
+    assert "central_subjects" in prompt
+    assert "option_kind must be one of" in prompt
     assert "Use task-specific, option-faithful canonical claims" in prompt
     assert "Use domain-neutral temporary keys only" in prompt
     assert "Use domain-neutral wording in the plan" not in prompt

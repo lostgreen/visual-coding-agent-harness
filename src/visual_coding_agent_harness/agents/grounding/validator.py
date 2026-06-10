@@ -12,6 +12,7 @@ from .contracts import (
     ALLOWED_GROUNDING_MODALITIES,
     ALLOWED_GROUNDING_POLARITIES,
     ALLOWED_GROUNDING_ROUTES,
+    ALLOWED_OPTION_KINDS,
     ALLOWED_RELATION_KINDS,
     GroundingPlan,
 )
@@ -69,6 +70,10 @@ def validate_grounding_plan(
                 )
             )
 
+    central_subjects = tuple(_normalize_space(subject) for subject in plan.central_subjects if _normalize_space(subject))
+    if not central_subjects:
+        findings.append(GroundingValidationFinding("central_subjects", "at least one central subject is required"))
+
     subject_keys = _unique_keys(
         (subject.subject_key for subject in plan.subjects),
         path="subjects",
@@ -114,6 +119,19 @@ def validate_grounding_plan(
             )
         if target.target_key.upper() in {"A", "B", "C", "D", "E", "F", "G", "H"}:
             findings.append(GroundingValidationFinding(f"{path}.target_key", "option letter cannot be a target key"))
+
+    target_subject_surfaces: set[str] = set()
+    for target in plan.targets:
+        target_subject_surfaces.add(_normalize_space(target.canonical_claim))
+        target_subject_surfaces.update(_normalize_space(alias) for alias in target.aliases if _normalize_space(alias))
+    for index, central_subject in enumerate(central_subjects):
+        if central_subject not in target_subject_surfaces:
+            findings.append(
+                GroundingValidationFinding(
+                    f"central_subjects[{index}]",
+                    "central subject must appear exactly in at least one target canonical claim or alias",
+                )
+            )
 
     relation_keys = _unique_keys(
         (relation.relation_key for relation in plan.relations),
@@ -162,6 +180,11 @@ def validate_grounding_plan(
         path = f"options[{index}]"
         if not _OPTION_RE.fullmatch(str(option.option_id)):
             findings.append(GroundingValidationFinding(f"{path}.option_id", f"invalid option id: {option.option_id}"))
+        option_kind = _normalized_value(option.option_kind)
+        if not option_kind:
+            findings.append(GroundingValidationFinding(f"{path}.option_kind", "required"))
+        elif option_kind not in ALLOWED_OPTION_KINDS:
+            findings.append(GroundingValidationFinding(f"{path}.option_kind", f"invalid option kind: {option.option_kind}"))
         expected_raw_option = normalized_raw_options.get(option.option_id)
         if expected_raw_option is not None and _normalize_space(option.raw_option_text) != expected_raw_option:
             findings.append(

@@ -570,6 +570,23 @@ class CaptionQAToolsTest(unittest.TestCase):
 
         self.assertEqual(result["targets"], ["humble background"])
 
+    def test_verify_segment_anchors_rejects_additional_targets_directly(self):
+        backend = FixedTextBackend("{}")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="verify_additional_targets_rejected")
+            registry = build_segment_inspector_registry(backend, workspace=workspace)
+
+            with self.assertRaisesRegex(Exception, "additional_targets_not_allowed"):
+                registry.execute(
+                    "verify_segment_anchors",
+                    {
+                        "video_path": "/videos/goya.mp4",
+                        "segment_id": "seg_0001",
+                        "anchors": [],
+                        "additional_targets": ["free-text hint"],
+                    },
+                )
+
     def test_verify_segment_anchors_parses_ordered_visible_into_timeline_order(self):
         backend = FixedTextBackend(
             json.dumps(

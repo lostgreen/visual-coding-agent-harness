@@ -451,7 +451,7 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
     return (
         "ground_question(query: str, top_k: int = 5, modalities: list = [])",
         target_coverage_schema,
-        "search_segments(query: str, top_k: int = 5, modalities: list = [])",
+        "search_segments(query: str, top_k: int = 5, modalities: list = [], additional_targets: list = [])",
         "read_segment(segment_id: str)",
         read_segment_detail_schema,
         locate_targets_schema,
@@ -465,9 +465,9 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         "read_timeline_sorted()",
         "read_hypothesis()",
         "update_hypothesis_slot(slot_name: str, status: str, evidence_obs_id: str = '')",
-        "vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, event_label: str = '', nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
+        "vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, additional_targets: list = [], event_label: str = '', nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
         inspect_schema,
-        "caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
+        "caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, additional_targets: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
         "qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
     )
 
@@ -810,8 +810,10 @@ _ROUTE_AGNOSTIC_FINAL_RULES = (
 )
 
 _TARGET_REF_FINAL_RULES = (
-    "- target_refs accepts only known registry ids like T1; free text or unknown T<n> ids hard-reject the tool call.",
-    "- targets is only for natural-language target text; acceptance requires 0 occurrences of T<n> in legacy targets.",
+    "- target_refs accepts only exact known registry ids like T1; option letters, Q<n> rows, lowercase ids, canonical text, and free text hard-reject the tool call.",
+    "- When both target_refs and targets are present, target_refs are source of truth and targets is audit-only free text.",
+    "- additional_targets is allowed only on discovery calls: search_segments(query), vision_read(ask_for), and caption_segment(question).",
+    "- additional_targets is banned on target_coverage, read_segment_detail, verify_ledger_answer, verify_segment_anchors, and locate_targets_in_segment.",
 )
 
 _NO_TARGET_REF_FINAL_RULES = (
