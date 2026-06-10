@@ -13,7 +13,7 @@ from ..agents.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
-from .frame_cache import FrameSampler
+from .frame_cache import FrameSampler, frame_cache_artifact_ref
 
 
 ClipExtractor = Callable[[str, str, float, float], str]
@@ -132,7 +132,14 @@ def _run_segment_tool(
         if frame_paths:
             media_path = None
             media_type = "video"
-            input_artifacts = list(frame_paths)
+            input_artifacts = [
+                frame_cache_artifact_ref(
+                    video_path=video_path,
+                    start_sec=float(start_sec),
+                    end_sec=float(end_sec),
+                    frame_count=len(frame_paths),
+                )
+            ]
             metadata["source_video_path"] = video_path
             metadata["frame_cache_policy"] = "precomputed_2fps"
             metadata["frame_count"] = len(frame_paths)

@@ -9,7 +9,7 @@ from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..video_map import VideoMap, VideoMapStore
-from .frame_cache import FrameSampler
+from .frame_cache import FrameSampler, frame_cache_artifact_ref
 
 
 DEFAULT_MAX_PIXELS = 151200
@@ -59,7 +59,14 @@ def build_query_context_registry(
             if frame_paths:
                 media_path = None
                 media_type = "video"
-                input_artifacts = list(frame_paths)
+                input_artifacts = [
+                    frame_cache_artifact_ref(
+                        video_path=video_path,
+                        start_sec=0.0,
+                        end_sec=resolved_duration,
+                        frame_count=len(frame_paths),
+                    )
+                ]
                 metadata["source_video_path"] = video_path
                 metadata["frame_cache_policy"] = "precomputed_2fps"
                 metadata["frame_count"] = len(frame_paths)

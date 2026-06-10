@@ -9,7 +9,7 @@ from ..agents.contracts import VISUAL_EVIDENCE_NFRAMES, resolve_nframes
 from ..agents.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
-from .frame_cache import FrameSampler
+from .frame_cache import FrameSampler, frame_cache_artifact_ref
 
 
 DEFAULT_GLOBAL_NFRAMES = VISUAL_EVIDENCE_NFRAMES
@@ -50,7 +50,14 @@ def build_global_view_registry(
             if frame_paths:
                 media_path = None
                 media_type = "video"
-                input_artifacts = list(frame_paths)
+                input_artifacts = [
+                    frame_cache_artifact_ref(
+                        video_path=video_path,
+                        start_sec=0.0,
+                        end_sec=float(duration_sec),
+                        frame_count=len(frame_paths),
+                    )
+                ]
                 metadata["source_video_path"] = video_path
                 metadata["frame_cache_policy"] = "precomputed_2fps"
                 metadata["frame_count"] = len(frame_paths)

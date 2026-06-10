@@ -200,7 +200,7 @@ class CaptionQAToolsTest(unittest.TestCase):
             list(request.frames),
             ["/frames/demo/frame_000000003.jpg", "/frames/demo/frame_000000004.jpg"],
         )
-        self.assertEqual(result["input_artifacts"], list(request.frames))
+        self.assertEqual(result["input_artifacts"], ["frame_cache:precomputed_2fps:demo.mp4:10.000-20.000:n=2"])
         self.assertEqual(result["regions"][0]["source_video_path"], "/videos/demo.mp4")
         self.assertEqual(result["regions"][0]["frame_cache_policy"], "precomputed_2fps")
 

@@ -57,6 +57,14 @@ def build_extract_frame_cache_command(*, video_path: str, output_pattern: str, f
     ]
 
 
+def frame_cache_artifact_ref(*, video_path: str, start_sec: float, end_sec: float, frame_count: int) -> str:
+    source = Path(video_path).name or "video"
+    return (
+        "frame_cache:precomputed_2fps:"
+        f"{source}:{float(start_sec):.3f}-{float(end_sec):.3f}:n={int(frame_count)}"
+    )
+
+
 def build_frame_cache_for_video(
     *,
     video_path: Path,
