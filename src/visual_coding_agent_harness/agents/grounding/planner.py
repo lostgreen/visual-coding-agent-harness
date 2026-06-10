@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from ...backends.base import BackendRequest, VisionLanguageBackend
+from ..skills.specs import builtin_skill_registry
 from .contracts import GroundingPlan
 from .validator import GroundingValidationResult, validate_grounding_plan
 
@@ -30,6 +31,8 @@ def ground_question_with_model(
     max_retries: int = 1,
 ) -> GroundingPlannerResult:
     option_ids = tuple(_option_id(option) for option in options if _option_id(option))
+    raw_options = _raw_options_by_id(options)
+    skill_ids = tuple(skill.name for skill in builtin_skill_registry().list())
     validation = GroundingValidationResult(is_valid=False)
     raw_text = ""
     feedback = ""
@@ -51,7 +54,12 @@ def ground_question_with_model(
             validation = GroundingValidationResult(is_valid=False)
             feedback = "Previous response was not a valid JSON object matching the GroundingPlan schema."
             continue
-        validation = validate_grounding_plan(plan, option_ids=option_ids)
+        validation = validate_grounding_plan(
+            plan,
+            option_ids=option_ids,
+            raw_options=raw_options,
+            skill_ids=skill_ids,
+        )
         if validation.is_valid:
             return GroundingPlannerResult(plan=plan, validation=validation, raw_text=raw_text, attempts=attempts)
         feedback = validation.feedback()
@@ -79,12 +87,13 @@ def _grounding_prompt(
         "Preserve semantic differences between initial states, later transitions, attributes, and ordered events.\n"
         "Output strict JSON with keys: route, recommended_skill, subjects, targets, relations, options, "
         "acceptable_evidence_sources, confidence, unresolved_ambiguities.\n"
-        "Use temporary keys such as subject_main, event_alpha, relation_1; the framework will assign T/R IDs.\n"
+        "Use domain-neutral temporary keys such as subject_main, event_alpha, relation_1; the framework will assign T/R IDs.\n"
+        "Use task-specific, option-faithful canonical claims, aliases, and search queries that preserve the words needed for retrieval.\n"
         "Each target requires target_key, canonical_claim, subject_key, claim_kind, claim_modality, aliases, "
         "search_queries, polarity. Each option requires option_id, required_target_keys, ordered_target_keys, "
         "required_relation_keys, raw_option_text.\n"
         "Do not assert that any claim is true; describe what evidence would need to be checked.\n"
-        "Use domain-neutral wording in the plan; do not rely on memorized examples.\n"
+        "Use domain-neutral temporary keys only; do not rely on memorized examples.\n"
         f"{feedback_block}\n"
         f"Route hint: {route_hint or '(none)'}\n"
         f"Question:\n{question}\n"
@@ -105,3 +114,17 @@ def _extract_json_object(text: str) -> str:
 def _option_id(value: object) -> str:
     match = re.match(r"\s*([A-H])(?:[.)]\s*|\s+|$)", str(value), flags=re.IGNORECASE)
     return match.group(1).upper() if match else ""
+
+
+def _raw_options_by_id(options: Sequence[str]) -> dict[str, str]:
+    raw_options: dict[str, str] = {}
+    for option in options:
+        option_id = _option_id(option)
+        if not option_id:
+            continue
+        raw_options[option_id] = _strip_option_id(option)
+    return raw_options
+
+
+def _strip_option_id(option: object) -> str:
+    return re.sub(r"^\s*[A-H][\).:-]\s*", "", str(option or ""), count=1, flags=re.IGNORECASE).strip()

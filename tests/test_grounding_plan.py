@@ -108,6 +108,84 @@ def test_validate_grounding_plan_rejects_unknown_target_ref() -> None:
     assert any("unknown target" in finding.message for finding in result.findings)
 
 
+def test_validate_grounding_plan_rejects_invalid_enums_and_policy_values() -> None:
+    bad_plan = replace(
+        _valid_plan(),
+        route="dream_route",
+        recommended_skill="missing_skill",
+        targets=(
+            replace(
+                _valid_plan().targets[0],
+                claim_kind="whatever",
+                claim_modality="narration",
+                polarity="maybe",
+            ),
+        ),
+        relations=(
+            GroundingRelation(
+                relation_key="bad_relation",
+                kind="earlier_than",
+                source_target_key="event_alpha",
+                destination_target_key="event_alpha",
+            ),
+        ),
+        options=(
+            GroundingOption(
+                option_id="A",
+                required_target_keys=("event_alpha",),
+                required_relation_keys=("bad_relation",),
+                raw_option_text="Alpha then Beta",
+            ),
+        ),
+        acceptable_evidence_sources=("dream",),
+    )
+
+    result = validate_grounding_plan(
+        bad_plan,
+        raw_options={"A": "Alpha then Beta"},
+        skill_ids=("timeline_ordering",),
+    )
+
+    assert not result.is_valid
+    messages = "\n".join(f"{finding.path}: {finding.message}" for finding in result.findings)
+    assert "route" in messages
+    assert "recommended_skill" in messages
+    assert "claim_kind" in messages
+    assert "claim_modality" in messages
+    assert "polarity" in messages
+    assert "relations[0].kind" in messages
+    assert "acceptable_evidence_sources" in messages
+
+
+def test_validate_grounding_plan_requires_exact_raw_option_set_and_text() -> None:
+    bad_plan = replace(
+        _valid_plan(),
+        options=(
+            GroundingOption(
+                option_id="A",
+                ordered_target_keys=("event_alpha", "event_beta"),
+                raw_option_text="model rewritten option",
+            ),
+            GroundingOption(
+                option_id="C",
+                ordered_target_keys=("event_alpha",),
+                raw_option_text="extra option",
+            ),
+        ),
+    )
+
+    result = validate_grounding_plan(
+        bad_plan,
+        raw_options={"A": "Alpha then Beta", "B": "Beta then Alpha"},
+    )
+
+    assert not result.is_valid
+    messages = "\n".join(f"{finding.path}: {finding.message}" for finding in result.findings)
+    assert "missing option(s): B" in messages
+    assert "extra option(s): C" in messages
+    assert "raw_option_text must match framework raw option text" in messages
+
+
 def test_compile_grounding_plan_assigns_stable_registry_ids_and_hash() -> None:
     compiled = compile_grounding_plan(_valid_plan())
 
@@ -123,6 +201,33 @@ def test_compile_grounding_plan_assigns_stable_registry_ids_and_hash() -> None:
     compiled_again = compile_grounding_plan(_valid_plan())
     assert compiled.plan_hash == compiled_again.plan_hash
     assert compiled.registry.version == compiled_again.registry.version
+
+
+def test_compile_grounding_plan_preserves_runtime_policy_and_target_metadata() -> None:
+    plan = replace(
+        _valid_plan(),
+        unresolved_ambiguities=("needs transcript confirmation",),
+        options=(
+            replace(_valid_plan().options[0], raw_option_text="model rewrite A"),
+            replace(_valid_plan().options[1], raw_option_text="model rewrite B"),
+        ),
+    )
+
+    compiled = compile_grounding_plan(
+        plan,
+        raw_options={"A": "Alpha then Beta", "B": "Beta then Alpha"},
+    )
+
+    assert compiled.route == "temporal_order"
+    assert compiled.recommended_skill_id == "timeline_ordering"
+    assert compiled.acceptable_evidence_sources == ("visual", "asr")
+    assert compiled.unresolved_ambiguities == ("needs transcript confirmation",)
+    assert compiled.raw_options == {"A": "Alpha then Beta", "B": "Beta then Alpha"}
+    target = compiled.registry.resolve_target_ref("T1")
+    assert target.claim_kind == "visible_event"
+    assert target.polarity == "affirmed"
+    assert target.acceptable_evidence_sources == ("visual", "asr")
+    assert target.relation is None
 
 
 def test_ground_question_retries_once_then_uses_valid_plan() -> None:
@@ -144,6 +249,21 @@ def test_ground_question_retries_once_then_uses_valid_plan() -> None:
     assert result.attempts == 2
     assert [request.task for request in backend.requests] == ["ground_question", "ground_question"]
     assert "Validation feedback" in backend.requests[1].prompt
+
+
+def test_grounding_prompt_keeps_task_specific_claim_text_and_neutral_keys() -> None:
+    backend = ScriptedGroundingBackend([json.dumps(_valid_plan().to_dict())])
+
+    ground_question_with_model(
+        backend,
+        question="Question: Which named event happens first?",
+        options=("A. Alpha then Beta", "B. Beta then Alpha"),
+    )
+
+    prompt = backend.requests[0].prompt
+    assert "Use task-specific, option-faithful canonical claims" in prompt
+    assert "Use domain-neutral temporary keys only" in prompt
+    assert "Use domain-neutral wording in the plan" not in prompt
 
 
 def test_ground_question_falls_back_unstructured_after_retry() -> None:

@@ -153,6 +153,8 @@ def compose_replanning_prompt_slots(
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
     resolved_route = route or playbook.route
+    if route and route != playbook.route:
+        playbook = QuestionPlaybook(name=str(route), route=str(route))
     option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
     task_blocks = [
         PromptBlock(

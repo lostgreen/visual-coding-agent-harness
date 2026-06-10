@@ -18,7 +18,7 @@ from .answer_agent import AnswerAgent, AnswerAgentResult
 from .contracts import VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
-from .grounding import compile_grounding_plan, ground_question_with_model
+from .grounding import CompiledGroundingPlan, compile_grounding_plan, ground_question_with_model
 from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
 from .output_quality import is_unsupported_claim
 from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
@@ -209,14 +209,18 @@ class IterativeVisualAgent:
         self._no_progress_warning_emitted = False
         question_context = build_question_context(question)
         raw_question = question_context.raw_question
-        exploration_question_text = self._question_for_exploration(question_context)
         vlm_safe_question = question_context.vlm_safe_question
         self.workspace.ensure_hypothesis(raw_question)
-        self._initialize_planner_owned_grounding(question_context)
+        grounding_runtime = self._initialize_planner_owned_grounding(question_context)
+        effective_route = self._effective_route(raw_question)
+        exploration_question_text = self._question_for_exploration(
+            question_context,
+            route_hint=effective_route,
+        )
         self._seed_target_coverage(raw_question)
         if (
             not self.budget.disable_global_gist_route
-            and classify_question_route(raw_question) == "gist_global"
+            and effective_route == "gist_global"
             and self._has_tool("global_gist")
         ):
             global_result = self._try_global_gist_route(question=exploration_question_text, video_path=video_path)
@@ -230,6 +234,8 @@ class IterativeVisualAgent:
                 question=raw_question,
                 exploration_question=exploration_question_text,
                 video_path=video_path,
+                route=effective_route,
+                recommended_skill_id=grounding_runtime.recommended_skill_id if grounding_runtime else "",
             )
             if skill_result is not None:
                 if skill_result.status == "final" or len(skill_result.rounds) >= self.budget.max_rounds:
@@ -272,7 +278,15 @@ class IterativeVisualAgent:
         post_repair_action_start_round = 0
         evidence_repair_candidate_answer = ""
         evidence_repair_failure_reason = ""
-        skill_runtime = _initial_skill_runtime_state(raw_question) if self.budget.hard_skill_runtime else None
+        skill_runtime = (
+            _initial_skill_runtime_state(
+                raw_question,
+                route=effective_route,
+                recommended_skill_id=grounding_runtime.recommended_skill_id if grounding_runtime else "",
+            )
+            if self.budget.hard_skill_runtime
+            else None
+        )
         last_selected_skill_id: str | None = _skill_id(skill_runtime.effective_skill) if skill_runtime else None
         if skill_runtime is not None:
             self.workspace.write_trace_event(
@@ -312,7 +326,7 @@ class IterativeVisualAgent:
                 recent_tool_outputs=self.workspace.recent_tool_outputs(limit=3),
                 exhausted_tools=exhausted_tools,
                 active_skill=last_selected_skill_id,
-                route=classify_question_route(raw_question),
+                route=effective_route,
                 target_hints=self._exploration_target_entities,
                 target_ref_descriptions=_registered_target_ref_descriptions(self.workspace),
             )
@@ -358,7 +372,7 @@ class IterativeVisualAgent:
                     },
                 )
                 self.workspace.write_reflection_memory(
-                    route=classify_question_route(raw_question),
+                    route=effective_route,
                     failure_tag="planner_json_parse_error",
                     rule="return valid JSON matching the continue/final response contract before using tools",
                 )
@@ -568,7 +582,7 @@ class IterativeVisualAgent:
                         },
                     )
                     self.workspace.write_reflection_memory(
-                        route=classify_question_route(raw_question),
+                        route=effective_route,
                         failure_tag=blocked_reason,
                         rule=_reflection_rule_for_failure(blocked_reason),
                     )
@@ -1016,7 +1030,7 @@ class IterativeVisualAgent:
                 has_inspect_with_candidate_options = True
             timeline_decision = (
                 _timeline_temporal_decision(question=raw_question, timeline=self.workspace.read_timeline_sorted())
-                if classify_question_route(raw_question) == "temporal_order"
+                if effective_route == "temporal_order"
                 else None
             )
             if timeline_decision is not None:
@@ -1342,18 +1356,24 @@ class IterativeVisualAgent:
             rounds=rounds,
         )
 
-    def _question_for_exploration(self, question_context: QuestionContext) -> str:
+    def _question_for_exploration(self, question_context: QuestionContext, *, route_hint: str = "") -> str:
         question = question_context.raw_question
-        self._exploration_target_entities = tuple(extract_option_target_atoms(question, max_targets=12, include_synonyms=False))
+        registry_targets = _target_entities_from_registry(getattr(self.workspace, "target_registry", None))
+        if registry_targets:
+            self._exploration_target_entities = registry_targets
+        else:
+            self._exploration_target_entities = tuple(
+                extract_option_target_atoms(question, max_targets=12, include_synonyms=False)
+            )
         if not self.budget.rewrite_mcq_for_exploration or not question_context.options:
             return question_context.planner_question
         rewrite = rewrite_exploration_question_with_model(
             self.backend,
             question=question,
-            route_hint=classify_question_route(question),
+            route_hint=route_hint or classify_question_route(question),
         )
         rewrite_targets = tuple(rewrite.target_entities)
-        if rewrite_targets:
+        if rewrite_targets and not registry_targets:
             self._exploration_target_entities = rewrite_targets
         self.workspace.write_trace_event(
             "mcq_exploration_question_rewrite",
@@ -1367,15 +1387,16 @@ class IterativeVisualAgent:
         )
         return rewrite.exploration_question or question_context.vlm_safe_question
 
-    def _initialize_planner_owned_grounding(self, question_context: QuestionContext) -> None:
+    def _initialize_planner_owned_grounding(self, question_context: QuestionContext) -> CompiledGroundingPlan | None:
         if not self.budget.planner_owned_grounding:
-            return
+            return None
         if getattr(self.workspace, "target_registry", None) is not None:
-            return
+            return getattr(self.workspace, "grounding_runtime", None)
+        route_hint = classify_question_route(question_context.raw_question)
         self.workspace.write_trace_event(
             "grounding_requested",
             {
-                "route_hint": classify_question_route(question_context.raw_question),
+                "route_hint": route_hint,
                 "option_count": len(question_context.options),
             },
         )
@@ -1383,7 +1404,7 @@ class IterativeVisualAgent:
             self.backend,
             question=question_context.raw_question,
             options=question_context.options,
-            route_hint=classify_question_route(question_context.raw_question),
+            route_hint=route_hint,
         )
         self.workspace.write_trace_event(
             "grounding_plan_received",
@@ -1401,15 +1422,23 @@ class IterativeVisualAgent:
                     "findings": [finding.__dict__ for finding in result.validation.findings],
                 },
             )
-            return
-        compiled = compile_grounding_plan(result.plan)
+            return None
+        raw_options = _raw_options_by_id(question_context.options)
+        skill_ids = tuple(skill.name for skill in builtin_skill_registry().list())
+        compiled = compile_grounding_plan(result.plan, raw_options=raw_options, skill_ids=skill_ids)
         self.workspace.target_registry = compiled.registry
+        self.workspace.grounding_runtime = compiled
+        self._exploration_target_entities = _target_entities_from_registry(compiled.registry)
         self.workspace.write_trace_event(
             "target_registry_compiled",
             {
                 "source": "grounding_plan",
                 "version": compiled.registry.version,
                 "plan_hash": compiled.plan_hash,
+                "route": compiled.route,
+                "recommended_skill": _skill_id_from_name(compiled.recommended_skill_id),
+                "acceptable_evidence_sources": list(compiled.acceptable_evidence_sources),
+                "unresolved_ambiguities": list(compiled.unresolved_ambiguities),
                 "target_key_to_id": dict(compiled.target_key_to_id),
                 "relation_key_to_id": dict(compiled.relation_key_to_id),
             },
@@ -1422,6 +1451,12 @@ class IterativeVisualAgent:
                 "option_count": len(compiled.registry.options_by_id),
             },
         )
+        return compiled
+
+    def _effective_route(self, raw_question: str) -> str:
+        runtime = getattr(self.workspace, "grounding_runtime", None)
+        route = str(getattr(runtime, "route", "") or "").strip()
+        return route or classify_question_route(raw_question)
 
     def _verify_planner_final_with_answer_agent(
         self,
@@ -1895,7 +1930,11 @@ class IterativeVisualAgent:
                     blocked_route_violation = True
                     continue
             if tool_name == "read_segment_detail":
-                if self._exploration_target_entities and not args.get("targets"):
+                if (
+                    self._exploration_target_entities
+                    and self._tool_accepts_argument(tool_name, "targets")
+                    and not args.get("targets")
+                ):
                     args["targets"] = list(self._exploration_target_entities)
                 if self._tool_accepts_argument(tool_name, "option_targets") and not args.get("option_targets"):
                     option_targets = extract_option_target_atom_map(raw_question or question, include_synonyms=False)
@@ -2777,7 +2816,11 @@ class IterativeVisualAgent:
             and self._has_tool("read_segment_detail")
         ):
             repaired_args = dict(args)
-            if self._exploration_target_entities and not repaired_args.get("targets"):
+            if (
+                self._exploration_target_entities
+                and self._tool_accepts_argument("read_segment_detail", "targets")
+                and not repaired_args.get("targets")
+            ):
                 repaired_args["targets"] = list(self._exploration_target_entities)
             return "read_segment_detail", repaired_args, "repair_read_segment_to_read_segment_detail"
         if (
@@ -3728,8 +3771,14 @@ class IterativeVisualAgent:
         question: str,
         exploration_question: str,
         video_path: str,
+        route: str = "",
+        recommended_skill_id: str = "",
     ) -> IterativeRunResult | None:
-        skill = _recommended_effective_skill(question)
+        skill = _recommended_effective_skill(
+            question,
+            route=route or None,
+            recommended_skill_id=recommended_skill_id,
+        )
         if skill.name in {"timeline_ordering", "visual_timeline_qa", "narration_timeline_qa"}:
             return None
         if skill.name not in {"grounded_factual_qa", "mutex_fact_qa"}:
@@ -3737,13 +3786,15 @@ class IterativeVisualAgent:
         if not self._has_tool("ground_question") or not self._has_tool("vision_read"):
             return None
 
-        route = classify_question_route(question)
-        target_specs = _skill_target_fact_specs(question=exploration_question, skill_name=skill.name)
-        if not target_specs:
-            target_specs = _skill_target_fact_specs(question=question, skill_name=skill.name)
-        if not target_specs:
+        target_facts = list(_target_entities_from_registry(getattr(self.workspace, "target_registry", None)))
+        target_specs: list[SkillTargetFact] = []
+        if not target_facts:
+            target_specs = _skill_target_fact_specs(question=exploration_question, skill_name=skill.name)
+            if not target_specs:
+                target_specs = _skill_target_fact_specs(question=question, skill_name=skill.name)
+            target_facts = [spec.fact for spec in target_specs]
+        if not target_facts:
             return None
-        target_facts = [spec.fact for spec in target_specs]
 
         self.workspace.write_trace_event(
             "iterative_route",
@@ -3779,16 +3830,16 @@ class IterativeVisualAgent:
             [
                 FollowupTarget(
                     target_id=f"fu_{self.workspace.run_id}_{index:04d}",
-                    query=target_spec.fact,
-                    event_label=target_spec.fact,
+                    query=target_fact,
+                    event_label=target_fact,
                     route=_followup_route_for_skill(skill.name),
                     reason="hard skill target fact still needs visual grounding",
                     priority=index,
                     attempt_count=0,
                     parent_missing_evidence_id=f"target_fact_{index:04d}",
-                    mutex_group_id=target_spec.mutex_group_id,
+                    mutex_group_id=target_specs[index - 1].mutex_group_id if index - 1 < len(target_specs) else "",
                 )
-                for index, target_spec in enumerate(target_specs, start=1)
+                for index, target_fact in enumerate(target_facts, start=1)
             ]
         )
         last_answer_result = None
@@ -4237,11 +4288,20 @@ def _planner_selected_skill(action: Mapping[str, Any]) -> tuple[SkillSpec | None
         return None, {"status": "invalid", "requested_skill": requested}
 
 
-def _initial_skill_runtime_state(question: str) -> SkillRuntimeState:
-    recommended = _recommended_effective_skill(question)
+def _initial_skill_runtime_state(
+    question: str,
+    *,
+    route: str | None = None,
+    recommended_skill_id: str = "",
+) -> SkillRuntimeState:
+    recommended = _recommended_effective_skill(
+        question,
+        route=route,
+        recommended_skill_id=recommended_skill_id,
+    )
     state = SkillRuntimeState(
         recommended_skill=recommended,
-        compatible_skill_ids=_compatible_skill_ids(question=question, recommended=recommended),
+        compatible_skill_ids=_compatible_skill_ids(question=question, recommended=recommended, route=route),
         effective_skill=recommended,
         locked=True,
         selected_round=1,
@@ -4249,9 +4309,21 @@ def _initial_skill_runtime_state(question: str) -> SkillRuntimeState:
     return state
 
 
-def _recommended_effective_skill(question: str) -> SkillSpec:
+def _recommended_effective_skill(
+    question: str,
+    *,
+    route: str | None = None,
+    recommended_skill_id: str = "",
+) -> SkillSpec:
     registry = builtin_skill_registry()
-    if classify_question_route(question) == "temporal_order":
+    skill_name = _skill_name_from_id(recommended_skill_id)
+    if skill_name:
+        try:
+            return registry.get(skill_name)
+        except KeyError:
+            pass
+    resolved_route = route or classify_question_route(question)
+    if resolved_route == "temporal_order":
         if classify_narration_subroute(question) == "narration_timeline":
             try:
                 return registry.get("narration_timeline_qa")
@@ -4261,13 +4333,19 @@ def _recommended_effective_skill(question: str) -> SkillSpec:
             return registry.get("visual_timeline_qa")
         except KeyError:
             pass
-    return select_skill(question)
+    return select_skill(question, route=resolved_route)
 
 
-def _compatible_skill_ids(*, question: str, recommended: SkillSpec) -> tuple[str, ...]:
+def _compatible_skill_ids(
+    *,
+    question: str,
+    recommended: SkillSpec,
+    route: str | None = None,
+) -> tuple[str, ...]:
     recommended_id = _skill_id(recommended)
-    if classify_question_route(question) == "temporal_order":
-        if classify_narration_subroute(question) == "narration_timeline":
+    resolved_route = route or classify_question_route(question)
+    if resolved_route == "temporal_order":
+        if recommended.name == "narration_timeline_qa" or classify_narration_subroute(question) == "narration_timeline":
             return _unique_tuple(
                 [
                     recommended_id,
@@ -4287,6 +4365,41 @@ def _skill_id(skill: SkillSpec | None) -> str:
     if skill is None:
         return ""
     return f"{skill.name}@v{skill.version}"
+
+
+def _skill_name_from_id(skill_id: str) -> str:
+    return str(skill_id or "").strip().split("@", 1)[0].strip()
+
+
+def _skill_id_from_name(skill_name: str) -> str:
+    name = _skill_name_from_id(skill_name)
+    if not name:
+        return ""
+    try:
+        return _skill_id(builtin_skill_registry().get(name))
+    except KeyError:
+        return name
+
+
+def _target_entities_from_registry(registry: object) -> tuple[str, ...]:
+    targets_by_id = getattr(registry, "targets_by_id", None)
+    if not isinstance(targets_by_id, Mapping):
+        return ()
+    return tuple(
+        str(target.canonical_text).strip()
+        for target in targets_by_id.values()
+        if str(getattr(target, "canonical_text", "")).strip()
+    )
+
+
+def _raw_options_by_id(options: Sequence[str]) -> dict[str, str]:
+    raw_options: dict[str, str] = {}
+    for option in options:
+        match = re.match(r"\s*([A-H])[\).:-]\s*(.*)\s*$", str(option or ""), flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            continue
+        raw_options[match.group(1).upper()] = " ".join(match.group(2).split()).strip()
+    return raw_options
 
 
 def _rationale_mentions_modality_mismatch(rationale: str) -> bool:

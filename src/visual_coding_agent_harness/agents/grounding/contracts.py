@@ -21,6 +21,13 @@ GroundingModality = Literal["visual", "asr", "ocr", "mixed", "unknown"]
 GroundingPolarity = Literal["affirmed", "negated", "unknown"]
 RelationKind = Literal["before", "after", "same_scene", "causes", "contradicts", "equivalent", "transitions_to"]
 
+ALLOWED_CLAIM_KINDS = frozenset(ClaimKind.__args__)  # type: ignore[attr-defined]
+ALLOWED_GROUNDING_MODALITIES = frozenset(GroundingModality.__args__)  # type: ignore[attr-defined]
+ALLOWED_GROUNDING_POLARITIES = frozenset(GroundingPolarity.__args__)  # type: ignore[attr-defined]
+ALLOWED_RELATION_KINDS = frozenset(RelationKind.__args__)  # type: ignore[attr-defined]
+ALLOWED_GROUNDING_ROUTES = frozenset({"gist_global", "needle_local", "temporal_order", "mixed_asr_visual"})
+ALLOWED_EVIDENCE_SOURCES = frozenset({"visual", "asr", "ocr", "mixed", "qa", "indexed_transcript", "global"})
+
 
 @dataclass(frozen=True)
 class GroundingSubject:

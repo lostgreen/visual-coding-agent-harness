@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -335,6 +336,126 @@ def test_life_journey_registry_is_not_semantically_canonicalized_before_groundin
     assert getattr(workspace, "target_registry", None) is None
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert "target_registry_compiled" not in trace
+
+
+def test_planner_owned_grounding_controls_runtime_route_skill_and_target_hints(tmp_path: Path):
+    class GroundingThenPlanBackend(VisionLanguageBackend):
+        def __init__(self) -> None:
+            self.requests = []
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            if request.task == "ground_question":
+                return BackendResponse(
+                    text=json.dumps(
+                        {
+                            "route": "temporal_order",
+                            "recommended_skill": "narration_timeline_qa",
+                            "subjects": [
+                                {
+                                    "subject_key": "subject_main",
+                                    "canonical_name": "Planner Subject",
+                                    "aliases": [],
+                                }
+                            ],
+                            "targets": [
+                                {
+                                    "target_key": "event_alpha",
+                                    "canonical_claim": "Planner canonical alpha event",
+                                    "subject_key": "subject_main",
+                                    "claim_kind": "narrated_fact",
+                                    "claim_modality": "asr",
+                                    "aliases": ["planner alpha"],
+                                    "search_queries": ["planner alpha transcript"],
+                                    "polarity": "affirmed",
+                                },
+                                {
+                                    "target_key": "event_beta",
+                                    "canonical_claim": "Planner canonical beta event",
+                                    "subject_key": "subject_main",
+                                    "claim_kind": "narrated_fact",
+                                    "claim_modality": "asr",
+                                    "aliases": ["planner beta"],
+                                    "search_queries": ["planner beta transcript"],
+                                    "polarity": "affirmed",
+                                },
+                            ],
+                            "relations": [
+                                {
+                                    "relation_key": "alpha_before_beta",
+                                    "kind": "before",
+                                    "source_target_key": "event_alpha",
+                                    "destination_target_key": "event_beta",
+                                }
+                            ],
+                            "options": [
+                                {
+                                    "option_id": "A",
+                                    "required_target_keys": [],
+                                    "ordered_target_keys": ["event_alpha", "event_beta"],
+                                    "required_relation_keys": ["alpha_before_beta"],
+                                    "raw_option_text": "legacy option chunk alpha",
+                                },
+                                {
+                                    "option_id": "B",
+                                    "required_target_keys": [],
+                                    "ordered_target_keys": ["event_beta", "event_alpha"],
+                                    "required_relation_keys": [],
+                                    "raw_option_text": "legacy option chunk beta",
+                                },
+                            ],
+                            "acceptable_evidence_sources": ["asr"],
+                            "confidence": 0.8,
+                            "unresolved_ambiguities": [],
+                        }
+                    )
+                )
+            if request.task == "replan":
+                return BackendResponse(text='{"status": "continue", "program": []}')
+            return BackendResponse(text="unexpected")
+
+    backend = GroundingThenPlanBackend()
+    workspace = EvidenceWorkspace.create(tmp_path, "grounding_runtime_policy")
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=ToolRegistry(),
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_summary="The transcript mentions planner alpha before planner beta.",
+                )
+            ],
+        ),
+        budget=AgentBudget(
+            max_rounds=1,
+            reserve_final_round=False,
+            hard_skill_runtime=True,
+            planner_owned_grounding=True,
+        ),
+    )
+
+    agent.run(
+        question="Which object is visible?\nA. legacy option chunk alpha\nB. legacy option chunk beta",
+        video_path="/videos/demo.mp4",
+    )
+
+    assert agent._exploration_target_entities == (
+        "Planner canonical alpha event",
+        "Planner canonical beta event",
+    )
+    prompt = next(request.prompt for request in backend.requests if request.task == "replan")
+    assert "Question route: temporal_order" in prompt
+    assert "recommended_skill: narration_timeline_qa@v1" in prompt
+    assert "effective_skill: narration_timeline_qa@v1" in prompt
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert '"route": "temporal_order"' in trace
+    assert '"recommended_skill": "narration_timeline_qa@v1"' in trace
 
 
 def test_program_signature_ignores_assign_names_and_trace_ids():

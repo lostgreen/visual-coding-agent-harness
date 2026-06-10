@@ -11,7 +11,7 @@ Replace the previous VideoMME 605/611/612-oriented semantic shortcuts with a gen
 ## Current evidence
 
 - Current local branch: `codex/agent-ownership-context-redesign`.
-- Latest local verification: `PYTHONPATH=src:. pytest -q` => `490 passed in 1.72s`.
+- Latest local verification: `PYTHONPATH=src:. pytest -q` => `495 passed in 1.84s`.
 - Whitespace check: `git diff --check` => clean.
 - The previous KML run based on older code is stale for this refactor:
   - `/home/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_final_closure_d9f99c7_3demo_20260609_233313_pyenv`
@@ -24,6 +24,12 @@ Replace the previous VideoMME 605/611/612-oriented semantic shortcuts with a gen
   - `src/visual_coding_agent_harness/agents/grounding/compiler.py`
   - `src/visual_coding_agent_harness/agents/grounding/planner.py`
 - Wired `AgentBudget.planner_owned_grounding` and VideoMME runner flag/default.
+- Wired compiled grounding runtime policy into `IterativeVisualAgent`:
+  - `route`
+  - `recommended_skill_id`
+  - `acceptable_evidence_sources`
+  - `unresolved_ambiguities`
+  - framework-owned `raw_options`
 - Removed/demoted benchmark-specific runtime semantics from:
   - `agents/question_policy.py`
   - `agents/iterative_agent.py`
@@ -37,6 +43,10 @@ Replace the previous VideoMME 605/611/612-oriented semantic shortcuts with a gen
 ## Important decisions
 
 - No pre-Planner semantic target registry is created from option text.
+- Grounding now runs before exploration target hints; when a frozen registry exists, target hints are derived from registry canonical claims.
+- GroundingPlan route and recommended skill now become the effective runtime route/skill; keyword classifiers are fallback only when grounding is unavailable.
+- Validator rejects invalid route/claim/relation/modality/polarity/evidence-source values and enforces exact raw option set/text.
+- Compiler preserves claim kind, polarity, acceptable evidence sources, unresolved ambiguities, raw options, route, and recommended skill.
 - `target_coverage` seeding only runs when a frozen `TargetRegistry` exists.
 - Ordered transcript/navigation rows are option-neutral and expose sequence bindings rather than `supported_option`.
 - Deterministic temporal/main-idea option takeover is removed; AnswerAgent is the verifier.
@@ -45,13 +55,14 @@ Replace the previous VideoMME 605/611/612-oriented semantic shortcuts with a gen
 
 ## Tests added or updated
 
-- `tests/test_grounding_plan.py`: validates GroundingPlan contracts, compiler, planner retry, and fallback.
+- `tests/test_grounding_plan.py`: validates GroundingPlan contracts, enum/option fidelity, compiler metadata, planner retry, and fallback.
+- `tests/test_iterative_agent.py`: validates GroundingPlan-owned route/skill/target hints in the runtime planner prompt.
 - `tests/test_runtime_source_cleanliness.py`: prevents benchmark semantic constants from re-entering runtime source.
 - Existing policy/navigation/answer/iterative tests were updated to assert the new ownership boundary instead of old deterministic shortcuts.
 
 ## Next actions
 
-1. Commit and push this refactor when ready.
-2. Launch a fresh KML 3-demo run only from the new pushed commit; previous KML paths should not be used as evidence for this version.
-3. Inspect only compact remote summaries: result count, terminal status, top failure fingerprint, and output artifact paths.
-4. If a demo fails, first check whether GroundingPlan output was valid/frozen before debugging tool routing or AnswerAgent verification.
+1. Launch a fresh KML 3-demo run only from the new pushed commit; previous KML paths should not be used as evidence for this version.
+2. Inspect only compact remote summaries: result count, terminal status, top failure fingerprint, and output artifact paths.
+3. If a demo fails, first check whether GroundingPlan output was valid/frozen before debugging tool routing or AnswerAgent verification.
+4. Remaining design cleanup: convert AnswerAgent auto-final paths into verifier recommendations, remove dormant forced-visual branches, and add a controlled GroundingPlan amendment path.

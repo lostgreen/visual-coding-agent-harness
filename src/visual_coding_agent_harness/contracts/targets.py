@@ -28,9 +28,13 @@ class TargetSpec:
     relation: str | None = None
     modality_hint: ClaimModality = ClaimModality.UNKNOWN
     source: str = ""
+    claim_kind: str = ""
+    polarity: str = "unknown"
+    acceptable_evidence_sources: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "aliases", tuple(self.aliases))
+        object.__setattr__(self, "acceptable_evidence_sources", tuple(self.acceptable_evidence_sources))
         if not isinstance(self.modality_hint, ClaimModality):
             object.__setattr__(self, "modality_hint", ClaimModality(self.modality_hint))
         if not _TARGET_REF_RE.fullmatch(str(self.target_id)):
