@@ -140,6 +140,39 @@ def test_fallback_grounding_plan_validates_for_mcq_options() -> None:
     assert compiled.registry.option_for("A").target_sequence
 
 
+def test_fallback_grounding_plan_builds_item_targets_for_quoted_order_options() -> None:
+    question = (
+        "In what order does the narration list the artworks?\n"
+        'A. "Aeneas", "David", "Persephone", "Apollo"\n'
+        'B. "David", "Aeneas", "Persephone", "Apollo"\n'
+        'C. "Aeneas", "Persephone", "David", "Apollo"\n'
+        'D. "Aeneas", "David", "Apollo", "Persephone"'
+    )
+    options = (
+        'A. "Aeneas", "David", "Persephone", "Apollo"',
+        'B. "David", "Aeneas", "Persephone", "Apollo"',
+        'C. "Aeneas", "Persephone", "David", "Apollo"',
+        'D. "Aeneas", "David", "Apollo", "Persephone"',
+    )
+
+    plan = compile_fallback_plan(question, options, "temporal_order")
+    compiled = compile_grounding_plan(
+        plan,
+        raw_options={
+            "A": '"Aeneas", "David", "Persephone", "Apollo"',
+            "B": '"David", "Aeneas", "Persephone", "Apollo"',
+            "C": '"Aeneas", "Persephone", "David", "Apollo"',
+            "D": '"Aeneas", "David", "Apollo", "Persephone"',
+        },
+        skill_ids=("visual_timeline_qa", "narration_timeline_qa", "main_idea", "grounded_factual_qa"),
+    )
+
+    target_texts = [target.canonical_text for target in compiled.registry.targets_by_id.values()]
+    assert target_texts == ["Aeneas", "David", "Persephone", "Apollo"]
+    assert compiled.registry.option_for("A").target_sequence == ("T1", "T2", "T3", "T4")
+    assert compiled.registry.option_for("B").target_sequence == ("T2", "T1", "T3", "T4")
+
+
 def test_fallback_grounding_plan_uses_narration_skill_for_life_journey() -> None:
     question = "How was his life journey according to the video?"
     options = (

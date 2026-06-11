@@ -281,6 +281,11 @@ def build_video_navigation_registry(
             ]
             answer_evidence_rows = [
                 *answer_evidence_rows,
+                *_ordered_transcript_answer_evidence_rows(
+                    segment=segment,
+                    targets=binding_targets,
+                    workspace=workspace,
+                ),
                 *_answer_evidence_rows_from_bound_targets(
                     segment=segment,
                     targets=binding_targets,

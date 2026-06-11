@@ -47,6 +47,14 @@ _SEGMENT_ID_TOOLS = _SEGMENT_MEDIA_TOOLS | _SEGMENT_TEXT_TOOLS
 _GLOBAL_VIEW_TOOLS = {"global_gist"}
 _ONE_SHOT_TOOLS: frozenset[str] = frozenset({"global_gist"})
 _TARGET_REF_RE = re.compile(r"^T[1-9]\d*$")
+_ZERO_YIELD_EMPTY_RESULT_TOOLS = frozenset(
+    {
+        "bind_asr_claim",
+        "read_segment_detail",
+        "asr_cue_detail",
+        "transcript_evidence_binder",
+    }
+)
 
 
 def _exhausted_one_shot_tools(workspace: Any) -> frozenset[str]:
@@ -630,6 +638,18 @@ class IterativeVisualAgent:
                                 rationale=blocked_reason,
                             )
                         )
+                        fallback_result = self._forced_mcq_fallback_result(
+                            question=raw_question,
+                            video_path=video_path,
+                            rounds=rounds,
+                            round_number=round_number,
+                            citations=final_citations or citations,
+                            source="final_rejected",
+                            candidate_answer=final_answer,
+                            reason=blocked_reason,
+                        )
+                        if fallback_result is not None:
+                            return fallback_result
                         return IterativeRunResult(
                             question=raw_question,
                             video_path=video_path,
@@ -1056,6 +1076,18 @@ class IterativeVisualAgent:
                 )
                 if guard_final is not None:
                     return guard_final
+                guard_fallback = self._forced_mcq_fallback_result(
+                    question=raw_question,
+                    video_path=video_path,
+                    rounds=rounds,
+                    round_number=round_number,
+                    citations=citations,
+                    source="repeated_program_guard",
+                    candidate_answer=_partial_answer_from_ledger(self._read_ledger()),
+                    reason="repeated_program_guard",
+                )
+                if guard_fallback is not None:
+                    return guard_fallback
                 plural = "round" if len(rounds) == 1 else "rounds"
                 partial_answer = _partial_answer_from_ledger(self._read_ledger())
                 return IterativeRunResult(
@@ -1381,6 +1413,8 @@ class IterativeVisualAgent:
             citations=citations,
             source="budget_exhausted",
             answer_result=budget_answer_result,
+            candidate_answer=_partial_answer_from_ledger(self._read_ledger()),
+            reason="budget_exhausted",
         )
         if forced_mcq is not None:
             return forced_mcq
@@ -1406,20 +1440,40 @@ class IterativeVisualAgent:
         citations: Sequence[str],
         source: str,
         answer_result: AnswerAgentResult | None = None,
+        candidate_answer: str = "",
+        reason: str = "",
     ) -> IterativeRunResult | None:
         options = extract_candidate_options(question)
         if not options:
             return None
         low_confidence = answer_result.as_low_confidence_final() if answer_result is not None else None
-        answer_agent_parse_failed = _answer_agent_parse_failed(answer_result)
-        if not answer_agent_parse_failed:
-            return None
         answer = (
             _answer_option_letter(low_confidence.answer) if low_confidence is not None and low_confidence.status == "low_confidence_final" else ""
         )
-        answer = answer or _best_effort_option_from_evidence_table(self._answer_evidence_table(question))
+        fallback_source = (
+            "answer_agent_partial_support"
+            if low_confidence is not None and low_confidence.status == "low_confidence_final"
+            else ""
+        )
+        if not answer and answer_result is not None:
+            answer = _answer_option_letter(answer_result.answer) or ""
+            fallback_source = "answer_agent_answer" if answer else fallback_source
+        table = self._answer_evidence_table(question)
         if not answer:
-            return None
+            answer = _best_effort_option_from_evidence_table(table)
+            fallback_source = "answer_evidence_table_strong" if answer else fallback_source
+        if not answer:
+            answer = _top_option_from_evidence_table(table)
+            fallback_source = "answer_evidence_table_top" if answer else fallback_source
+        if not answer:
+            answer = _answer_option_letter(candidate_answer) or ""
+            fallback_source = "candidate_answer" if answer else fallback_source
+        if not answer:
+            answer = _latest_hypothesis_option(self.workspace)
+            fallback_source = "latest_hypothesis" if answer else fallback_source
+        if not answer:
+            answer = _first_candidate_option_letter(options) or ""
+            fallback_source = "fixed_first_option" if answer else fallback_source
         fallback_citations = list(low_confidence.citations) if low_confidence is not None and low_confidence.status == "low_confidence_final" else list(citations)
         confidence = low_confidence.confidence if low_confidence is not None and low_confidence.status == "low_confidence_final" else 0.0
         self.workspace.write_trace_event(
@@ -1428,10 +1482,9 @@ class IterativeVisualAgent:
                 "round": round_number,
                 "source": source,
                 "answer": answer,
-                "reason": "mcq_budget_exhausted_non_empty_answer",
-                "fallback_source": "answer_agent_partial_support"
-                if low_confidence is not None and low_confidence.status == "low_confidence_final"
-                else "answer_agent_parse_failure",
+                "reason": reason or "mcq_terminal_non_empty_answer",
+                "fallback_source": fallback_source or "fixed_first_option",
+                "answer_agent_parse_failed": _answer_agent_parse_failed(answer_result),
             },
         )
         final_rounds = list(rounds)
@@ -1969,7 +2022,10 @@ class IterativeVisualAgent:
             if not tool_name or not isinstance(args, Mapping):
                 continue
             observation = self.workspace.get_observation(str(observation_id))
-            if observation is None or not _observation_is_zero_yield_failure(observation.raw_output):
+            if observation is None or not _observation_is_zero_yield_failure(
+                tool_name=tool_name,
+                raw_output=observation.raw_output,
+            ):
                 continue
             signature = _tool_call_signature(tool_name=tool_name, args=args)
             if not signature:
@@ -6243,6 +6299,59 @@ def _best_effort_option_from_evidence_table(table: Mapping[str, Any]) -> str:
     return scored[0][2]
 
 
+def _top_option_from_evidence_table(table: Mapping[str, Any]) -> str:
+    groups = table.get("groups", {})
+    if not isinstance(groups, Mapping):
+        return ""
+    scored: list[tuple[float, int, str]] = []
+    for option, raw_rows in groups.items():
+        option_letter = _answer_option_letter(str(option))
+        if not option_letter or option_letter == "U":
+            continue
+        rows = list(raw_rows) if isinstance(raw_rows, Sequence) and not isinstance(raw_rows, (str, bytes)) else []
+        score = 0.0
+        support_count = 0
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            confidence = float(row.get("confidence", 0.0) or 0.0)
+            if confidence <= 0 and not row.get("candidate_option_relations"):
+                continue
+            support_count += 1
+            score += max(confidence, 0.05)
+        if support_count:
+            scored.append((score, support_count, option_letter))
+    if not scored:
+        return ""
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return scored[0][2]
+
+
+def _first_candidate_option_letter(options: Sequence[str]) -> str:
+    for index, option in enumerate(options):
+        letter = _answer_option_letter(str(option)) or chr(ord("A") + index)
+        if letter:
+            return letter
+    return ""
+
+
+def _latest_hypothesis_option(workspace: Any) -> str:
+    try:
+        text = str(workspace.read_hypothesis_text())
+    except (AttributeError, OSError):
+        return ""
+    patterns = [
+        r"\b(?:hypothesis|candidate|answer|selected|option)\s*(?:option|answer)?\s*[:=]\s*([A-H])\b",
+        r"\boption\s+([A-H])\b",
+        r"^\s*([A-H])(?:[.)]\s+|\s*$)",
+    ]
+    for pattern in patterns:
+        matches = re.findall(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+        if matches:
+            return str(matches[-1]).upper()
+    return ""
+
+
 def _answer_agent_parse_failed(answer_result: AnswerAgentResult | None) -> bool:
     if answer_result is None:
         return False
@@ -6609,10 +6718,8 @@ def _tool_call_signature(*, tool_name: str, args: Mapping[str, Any]) -> str:
     )
 
 
-def _observation_is_zero_yield_failure(raw_output: Mapping[str, Any]) -> bool:
+def _observation_is_zero_yield_failure(*, tool_name: str, raw_output: Mapping[str, Any]) -> bool:
     limitations = str(raw_output.get("limitations", "") or "").strip()
-    if not limitations:
-        return False
     answer_rows = raw_output.get("answer_evidence_rows", [])
     if isinstance(answer_rows, Sequence) and not isinstance(answer_rows, (str, bytes)) and len(answer_rows) > 0:
         return False
@@ -6621,6 +6728,10 @@ def _observation_is_zero_yield_failure(raw_output: Mapping[str, Any]) -> bool:
         return False
     relations = raw_output.get("candidate_option_relations", [])
     if _has_support_relation(relations):
+        return False
+    if str(tool_name).strip() in _ZERO_YIELD_EMPTY_RESULT_TOOLS:
+        return True
+    if not limitations:
         return False
     return True
 

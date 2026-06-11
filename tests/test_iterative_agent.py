@@ -201,6 +201,40 @@ def test_mcq_budget_exhaustion_never_returns_empty_answer_after_answer_parse_fai
     assert "iterative_answer_agent" in trace
 
 
+def test_mcq_terminal_fallback_prefers_latest_hypothesis_option_before_fixed_option():
+    class AbstainingBackend(VisionLanguageBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            if request.task == "replan":
+                return BackendResponse(text='{"status": "continue", "program": []}')
+            if request.task == "answer_from_evidence":
+                return BackendResponse(
+                    text='{"answer": "need_more_evidence", "citations": [], "missing_evidence": ["more"], "confidence": 0.0}'
+                )
+            return BackendResponse(text="unexpected")
+
+    scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_hypothesis_fallback")
+        (workspace.root / "hypothesis.md").write_text("# Hypothesis\n\nlatest hypothesis option: C\n", encoding="utf-8")
+        agent = IterativeVisualAgent(
+            backend=AbstainingBackend(),
+            registry=ToolRegistry(),
+            workspace=workspace,
+            scene_index=scene_index,
+            budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+        )
+
+        result = agent.run(
+            question="Which option is supported?\nA. first\nB. second\nC. third",
+            video_path="/videos/demo.mp4",
+        )
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert result.status == "low_confidence_final"
+    assert result.answer == "C"
+    assert '"fallback_source": "latest_hypothesis"' in trace
+
+
 def test_repeated_zero_yield_asr_binding_call_is_skipped():
     class RepeatedBindingBackend(VisionLanguageBackend):
         def __init__(self):
@@ -256,8 +290,66 @@ def test_repeated_zero_yield_asr_binding_call_is_skipped():
         )
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
-    assert result.status == "max_rounds_reached"
+    assert result.status == "low_confidence_final"
+    assert result.answer
     assert calls["bind"] == 1
+    assert "zero_yield_tool_call_skipped" in trace
+
+
+def test_repeated_clean_zero_yield_asr_binding_call_is_skipped_without_limitations():
+    class RepeatedBindingBackend(VisionLanguageBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            if request.task == "replan":
+                return BackendResponse(
+                    text=(
+                        '{"status": "continue", "program": ['
+                        '{"tool": "bind_asr_claim", "args": {"segment_id": "seg_0001", "target_refs": ["T1"]}}'
+                        "]}"
+                    )
+                )
+            return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "missing_evidence": ["more"]}')
+
+    registry = ToolRegistry()
+    calls = {"bind": 0}
+
+    @tool(name="bind_asr_claim", description="Bind ASR claims.")
+    def bind_asr_claim(segment_id: str, target_refs: list | None = None):
+        calls["bind"] += 1
+        return {
+            "claim": "No cue supported the requested target.",
+            "confidence": 0.0,
+            "segment_id": segment_id,
+            "target_refs": list(target_refs or []),
+            "answer_evidence_rows": [],
+            "evidence_bindings": [],
+        }
+
+    registry.register(bind_asr_claim)
+    scene_index = fixed_window_scene_index(video_path="/videos/asr.mp4", duration_sec=30.0, window_sec=30.0)
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="zero_yield_dedupe_clean")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[TargetSpec("T1", "narrated target", modality_hint=ClaimModality.NARRATED_FACT)],
+            options=[OptionSpec("A", target_sequence=("T1",))],
+        )
+        agent = IterativeVisualAgent(
+            backend=RepeatedBindingBackend(),
+            registry=registry,
+            workspace=workspace,
+            scene_index=scene_index,
+            budget=AgentBudget(max_rounds=3, reserve_final_round=False, max_repeated_programs=0),
+        )
+
+        result = agent.run(
+            question="Which option is supported?\nA. narrated target\nB. other",
+            video_path="/videos/asr.mp4",
+        )
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert result.status == "low_confidence_final"
+    assert result.answer
+    assert calls["bind"] == 1
+    assert "zero_yield_tool_call_recorded" in trace
     assert "zero_yield_tool_call_skipped" in trace
 
 
@@ -700,13 +792,14 @@ def test_answer_verifier_blocks_conflicting_planner_sequence_final():
 
         result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
-        assert result.status == "max_rounds_reached"
-        assert result.answer == "Stopped after 1 exploration round with partial evidence."
+        assert result.status == "low_confidence_final"
+        assert result.answer == "D"
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
         assert "deterministic_evidence_mapping" not in trace
         assert "answer_conflict_detected" not in trace
         assert "planner_final_verifier_disagrees" in trace
         assert '"planner_answer": "C"' in trace
+        assert "mcq_forced_fallback" in trace
 
 
 BERNINI_ORDER_QUESTION = (
@@ -1768,12 +1861,13 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final_rejected")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual(workspace.observation_count(tool_name="global_gist"), 1)
             self.assertIn("replan", [request.task for request in backend.requests])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("global_gist_topic_seeded", trace)
             self.assertIn("iterative_final_rejected", trace)
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_budget_can_disable_global_gist_shortcut_for_planner_trace_debugging(self):
         backend = ScriptedPlannerBackend(
@@ -2872,12 +2966,13 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=BERNINI_ORDER_QUESTION, video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual(calls["vision"], 1)
             self.assertEqual(calls["verify"], 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("route_recovery_selected", trace)
             self.assertIn("focused_ordered_list_vision_executed", trace)
+            self.assertIn("mcq_forced_fallback", trace)
             self.assertNotIn("repair_repeated_locator_to_verify_segment_anchors", trace)
 
     def test_parse_error_executes_unique_safe_pending_action(self):
@@ -2943,12 +3038,13 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=BERNINI_ORDER_QUESTION, video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual(calls["vision"], 1)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_json_parse_error", trace)
             self.assertIn("planner_parse_error_recovery_selected", trace)
             self.assertIn("focused_ordered_list_vision_executed", trace)
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_narration_recovery_uses_transcript_detail_before_anchor_verify(self):
         repeated_locator = (
@@ -4207,7 +4303,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
             table = workspace.evidence_table_v2(
                 question="What is the video mainly about?",
                 options=[
@@ -4216,6 +4312,8 @@ class IterativeAgentTest(unittest.TestCase):
                 ],
             )
             self.assertEqual(table["groups"]["D"], [])
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_iterative_agent_indexes_scene_order_for_videomme_masterpiece_sequence(self):
         class SceneOrderBackend(VisionLanguageBackend):
@@ -4345,10 +4443,11 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/goya.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_skill_selection", trace)
             self.assertNotIn("timeline_temporal_order", trace)
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_iterative_agent_prompt_includes_broad_long_video_index(self):
         backend = ScriptedPlannerBackend(
@@ -4601,10 +4700,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.answer, "B")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("low_confidence_final_blocked", trace)
-            self.assertNotIn("mcq_forced_fallback", trace)
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_iterative_agent_reserves_final_round_from_new_visual_tools(self):
         backend = ScriptedPlannerBackend(
@@ -4996,7 +5096,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final_rejected")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertLessEqual(workspace.observation_count(tool_name="caption_segment"), 1)
             self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -5005,6 +5105,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertNotIn("timeline_caption_", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
             self.assertIn("iterative_final_rejected", trace)
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_interactive_timeline_locator_rows_do_not_auto_final(self):
         video_map = VideoMap(
@@ -5075,10 +5176,11 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertNotEqual(result.answer, "D")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_confirmed_timeline_inference_is_prompt_hint_not_auto_final(self):
         registry = ToolRegistry()
@@ -5293,13 +5395,14 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final_rejected")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual(result.rounds[0].program, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("effective_skill_locked", trace)
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
             self.assertEqual(calls, [])
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_timeline_ordering_missing_entity_returns_need_more_evidence(self):
         registry = ToolRegistry()
@@ -5350,9 +5453,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertLessEqual(workspace.observation_count(tool_name="caption_segment"), 1)
             self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_timeline_ordering_ignores_negative_caption_echoes(self):
         registry = ToolRegistry()
@@ -5404,13 +5509,14 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual([call[0] for call in calls].count("caption_segment"), 1)
             self.assertEqual([call[0] for call in calls].count("vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("effective_skill_locked", trace)
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("timeline_ordering_missing_entity", trace)
+            self.assertIn("mcq_forced_fallback", trace)
 
     def test_no_evidence_growth_defers_low_confidence_until_budget(self):
         planner_responses = [
@@ -5691,7 +5797,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual(
                 [call[0] for call in calls],
                 ["search_segments", "search_segments", "search_segments", "search_segments"],

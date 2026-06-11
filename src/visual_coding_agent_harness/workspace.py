@@ -2379,6 +2379,16 @@ def _project_target_row_to_option(row: Mapping[str, Any], *, registry_obj: Any) 
         return dict(row)
     if row.get("supported_option") or _candidate_option_relations(row.get("candidate_option_relations")):
         return dict(row)
+    ordered_target_refs = _ordered_target_refs_from_evidence_row(row)
+    if ordered_target_refs:
+        option_id = _option_for_ordered_target_refs(ordered_target_refs, registry_obj=registry_obj)
+        if option_id:
+            return _project_option_relation(
+                row,
+                option_id=option_id,
+                target_ref="ordered_sequence",
+                assigned_by="target_registry_sequence_projection",
+            )
     target_ref = _target_ref_from_evidence_row(row)
     if not target_ref:
         return dict(row)
@@ -2391,6 +2401,21 @@ def _project_target_row_to_option(row: Mapping[str, Any], *, registry_obj: Any) 
     option_id = str(getattr(options[0], "option_id", "")).strip().upper()
     if not option_id:
         return dict(row)
+    return _project_option_relation(
+        row,
+        option_id=option_id,
+        target_ref=target_ref,
+        assigned_by="target_registry_projection",
+    )
+
+
+def _project_option_relation(
+    row: Mapping[str, Any],
+    *,
+    option_id: str,
+    target_ref: str,
+    assigned_by: str,
+) -> dict[str, Any]:
     confidence = float(row.get("confidence", 0.0) or 0.0)
     relation = {
         "option": option_id,
@@ -2401,7 +2426,7 @@ def _project_target_row_to_option(row: Mapping[str, Any], *, registry_obj: Any) 
         "target_ref": target_ref,
         "grounding_quality": str(row.get("grounding_quality", "")),
         "answer_grade": True,
-        "assigned_by": "target_registry_projection",
+        "assigned_by": assigned_by,
     }
     projected = dict(row)
     projected["candidate_option_relations"] = _merge_candidate_option_relations(
@@ -2410,6 +2435,41 @@ def _project_target_row_to_option(row: Mapping[str, Any], *, registry_obj: Any) 
     )
     projected["supported_option"] = option_id
     return projected
+
+
+def _ordered_target_refs_from_evidence_row(row: Mapping[str, Any]) -> tuple[str, ...]:
+    candidates = [
+        row.get("ordered_target_refs"),
+        row.get("ordered_targets"),
+    ]
+    binding = row.get("evidence_binding")
+    if isinstance(binding, Mapping):
+        candidates.extend([binding.get("ordered_target_refs"), binding.get("ordered_targets")])
+    sequence = row.get("ordered_transcript_sequence")
+    if isinstance(sequence, Mapping):
+        candidates.extend([sequence.get("ordered_target_refs"), sequence.get("ordered_targets")])
+    for candidate in candidates:
+        if not isinstance(candidate, Sequence) or isinstance(candidate, (str, bytes)):
+            continue
+        refs = tuple(str(ref).strip() for ref in candidate if str(ref).strip())
+        if refs and all(_TARGET_REF_RE.fullmatch(ref) for ref in refs):
+            return refs
+    return ()
+
+
+def _option_for_ordered_target_refs(ordered_target_refs: Sequence[str], *, registry_obj: Any) -> str:
+    try:
+        options_by_id = getattr(registry_obj, "options_by_id", {})
+        option_values = options_by_id.values() if isinstance(options_by_id, Mapping) else tuple(options_by_id)
+    except (AttributeError, TypeError):
+        return ""
+    matches = [
+        str(getattr(option, "option_id", "")).strip().upper()
+        for option in option_values
+        if tuple(str(ref) for ref in getattr(option, "target_sequence", ())) == tuple(ordered_target_refs)
+    ]
+    unique = sorted({match for match in matches if match})
+    return unique[0] if len(unique) == 1 else ""
 
 
 def _target_ref_from_evidence_row(row: Mapping[str, Any]) -> str:

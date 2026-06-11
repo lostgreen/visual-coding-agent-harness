@@ -9,7 +9,12 @@ from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
 from ...contracts import ClaimModality, ClaimRelation, OptionSpec, TargetRegistry, TargetSpec
-from ..question_policy import classify_narration_subroute, classify_question_route, extract_option_target_atoms_for_option
+from ..question_policy import (
+    classify_narration_subroute,
+    classify_question_route,
+    extract_option_sequence_specs,
+    extract_option_target_atoms_for_option,
+)
 from .contracts import ALLOWED_GROUNDING_ROUTES, GroundingOption, GroundingPlan, GroundingSubject, GroundingTarget
 from .validator import validate_grounding_plan
 
@@ -122,6 +127,26 @@ def compile_fallback_plan(
     )
     targets: list[GroundingTarget] = []
     grounding_options: list[GroundingOption] = []
+    sequence_plan = _fallback_ordered_sequence_plan(
+        question=question,
+        option_items=option_items,
+        subject_key=subject.subject_key,
+        route=route,
+    )
+    if sequence_plan is not None:
+        targets, grounding_options = sequence_plan
+        return GroundingPlan(
+            route=route,
+            recommended_skill=_fallback_recommended_skill(question, route),
+            central_subjects=(subject.canonical_name,),
+            subjects=(subject,),
+            targets=tuple(targets),
+            relations=(),
+            options=tuple(grounding_options),
+            acceptable_evidence_sources=_fallback_evidence_sources(route),
+            confidence=0.0,
+            unresolved_ambiguities=("grounding_model_unavailable_or_invalid",),
+        )
     for option_id, option_text in option_items:
         target_key = f"OPT_{option_id}_claim"
         aliases = tuple(
@@ -163,6 +188,73 @@ def compile_fallback_plan(
         confidence=0.0,
         unresolved_ambiguities=("grounding_model_unavailable_or_invalid",),
     )
+
+
+def _fallback_ordered_sequence_plan(
+    *,
+    question: str,
+    option_items: Sequence[tuple[str, str]],
+    subject_key: str,
+    route: str,
+) -> tuple[list[GroundingTarget], list[GroundingOption]] | None:
+    if route != "temporal_order" or len(option_items) < 2:
+        return None
+    sequence_specs = extract_option_sequence_specs([f"{option_id}. {option_text}" for option_id, option_text in option_items])
+    if len(sequence_specs) < 2:
+        return None
+    canonical_by_ref: dict[str, str] = {}
+    for spec in sequence_specs.values():
+        if len(spec.ordered_items) < 2:
+            return None
+        for ref, item in zip(spec.ordered_target_refs, spec.ordered_items):
+            canonical_by_ref.setdefault(str(ref), item)
+    if len(canonical_by_ref) < 2:
+        return None
+
+    targets: list[GroundingTarget] = []
+    for index, ref in enumerate(sorted(canonical_by_ref, key=_target_ref_sort_key), start=1):
+        item = canonical_by_ref[ref]
+        targets.append(
+            GroundingTarget(
+                target_key=f"SEQ_item_{index}",
+                canonical_claim=item,
+                subject_key=subject_key,
+                claim_kind=_fallback_claim_kind(route),
+                claim_modality=_fallback_claim_modality(route),
+                aliases=(item,),
+                search_queries=(item,),
+                polarity="affirmed",
+            )
+        )
+    target_key_by_ref = {
+        ref: f"SEQ_item_{index}"
+        for index, ref in enumerate(sorted(canonical_by_ref, key=_target_ref_sort_key), start=1)
+    }
+
+    grounding_options: list[GroundingOption] = []
+    for option_id, option_text in option_items:
+        spec = sequence_specs.get(option_id)
+        if spec is None:
+            return None
+        ordered_target_keys = tuple(target_key_by_ref.get(ref, "") for ref in spec.ordered_target_refs)
+        if len(ordered_target_keys) != len(spec.ordered_target_refs) or any(not key for key in ordered_target_keys):
+            return None
+        grounding_options.append(
+            GroundingOption(
+                option_id=option_id,
+                required_target_keys=ordered_target_keys,
+                ordered_target_keys=ordered_target_keys,
+                required_relation_keys=(),
+                raw_option_text=option_text,
+                option_kind=_fallback_option_kind(route),
+            )
+        )
+    return targets, grounding_options
+
+
+def _target_ref_sort_key(ref: str) -> tuple[int, str]:
+    match = re.match(r"^T(\d+)$", str(ref))
+    return (int(match.group(1)), str(ref)) if match else (10**9, str(ref))
 
 
 def _plan_hash(plan: GroundingPlan, *, raw_options: Mapping[str, str]) -> str:
