@@ -12,6 +12,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _latest_asr_binding_candidates,
     _planner_final_answer_with_option,
     _program_signature,
+    _projection_evidence_from_table,
     _sanitize_option_blind_feedback,
     _supported_binding_no_growth_feedback,
 )
@@ -231,6 +232,195 @@ def test_mcq_terminal_fallback_prefers_latest_hypothesis_option_before_fixed_opt
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
     assert result.status == "low_confidence_final"
+    assert result.answer == "C"
+    assert '"fallback_source": "latest_hypothesis"' in trace
+
+
+def test_mcq_terminal_fallback_prefers_complete_projection_over_low_confidence_answer():
+    class LowConfidenceAnswerBackend(VisionLanguageBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            if request.task == "replan":
+                return BackendResponse(
+                    text=(
+                        '{"status": "continue", "program": ['
+                        '{"tool": "vision_read", "args": {"segment_id": "seg_0001", "target_ref": "T1"}, "assign": "obs1"},'
+                        '{"tool": "vision_read", "args": {"segment_id": "seg_0004", "target_ref": "T2"}, "assign": "obs2"}'
+                        "]}"
+                    )
+                )
+            if request.task == "answer_from_evidence":
+                return BackendResponse(
+                    text=(
+                        '{"answer": "need_more_evidence", "citations": [], '
+                        '"candidate_option_relations": ['
+                        '{"option": "A", "relation": "support", "strength": 0.8, '
+                        '"observation_id": "obs_9999", "grounding_quality": "visually_confirmed"}], '
+                        '"missing_evidence": ["more evidence"], "confidence": 0.0}'
+                    )
+                )
+            return BackendResponse(text="unexpected")
+
+    scene_index = SceneIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=80.0,
+        segments=[
+            VideoSegment("seg_0001", 0.0, 10.0),
+            VideoSegment("seg_0004", 30.0, 40.0),
+        ],
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_projection_fallback")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[
+                TargetSpec("T1", "theme marker one"),
+                TargetSpec("T2", "theme marker two"),
+            ],
+            options=[
+                OptionSpec("A", target_sequence=("T1",), raw_option_text="theme marker one"),
+                OptionSpec("B", target_sequence=("T2",), raw_option_text="theme marker two"),
+                OptionSpec("C", target_sequence=(), raw_option_text="unrelated marker"),
+                OptionSpec(
+                    "D",
+                    target_sequence=("T1", "T2"),
+                    raw_option_text="theme marker one theme marker two",
+                    option_kind="theme",
+                ),
+            ],
+        )
+        agent = IterativeVisualAgent(
+            backend=LowConfidenceAnswerBackend(),
+            registry=ToolRegistry(),
+            workspace=workspace,
+            scene_index=scene_index,
+            budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+        )
+
+        @tool(name="vision_read", description="Read a focused visual fact.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            target_ref: str = "",
+            start_sec: float = 0.0,
+            end_sec: float = 0.0,
+            ask_for: str = "",
+            event_label: str = "",
+            nframes: int = 0,
+        ):
+            return {
+                "claim": f"Observed {target_ref}.",
+                "confidence": 0.9,
+                "target_ref": target_ref,
+                "grounding_quality": "visually_confirmed",
+            }
+
+        agent.registry.register(vision_read)
+
+        result = agent.run(
+            question=(
+                "What is the video mainly about?\n"
+                "A. theme marker one\n"
+                "B. theme marker two\n"
+                "C. unrelated marker\n"
+                "D. theme marker one theme marker two"
+            ),
+            video_path="/videos/demo.mp4",
+        )
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert result.status == "low_confidence_final"
+    assert result.answer == "D"
+    assert '"fallback_source": "answer_evidence_projection"' in trace
+
+
+def test_projection_evidence_ignores_contradictory_relation_target_refs():
+    evidence = _projection_evidence_from_table(
+        {
+            "rows": [
+                {
+                    "obs_id": "obs_0001",
+                    "tool": "vision_read",
+                    "claim": "The row contradicts a target candidate.",
+                    "confidence": 0.9,
+                    "grounding_quality": "visually_confirmed",
+                    "candidate_option_relations": [
+                        {
+                            "option": "B",
+                            "relation": "contradict",
+                            "target_ref": "T2",
+                            "strength": 0.9,
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert evidence == ()
+
+
+def test_mcq_terminal_fallback_ignores_ambiguous_projection_before_hypothesis():
+    question = (
+        "What is the video mainly about?\n"
+        "A. first broad theme\n"
+        "B. second broad theme\n"
+        "C. unresolved fallback"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_ambiguous_projection_fallback")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[
+                TargetSpec("T1", "first marker"),
+                TargetSpec("T2", "second marker"),
+                TargetSpec("T3", "third marker"),
+                TargetSpec("T4", "fourth marker"),
+            ],
+            options=[
+                OptionSpec("A", target_sequence=("T1", "T2"), raw_option_text="first broad theme", option_kind="theme"),
+                OptionSpec("B", target_sequence=("T3", "T4"), raw_option_text="second broad theme", option_kind="theme"),
+                OptionSpec("C", target_sequence=(), raw_option_text="unresolved fallback"),
+            ],
+        )
+        (workspace.root / "hypothesis.md").write_text("# Hypothesis\n\nlatest hypothesis option: C\n", encoding="utf-8")
+        agent = IterativeVisualAgent(
+            backend=StaticTaskBackend({}),
+            registry=ToolRegistry(),
+            workspace=workspace,
+            scene_index=fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0),
+            budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+        )
+        agent._answer_evidence_table = lambda _question: {
+            "options": extract_candidate_options(question),
+            "groups": {},
+            "rows": [
+                {
+                    "obs_id": obs_id,
+                    "tool": "vision_read",
+                    "segment_id": segment_id,
+                    "target_ref": target_ref,
+                    "claim": f"Observed {target_ref}.",
+                    "grounding_quality": "visually_confirmed",
+                    "confidence": 0.9,
+                }
+                for obs_id, target_ref, segment_id in [
+                    ("obs_0001", "T1", "seg_0001"),
+                    ("obs_0002", "T2", "seg_0002"),
+                    ("obs_0003", "T3", "seg_0003"),
+                    ("obs_0004", "T4", "seg_0003"),
+                ]
+            ],
+        }
+
+        result = agent._forced_mcq_fallback_result(
+            question=question,
+            video_path="/videos/demo.mp4",
+            rounds=[],
+            round_number=1,
+            citations=[],
+            source="unit_test",
+        )
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert result is not None
     assert result.answer == "C"
     assert '"fallback_source": "latest_hypothesis"' in trace
 

@@ -70,6 +70,35 @@ def test_evidence_table_preserves_source_provenance(tmp_path: Path):
     assert row["citation_provenance"] == {"asr": "subtitle", "visual": "video"}
 
 
+def test_evidence_table_preserves_target_binding_provenance(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "table_target_binding")
+
+    workspace.write_evidence_row(
+        {
+            "obs_id": "obs_target_binding",
+            "tool": "vision_read",
+            "segment_id": "seg_0004",
+            "target_ref": "T2",
+            "ordered_target_refs": ["T1", "T2"],
+            "evidence_binding": {"status": "supported", "source": "unit_test"},
+            "claim": "The evidence supports a target binding.",
+            "grounding_quality": "visually_confirmed",
+            "confidence": 0.87,
+        }
+    )
+
+    table = workspace.evidence_table_v2(
+        question="Which ordered target sequence is shown?",
+        options=["A. first", "B. second"],
+    )
+    row = table["rows"][0]
+
+    assert row["evidence_binding"]["target_ref"] == "T2"
+    assert row["evidence_binding"]["target_id"] == "T2"
+    assert row["evidence_binding"]["ordered_target_refs"] == ["T1", "T2"]
+    assert row["evidence_binding"]["status"] == "supported"
+
+
 def test_answer_evidence_table_prefers_jsonl_artifact(tmp_path: Path):
     workspace = EvidenceWorkspace.create(tmp_path, "table_file_source")
     workspace.write_evidence_row(

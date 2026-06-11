@@ -10,8 +10,11 @@ from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..contracts import ClaimModality, ClaimRelation, OptionSpec, TargetRegistry, TargetSpec
+from ..evidence.projection import ProjectionEvidence, ProjectionResult, project_option_support
 from ..interpreter import ProgramInterpreter
 from ..registry import ToolError, ToolRegistry
+from ..task.spec import OptionSpec as ProjectionOptionSpec
+from ..task.spec import TaskSpec, build_task_spec
 from ..video_index import SceneIndex, VideoSegment
 from ..workspace import EvidenceWorkspace
 from .answer_agent import AnswerAgent, AnswerAgentResult
@@ -1446,19 +1449,28 @@ class IterativeVisualAgent:
         options = extract_candidate_options(question)
         if not options:
             return None
+        table = self._answer_evidence_table(question)
+        projection_result = _projected_option_from_evidence_table(
+            question=question,
+            options=options,
+            table=table,
+            target_registry=getattr(self.workspace, "target_registry", None),
+        )
+        projection_answer = projection_result.option_label if projection_result.status == "supported" else ""
         low_confidence = answer_result.as_low_confidence_final() if answer_result is not None else None
-        answer = (
+        answer = projection_answer or (
             _answer_option_letter(low_confidence.answer) if low_confidence is not None and low_confidence.status == "low_confidence_final" else ""
         )
         fallback_source = (
-            "answer_agent_partial_support"
+            "answer_evidence_projection"
+            if projection_answer
+            else "answer_agent_partial_support"
             if low_confidence is not None and low_confidence.status == "low_confidence_final"
             else ""
         )
         if not answer and answer_result is not None:
             answer = _answer_option_letter(answer_result.answer) or ""
             fallback_source = "answer_agent_answer" if answer else fallback_source
-        table = self._answer_evidence_table(question)
         if not answer:
             answer = _best_effort_option_from_evidence_table(table)
             fallback_source = "answer_evidence_table_strong" if answer else fallback_source
@@ -1474,8 +1486,16 @@ class IterativeVisualAgent:
         if not answer:
             answer = _first_candidate_option_letter(options) or ""
             fallback_source = "fixed_first_option" if answer else fallback_source
-        fallback_citations = list(low_confidence.citations) if low_confidence is not None and low_confidence.status == "low_confidence_final" else list(citations)
-        confidence = low_confidence.confidence if low_confidence is not None and low_confidence.status == "low_confidence_final" else 0.0
+        projection_citations = list(projection_result.supporting_evidence_ids) if projection_answer else []
+        fallback_citations = (
+            projection_citations
+            or (list(low_confidence.citations) if low_confidence is not None and low_confidence.status == "low_confidence_final" else list(citations))
+        )
+        confidence = (
+            min(0.8, float(projection_result.score or 0.0))
+            if projection_answer
+            else (low_confidence.confidence if low_confidence is not None and low_confidence.status == "low_confidence_final" else 0.0)
+        )
         self.workspace.write_trace_event(
             "mcq_forced_fallback",
             {
@@ -1485,6 +1505,8 @@ class IterativeVisualAgent:
                 "reason": reason or "mcq_terminal_non_empty_answer",
                 "fallback_source": fallback_source or "fixed_first_option",
                 "answer_agent_parse_failed": _answer_agent_parse_failed(answer_result),
+                "projection_strategy": projection_result.strategy if projection_answer else "",
+                "projection_citations": projection_citations,
             },
         )
         final_rounds = list(rounds)
@@ -6269,6 +6291,241 @@ def _missing_confirmed_timeline_entities(
 def _answer_option_letter(answer: str) -> str | None:
     match = re.match(r"\s*([A-H])(?:[.)]\s*|\s+|$)", str(answer), flags=re.IGNORECASE)
     return match.group(1).upper() if match else None
+
+
+def _projected_option_from_evidence_table(
+    *,
+    question: str,
+    options: Sequence[str],
+    table: Mapping[str, Any],
+    target_registry: TargetRegistry | None,
+) -> ProjectionResult:
+    if target_registry is None:
+        return ProjectionResult("unsupported", None, "none", 0.0, reason="missing_target_registry")
+    evidence = _projection_evidence_from_table(table)
+    if not evidence:
+        return ProjectionResult("unsupported", None, "none", 0.0, reason="missing_target_evidence")
+    route = classify_question_route(question)
+    task = _projection_task_spec(
+        question=question,
+        options=options,
+        route=route,
+        target_registry=target_registry,
+    )
+    return project_option_support(task, evidence)
+
+
+def _projection_task_spec(
+    *,
+    question: str,
+    options: Sequence[str],
+    route: str,
+    target_registry: TargetRegistry,
+) -> TaskSpec:
+    fallback_task = build_task_spec(
+        task_id="mcq_terminal_projection",
+        question=question,
+        options=options,
+        route=route,
+        target_registry=target_registry,
+    )
+    fallback_by_label = {option.label: option for option in fallback_task.options}
+    registry_options = getattr(target_registry, "options_by_id", {})
+    if not isinstance(registry_options, Mapping):
+        registry_options = {}
+
+    compiled: list[ProjectionOptionSpec] = []
+    for index, option_text in enumerate(options):
+        label = _answer_option_letter(str(option_text)) or _option_label_for_index(index)
+        registry_option = registry_options.get(label)
+        target_refs = tuple(
+            str(ref).strip()
+            for ref in getattr(registry_option, "target_sequence", ())
+            if str(ref or "").strip()
+        )
+        if target_refs:
+            compiled.append(
+                _projection_option_from_registry_option(
+                    label=label,
+                    option_text=str(getattr(registry_option, "raw_option_text", "") or option_text),
+                    target_refs=target_refs,
+                    route=route,
+                    option_kind=str(getattr(registry_option, "option_kind", "") or ""),
+                )
+            )
+            continue
+        compiled.append(
+            fallback_by_label.get(label)
+            or ProjectionOptionSpec(label=label, text=str(option_text), required_targets=())
+        )
+
+    return TaskSpec(
+        task_id="mcq_terminal_projection",
+        question=question,
+        answer_format="mcq",
+        route=route,
+        options=tuple(compiled),
+        target_registry=target_registry,
+    )
+
+
+def _projection_option_from_registry_option(
+    *,
+    label: str,
+    option_text: str,
+    target_refs: Sequence[str],
+    route: str,
+    option_kind: str,
+) -> ProjectionOptionSpec:
+    kind_text = str(option_kind or "").casefold()
+    route_text = str(route or "").casefold()
+    if any(marker in route_text for marker in ("order", "sequence", "timeline", "temporal")) or "sequence" in kind_text:
+        return ProjectionOptionSpec(
+            label=label,
+            text=option_text,
+            required_targets=tuple(target_refs),
+            target_sequence=tuple(target_refs),
+        )
+    if any(marker in route_text for marker in ("main_idea", "gist", "synopsis", "summary")) or kind_text in {
+        "theme",
+        "main_idea",
+        "summary",
+        "gist",
+    }:
+        return ProjectionOptionSpec(
+            label=label,
+            text=option_text,
+            required_targets=tuple(target_refs),
+            theme_targets=tuple(target_refs),
+        )
+    return ProjectionOptionSpec(
+        label=label,
+        text=option_text,
+        required_targets=tuple(target_refs),
+    )
+
+
+def _projection_evidence_from_table(table: Mapping[str, Any]) -> tuple[ProjectionEvidence, ...]:
+    rows = table.get("rows", ())
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+        return ()
+    evidence: list[ProjectionEvidence] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        target_refs = _projection_target_refs_from_row(row)
+        if not target_refs:
+            continue
+        start, end = _projection_time_bounds(row)
+        evidence_id = str(row.get("obs_id") or row.get("evidence_id") or row.get("observation_id") or "")
+        if not evidence_id:
+            evidence_id = f"row_{len(evidence) + 1}"
+        for target_ref in target_refs:
+            evidence.append(
+                ProjectionEvidence(
+                    evidence_id=evidence_id,
+                    target_ref=target_ref,
+                    timestamp_start=start,
+                    timestamp_end=end,
+                    confidence=_float_or_none(row.get("confidence")),
+                    segment_id=str(row.get("segment_id") or row.get("source_segment_id") or ""),
+                    support_status=_projection_support_status(row),
+                    source=str(row.get("tool") or ""),
+                )
+            )
+    return tuple(evidence)
+
+
+def _projection_target_refs_from_row(row: Mapping[str, Any]) -> tuple[str, ...]:
+    refs: list[str] = []
+    candidates: list[Any] = [
+        row.get("target_ref"),
+        row.get("target_id"),
+        row.get("event_label"),
+        row.get("entity"),
+        row.get("ordered_target_refs"),
+        row.get("ordered_targets"),
+    ]
+    binding = row.get("evidence_binding")
+    if isinstance(binding, Mapping):
+        candidates.extend(
+            [
+                binding.get("target_ref"),
+                binding.get("target_id"),
+                binding.get("ordered_target_refs"),
+                binding.get("ordered_targets"),
+            ]
+        )
+    relations = row.get("candidate_option_relations")
+    if isinstance(relations, Sequence) and not isinstance(relations, (str, bytes)):
+        for relation in relations:
+            if isinstance(relation, Mapping):
+                relation_kind = str(relation.get("relation", "")).strip().lower()
+                if relation_kind not in {"support", "supports", "supported"}:
+                    continue
+                candidates.extend([relation.get("target_ref"), relation.get("target_id")])
+    for candidate in candidates:
+        _append_projection_target_refs(refs, candidate)
+    return tuple(dict.fromkeys(refs))
+
+
+def _append_projection_target_refs(refs: list[str], candidate: Any) -> None:
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes)):
+        for item in candidate:
+            _append_projection_target_refs(refs, item)
+        return
+    text = str(candidate or "").strip()
+    if _TARGET_REF_RE.fullmatch(text):
+        refs.append(text)
+
+
+def _projection_time_bounds(row: Mapping[str, Any]) -> tuple[float | None, float | None]:
+    start = _float_or_none(row.get("t_start"))
+    end = _float_or_none(row.get("t_end"))
+    time_range = row.get("time_range")
+    if (
+        start is None
+        and isinstance(time_range, Sequence)
+        and not isinstance(time_range, (str, bytes))
+        and len(time_range) >= 2
+    ):
+        start = _float_or_none(time_range[0])
+        end = _float_or_none(time_range[1])
+    if start is None:
+        start = _float_or_none(row.get("observed_at_sec") or row.get("mention_timestamp_sec"))
+    return start, end
+
+
+def _projection_support_status(row: Mapping[str, Any]) -> str:
+    raw_status = str(row.get("support_status") or row.get("status") or "").strip().lower()
+    if raw_status in {"unsupported", "contradict", "contradicted", "negative"}:
+        return "unsupported"
+    confidence_signal = str(row.get("confidence_signal") or "").strip().lower()
+    grounding = str(row.get("grounding_quality") or "").strip().lower()
+    if confidence_signal == "unsupported" or grounding in {
+        "weak",
+        "inferred",
+        "navigation_only",
+        "external_knowledge",
+    }:
+        return "unsupported"
+    return "supported"
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _option_label_for_index(index: int) -> str:
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if 0 <= index < len(alphabet):
+        return alphabet[index]
+    return str(index + 1)
 
 
 def _best_effort_option_from_evidence_table(table: Mapping[str, Any]) -> str:

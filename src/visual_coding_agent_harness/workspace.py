@@ -2726,9 +2726,6 @@ def _normalize_evidence_row(row: Mapping[str, Any], *, evidence_id: str | None =
         legacy_worker_vote=bool(row.get("legacy_worker_vote", False)),
         limitations=str(row.get("limitations", "")),
         artifact=str(row.get("artifact", "")),
-        evidence_binding=dict(row.get("evidence_binding", {}))
-        if isinstance(row.get("evidence_binding"), Mapping)
-        else {},
         **_evidence_provenance_fields(row),
     ).to_dict()
     if payload["time_range"] is None and payload["t_start"] is not None and payload["t_end"] is not None:
@@ -3026,11 +3023,26 @@ def _evidence_provenance_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     citation_provenance = source.get("citation_provenance", {})
     if not isinstance(citation_provenance, Mapping):
         citation_provenance = {}
+    evidence_binding = source.get("evidence_binding", {})
+    if not isinstance(evidence_binding, Mapping):
+        evidence_binding = {}
+    evidence_binding = dict(evidence_binding)
+    target_ref = source.get("target_ref") or source.get("target_id")
+    if target_ref:
+        evidence_binding.setdefault("target_ref", str(target_ref))
+        evidence_binding.setdefault("target_id", str(target_ref))
+    ordered_refs = source.get("ordered_target_refs") or source.get("ordered_targets")
+    if isinstance(ordered_refs, Sequence) and not isinstance(ordered_refs, (str, bytes)):
+        evidence_binding.setdefault(
+            "ordered_target_refs",
+            [str(ref) for ref in ordered_refs if str(ref or "").strip()],
+        )
     return {
         "source_segment_id": str(source.get("source_segment_id") or ""),
         "raw_asr_ref": source.get("raw_asr_ref", ""),
         "visual_caption_source": str(source.get("visual_caption_source") or ""),
         "citation_provenance": dict(citation_provenance),
+        "evidence_binding": evidence_binding,
     }
 
 
