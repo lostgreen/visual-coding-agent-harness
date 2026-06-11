@@ -102,6 +102,39 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.status, "final")
         self.assertEqual(result.answer, "D. Aeneas, David, Persephone, Apollo and Daphne")
 
+    def test_hypothesis_disagreement_returns_conflict_instead_of_final(self):
+        table = {
+            "options": ["C. narrow local focus", "D. whole-video arc"],
+            "groups": {
+                "C": [
+                    {
+                        "obs_id": "obs_0003",
+                        "tool": "vision_read",
+                        "claim": "Only the narrow local focus is supported.",
+                        "confidence": 0.92,
+                        "grounding_quality": "visually_confirmed",
+                    }
+                ],
+                "D": [
+                    {
+                        "obs_id": "obs_0004",
+                        "tool": "caption_segment",
+                        "claim": "Weak hint for a whole-video arc.",
+                        "confidence": 0.35,
+                        "grounding_quality": "weak",
+                    }
+                ],
+            },
+        }
+
+        result = arbitrate_evidence_table(table, hypothesis_option="D")
+
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertIn("hypothesis_disagreement", result.missing_evidence[0])
+        self.assertEqual(result.conflict["type"], "hypothesis_disagreement")
+        self.assertEqual(result.conflict["hypothesis_option"], "D")
+        self.assertEqual(result.conflict["winner"], "C")
+
     def test_answer_agent_does_not_map_unassigned_evidence_after_parse_failure(self):
         backend = StaticBackend("I think D because the whole video covers the empire.")
         table = {

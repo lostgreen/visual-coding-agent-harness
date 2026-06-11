@@ -79,9 +79,10 @@ class AnswerAgent:
         question: str,
         evidence_text: str = "",
         evidence_table: Mapping[str, Any] | None = None,
+        hypothesis_option: str = "",
     ) -> AnswerAgentResult:
         if evidence_table is not None and _has_option_support(evidence_table):
-            return arbitrate_evidence_table(evidence_table)
+            return arbitrate_evidence_table(evidence_table, hypothesis_option=hypothesis_option)
         response = self.backend.generate(
             BackendRequest(
                 task="answer_from_evidence",
@@ -103,7 +104,12 @@ GROUNDING_WEIGHTS = {
 WEAK_GROUNDING = {"global_sparse", "inferred", "weak", "external_knowledge"}
 
 
-def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.12) -> AnswerAgentResult:
+def arbitrate_evidence_table(
+    table: Mapping[str, Any],
+    *,
+    min_margin: float = 0.12,
+    hypothesis_option: str = "",
+) -> AnswerAgentResult:
     """Pick or abstain from an MCQ answer using the complete option-grouped evidence table."""
 
     option_text = _option_text_map(table.get("options", []))
@@ -162,6 +168,19 @@ def arbitrate_evidence_table(table: Mapping[str, Any], *, min_margin: float = 0.
                 conflict=conflict,
                 candidate_option_relations=_partial_support_relations(table, options=[winner, runner_up]),
             )
+    hypothesis_letter = _option_letter(hypothesis_option)
+    if hypothesis_letter and hypothesis_letter != winner:
+        return _need_more_evidence(
+            f"hypothesis_disagreement: hypothesis option {hypothesis_letter} conflicts with evidence winner {winner}.",
+            conflict={
+                "type": "hypothesis_disagreement",
+                "hypothesis_option": hypothesis_letter,
+                "winner": winner,
+                "runner_up": runner_up,
+                "scores": {option: round(score, 3) for option, score in option_scores.items()},
+            },
+            candidate_option_relations=_partial_support_relations(table, options=[winner, hypothesis_letter]),
+        )
 
     citation_rows = _temporal_citation_rows(strong_winning_rows) or strong_winning_rows[:2]
     citations = [str(row.get("obs_id", "")) for row in citation_rows if row.get("obs_id")]
@@ -227,6 +246,11 @@ def _parse_answer_response(text: str) -> AnswerAgentResult:
         confidence=float(payload.get("confidence", 0.0) or 0.0),
         raw_text=text,
     )
+
+
+def _option_letter(value: str) -> str:
+    match = re.match(r"\s*([A-H])(?:[.)]\s*|\s+|$)", str(value or ""), flags=re.IGNORECASE)
+    return match.group(1).upper() if match else ""
 
 
 def _parse_json_like_object(text: str) -> Mapping[str, Any]:

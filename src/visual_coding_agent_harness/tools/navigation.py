@@ -13,6 +13,7 @@ from ..contracts import (
     ClaimRelation,
     TargetSpec,
     build_ordered_transcript_sequence,
+    ordered_sequence_exact_option,
 )
 from ..registry import ToolError, ToolRegistry, tool
 from ..text_norm import token_spans, unique_tokens
@@ -1189,43 +1190,49 @@ def _ordered_transcript_answer_evidence_rows(
     sequence_payload = sequence.to_dict()
     target_refs = list(sequence.ordered_target_refs)
     evidence_id = str(sequence_payload.get("evidence_id") or f"seq_{segment.segment_id}")
-    return [
-        {
+    row = {
+        "evidence_id": evidence_id,
+        "tool": "ordered_transcript_sequence",
+        "segment_id": segment.segment_id,
+        "time_range": [float(segment.start_sec), float(segment.end_sec)],
+        "event_label": "ordered_transcript_sequence",
+        "claim": (
+            f"Indexed transcript in {segment.segment_id} gives a complete contiguous ordered list "
+            "over target refs: " + " -> ".join(target_refs)
+        ),
+        "confidence": sequence.confidence,
+        "grounding_quality": "indexed_transcript",
+        "confidence_signal": "complete contiguous transcript ordered list",
+        "limitations": "Order is derived from ASR text position in one contiguous enumeration; visual corroboration is optional unless explicitly required.",
+        "source": sequence.source,
+        "snippet": sequence.snippet,
+        "ordered_target_refs": target_refs,
+        "ordered_transcript_sequence": sequence_payload,
+        "sequence_binding": {
             "evidence_id": evidence_id,
-            "tool": "ordered_transcript_sequence",
-            "segment_id": segment.segment_id,
-            "time_range": [float(segment.start_sec), float(segment.end_sec)],
-            "event_label": "ordered_transcript_sequence",
-            "claim": (
-                f"Indexed transcript in {segment.segment_id} gives a complete contiguous ordered list "
-                "over target refs: " + " -> ".join(target_refs)
-            ),
-            "confidence": sequence.confidence,
-            "grounding_quality": "indexed_transcript",
-            "confidence_signal": "complete contiguous transcript ordered list",
-            "limitations": "Order is derived from ASR text position in one contiguous enumeration; visual corroboration is optional unless explicitly required.",
+            "status": "supported",
             "source": sequence.source,
             "snippet": sequence.snippet,
-            "ordered_transcript_sequence": sequence_payload,
-            "sequence_binding": {
-                "evidence_id": evidence_id,
-                "status": "supported",
-                "source": sequence.source,
-                "snippet": sequence.snippet,
-                "ordered_target_refs": target_refs,
-            },
-            "evidence_binding": {
-                "evidence_id": evidence_id,
-                "status": "supported",
-                "claim_modality": ClaimModality.NARRATED_FACT.value,
-                "target_id": "ordered_sequence",
-                "segment_id": segment.segment_id,
-                "source": sequence.source,
-                "snippet": sequence.snippet,
-                "ordered_target_refs": target_refs,
-            },
-        }
-    ]
+            "ordered_target_refs": target_refs,
+        },
+        "evidence_binding": {
+            "evidence_id": evidence_id,
+            "status": "supported",
+            "claim_modality": ClaimModality.NARRATED_FACT.value,
+            "target_id": "ordered_sequence",
+            "segment_id": segment.segment_id,
+            "source": sequence.source,
+            "snippet": sequence.snippet,
+            "ordered_target_refs": target_refs,
+        },
+    }
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    options_by_id = getattr(registry, "options_by_id", {}) if registry is not None else {}
+    supported_option = ordered_sequence_exact_option(sequence, options_by_id)
+    if supported_option:
+        row["supported_option"] = supported_option
+        row["evidence_binding"]["supported_option"] = supported_option
+    return [row]
 
 
 def _relation_touches_target(

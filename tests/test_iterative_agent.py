@@ -94,6 +94,265 @@ def test_supported_binding_no_growth_feedback_recommends_asr_binding_without_rou
     assert "change route" not in joined.lower()
 
 
+def test_read_segment_detail_does_not_auto_inject_option_targets():
+    backend = ScriptedPlannerBackend(
+        [
+            (
+                '{"status": "continue", "program": ['
+                '{"tool": "read_segment_detail", "args": {"segment_id": "seg_0001"}, "assign": "detail"}'
+                "]}"
+            ),
+            '{"status": "final", "answer": "B", "citations": ["obs_0001"], "confidence": 0.7}',
+        ]
+    )
+    video_map = VideoMap(
+        video_path="/videos/demo.mp4",
+        duration_sec=30.0,
+        segments=[VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0, asr_text="Relevant narration.")],
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="no_option_targets")
+        agent = IterativeVisualAgent(
+            backend=backend,
+            registry=build_video_navigation_registry(video_map, workspace=workspace),
+            workspace=workspace,
+            scene_index=fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0),
+            budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+        )
+
+        result = agent.run(
+            question="Which option is supported?\nA. wrong full option\nB. right full option",
+            video_path="/videos/demo.mp4",
+        )
+
+    assert "option_targets" not in result.rounds[0].program[0]["args"]
+
+
+def test_mcq_budget_exhaustion_never_returns_empty_answer_after_answer_parse_failure():
+    class ParseFailingAnswerBackend(VisionLanguageBackend):
+        def __init__(self):
+            self.requests = []
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            if request.task == "replan":
+                return BackendResponse(
+                    text=(
+                        '{"status": "continue", "program": ['
+                        '{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "Inspect"}, "assign": "obs"}'
+                        "]}"
+                    )
+                )
+            if request.task == "answer_from_evidence":
+                return BackendResponse(text="not json")
+            return BackendResponse(text="unexpected")
+
+    scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="mcq_parse_failure_fallback")
+        agent = IterativeVisualAgent(
+            backend=ParseFailingAnswerBackend(),
+            registry=ToolRegistry(),
+            workspace=workspace,
+            scene_index=scene_index,
+            budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+        )
+        calls = {"vision": 0}
+
+        @tool(name="vision_read", description="Read a focused visual fact.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float = 0.0,
+            end_sec: float = 0.0,
+            ask_for: str = "",
+            event_label: str = "",
+            nframes: int = 0,
+        ):
+            calls["vision"] += 1
+            return {
+                "claim": "The second option has direct support.",
+                "confidence": 0.9,
+                "grounding_quality": "visually_confirmed",
+                "answer_evidence_rows": [
+                    {
+                        "tool": "vision_read",
+                        "segment_id": segment_id,
+                        "claim": "The second option has direct support.",
+                        "confidence": 0.9,
+                        "grounding_quality": "visually_confirmed",
+                        "supported_option": "B",
+                    }
+                ],
+            }
+
+        agent.registry.register(vision_read)
+
+        result = agent.run(
+            question="Which option is supported?\nA. first\nB. second\nC. third\nD. fourth",
+            video_path="/videos/demo.mp4",
+        )
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert result.status in {"final", "low_confidence_final"}
+    assert result.answer.startswith("B")
+    assert result.answer
+    assert calls["vision"] == 1
+    assert "iterative_answer_agent" in trace
+
+
+def test_repeated_zero_yield_asr_binding_call_is_skipped():
+    class RepeatedBindingBackend(VisionLanguageBackend):
+        def __init__(self):
+            self.requests = []
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            if request.task == "replan":
+                return BackendResponse(
+                    text=(
+                        '{"status": "continue", "program": ['
+                        '{"tool": "bind_asr_claim", "args": {"segment_id": "seg_0001", "target_refs": ["T1"]}}'
+                        "]}"
+                    )
+                )
+            return BackendResponse(text='{"answer": "need_more_evidence", "citations": [], "missing_evidence": ["more"]}')
+
+    registry = ToolRegistry()
+    calls = {"bind": 0}
+
+    @tool(name="bind_asr_claim", description="Bind ASR claims.")
+    def bind_asr_claim(segment_id: str, target_refs: list | None = None):
+        calls["bind"] += 1
+        return {
+            "claim": "No cue supported the requested target.",
+            "confidence": 0.0,
+            "segment_id": segment_id,
+            "target_refs": list(target_refs or []),
+            "answer_evidence_rows": [],
+            "evidence_bindings": [],
+            "limitations": "missing binding for T1",
+        }
+
+    registry.register(bind_asr_claim)
+    scene_index = fixed_window_scene_index(video_path="/videos/asr.mp4", duration_sec=30.0, window_sec=30.0)
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="zero_yield_dedupe")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[TargetSpec("T1", "narrated target", modality_hint=ClaimModality.NARRATED_FACT)],
+            options=[OptionSpec("A", target_sequence=("T1",))],
+        )
+        agent = IterativeVisualAgent(
+            backend=RepeatedBindingBackend(),
+            registry=registry,
+            workspace=workspace,
+            scene_index=scene_index,
+            budget=AgentBudget(max_rounds=3, reserve_final_round=False, max_repeated_programs=0),
+        )
+
+        result = agent.run(
+            question="Which option is supported?\nA. narrated target\nB. other",
+            video_path="/videos/asr.mp4",
+        )
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert result.status == "max_rounds_reached"
+    assert calls["bind"] == 1
+    assert "zero_yield_tool_call_skipped" in trace
+
+
+def test_stable_answer_agent_suggestion_can_finalize_before_reserved_round():
+    class StableSuggestionBackend(VisionLanguageBackend):
+        def __init__(self):
+            self.requests = []
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            if request.task == "replan":
+                return BackendResponse(
+                    text=(
+                        '{"status": "continue", "program": ['
+                        '{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "Inspect"}, "assign": "vis"}'
+                        "]}"
+                    )
+                )
+            if request.task == "answer_from_evidence":
+                return BackendResponse(
+                    text=json.dumps(
+                        {
+                            "answer": "B",
+                            "rationale": "Stable supported answer.",
+                            "citations": ["obs_0001"],
+                            "candidate_option_relations": [
+                                {
+                                    "option": "B",
+                                    "relation": "support",
+                                    "strength": 0.98,
+                                    "observation_id": "obs_0001",
+                                    "rationale": "caption supports B",
+                                    "answer_grade": True,
+                                }
+                            ],
+                            "missing_evidence": [],
+                            "confidence": 0.98,
+                        }
+                    )
+                )
+            return BackendResponse(text="unexpected")
+
+    registry = ToolRegistry()
+
+    @tool(name="vision_read", description="Read a focused visual fact.")
+    def vision_read(
+        segment_id: str,
+        ask_for: str = "",
+        video_path: str = "",
+        start_sec: float = 0.0,
+        end_sec: float = 0.0,
+        nframes: int = 0,
+        event_label: str = "",
+    ):
+        return {
+            "claim": "Segment seg_0001 contains the answer.",
+            "confidence": 0.95,
+            "grounding_quality": "visually_confirmed",
+            "segment_id": segment_id,
+            "answer_evidence_rows": [
+                {
+                    "tool": "vision_read",
+                    "segment_id": segment_id,
+                    "claim": "Segment seg_0001 contains the answer.",
+                    "confidence": 0.95,
+                    "grounding_quality": "visually_confirmed",
+                    "supported_option": "B",
+                }
+            ],
+        }
+
+    registry.register(vision_read)
+    scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="stable_answer_suggestion")
+        agent = IterativeVisualAgent(
+            backend=StableSuggestionBackend(),
+            registry=registry,
+            workspace=workspace,
+            scene_index=scene_index,
+            budget=AgentBudget(max_rounds=6, reserve_final_round=True, max_repeated_programs=0, answer_probe_rounds_before_final=4),
+        )
+
+        result = agent.run(
+            question="Which option is supported?\nA. wrong\nB. Segment seg_0001 contains the answer",
+            video_path="/videos/demo.mp4",
+        )
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert result.status == "final"
+    assert result.answer.startswith("B")
+    assert len(result.rounds) < 5
+    assert "stable_answer_suggestion_finalized" in trace
+
+
 def test_low_confidence_near_exhaustion_auto_promotes_asr_binding_before_final():
     video_map = VideoMap(
         video_path="/videos/asr.mp4",
@@ -4345,6 +4604,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "max_rounds_reached")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("low_confidence_final_blocked", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_iterative_agent_reserves_final_round_from_new_visual_tools(self):
         backend = ScriptedPlannerBackend(

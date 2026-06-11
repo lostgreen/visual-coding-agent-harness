@@ -71,6 +71,33 @@ def test_runtime_python_control_flow_does_not_branch_on_case_ids_or_raw_option_l
     assert hits == [], _format_hits(hits)
 
 
+def test_scanned_runtime_paths_skip_macos_metadata_artifacts(tmp_path, monkeypatch) -> None:
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    (runtime_root / "normal.py").write_text("print('ok')\n", encoding="utf-8")
+    (runtime_root / "._normal.py").write_bytes(b"\x00\x05binary-ish metadata")
+
+    nested = runtime_root / "pkg"
+    nested.mkdir()
+    (nested / "._notes.md").write_bytes(b"\x00\x05binary-ish metadata")
+
+    hidden_fork_dir = nested / "._resource"
+    hidden_fork_dir.mkdir()
+    (hidden_fork_dir / "fork.txt").write_bytes(b"\x00\x05binary-ish metadata")
+
+    apple_double_dir = nested / ".AppleDouble"
+    apple_double_dir.mkdir()
+    (apple_double_dir / "source.py").write_bytes(b"\x00\x05binary-ish metadata")
+
+    macosx_dir = runtime_root / "__MACOSX"
+    macosx_dir.mkdir()
+    (macosx_dir / "source.py").write_bytes(b"\x00\x05binary-ish metadata")
+
+    monkeypatch.setitem(globals(), "RUNTIME_ROOT", runtime_root)
+
+    assert _scanned_runtime_paths() == [runtime_root / "normal.py"]
+
+
 def _load_blacklist_patterns() -> list[re.Pattern[str]]:
     patterns: list[re.Pattern[str]] = []
     for line_number, raw_line in enumerate(BLACKLIST_PATH.read_text(encoding="utf-8").splitlines(), start=1):
@@ -88,7 +115,15 @@ def _scanned_runtime_paths(*, suffixes: Iterable[str] = SCANNED_SUFFIXES) -> lis
     paths: set[Path] = set()
     for suffix in suffixes:
         paths.update(RUNTIME_ROOT.rglob(f"*{suffix}"))
-    return sorted(path for path in paths if path.is_file())
+    return sorted(path for path in paths if path.is_file() and not _is_macos_metadata_path(path))
+
+
+def _is_macos_metadata_path(path: Path) -> bool:
+    try:
+        parts = path.relative_to(RUNTIME_ROOT).parts
+    except ValueError:
+        parts = path.parts
+    return any(part in {"__MACOSX", ".AppleDouble"} or part.startswith("._") for part in parts)
 
 
 class _ControlFlowVisitor(ast.NodeVisitor):

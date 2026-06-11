@@ -19,7 +19,26 @@ class AsrBindingBackend(VisionLanguageBackend):
         return BackendResponse(text=self.text)
 
 
-def _video_map() -> VideoMap:
+class SequenceAsrBindingBackend(VisionLanguageBackend):
+    def __init__(self, texts: list[str]) -> None:
+        self.texts = list(texts)
+        self.requests: list[BackendRequest] = []
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        if not self.texts:
+            return BackendResponse(text="{}")
+        return BackendResponse(text=self.texts.pop(0))
+
+
+def _video_map(*, cue_id: str | None = None) -> VideoMap:
+    sentence = {
+        "start_sec": 3.0,
+        "end_sec": 7.0,
+        "text": "The narrator says Goya came from a humble background.",
+    }
+    if cue_id is not None:
+        sentence["cue_id"] = cue_id
     return VideoMap(
         video_path="/videos/asr.mp4",
         duration_sec=30.0,
@@ -28,13 +47,7 @@ def _video_map() -> VideoMap:
                 segment_id="seg_0001",
                 start_sec=0.0,
                 end_sec=30.0,
-                asr_sentences=[
-                    {
-                        "start_sec": 3.0,
-                        "end_sec": 7.0,
-                        "text": "The narrator says Goya came from a humble background.",
-                    }
-                ],
+                asr_sentences=[sentence],
             )
         ],
     )
@@ -93,3 +106,50 @@ def test_bind_asr_claim_rejects_illegal_cue_without_supported_row() -> None:
 
     assert output["answer_evidence_rows"] == []
     assert "illegal cue_ids" in output["limitations"]
+
+
+def test_bind_asr_claim_normalizes_cue_prefixed_numeric_ids() -> None:
+    backend = AsrBindingBackend(
+        '{"T1": {"verdict": "supported", "cue_ids": ["cue_142"], "quote": "Goya came from a humble background"}}'
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = _workspace(Path(tmp))
+        registry = build_video_exploration_registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
+
+        output = registry.execute("bind_asr_claim", {"segment_id": "seg_0001", "target_refs": ["T1"]})
+
+    assert output["answer_evidence_rows"][0]["raw_asr_ref"]["cue_ids"] == ["142"]
+    assert output["evidence_bindings"][0]["cue_ids"] == ["142"]
+    assert "normalized_cue_ids" in output["limitations"]
+
+
+def test_bind_asr_claim_prompt_example_uses_real_cue_ids() -> None:
+    backend = AsrBindingBackend(
+        '{"T1": {"verdict": "supported", "cue_ids": ["142"], "quote": "Goya came from a humble background"}}'
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = _workspace(Path(tmp))
+        registry = build_video_exploration_registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
+
+        registry.execute("bind_asr_claim", {"segment_id": "seg_0001", "target_refs": ["T1"]})
+
+    assert '"cue_ids": ["142"]' in backend.requests[0].prompt
+    assert '"cue_ids": ["cue_0001"]' not in backend.requests[0].prompt
+
+
+def test_bind_asr_claim_retries_once_after_still_illegal_cue_ids() -> None:
+    backend = SequenceAsrBindingBackend(
+        [
+            '{"T1": {"verdict": "supported", "cue_ids": ["cue_9999"], "quote": "bad"}}',
+            '{"T1": {"verdict": "supported", "cue_ids": ["142"], "quote": "Goya came from a humble background"}}',
+        ]
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = _workspace(Path(tmp))
+        registry = build_video_exploration_registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
+
+        output = registry.execute("bind_asr_claim", {"segment_id": "seg_0001", "target_refs": ["T1"]})
+
+    assert len(backend.requests) == 2
+    assert "Previous response used illegal cue_ids" in backend.requests[1].prompt
+    assert output["answer_evidence_rows"][0]["raw_asr_ref"]["cue_ids"] == ["142"]

@@ -118,6 +118,47 @@ def test_promote_answer_evidence_does_not_bind_raw_option_text_as_target():
     )
 
 
+def test_target_level_asr_rows_project_to_unique_option_coverage():
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="target_option_projection")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[
+                TargetSpec("T1", "shared setup", modality_hint=ClaimModality.NARRATED_FACT),
+                TargetSpec("T2", "distinct answer target", modality_hint=ClaimModality.NARRATED_FACT),
+            ],
+            options=[
+                OptionSpec("A", target_sequence=("T1",)),
+                OptionSpec("B", target_sequence=("T2",)),
+            ],
+        )
+        workspace.write_evidence_row(
+            {
+                "tool": "transcript_evidence_binder",
+                "event_label": "T2",
+                "target_id": "T2",
+                "claim": "Indexed ASR supports the distinct answer target.",
+                "confidence": 0.88,
+                "grounding_quality": "indexed_transcript",
+                "confidence_signal": "asr_claim_binding_supported",
+                "evidence_binding": {"target_id": "T2", "status": "supported"},
+            }
+        )
+
+        table = workspace.read_evidence_table_v3(
+            question="Which answer is supported?",
+            options=["A. shared setup", "B. distinct answer target"],
+        )
+        summary = workspace.evidence_status_summary(
+            question="Which answer is supported?",
+            options=["A. shared setup", "B. distinct answer target"],
+        )
+
+    assert [row["event_label"] for row in table["groups"]["B"]] == ["T2"]
+    assert table["groups"]["unassigned"] == []
+    assert summary["option_coverage"] == "1/2"
+    assert summary["option_status"]["B"]["strong_evidence_count"] == 1
+
+
 def test_post_observation_hook_grows_answer_evidence_after_one_detail_observation():
     with tempfile.TemporaryDirectory() as tmp:
         workspace = EvidenceWorkspace.create(Path(tmp), run_id="post_observation_growth")

@@ -208,11 +208,11 @@ def _before_relation_status(
     destination_end: int,
 ) -> str:
     if source_pos >= destination_pos:
-        return "rejected"
+        return "contradicted"
     relation_span = snippet[source_pos:destination_end].lower()
     between = snippet[source_end:destination_pos].lower()
     if re.search(r"\b(?:only\s+)?after\b", between):
-        return "rejected"
+        return "contradicted"
     if re.search(
         r"\b(?:then|later|subsequently|before|rose\s+through|to\s+reach|from\b.+\bto\b|moved\s+into|withdrew)\b",
         relation_span,

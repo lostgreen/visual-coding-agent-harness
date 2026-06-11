@@ -150,6 +150,14 @@ class FailureSignature:
     affected_tools: tuple[str, ...] = ()
 
 
+@dataclass
+class AnswerSuggestionState:
+    option: str = ""
+    citations: tuple[str, ...] = ()
+    confidence: float = 0.0
+    count: int = 0
+
+
 @dataclass(frozen=True)
 class FinalEvidenceBridgeResult:
     citations: list[str]
@@ -198,6 +206,8 @@ class IterativeVisualAgent:
         self._route_repair_exhausted: Mapping[str, Any] | None = None
         self._executed_recommended_action_ids: set[str] = set()
         self._auto_evidence_promotion_attempted_keys: set[tuple[str, str, tuple[str, ...]]] = set()
+        self._zero_yield_tool_call_signatures: set[str] = set()
+        self._answer_suggestion_state = AnswerSuggestionState()
         self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure: Mapping[str, Any] | None = None
         self.context_allocator = default_context_budget_allocator(
@@ -210,6 +220,8 @@ class IterativeVisualAgent:
         self._route_repair_exhausted = None
         self._executed_recommended_action_ids = set()
         self._auto_evidence_promotion_attempted_keys = set()
+        self._zero_yield_tool_call_signatures = set()
+        self._answer_suggestion_state = AnswerSuggestionState()
         self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure = None
         question_context = build_question_context(question)
@@ -1061,6 +1073,7 @@ class IterativeVisualAgent:
             )
             program_result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(program)
             observation_ids = [str(observation_id) for observation_id in program_result.observation_ids]
+            self._record_zero_yield_tool_calls(program=program, observation_ids=observation_ids)
             self._write_recovery_execution_traces(
                 round_number=round_number,
                 program=program,
@@ -1132,6 +1145,7 @@ class IterativeVisualAgent:
                 promotion_candidates = _latest_asr_binding_candidates(
                     workspace=self.workspace,
                     target_refs=(),
+                    failed_call_signatures=self._zero_yield_tool_call_signatures,
                     limit=2,
                 )
                 self.workspace.write_trace_event(
@@ -1240,6 +1254,19 @@ class IterativeVisualAgent:
                         )
                         answer_feedback = [blocked_reason]
                         continue
+                    stable_final = self._try_stable_answer_suggestion_final(
+                        answer_result=answer_result,
+                        question=raw_question,
+                        video_path=video_path,
+                        rounds=rounds,
+                        round_number=round_number,
+                        source="prefinal_probe",
+                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                        program=program,
+                        observation_ids=observation_ids,
+                    )
+                    if stable_final is not None:
+                        return stable_final
                     pending_inferences = [_answer_result_pending_inference(answer_result, source="prefinal_probe")]
                     self.workspace.write_trace_event(
                         "iterative_answer_suggestion",
@@ -1305,12 +1332,14 @@ class IterativeVisualAgent:
                     "reason": "planner_final_auto_final_blocked",
                 },
             )
+        budget_answer_result: AnswerAgentResult | None = None
         if extract_candidate_options(raw_question) and citations and not planner_final_auto_final_blocked:
             answer_result = AnswerAgent(self.backend).run(
                 question=raw_question,
                 evidence_text=self._read_ledger(),
                 evidence_table=self._answer_evidence_table(raw_question),
             )
+            budget_answer_result = answer_result
             self.workspace.write_trace_event(
                 "iterative_answer_agent",
                 {
@@ -1344,6 +1373,17 @@ class IterativeVisualAgent:
                 candidate_answer=evidence_repair_candidate_answer,
                 failure_reason=evidence_repair_failure_reason or "budget_exhausted_after_prefinal_evidence_repair_failed",
             )
+        forced_mcq = self._forced_mcq_fallback_result(
+            question=raw_question,
+            video_path=video_path,
+            rounds=rounds,
+            round_number=self.budget.max_rounds,
+            citations=citations,
+            source="budget_exhausted",
+            answer_result=budget_answer_result,
+        )
+        if forced_mcq is not None:
+            return forced_mcq
         plural = "round" if self.budget.max_rounds == 1 else "rounds"
         partial_answer = _partial_answer_from_ledger(self._read_ledger())
         return IterativeRunResult(
@@ -1354,6 +1394,65 @@ class IterativeVisualAgent:
             status="max_rounds_reached",
             citations=citations,
             rounds=rounds,
+        )
+
+    def _forced_mcq_fallback_result(
+        self,
+        *,
+        question: str,
+        video_path: str,
+        rounds: Sequence[IterativeRound],
+        round_number: int,
+        citations: Sequence[str],
+        source: str,
+        answer_result: AnswerAgentResult | None = None,
+    ) -> IterativeRunResult | None:
+        options = extract_candidate_options(question)
+        if not options:
+            return None
+        low_confidence = answer_result.as_low_confidence_final() if answer_result is not None else None
+        answer_agent_parse_failed = _answer_agent_parse_failed(answer_result)
+        if not answer_agent_parse_failed:
+            return None
+        answer = (
+            _answer_option_letter(low_confidence.answer) if low_confidence is not None and low_confidence.status == "low_confidence_final" else ""
+        )
+        answer = answer or _best_effort_option_from_evidence_table(self._answer_evidence_table(question))
+        if not answer:
+            return None
+        fallback_citations = list(low_confidence.citations) if low_confidence is not None and low_confidence.status == "low_confidence_final" else list(citations)
+        confidence = low_confidence.confidence if low_confidence is not None and low_confidence.status == "low_confidence_final" else 0.0
+        self.workspace.write_trace_event(
+            "mcq_forced_fallback",
+            {
+                "round": round_number,
+                "source": source,
+                "answer": answer,
+                "reason": "mcq_budget_exhausted_non_empty_answer",
+                "fallback_source": "answer_agent_partial_support"
+                if low_confidence is not None and low_confidence.status == "low_confidence_final"
+                else "answer_agent_parse_failure",
+            },
+        )
+        final_rounds = list(rounds)
+        final_rounds.append(
+            IterativeRound(
+                round_number=round_number,
+                status="low_confidence_final",
+                planner_text="",
+                rationale="MCQ budget exhausted; returning best-effort non-empty option.",
+                program=(),
+                observation_ids=(),
+            )
+        )
+        return IterativeRunResult(
+            question=question,
+            video_path=video_path,
+            answer=answer,
+            status="low_confidence_final",
+            citations=fallback_citations,
+            confidence=confidence,
+            rounds=final_rounds,
         )
 
     def _evidence_repair_exhausted_result(
@@ -1755,6 +1854,19 @@ class IterativeVisualAgent:
             )
             return None
         if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES:
+            stable_final = self._try_stable_answer_suggestion_final(
+                answer_result=answer_result,
+                question=question,
+                video_path=video_path,
+                rounds=rounds,
+                round_number=round_number,
+                source=source,
+                has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                program=program,
+                observation_ids=observation_ids,
+            )
+            if stable_final is not None:
+                return stable_final
             if pending_inferences_out is not None:
                 pending_inferences_out.append(_answer_result_pending_inference(answer_result, source=source))
             self.workspace.write_trace_event(
@@ -1780,6 +1892,98 @@ class IterativeVisualAgent:
             program=program,
             observation_ids=observation_ids,
         )
+
+    def _try_stable_answer_suggestion_final(
+        self,
+        *,
+        answer_result: AnswerAgentResult,
+        question: str,
+        video_path: str,
+        rounds: Sequence[IterativeRound],
+        round_number: int,
+        source: str,
+        has_inspect_with_candidate_options: bool,
+        program: Sequence[Mapping[str, Any]] = (),
+        observation_ids: Sequence[str] = (),
+    ) -> IterativeRunResult | None:
+        option = _answer_option_letter(answer_result.answer)
+        citations = tuple(str(citation) for citation in answer_result.citations if str(citation))
+        if answer_result.status != "final" or not option or not citations or answer_result.confidence < 0.9:
+            self._answer_suggestion_state = AnswerSuggestionState()
+            return None
+        previous = self._answer_suggestion_state
+        count = previous.count + 1 if previous.option == option and previous.citations == citations else 1
+        self._answer_suggestion_state = AnswerSuggestionState(
+            option=option,
+            citations=citations,
+            confidence=answer_result.confidence,
+            count=count,
+        )
+        self.workspace.write_trace_event(
+            "stable_answer_suggestion_observed",
+            {
+                "round": round_number,
+                "source": source,
+                "answer": answer_result.answer,
+                "option": option,
+                "citations": list(citations),
+                "confidence": answer_result.confidence,
+                "stable_count": count,
+            },
+        )
+        if count < 2:
+            return None
+        self.workspace.write_trace_event(
+            "stable_answer_suggestion_finalized",
+            {
+                "round": round_number,
+                "source": source,
+                "answer": answer_result.answer,
+                "citations": list(citations),
+                "confidence": answer_result.confidence,
+            },
+        )
+        return self._finalize_answer_agent_result(
+            answer_result=answer_result,
+            question=question,
+            video_path=video_path,
+            rounds=rounds,
+            round_number=round_number,
+            source="stable_answer_suggestion",
+            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+            program=program,
+            observation_ids=observation_ids,
+        )
+
+    def _record_zero_yield_tool_calls(
+        self,
+        *,
+        program: Sequence[Mapping[str, Any]],
+        observation_ids: Sequence[str],
+    ) -> None:
+        for step, observation_id in zip(program, observation_ids):
+            if not isinstance(step, Mapping):
+                continue
+            tool_name = str(step.get("tool") or step.get("op") or "").strip()
+            args = step.get("args", {})
+            if not tool_name or not isinstance(args, Mapping):
+                continue
+            observation = self.workspace.get_observation(str(observation_id))
+            if observation is None or not _observation_is_zero_yield_failure(observation.raw_output):
+                continue
+            signature = _tool_call_signature(tool_name=tool_name, args=args)
+            if not signature:
+                continue
+            self._zero_yield_tool_call_signatures.add(signature)
+            self.workspace.write_trace_event(
+                "zero_yield_tool_call_recorded",
+                {
+                    "tool": tool_name,
+                    "args": dict(args),
+                    "observation_id": str(observation_id),
+                    "limitations": str(observation.limitations or observation.raw_output.get("limitations", "")),
+                },
+            )
 
     def _normalize_program(
         self,
@@ -2078,10 +2282,6 @@ class IterativeVisualAgent:
                     and not args.get("targets")
                 ):
                     args["targets"] = list(self._exploration_target_entities)
-                if self._tool_accepts_argument(tool_name, "option_targets") and not args.get("option_targets"):
-                    option_targets = extract_option_target_atom_map(raw_question or question, include_synonyms=False)
-                    if option_targets:
-                        args["option_targets"] = option_targets
             if final_round_reserved and tool_name != "verify_ledger_answer":
                 self.workspace.write_trace_event(
                     "exploration_policy_adjustment",
@@ -2263,6 +2463,34 @@ class IterativeVisualAgent:
                 else:
                     args.setdefault("nframes", self.budget.default_nframes)
                 reserved_segment_ids.add(segment.segment_id)
+
+            zero_yield_signature = _tool_call_signature(tool_name=tool_name, args=args)
+            if zero_yield_signature in self._zero_yield_tool_call_signatures:
+                next_action = (
+                    f"The exact {tool_name} call already produced no answer-grade evidence. "
+                    "Use a different segment, target_refs, or evidence tool instead of repeating it."
+                )
+                self.workspace.write_trace_event(
+                    "zero_yield_tool_call_skipped",
+                    {
+                        "tool": tool_name,
+                        "args": args,
+                        "reason": "previous_zero_yield",
+                    },
+                )
+                self.workspace.write_reflection_memory(
+                    route=active_skill.trigger.route if active_skill is not None else classify_question_route(question),
+                    failure_tag="previous_zero_yield_tool_call",
+                    rule=next_action,
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=tool_name,
+                    reason="previous_zero_yield_tool_call",
+                    original={"tool": tool_name, "args": args},
+                    next_action=next_action,
+                )
+                continue
 
             normalized_step: dict[str, Any] = {"tool": tool_name, "args": args}
             if "assign" in step:
@@ -4024,7 +4252,12 @@ class IterativeVisualAgent:
                 {"round": round_number, "source": source, "answer": answer, "succeeded": False, "reason": "no_target_refs"},
             )
             return False
-        candidate = _latest_asr_binding_candidates(workspace=self.workspace, target_refs=target_refs, limit=1)
+        candidate = _latest_asr_binding_candidates(
+            workspace=self.workspace,
+            target_refs=target_refs,
+            failed_call_signatures=self._zero_yield_tool_call_signatures,
+            limit=1,
+        )
         if not candidate:
             self.workspace.write_trace_event(
                 "auto_evidence_promotion_attempted",
@@ -5982,6 +6215,48 @@ def _answer_option_letter(answer: str) -> str | None:
     return match.group(1).upper() if match else None
 
 
+def _best_effort_option_from_evidence_table(table: Mapping[str, Any]) -> str:
+    groups = table.get("groups", {})
+    if not isinstance(groups, Mapping):
+        return ""
+    scored: list[tuple[float, int, str]] = []
+    for option, raw_rows in groups.items():
+        option_letter = _answer_option_letter(str(option))
+        if not option_letter or option_letter == "U":
+            continue
+        rows = list(raw_rows) if isinstance(raw_rows, Sequence) and not isinstance(raw_rows, (str, bytes)) else []
+        score = 0.0
+        support_count = 0
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            quality = str(row.get("grounding_quality", ""))
+            signal = str(row.get("confidence_signal", ""))
+            if quality in {"visually_confirmed", "indexed_transcript", "global_sparse"} or signal == "asr_claim_binding_supported":
+                score += float(row.get("confidence", 0.0) or 0.0)
+                support_count += 1
+        if support_count:
+            scored.append((score, support_count, option_letter))
+    if not scored:
+        return ""
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return scored[0][2]
+
+
+def _answer_agent_parse_failed(answer_result: AnswerAgentResult | None) -> bool:
+    if answer_result is None:
+        return False
+    haystack = " ".join(
+        str(item)
+        for item in [
+            answer_result.answer,
+            answer_result.rationale,
+            *list(answer_result.missing_evidence),
+        ]
+    ).lower()
+    return "answer_json_parse_failed" in haystack
+
+
 def _planner_final_answer_with_option(*, question: str, answer: str) -> str:
     return str(answer)
 
@@ -6323,6 +6598,54 @@ def _append_candidate_options_to_tool_question(question: str, *, candidate_optio
 
 def _program_signature(program: Sequence[Mapping[str, Any]]) -> str:
     return json.dumps(_signature_value(list(program)), ensure_ascii=True, sort_keys=True, default=str)
+
+
+def _tool_call_signature(*, tool_name: str, args: Mapping[str, Any]) -> str:
+    return json.dumps(
+        _signature_value({"tool": str(tool_name), "args": dict(args)}),
+        ensure_ascii=True,
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _observation_is_zero_yield_failure(raw_output: Mapping[str, Any]) -> bool:
+    limitations = str(raw_output.get("limitations", "") or "").strip()
+    if not limitations:
+        return False
+    answer_rows = raw_output.get("answer_evidence_rows", [])
+    if isinstance(answer_rows, Sequence) and not isinstance(answer_rows, (str, bytes)) and len(answer_rows) > 0:
+        return False
+    bindings = raw_output.get("evidence_bindings") or raw_output.get("bindings") or []
+    if _has_supported_binding(bindings):
+        return False
+    relations = raw_output.get("candidate_option_relations", [])
+    if _has_support_relation(relations):
+        return False
+    return True
+
+
+def _has_supported_binding(value: Any) -> bool:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return False
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        status = str(item.get("status") or item.get("support_status") or "").strip().lower()
+        if status == "supported":
+            return True
+    return False
+
+
+def _has_support_relation(value: Any) -> bool:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return False
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("relation", "")).strip().lower() == "support":
+            return True
+    return False
 
 
 _PROTOCOL_FAILURE_REASONS = frozenset(
@@ -6762,6 +7085,7 @@ def _latest_asr_binding_candidates(
     *,
     workspace: EvidenceWorkspace,
     target_refs: Sequence[str] = (),
+    failed_call_signatures: set[str] | frozenset[str] = frozenset(),
     limit: int = 2,
 ) -> list[dict[str, Any]]:
     requested_refs = {str(ref).strip() for ref in target_refs if str(ref).strip()}
@@ -6788,6 +7112,12 @@ def _latest_asr_binding_candidates(
                 if not segment_id:
                     continue
                 target_refs_for_candidate = [row_ref] if is_registry_ref else []
+                call_signature = _tool_call_signature(
+                    tool_name="bind_asr_claim",
+                    args={"segment_id": segment_id, "target_refs": target_refs_for_candidate},
+                )
+                if call_signature in failed_call_signatures:
+                    continue
                 candidates.append(
                     {
                         "segment_id": segment_id,

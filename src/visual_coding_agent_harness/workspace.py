@@ -22,6 +22,9 @@ from .contracts import (
 from .schemas import EvidenceRowV2
 
 
+_TARGET_REF_RE = re.compile(r"^T[1-9]\d*$")
+
+
 @dataclass(frozen=True)
 class Observation:
     observation_id: str
@@ -916,6 +919,7 @@ class EvidenceWorkspace:
             elif row.get("legacy_worker_vote") and not include_legacy_worker_votes:
                 row["supported_option"] = None
             else:
+                row = _project_target_row_to_option(row, registry_obj=getattr(self, "target_registry", None))
                 option_source = (
                     row.get("supported_option")
                     or _supported_option_from_relations(row.get("candidate_option_relations"), option_map=option_map)
@@ -1324,6 +1328,35 @@ class EvidenceWorkspace:
             if legacy_worker_vote and not include_legacy_worker_votes:
                 supported_option = None
             else:
+                projected_relation = _project_target_row_to_option(
+                    {
+                        "tool": tool_name,
+                        "event_label": _observation_event_label(raw_output=raw_output, claim=display_claim),
+                        "target_id": raw_output.get("target_id") or raw_output.get("target_ref"),
+                        "evidence_binding": raw_output.get("evidence_binding"),
+                        "candidate_option_relations": raw_output.get("candidate_option_relations"),
+                        "grounding_quality": _grounding_quality(
+                            raw_output=raw_output,
+                            limitations=str(observation.get("limitations", "")),
+                            confidence_signal=str(observation.get("confidence_signal", "")),
+                        ),
+                        "confidence": float(observation.get("confidence", 0.0) or 0.0),
+                        "obs_id": str(observation.get("observation_id", "")),
+                    },
+                    registry_obj=getattr(self, "target_registry", None),
+                )
+                if projected_relation.get("candidate_option_relations"):
+                    raw_output = {
+                        **raw_output,
+                        "candidate_option_relations": _merge_candidate_option_relations(
+                            _candidate_option_relations(raw_output.get("candidate_option_relations")),
+                            _candidate_option_relations(projected_relation.get("candidate_option_relations")),
+                        ),
+                    }
+                    option_source = option_source or _supported_option_from_relations(
+                        raw_output.get("candidate_option_relations"),
+                        option_map=option_map,
+                    )
                 supported_option = _normalize_supported_option(option_source, option_map=option_map)
             group_key = supported_option or "unassigned"
             groups.setdefault(group_key, [])
@@ -1437,7 +1470,11 @@ class EvidenceWorkspace:
             strong = [
                 row
                 for row in rows
-                if isinstance(row, Mapping) and str(row.get("grounding_quality", "")) in {"visually_confirmed", "global_sparse"}
+                if isinstance(row, Mapping)
+                and (
+                    str(row.get("grounding_quality", "")) in {"visually_confirmed", "global_sparse", "indexed_transcript"}
+                    or str(row.get("confidence_signal", "")) == "asr_claim_binding_supported"
+                )
             ]
             weak = [
                 row
@@ -2335,6 +2372,61 @@ def _candidate_option_relations(value: Any) -> list[dict[str, Any]]:
 
 def _tool_emits_candidate_hints_only(tool_name: Any) -> bool:
     return str(tool_name) == "global_gist"
+
+
+def _project_target_row_to_option(row: Mapping[str, Any], *, registry_obj: Any) -> dict[str, Any]:
+    if registry_obj is None:
+        return dict(row)
+    if row.get("supported_option") or _candidate_option_relations(row.get("candidate_option_relations")):
+        return dict(row)
+    target_ref = _target_ref_from_evidence_row(row)
+    if not target_ref:
+        return dict(row)
+    try:
+        options = tuple(registry_obj.options_for_target(target_ref))
+    except (AttributeError, KeyError):
+        return dict(row)
+    if len(options) != 1:
+        return dict(row)
+    option_id = str(getattr(options[0], "option_id", "")).strip().upper()
+    if not option_id:
+        return dict(row)
+    confidence = float(row.get("confidence", 0.0) or 0.0)
+    relation = {
+        "option": option_id,
+        "relation": "support",
+        "strength": confidence,
+        "observation_id": str(row.get("obs_id") or row.get("observation_id") or ""),
+        "evidence_id": str(row.get("evidence_id", "")),
+        "target_ref": target_ref,
+        "grounding_quality": str(row.get("grounding_quality", "")),
+        "answer_grade": True,
+        "assigned_by": "target_registry_projection",
+    }
+    projected = dict(row)
+    projected["candidate_option_relations"] = _merge_candidate_option_relations(
+        _candidate_option_relations(projected.get("candidate_option_relations")),
+        [relation],
+    )
+    projected["supported_option"] = option_id
+    return projected
+
+
+def _target_ref_from_evidence_row(row: Mapping[str, Any]) -> str:
+    candidates = [
+        row.get("target_id"),
+        row.get("target_ref"),
+        row.get("event_label"),
+        row.get("entity"),
+    ]
+    binding = row.get("evidence_binding")
+    if isinstance(binding, Mapping):
+        candidates.extend([binding.get("target_id"), binding.get("target_ref")])
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if _TARGET_REF_RE.fullmatch(text):
+            return text
+    return ""
 
 
 def _candidate_option_relations_from_supported_option(observation: Observation) -> list[dict[str, Any]]:

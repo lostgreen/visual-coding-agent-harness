@@ -65,10 +65,12 @@ def build_asr_binding_registry(
                 limitations="; ".join(target_limitations) or "bind_asr_claim requires at least one target_ref.",
             )
 
+        cues_by_id = {str(cue["cue_id"]): cue for cue in cues}
+        prompt = _binding_prompt(segment=segment, cues=cues, targets=targets)
         response = backend.generate(
             BackendRequest(
                 task="asr_claim_binding",
-                prompt=_binding_prompt(segment=segment, cues=cues, targets=targets),
+                prompt=prompt,
                 max_new_tokens=800,
                 temperature=0.0,
             )
@@ -82,57 +84,40 @@ def build_asr_binding_registry(
                 limitations=f"Could not parse asr_claim_binding JSON: {exc}",
             )
 
-        cues_by_id = {str(cue["cue_id"]): cue for cue in cues}
-        evidence_bindings: list[dict[str, object]] = []
-        answer_rows: list[dict[str, object]] = []
-        limitations: list[str] = []
-        for target in targets:
-            target_id = str(target["target_id"])
-            entry = payload.get(target_id)
-            if not isinstance(entry, Mapping):
-                limitations.append(f"missing binding for {target_id}")
-                continue
-
-            verdict = str(entry.get("verdict", "")).strip().lower()
-            if verdict not in _KNOWN_VERDICTS:
-                limitations.append(f"unknown verdict for {target_id}: {verdict or '(empty)'}")
-                continue
-
-            cue_ids = _string_list(entry.get("cue_ids"))
-            quote = str(entry.get("quote") or "").strip()
-            binding = {
-                "evidence_id": _evidence_id(segment_id=segment_id_text, target_id=target_id),
-                "status": "supported" if verdict in _SUPPORTED_VERDICTS else verdict,
-                "target_id": target_id,
-                "segment_id": segment_id_text,
-                "source": "indexed_transcript",
-                "cue_ids": cue_ids,
-                "snippet": quote,
-                "canonical_claim": str(target["canonical_claim"]),
-            }
-            evidence_bindings.append(binding)
-
-            if verdict not in _SUPPORTED_VERDICTS:
-                continue
-            if not cue_ids:
-                limitations.append(f"supported verdict for {target_id} has no cue_ids")
-                continue
-            illegal = [cue_id for cue_id in cue_ids if cue_id not in cues_by_id]
-            if illegal:
-                limitations.append(f"illegal cue_ids for {target_id}: {', '.join(illegal)}")
-                continue
-
-            selected_cues = [cues_by_id[cue_id] for cue_id in cue_ids]
-            answer_rows.append(
-                _answer_evidence_row(
-                    segment=segment,
-                    target=target,
-                    cue_ids=cue_ids,
-                    cues=selected_cues,
-                    quote=quote,
-                    evidence_binding=binding,
+        evidence_bindings, answer_rows, limitations, illegal_retry_feedback = _build_binding_rows(
+            segment=segment,
+            segment_id_text=segment_id_text,
+            targets=targets,
+            payload=payload,
+            cues_by_id=cues_by_id,
+        )
+        if illegal_retry_feedback and not answer_rows:
+            retry_response = backend.generate(
+                BackendRequest(
+                    task="asr_claim_binding",
+                    prompt=_binding_prompt(
+                        segment=segment,
+                        cues=cues,
+                        targets=targets,
+                        retry_feedback=illegal_retry_feedback,
+                    ),
+                    max_new_tokens=800,
+                    temperature=0.0,
                 )
             )
+            try:
+                retry_payload = _parse_json_object(retry_response.text)
+            except ValueError as exc:
+                limitations.append(f"Retry could not parse asr_claim_binding JSON: {exc}")
+            else:
+                evidence_bindings, answer_rows, retry_limitations, _retry_illegal_feedback = _build_binding_rows(
+                    segment=segment,
+                    segment_id_text=segment_id_text,
+                    targets=targets,
+                    payload=retry_payload,
+                    cues_by_id=cues_by_id,
+                )
+                limitations = [*limitations, *retry_limitations]
 
         claim = (
             f"ASR claim binding checked {len(targets)} target_ref(s) in {segment_id_text}; "
@@ -216,6 +201,7 @@ def _binding_prompt(
     segment: VideoMapSegment,
     cues: Sequence[Mapping[str, object]],
     targets: Sequence[Mapping[str, str]],
+    retry_feedback: str = "",
 ) -> str:
     cue_lines = []
     for cue in cues:
@@ -223,13 +209,18 @@ def _binding_prompt(
         cue_lines.append(f"- {cue['cue_id']} {window}: {cue['text']}")
     target_lines = [f"- {target['target_id']}: {target['canonical_claim']}" for target in targets]
     example_target = str(targets[0]["target_id"]) if targets else "T1"
+    example_cue_ids = [str(cue["cue_id"]) for cue in cues[:2] if str(cue.get("cue_id", "")).strip()]
+    if not example_cue_ids:
+        example_cue_ids = ["cue_id_from_list"]
+    example_cue_json = json.dumps(example_cue_ids)
     return "\n".join(
         [
             "Bind registered target claims to indexed ASR cues from one video segment.",
             "Return only JSON with exactly this shape:",
-            f'{{"{example_target}": {{"verdict": "supports|supported|contradicts|insufficient", "cue_ids": ["cue_0001"], "quote": "short exact ASR quote"}}}}',
+            f'{{"{example_target}": {{"verdict": "supports|supported|contradicts|insufficient", "cue_ids": {example_cue_json}, "quote": "short exact ASR quote"}}}}',
             "Use supports/supported only when the ASR cue directly says the target claim.",
-            "Use only cue_ids listed below; do not invent cue ids.",
+            "cue_ids must be copied exactly from the ASR cues list below; do not add prefixes or invent cue ids.",
+            *([f"Previous response used illegal cue_ids: {retry_feedback}. Use only exact ids from the list below."] if retry_feedback else []),
             f"Segment: {segment.segment_id} [{float(segment.start_sec):.3f}-{float(segment.end_sec):.3f}s]",
             "Targets:",
             *target_lines,
@@ -245,6 +236,109 @@ def _cue_window(cue: Mapping[str, object]) -> str:
     if start is None or end is None:
         return ""
     return f"[{float(start):.3f}-{float(end):.3f}s]"
+
+
+def _build_binding_rows(
+    *,
+    segment: VideoMapSegment,
+    segment_id_text: str,
+    targets: Sequence[Mapping[str, str]],
+    payload: Mapping[str, Any],
+    cues_by_id: Mapping[str, Mapping[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[str], str]:
+    evidence_bindings: list[dict[str, object]] = []
+    answer_rows: list[dict[str, object]] = []
+    limitations: list[str] = []
+    illegal_feedback: list[str] = []
+    for target in targets:
+        target_id = str(target["target_id"])
+        entry = payload.get(target_id)
+        if not isinstance(entry, Mapping):
+            limitations.append(f"missing binding for {target_id}")
+            continue
+
+        verdict = str(entry.get("verdict", "")).strip().lower()
+        if verdict not in _KNOWN_VERDICTS:
+            limitations.append(f"unknown verdict for {target_id}: {verdict or '(empty)'}")
+            continue
+
+        raw_cue_ids = _string_list(entry.get("cue_ids"))
+        cue_ids, normalized = _normalize_cue_ids(raw_cue_ids, legal_cue_ids=cues_by_id.keys())
+        if normalized:
+            limitations.append(f"normalized_cue_ids for {target_id}: {', '.join(normalized)}")
+        quote = str(entry.get("quote") or "").strip()
+        binding = {
+            "evidence_id": _evidence_id(segment_id=segment_id_text, target_id=target_id),
+            "status": "supported" if verdict in _SUPPORTED_VERDICTS else verdict,
+            "target_id": target_id,
+            "segment_id": segment_id_text,
+            "source": "indexed_transcript",
+            "cue_ids": cue_ids,
+            "snippet": quote,
+            "canonical_claim": str(target["canonical_claim"]),
+        }
+        evidence_bindings.append(binding)
+
+        if verdict not in _SUPPORTED_VERDICTS:
+            continue
+        if not cue_ids:
+            limitations.append(f"supported verdict for {target_id} has no cue_ids")
+            continue
+        illegal = [cue_id for cue_id in cue_ids if cue_id not in cues_by_id]
+        if illegal:
+            legal_preview = _cue_id_preview(cues_by_id.keys())
+            message = (
+                f"illegal cue_ids for {target_id}: {', '.join(illegal)}; "
+                f"use bare ids from {legal_preview}; do not repeat this exact call"
+            )
+            limitations.append(message)
+            illegal_feedback.append(message)
+            continue
+
+        selected_cues = [cues_by_id[cue_id] for cue_id in cue_ids]
+        answer_rows.append(
+            _answer_evidence_row(
+                segment=segment,
+                target=target,
+                cue_ids=cue_ids,
+                cues=selected_cues,
+                quote=quote,
+                evidence_binding=binding,
+            )
+        )
+    return evidence_bindings, answer_rows, limitations, "; ".join(illegal_feedback)
+
+
+def _normalize_cue_ids(raw_cue_ids: Sequence[str], *, legal_cue_ids: Sequence[str]) -> tuple[list[str], list[str]]:
+    legal = {str(cue_id): str(cue_id) for cue_id in legal_cue_ids}
+    normalized: list[str] = []
+    notes: list[str] = []
+    for raw_cue_id in raw_cue_ids:
+        cue_id = str(raw_cue_id or "").strip()
+        if not cue_id:
+            continue
+        if cue_id in legal:
+            normalized.append(legal[cue_id])
+            continue
+        candidate = _strip_cue_prefix(cue_id)
+        if candidate in legal:
+            normalized.append(legal[candidate])
+            notes.append(f"{cue_id}->{candidate}")
+            continue
+        normalized.append(cue_id)
+    return normalized, notes
+
+
+def _strip_cue_prefix(cue_id: str) -> str:
+    match = re.fullmatch(r"(?i)cue[_-]?(.+)", cue_id.strip())
+    return match.group(1).strip() if match else cue_id
+
+
+def _cue_id_preview(cue_ids: Sequence[str], *, limit: int = 8) -> str:
+    values = [str(cue_id) for cue_id in cue_ids if str(cue_id)]
+    if len(values) <= limit:
+        return "{" + ", ".join(values) + "}"
+    return "{" + ", ".join(values[:limit]) + f", ... +{len(values) - limit}" + "}"
 
 
 def _answer_evidence_row(

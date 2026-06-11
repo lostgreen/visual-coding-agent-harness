@@ -205,7 +205,9 @@ def compose_replanning_prompt_slots(
             title="Response Contract",
             body=(
                 "Return only JSON with one of these schemas:\n"
-                '{"status": "continue", "skill": string, "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
+                '{"status": "continue", "skill": string, "rationale": string, '
+                '"hypothesis": {"option": "A|B|C|D", "why": string, "missing": [string]}, '
+                '"program": [{"tool": string, "args": object, "assign": string}]}\n'
                 '{"status": "final", "skill": string, "answer": string, "citations": [observation_id], "confidence": number}'
             ),
         ),
@@ -390,7 +392,9 @@ def compose_replanning_prompt_blocks(
                 title="Response Contract",
                 body=(
                     "Return only JSON with one of these schemas:\n"
-                    '{"status": "continue", "skill": string, "rationale": string, "program": [{"tool": string, "args": object, "assign": string}]}\n'
+                    '{"status": "continue", "skill": string, "rationale": string, '
+                    '"hypothesis": {"option": "A|B|C|D", "why": string, "missing": [string]}, '
+                    '"program": [{"tool": string, "args": object, "assign": string}]}\n'
                     '{"status": "final", "skill": string, "answer": string, "citations": [observation_id], "confidence": number}'
                 ),
             ),

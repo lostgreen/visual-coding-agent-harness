@@ -257,7 +257,10 @@ class VideoNavigationTest(unittest.TestCase):
         )
 
         self.assertEqual(located["answer_evidence_rows"][0]["tool"], "ordered_transcript_sequence")
-        self.assertNotIn("supported_option", located["answer_evidence_rows"][0])
+        self.assertEqual(located["answer_evidence_rows"][0]["supported_option"], "D")
+        self.assertEqual(located["answer_evidence_rows"][0]["ordered_target_refs"], ["T1", "T2", "T3", "T4"])
+        self.assertEqual(located["answer_evidence_rows"][0]["evidence_binding"]["supported_option"], "D")
+        self.assertEqual(located["answer_evidence_rows"][0]["evidence_binding"]["ordered_target_refs"], ["T1", "T2", "T3", "T4"])
         self.assertNotIn("candidate_option_relations", located["answer_evidence_rows"][0])
         self.assertEqual(
             located["answer_evidence_rows"][0]["ordered_transcript_sequence"]["ordered_target_refs"],

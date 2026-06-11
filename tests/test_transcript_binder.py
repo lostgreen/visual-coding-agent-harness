@@ -111,6 +111,36 @@ def test_supports_explicit_goya_life_targets_and_order_relation():
     assert result.evidence_bindings[0].mention_timestamp_sec == 10.0
 
 
+def test_temporal_relation_contradiction_is_explicit():
+    binder = TranscriptEvidenceBinder()
+    humble = _target("T1", "humble background", subject="Goya")
+    upper = TargetSpec(
+        target_id="T2",
+        canonical_text="upper class",
+        aliases=("upper",),
+        subject="Goya",
+        relation="present",
+        source="unit_test",
+    )
+
+    result = binder.bind(
+        text="Goya reached the upper class after leaving his humble background.",
+        targets=[upper, humble],
+        relations=[
+            ClaimRelation(
+                relation_id="R1",
+                kind="before",
+                source_target_id="T2",
+                destination_target_id="T1",
+            )
+        ],
+        obs_id="obs_contradicted",
+        segment_id="seg_0001",
+    )
+
+    assert result.relation_bindings[0].status == "contradicted"
+
+
 def test_611_complete_asr_enumeration_creates_supported_sequence():
     targets = [
         _target("T1", "Aeneas, Anchises, and Ascanius fleeing Troy", subject=""),
