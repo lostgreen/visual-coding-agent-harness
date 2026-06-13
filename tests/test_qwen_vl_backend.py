@@ -24,6 +24,7 @@ class FakeQwen35Processor:
     def __init__(self) -> None:
         self.chat_messages = None
         self.decoded_tokens = None
+        self.processor_kwargs = None
 
     @classmethod
     def from_pretrained(cls, model_path):
@@ -38,8 +39,10 @@ class FakeQwen35Processor:
         tokenize,
         return_dict,
         return_tensors,
+        processor_kwargs=None,
     ):
         self.chat_messages = messages
+        self.processor_kwargs = processor_kwargs
         assert add_generation_prompt is True
         assert tokenize is True
         assert return_dict is True
@@ -180,5 +183,5 @@ def test_qwen35_vl_backend_disables_frame_sampling_for_preextracted_video_frames
         "type": "video",
         "video": ["/frames/frame_0001.jpg", "/frames/frame_0002.jpg"],
         "nframes": 2,
-        "do_sample_frames": False,
     }
+    assert backend.processor.processor_kwargs == {"do_sample_frames": False}

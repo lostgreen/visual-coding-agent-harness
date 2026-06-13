@@ -120,14 +120,21 @@ def _resolve_qwen35_model_class() -> Any:
     raise ImportError("Qwen3.5 text planner requires AutoModelForMultimodalLM-compatible transformers")
 
 
-def _apply_qwen35_chat_template(processor: Any, messages: list[dict[str, Any]]) -> Any:
-    return processor.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-    )
+def _apply_qwen35_chat_template(
+    processor: Any,
+    messages: list[dict[str, Any]],
+    *,
+    processor_kwargs: dict[str, Any] | None = None,
+) -> Any:
+    kwargs: dict[str, Any] = {
+        "add_generation_prompt": True,
+        "tokenize": True,
+        "return_dict": True,
+        "return_tensors": "pt",
+    }
+    if processor_kwargs:
+        kwargs["processor_kwargs"] = processor_kwargs
+    return processor.apply_chat_template(messages, **kwargs)
 
 
 def _qwen35_messages(request: BackendRequest) -> list[dict[str, Any]]:
