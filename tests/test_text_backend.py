@@ -140,6 +140,15 @@ class RepairingQwen35Processor(FakeQwen35Processor):
         return self.responses.pop(0)
 
 
+class FailingRepairQwen35Processor(RepairingQwen35Processor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.responses = [
+            "original analysis without json",
+            "repair analysis still without json",
+        ]
+
+
 class ForbiddenCausalLM:
     @classmethod
     def from_pretrained(cls, model_path, **kwargs):
@@ -302,6 +311,36 @@ def test_qwen35_text_planner_repairs_unparseable_structured_json(monkeypatch):
     assert "Draft response to repair" in repair_user_text
     assert backend.model.generate_calls[-1]["max_new_tokens"] == 512
     assert backend.model.generate_calls[-1]["max_time"] == 45.0
+
+
+def test_qwen35_text_planner_keeps_original_when_json_repair_fails(monkeypatch):
+    module = types.SimpleNamespace(
+        AutoTokenizer=FakeTokenizer,
+        AutoModelForCausalLM=ForbiddenCausalLM,
+        AutoProcessor=FailingRepairQwen35Processor,
+        AutoModelForMultimodalLM=CountingQwen35Model,
+    )
+    monkeypatch.setitem(sys.modules, "transformers", module)
+
+    from visual_coding_agent_harness.backends.qwen_text import QwenTextBackend
+
+    backend = QwenTextBackend.from_pretrained(
+        "/m2v_intern/xuboshen/models/Qwen3.5-9B",
+        device_map="cpu",
+        torch_dtype="auto",
+    )
+
+    response = backend.generate(
+        BackendRequest(
+            task="replan",
+            prompt="Return planner JSON only.",
+            max_new_tokens=4096,
+            temperature=0.0,
+        )
+    )
+
+    assert response.text == "original analysis without json"
+    assert len(backend.model.generate_calls) == 2
 
 
 def test_qwen35_structured_json_normalizer_requires_answer_shape():

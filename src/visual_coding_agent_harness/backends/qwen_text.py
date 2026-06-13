@@ -88,9 +88,11 @@ class QwenTextBackend:
         if request.task in _JSON_TEXT_TASKS:
             normalized = _normalized_structured_json_output(cleaned_text, task=request.task)
             if normalized is None:
+                original_text = cleaned_text
                 repair_text = self._repair_structured_json_output(request=request, draft=cleaned_text)
-                cleaned_text = _strip_qwen_thinking(repair_text).strip()
-                normalized = _normalized_structured_json_output(cleaned_text, task=request.task)
+                repaired_text = _strip_qwen_thinking(repair_text).strip()
+                normalized = _normalized_structured_json_output(repaired_text, task=request.task)
+                cleaned_text = repaired_text if normalized is not None else original_text
             if normalized is not None:
                 cleaned_text = normalized
         return BackendResponse(
