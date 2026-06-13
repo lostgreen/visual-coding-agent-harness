@@ -912,6 +912,77 @@ class EvalRunnerTest(unittest.TestCase):
         vl_load.assert_called_once_with("/models/vl")
         text_load.assert_called_once_with("/models/text")
 
+    def test_planner_api_cli_flags_build_agent_config(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--model-path",
+                "/models/vl",
+                "--planner-model-path",
+                "/models/local-fallback",
+                "--planner-api-base",
+                "http://planner-host:8000/v1",
+                "--planner-api-model",
+                "Qwen3.5-9B",
+                "--planner-api-key",
+                "EMPTY",
+                "--planner-api-timeout",
+                "75",
+                "--planner-thinking-token-budget",
+                "512",
+                "--planner-enable-thinking",
+            ]
+        )
+
+        config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.planner_api_base, "http://planner-host:8000/v1")
+        self.assertEqual(config.planner_api_model, "Qwen3.5-9B")
+        self.assertEqual(config.planner_api_key, "EMPTY")
+        self.assertEqual(config.planner_api_timeout, 75.0)
+        self.assertEqual(config.planner_thinking_token_budget, 512)
+        self.assertTrue(config.planner_enable_thinking)
+
+    def test_build_backend_uses_openai_chat_text_backend_for_planner_api(self):
+        from runs import eval_runner
+
+        config = eval_runner.EvalConfig(
+            run_root=Path("/tmp/run"),
+            workspace_root=Path("/tmp/run/workspaces"),
+            model_path="/models/vl",
+            planner_model_path="/models/local-should-not-load",
+            planner_api_base="http://planner-host:8000/v1",
+            planner_api_model="Qwen3.5-9B",
+            planner_api_key="EMPTY",
+            planner_api_timeout=90.0,
+            planner_thinking_token_budget=512,
+            planner_enable_thinking=True,
+            data_root=Path("/dataset"),
+            parquet_path=Path("/dataset/test.parquet"),
+            video_dir=Path("/dataset/video"),
+            subtitle_dir=Path("/dataset/subtitle"),
+            cases=("605-1",),
+            strategies=("agent_v2",),
+        )
+
+        with patch("visual_coding_agent_harness.backends.qwen_vl.QwenVLBackend.from_pretrained", return_value="vl") as vl_load:
+            with patch(
+                "visual_coding_agent_harness.backends.qwen_text.QwenTextBackend.from_pretrained",
+                side_effect=AssertionError("local planner should not load"),
+            ):
+                backend = eval_runner.build_backend(config)
+
+        self.assertEqual(backend.vl_backend, "vl")
+        self.assertEqual(backend.text_backend.api_base, "http://planner-host:8000/v1")
+        self.assertEqual(backend.text_backend.model, "Qwen3.5-9B")
+        self.assertEqual(backend.text_backend.api_key, "EMPTY")
+        self.assertEqual(backend.text_backend.timeout, 90.0)
+        self.assertEqual(backend.text_backend.thinking_token_budget, 512)
+        self.assertTrue(backend.text_backend.enable_thinking)
+        vl_load.assert_called_once_with("/models/vl")
+
     def test_ablation_cli_flags_serialized_to_config(self):
         from runs import eval_runner
 

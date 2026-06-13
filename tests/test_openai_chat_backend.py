@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import io
+import json
+import urllib.error
+
+import pytest
+
+from visual_coding_agent_harness.backends.base import BackendRequest
+
+
+class FakeHTTPResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def test_openai_chat_backend_sends_thinking_budget_and_returns_structured_json(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeHTTPResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "reasoning_content": "private chain of thought",
+                            "content": (
+                                "The user wants a planner step.\n"
+                                '{"status":"continue","program":[],"rationale":"budgeted"}'
+                            ),
+                        }
+                    }
+                ],
+                "usage": {"completion_tokens": 19},
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(
+        api_base="http://planner-host:8000/v1",
+        model="Qwen3.5-9B",
+        api_key="EMPTY",
+        timeout=12.5,
+        thinking_token_budget=512,
+        enable_thinking=True,
+    )
+
+    response = backend.generate(
+        BackendRequest(
+            task="replan",
+            prompt="Return planner JSON only.",
+            max_new_tokens=4096,
+            temperature=0.0,
+        )
+    )
+
+    assert captured["url"] == "http://planner-host:8000/v1/chat/completions"
+    assert captured["timeout"] == 12.5
+    assert captured["headers"]["Authorization"] == "Bearer EMPTY"
+    body = captured["body"]
+    assert body["model"] == "Qwen3.5-9B"
+    assert body["max_tokens"] == 4096
+    assert body["temperature"] == 0.0
+    assert body["thinking_token_budget"] == 512
+    assert body["chat_template_kwargs"] == {"enable_thinking": True}
+    assert body["messages"][0]["role"] == "system"
+    assert "Do not explain your reasoning" in body["messages"][0]["content"]
+    assert "Return only one parseable JSON object" in body["messages"][1]["content"]
+    assert response.text == '{"status":"continue","program":[],"rationale":"budgeted"}'
+    assert response.raw["backend"] == "openai_chat"
+    assert response.raw["task"] == "replan"
+    assert response.raw["model"] == "Qwen3.5-9B"
+    assert response.raw["api_base"] == "http://planner-host:8000/v1"
+    assert response.raw["reasoning_content_present"] is True
+
+
+def test_openai_chat_backend_supports_request_metadata_override(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeHTTPResponse({"choices": [{"message": {"content": '{"answer":"A"}'}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(
+        api_base="http://planner-host:8000",
+        model="Qwen3.5-9B",
+        thinking_token_budget=1024,
+        enable_thinking=True,
+    )
+
+    backend.generate(
+        BackendRequest(
+            task="answer_from_evidence",
+            prompt="Answer.",
+            metadata={
+                "thinking_token_budget": 128,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "extra_body": {"top_k": 20},
+            },
+        )
+    )
+
+    assert captured["body"]["thinking_token_budget"] == 128
+    assert captured["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert captured["body"]["top_k"] == 20
+
+
+def test_openai_chat_backend_rejects_media_requests(monkeypatch):
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(api_base="http://planner-host:8000/v1", model="Qwen3.5-9B")
+
+    with pytest.raises(ValueError, match="text-only"):
+        backend.generate(BackendRequest(task="caption_segment", prompt="Describe.", media_path="/tmp/video.mp4"))
+
+    with pytest.raises(ValueError, match="text-only"):
+        backend.generate(BackendRequest(task="caption_frames", prompt="Describe.", frames=["frame-1.png"]))
+
+
+def test_openai_chat_backend_reports_http_error(monkeypatch):
+    def fake_urlopen(request, timeout):
+        del request, timeout
+        raise urllib.error.HTTPError(
+            "http://planner-host:8000/v1/chat/completions",
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"bad thinking budget"}}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(api_base="http://planner-host:8000/v1", model="Qwen3.5-9B")
+
+    with pytest.raises(RuntimeError, match="bad thinking budget"):
+        backend.generate(BackendRequest(task="replan", prompt="Return JSON."))

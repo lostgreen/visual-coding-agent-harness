@@ -61,6 +61,12 @@ class EvalConfig:
     cases: Sequence[str]
     strategies: Sequence[str]
     planner_model_path: str = PLANNER_MODEL_PATH
+    planner_api_base: str = ""
+    planner_api_model: str = ""
+    planner_api_key: str = "EMPTY"
+    planner_api_timeout: float = 180.0
+    planner_thinking_token_budget: int | None = None
+    planner_enable_thinking: bool | None = None
     window_sec: float = WINDOW_SEC
     scene_index_mode: str = "dual-source"
     scene_index_cache_dir: Path = DEFAULT_SCENE_INDEX_CACHE_DIR
@@ -395,6 +401,12 @@ def run_eval_cases(
         "budget": asdict(config.budget),
         "model_path": config.model_path,
         "planner_model_path": config.planner_model_path,
+        "planner_api_base": config.planner_api_base,
+        "planner_api_model": config.planner_api_model,
+        "planner_api_key_set": bool(config.planner_api_key),
+        "planner_api_timeout": config.planner_api_timeout,
+        "planner_thinking_token_budget": config.planner_thinking_token_budget,
+        "planner_enable_thinking": config.planner_enable_thinking,
         "data_root": str(config.data_root),
         "parquet_path": str(config.parquet_path),
         "video_dir": str(config.video_dir),
@@ -1239,6 +1251,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-root", type=Path, default=None)
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--planner-model-path", default=None)
+    parser.add_argument("--planner-api-base", default=None)
+    parser.add_argument("--planner-api-model", default=None)
+    parser.add_argument("--planner-api-key", default=None)
+    parser.add_argument("--planner-api-timeout", type=float, default=None)
+    parser.add_argument("--planner-thinking-token-budget", type=int, default=None)
+    parser.add_argument("--planner-enable-thinking", dest="planner_enable_thinking", action="store_true", default=None)
+    parser.add_argument("--planner-disable-thinking", dest="planner_enable_thinking", action="store_false")
     parser.add_argument("--data-root", type=Path, default=None)
     parser.add_argument("--parquet-path", type=Path, default=None)
     parser.add_argument("--video-dir", type=Path, default=None)
@@ -1419,11 +1438,45 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
     )
     if scene_index_cache_enabled is None:
         scene_index_cache_enabled = not _as_bool(_arg_or_config(args, config_data, "no_scene_index_cache", default=False))
+    planner_thinking_budget = _arg_or_config(
+        args,
+        config_data,
+        "planner_thinking_token_budget",
+        "planner.thinking_token_budget",
+        "planner_api.thinking_token_budget",
+        default=None,
+    )
+    planner_enable_thinking = _arg_or_config(
+        args,
+        config_data,
+        "planner_enable_thinking",
+        "planner.enable_thinking",
+        "planner_api.enable_thinking",
+        default=None,
+    )
     return EvalConfig(
         run_root=run_root,
         workspace_root=workspace_root,
         model_path=str(_arg_or_config(args, config_data, "model_path", default=MODEL_PATH)),
         planner_model_path=str(_arg_or_config(args, config_data, "planner_model_path", default=PLANNER_MODEL_PATH)),
+        planner_api_base=str(
+            _arg_or_config(args, config_data, "planner_api_base", "planner.api_base", "planner_api.base", default="")
+        ),
+        planner_api_model=str(
+            _arg_or_config(args, config_data, "planner_api_model", "planner.api_model", "planner_api.model", default="")
+        ),
+        planner_api_key=str(
+            _arg_or_config(args, config_data, "planner_api_key", "planner.api_key", "planner_api.api_key", default="EMPTY")
+        ),
+        planner_api_timeout=float(
+            _arg_or_config(args, config_data, "planner_api_timeout", "planner.api_timeout", "planner_api.timeout", default=180.0)
+        ),
+        planner_thinking_token_budget=(
+            int(planner_thinking_budget) if planner_thinking_budget is not None else None
+        ),
+        planner_enable_thinking=(
+            _as_bool(planner_enable_thinking) if planner_enable_thinking is not None else None
+        ),
         data_root=_as_path(_arg_or_config(args, config_data, "data_root", default=DATA_ROOT)),
         parquet_path=_as_path(_arg_or_config(args, config_data, "parquet_path", default=DEFAULT_PARQUET_PATH)),
         video_dir=_as_path(_arg_or_config(args, config_data, "video_dir", default=DEFAULT_VIDEO_DIR)),
@@ -1456,6 +1509,19 @@ def build_backend(config: EvalConfig) -> Any:
     from visual_coding_agent_harness.backends.qwen_vl import QwenVLBackend
 
     vl_backend = QwenVLBackend.from_pretrained(config.model_path)
+    if config.planner_api_base:
+        from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+        from visual_coding_agent_harness.backends.routed import RoutedBackend
+
+        text_backend = OpenAIChatTextBackend(
+            api_base=config.planner_api_base,
+            model=config.planner_api_model or config.planner_model_path or config.model_path,
+            api_key=config.planner_api_key,
+            timeout=config.planner_api_timeout,
+            thinking_token_budget=config.planner_thinking_token_budget,
+            enable_thinking=config.planner_enable_thinking,
+        )
+        return RoutedBackend(text_backend=text_backend, vl_backend=vl_backend)
     if not config.planner_model_path:
         return vl_backend
 
