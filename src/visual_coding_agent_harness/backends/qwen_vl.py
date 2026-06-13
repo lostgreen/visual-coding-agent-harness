@@ -33,7 +33,7 @@ class QwenVLBackend:
         import torch
         from transformers import AutoProcessor
 
-        model_class = _resolve_qwen_model_class()
+        model_class = _resolve_qwen_model_class(model_path)
         dtype = _resolve_dtype(torch_dtype=torch_dtype, torch_module=torch)
         kwargs: dict[str, Any] = {"device_map": device_map}
         if dtype is not None:
@@ -122,15 +122,16 @@ class QwenVLBackend:
         )
 
 
-def _resolve_qwen_model_class() -> Any:
+def _resolve_qwen_model_class(model_path: str | None = None) -> Any:
     import transformers
 
-    for name in [
-        "Qwen3VLForConditionalGeneration",
-        "AutoModelForMultimodalLM",
-        "AutoModelForImageTextToText",
-        "Qwen2_5_VLForConditionalGeneration",
-    ]:
+    names = (
+        ["AutoModelForMultimodalLM", "AutoModelForImageTextToText"]
+        if model_path is not None and _is_qwen35_model_path(model_path)
+        else ["Qwen3VLForConditionalGeneration", "AutoModelForMultimodalLM", "AutoModelForImageTextToText"]
+    )
+    names.append("Qwen2_5_VLForConditionalGeneration")
+    for name in names:
         model_class = getattr(transformers, name, None)
         if model_class is not None:
             return model_class

@@ -69,6 +69,12 @@ class FakeQwen35Model:
         return [[1, 2, 3, 4, 5]]
 
 
+class ForbiddenQwen3VLModel:
+    @classmethod
+    def from_pretrained(cls, model_path, **kwargs):
+        raise AssertionError("Qwen3.5 must load through AutoModelForMultimodalLM, not Qwen3VLForConditionalGeneration")
+
+
 def test_qwen_vl_backend_serializes_frame_requests_as_video_frame_list() -> None:
     content = _message_content(
         BackendRequest(
@@ -105,6 +111,7 @@ def test_qwen35_vl_backend_uses_official_multimodal_chat_template(monkeypatch) -
     module = types.SimpleNamespace(
         AutoProcessor=FakeQwen35Processor,
         AutoModelForMultimodalLM=FakeQwen35Model,
+        Qwen3VLForConditionalGeneration=ForbiddenQwen3VLModel,
     )
     monkeypatch.setitem(sys.modules, "transformers", module)
     monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(bfloat16=object(), float16=object(), float32=object()))
