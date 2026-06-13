@@ -84,11 +84,14 @@ class QwenTextBackend:
         messages = _qwen35_messages(request)
         inputs = _apply_qwen35_chat_template(self.processor, messages)
         inputs = _move_inputs_to_model(inputs, self.model)
+        max_new_tokens, max_time = _qwen35_structured_generation_budget(request)
         generation_kwargs = {
             **inputs,
-            "max_new_tokens": request.max_new_tokens,
+            "max_new_tokens": max_new_tokens,
             "do_sample": request.temperature > 0,
         }
+        if max_time is not None:
+            generation_kwargs["max_time"] = max_time
         if request.temperature > 0:
             generation_kwargs["temperature"] = request.temperature
         generated_ids = self.model.generate(**generation_kwargs)
@@ -172,6 +175,19 @@ _JSON_TEXT_TASKS = {
     "verify_from_evidence",
     "asr_claim_binding",
 }
+
+_QWEN35_JSON_MAX_NEW_TOKENS = 768
+_QWEN35_JSON_MAX_TIME_SECONDS = 90.0
+
+
+def _qwen35_structured_generation_budget(request: BackendRequest) -> tuple[int, float | None]:
+    if request.task not in _JSON_TEXT_TASKS:
+        return request.max_new_tokens, None
+    max_new_tokens = min(request.max_new_tokens, _QWEN35_JSON_MAX_NEW_TOKENS)
+    max_time = request.metadata.get("max_time")
+    if max_time is None:
+        max_time = _QWEN35_JSON_MAX_TIME_SECONDS
+    return max_new_tokens, float(max_time)
 
 
 def _strip_qwen_thinking(text: str) -> str:

@@ -215,3 +215,26 @@ def test_qwen35_text_planner_uses_multimodal_processor_and_disables_thinking(fak
     assert "temperature" not in backend.model.generate_kwargs
     assert response.text == '{"status":"final","answer":"A"}'
     assert response.raw == {"backend": "qwen_text", "task": "replan", "model_family": "qwen3.5"}
+
+
+def test_qwen35_text_planner_caps_structured_json_generation_budget(fake_qwen35_transformers):
+    from visual_coding_agent_harness.backends.qwen_text import QwenTextBackend
+
+    backend = QwenTextBackend.from_pretrained(
+        "/m2v_intern/xuboshen/models/Qwen3.5-9B",
+        device_map="cpu",
+        torch_dtype="auto",
+    )
+
+    backend.generate(
+        BackendRequest(
+            task="ground_question",
+            prompt="Return a grounding plan JSON only.",
+            max_new_tokens=4096,
+            temperature=0.0,
+        )
+    )
+
+    assert backend.model.generate_kwargs["max_new_tokens"] == 768
+    assert backend.model.generate_kwargs["max_time"] == 90.0
+    assert backend.model.generate_kwargs["do_sample"] is False
