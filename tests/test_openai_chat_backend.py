@@ -158,3 +158,43 @@ def test_openai_chat_backend_reports_http_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="bad thinking budget"):
         backend.generate(BackendRequest(task="replan", prompt="Return JSON."))
+
+
+def test_openai_chat_backend_falls_back_when_vllm_rejects_thinking_budget(monkeypatch):
+    bodies = []
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        body = json.loads(request.data.decode("utf-8"))
+        bodies.append(body)
+        if len(bodies) == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                400,
+                "Bad Request",
+                hdrs=None,
+                fp=io.BytesIO(b'{"error":{"message":"Extra inputs are not permitted: thinking_token_budget"}}'),
+            )
+        return FakeHTTPResponse(
+            {"choices": [{"message": {"content": '{"status":"continue","program":[]}'}}]}
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(
+        api_base="http://planner-host:8000/v1",
+        model="Qwen3.5-9B",
+        thinking_token_budget=512,
+        enable_thinking=True,
+    )
+
+    response = backend.generate(BackendRequest(task="replan", prompt="Return JSON."))
+
+    assert bodies[0]["thinking_token_budget"] == 512
+    assert bodies[0]["chat_template_kwargs"] == {"enable_thinking": True}
+    assert "thinking_token_budget" not in bodies[1]
+    assert bodies[1]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert response.text == '{"status":"continue","program":[]}'
+    assert response.raw["thinking_budget_fallback"] is True

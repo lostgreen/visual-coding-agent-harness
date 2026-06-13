@@ -28,7 +28,14 @@ class OpenAIChatTextBackend:
         if request.media_path or request.frames:
             raise ValueError("OpenAIChatTextBackend is text-only and cannot handle media requests")
         body = self._request_body(request)
-        payload = self._post_json(body)
+        thinking_budget_fallback = False
+        try:
+            payload = self._post_json(body)
+        except RuntimeError as exc:
+            if not _should_retry_without_thinking_budget(body, exc):
+                raise
+            thinking_budget_fallback = True
+            payload = self._post_json(_disable_thinking_budget_body(body))
         text, raw_flags = _extract_message_text(payload)
         cleaned_text = _strip_qwen_thinking(text).strip()
         if request.task in _JSON_TEXT_TASKS:
@@ -42,6 +49,7 @@ class OpenAIChatTextBackend:
                 "task": request.task,
                 "model": self.model,
                 "api_base": _normalized_api_base(self.api_base),
+                "thinking_budget_fallback": thinking_budget_fallback,
                 **raw_flags,
             },
         )
@@ -191,3 +199,32 @@ def _format_http_error(exc: urllib.error.HTTPError) -> str:
     if not detail:
         detail = str(exc.reason)
     return f"OpenAI-compatible planner request failed with HTTP {exc.code}: {detail}"
+
+
+def _should_retry_without_thinking_budget(body: Mapping[str, Any], exc: RuntimeError) -> bool:
+    if "thinking_token_budget" not in body:
+        return False
+    message = str(exc).lower()
+    if "thinking_token_budget" not in message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "extra",
+            "not permitted",
+            "unknown",
+            "unrecognized",
+            "unexpected",
+            "unsupported",
+            "invalid",
+        )
+    )
+
+
+def _disable_thinking_budget_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    retry_body = dict(body)
+    retry_body.pop("thinking_token_budget", None)
+    chat_template_kwargs = dict(retry_body.get("chat_template_kwargs") or {})
+    chat_template_kwargs["enable_thinking"] = False
+    retry_body["chat_template_kwargs"] = chat_template_kwargs
+    return retry_body
