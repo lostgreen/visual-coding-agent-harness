@@ -101,7 +101,11 @@ class FakeQwen35Processor:
         self.decoded_tokens = list(token_ids)
         assert skip_special_tokens is True
         assert clean_up_tokenization_spaces is False
-        return "  <think>private planner scratchpad</think>\n\n{\"status\":\"final\",\"answer\":\"A\"}  "
+        return (
+            "  Thinking Process:\n"
+            "1. Analyze the planner request.\n\n"
+            "{\"status\":\"final\",\"answer\":\"A\"}  "
+        )
 
 
 class FakeQwen35Model(FakeModel):

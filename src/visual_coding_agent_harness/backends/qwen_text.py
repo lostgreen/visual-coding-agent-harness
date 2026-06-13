@@ -138,7 +138,17 @@ def _apply_qwen35_chat_template(processor: Any, messages: list[dict[str, Any]]) 
 
 
 def _strip_qwen_thinking(text: str) -> str:
-    return re.sub(r"^\s*<think>.*?</think>\s*", "", str(text), flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"^\s*<think>.*?</think>\s*", "", str(text), flags=re.DOTALL | re.IGNORECASE)
+    if re.match(r"^\s*thinking process\s*:", cleaned, flags=re.IGNORECASE):
+        json_start = _first_json_start(cleaned)
+        if json_start is not None:
+            return cleaned[json_start:]
+    return cleaned
+
+
+def _first_json_start(text: str) -> int | None:
+    candidates = [idx for idx in (text.find("{"), text.find("[")) if idx >= 0]
+    return min(candidates) if candidates else None
 
 
 def _resolve_dtype(torch_dtype: str) -> Any:
