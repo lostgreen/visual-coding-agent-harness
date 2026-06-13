@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 from typing import Any, Optional
 
@@ -82,6 +83,22 @@ class QwenTextBackend:
 
     def _generate_with_processor(self, request: BackendRequest) -> BackendResponse:
         messages = _qwen35_messages(request)
+        output_text = self._generate_with_processor_messages(messages, request)
+        cleaned_text = _strip_qwen_thinking(output_text).strip()
+        if request.task in _JSON_TEXT_TASKS:
+            normalized = _normalized_structured_json_output(cleaned_text, task=request.task)
+            if normalized is None:
+                repair_text = self._repair_structured_json_output(request=request, draft=cleaned_text)
+                cleaned_text = _strip_qwen_thinking(repair_text).strip()
+                normalized = _normalized_structured_json_output(cleaned_text, task=request.task)
+            if normalized is not None:
+                cleaned_text = normalized
+        return BackendResponse(
+            text=cleaned_text,
+            raw={"backend": "qwen_text", "task": request.task, "model_family": self.model_family},
+        )
+
+    def _generate_with_processor_messages(self, messages: list[dict[str, Any]], request: BackendRequest) -> str:
         inputs = _apply_qwen35_chat_template(self.processor, messages)
         inputs = _move_inputs_to_model(inputs, self.model)
         max_new_tokens, max_time = _qwen35_structured_generation_budget(request)
@@ -102,9 +119,19 @@ class QwenTextBackend:
             skip_special_tokens=True,
             clean_up_tokenization_spaces=False,
         )
-        return BackendResponse(
-            text=_strip_qwen_thinking(output_text).strip(),
-            raw={"backend": "qwen_text", "task": request.task, "model_family": self.model_family},
+        return str(output_text)
+
+    def _repair_structured_json_output(self, *, request: BackendRequest, draft: str) -> str:
+        repair_request = BackendRequest(
+            task=request.task,
+            prompt=request.prompt,
+            max_new_tokens=min(512, max(128, request.max_new_tokens)),
+            temperature=0.0,
+            metadata={**dict(request.metadata), "max_time": 45.0},
+        )
+        return self._generate_with_processor_messages(
+            _qwen35_json_repair_messages(request=request, draft=draft),
+            repair_request,
         )
 
 
@@ -176,7 +203,7 @@ _JSON_TEXT_TASKS = {
     "asr_claim_binding",
 }
 
-_QWEN35_JSON_MAX_NEW_TOKENS = 768
+_QWEN35_JSON_MAX_NEW_TOKENS = 1024
 _QWEN35_JSON_MAX_TIME_SECONDS = 90.0
 
 
@@ -188,6 +215,97 @@ def _qwen35_structured_generation_budget(request: BackendRequest) -> tuple[int, 
     if max_time is None:
         max_time = _QWEN35_JSON_MAX_TIME_SECONDS
     return max_new_tokens, float(max_time)
+
+
+def _qwen35_json_repair_messages(*, request: BackendRequest, draft: str) -> list[dict[str, Any]]:
+    task_hint = _json_task_shape_hint(request.task)
+    original_prompt = _compact_for_repair(request.prompt, limit=4000)
+    draft_excerpt = _compact_for_repair(draft, limit=4000)
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "You repair structured agent outputs. Return exactly one complete, parseable JSON object. "
+                        "No prose, no markdown, no analysis, no code fences."
+                    ),
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Task name: {request.task}\n"
+                        f"{task_hint}\n\n"
+                        "Original instruction:\n"
+                        f"{original_prompt}\n\n"
+                        "Draft response to repair:\n"
+                        f"{draft_excerpt}\n\n"
+                        "Return only the repaired JSON object now."
+                    ),
+                }
+            ],
+        },
+    ]
+
+
+def _json_task_shape_hint(task: str) -> str:
+    if task == "replan":
+        return (
+            'For replan, use either {"status":"continue","program":[],"rationale":"..."} '
+            'or {"status":"final","answer":"A","citations":[],"confidence":0.0}.'
+        )
+    return "Preserve the JSON schema requested by the original instruction."
+
+
+def _compact_for_repair(text: str, *, limit: int) -> str:
+    compact = str(text or "").strip()
+    if len(compact) <= limit:
+        return compact
+    half = max(1, limit // 2)
+    return f"{compact[:half]}\n...[truncated]...\n{compact[-half:]}"
+
+
+def _normalized_structured_json_output(text: str, *, task: str) -> str | None:
+    candidates: list[tuple[int, str]] = []
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", str(text or "")):
+        start = match.start()
+        try:
+            payload, end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        score = _structured_json_score(payload, task=task)
+        if score <= 0:
+            continue
+        candidates.append((score, json.dumps(payload, ensure_ascii=False, separators=(",", ":"))))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _structured_json_score(payload: dict[str, Any], *, task: str) -> int:
+    if task == "replan":
+        if payload.get("status") in {"continue", "final"}:
+            return 100
+        if "program" in payload or "answer" in payload:
+            return 60
+        return 0
+    if task == "ground_question":
+        score = 0
+        for key in ("route", "recommended_skill", "subjects", "targets", "relations"):
+            if key in payload:
+                score += 20
+        return score
+    return 50
 
 
 def _strip_qwen_thinking(text: str) -> str:

@@ -110,6 +110,36 @@ class FakeQwen35Model(FakeModel):
     loaded_kwargs = None
 
 
+class CountingQwen35Model(FakeQwen35Model):
+    def __init__(self) -> None:
+        self.generate_calls = []
+
+    def generate(self, **kwargs):
+        self.generate_calls.append(kwargs)
+        self.generate_kwargs = kwargs
+        return [[10, 11, 12, 20, 21]]
+
+
+class RepairingQwen35Processor(FakeQwen35Processor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages_by_call = []
+        self.responses = [
+            'analysis first {"status":"continue","program":[{"tool":"vision_read","args":{"segment_id":"seg_0001"}}',
+            '{"status":"continue","program":[],"rationale":"repair"}',
+        ]
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.messages_by_call.append(messages)
+        return super().apply_chat_template(messages, **kwargs)
+
+    def decode(self, token_ids, *, skip_special_tokens, clean_up_tokenization_spaces):
+        self.decoded_tokens = list(token_ids)
+        assert skip_special_tokens is True
+        assert clean_up_tokenization_spaces is False
+        return self.responses.pop(0)
+
+
 class ForbiddenCausalLM:
     @classmethod
     def from_pretrained(cls, model_path, **kwargs):
@@ -228,13 +258,47 @@ def test_qwen35_text_planner_caps_structured_json_generation_budget(fake_qwen35_
 
     backend.generate(
         BackendRequest(
-            task="ground_question",
-            prompt="Return a grounding plan JSON only.",
+            task="replan",
+            prompt="Return planner JSON only.",
             max_new_tokens=4096,
             temperature=0.0,
         )
     )
 
-    assert backend.model.generate_kwargs["max_new_tokens"] == 768
+    assert backend.model.generate_kwargs["max_new_tokens"] == 1024
     assert backend.model.generate_kwargs["max_time"] == 90.0
     assert backend.model.generate_kwargs["do_sample"] is False
+
+
+def test_qwen35_text_planner_repairs_unparseable_structured_json(monkeypatch):
+    module = types.SimpleNamespace(
+        AutoTokenizer=FakeTokenizer,
+        AutoModelForCausalLM=ForbiddenCausalLM,
+        AutoProcessor=RepairingQwen35Processor,
+        AutoModelForMultimodalLM=CountingQwen35Model,
+    )
+    monkeypatch.setitem(sys.modules, "transformers", module)
+
+    from visual_coding_agent_harness.backends.qwen_text import QwenTextBackend
+
+    backend = QwenTextBackend.from_pretrained(
+        "/m2v_intern/xuboshen/models/Qwen3.5-9B",
+        device_map="cpu",
+        torch_dtype="auto",
+    )
+
+    response = backend.generate(
+        BackendRequest(
+            task="replan",
+            prompt="Return planner JSON only.",
+            max_new_tokens=4096,
+            temperature=0.0,
+        )
+    )
+
+    assert response.text == '{"status":"continue","program":[],"rationale":"repair"}'
+    assert len(backend.model.generate_calls) == 2
+    repair_user_text = backend.processor.messages_by_call[-1][1]["content"][0]["text"]
+    assert "Draft response to repair" in repair_user_text
+    assert backend.model.generate_calls[-1]["max_new_tokens"] == 512
+    assert backend.model.generate_calls[-1]["max_time"] == 45.0
