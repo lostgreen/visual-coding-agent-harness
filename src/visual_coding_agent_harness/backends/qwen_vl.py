@@ -96,7 +96,7 @@ class QwenVLBackend:
     def _generate_qwen35(self, *, messages: list[Mapping[str, Any]], request: BackendRequest) -> BackendResponse:
         from .qwen_text import _apply_qwen35_chat_template, _strip_qwen_thinking
 
-        inputs = _apply_qwen35_chat_template(self.processor, list(messages))
+        inputs = _apply_qwen35_chat_template(self.processor, _qwen35_messages(messages))
         inputs = _move_inputs_to_model(inputs, self.model)
         generation_kwargs = {
             **inputs,
@@ -120,6 +120,19 @@ class QwenVLBackend:
             text=_strip_qwen_thinking(output_text).strip(),
             raw={"model": self.model.__class__.__name__, "task": request.task, "model_family": self.model_family},
         )
+
+
+def _qwen35_messages(messages: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        content = []
+        for item in message.get("content", []):
+            item_copy = dict(item)
+            if item_copy.get("type") == "video" and isinstance(item_copy.get("video"), list):
+                item_copy.setdefault("do_sample_frames", False)
+            content.append(item_copy)
+        normalized.append({"role": message.get("role", "user"), "content": content})
+    return normalized
 
 
 def _resolve_qwen_model_class(model_path: str | None = None) -> Any:

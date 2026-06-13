@@ -151,3 +151,34 @@ def test_qwen35_vl_backend_uses_official_multimodal_chat_template(monkeypatch) -
     assert backend.model.generate_kwargs["do_sample"] is False
     assert response.text == "visible evidence"
     assert response.raw == {"model": "FakeQwen35Model", "task": "vision_read", "model_family": "qwen3.5"}
+
+
+def test_qwen35_vl_backend_disables_frame_sampling_for_preextracted_video_frames(monkeypatch) -> None:
+    module = types.SimpleNamespace(
+        AutoProcessor=FakeQwen35Processor,
+        AutoModelForMultimodalLM=FakeQwen35Model,
+        Qwen3VLForConditionalGeneration=ForbiddenQwen3VLModel,
+    )
+    monkeypatch.setitem(sys.modules, "transformers", module)
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(bfloat16=object(), float16=object(), float32=object()))
+
+    from visual_coding_agent_harness.backends.qwen_vl import QwenVLBackend
+
+    backend = QwenVLBackend.from_pretrained("/m2v_intern/xuboshen/models/Qwen3.5-9B")
+    backend.generate(
+        BackendRequest(
+            task="vision_read",
+            prompt="Describe visible evidence.",
+            media_type="video",
+            frames=("/frames/frame_0001.jpg", "/frames/frame_0002.jpg"),
+            metadata={"nframes": 2},
+        )
+    )
+
+    video_item = backend.processor.chat_messages[0]["content"][0]
+    assert video_item == {
+        "type": "video",
+        "video": ["/frames/frame_0001.jpg", "/frames/frame_0002.jpg"],
+        "nframes": 2,
+        "do_sample_frames": False,
+    }
