@@ -71,7 +71,6 @@ class FakeQwen35Processor:
 
     def __init__(self) -> None:
         self.chat_messages = None
-        self.chat_template_kwargs = None
         self.decoded_tokens = None
 
     @classmethod
@@ -87,10 +86,8 @@ class FakeQwen35Processor:
         tokenize,
         return_dict,
         return_tensors,
-        chat_template_kwargs=None,
     ):
         self.chat_messages = messages
-        self.chat_template_kwargs = chat_template_kwargs
         assert add_generation_prompt is True
         assert tokenize is True
         assert return_dict is True
@@ -212,7 +209,6 @@ def test_qwen35_text_planner_uses_multimodal_processor_and_disables_thinking(fak
     user_text = backend.processor.chat_messages[1]["content"][0]["text"]
     assert user_text.startswith("Return planner JSON only.")
     assert "Return only one parseable JSON object" in user_text
-    assert backend.processor.chat_template_kwargs == {"enable_thinking": False}
     assert backend.processor.decoded_tokens == [20, 21]
     assert backend.model.generate_kwargs["max_new_tokens"] == 17
     assert backend.model.generate_kwargs["do_sample"] is False

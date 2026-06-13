@@ -23,7 +23,6 @@ class FakeQwen35Processor:
 
     def __init__(self) -> None:
         self.chat_messages = None
-        self.chat_template_kwargs = None
         self.decoded_tokens = None
 
     @classmethod
@@ -39,10 +38,8 @@ class FakeQwen35Processor:
         tokenize,
         return_dict,
         return_tensors,
-        chat_template_kwargs=None,
     ):
         self.chat_messages = messages
-        self.chat_template_kwargs = chat_template_kwargs
         assert add_generation_prompt is True
         assert tokenize is True
         assert return_dict is True
@@ -142,7 +139,6 @@ def test_qwen35_vl_backend_uses_official_multimodal_chat_template(monkeypatch) -
             ],
         }
     ]
-    assert backend.processor.chat_template_kwargs == {"enable_thinking": False}
     assert backend.processor.decoded_tokens == [4, 5]
     assert backend.model.generate_kwargs["max_new_tokens"] == 12
     assert backend.model.generate_kwargs["do_sample"] is False

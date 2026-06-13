@@ -121,20 +121,13 @@ def _resolve_qwen35_model_class() -> Any:
 
 
 def _apply_qwen35_chat_template(processor: Any, messages: list[dict[str, Any]]) -> Any:
-    kwargs = {
-        "add_generation_prompt": True,
-        "tokenize": True,
-        "return_dict": True,
-        "return_tensors": "pt",
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
-    try:
-        return processor.apply_chat_template(messages, **kwargs)
-    except TypeError as exc:
-        if "chat_template_kwargs" not in str(exc):
-            raise
-        kwargs.pop("chat_template_kwargs")
-        return processor.apply_chat_template(messages, **kwargs)
+    return processor.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+    )
 
 
 def _qwen35_messages(request: BackendRequest) -> list[dict[str, Any]]:
