@@ -206,9 +206,12 @@ def test_qwen35_text_planner_uses_multimodal_processor_and_disables_thinking(fak
     assert FakeQwen35Processor.loaded_path == "/m2v_intern/xuboshen/models/Qwen3.5-9B"
     assert FakeQwen35Model.loaded_path == "/m2v_intern/xuboshen/models/Qwen3.5-9B"
     assert FakeQwen35Model.loaded_kwargs == {"device_map": "cpu"}
-    assert backend.processor.chat_messages == [
-        {"role": "user", "content": [{"type": "text", "text": "Return planner JSON only."}]}
-    ]
+    assert backend.processor.chat_messages[0]["role"] == "system"
+    assert "Do not explain your reasoning" in backend.processor.chat_messages[0]["content"][0]["text"]
+    assert backend.processor.chat_messages[1]["role"] == "user"
+    user_text = backend.processor.chat_messages[1]["content"][0]["text"]
+    assert user_text.startswith("Return planner JSON only.")
+    assert "Return only one parseable JSON object" in user_text
     assert backend.processor.chat_template_kwargs == {"enable_thinking": False}
     assert backend.processor.decoded_tokens == [20, 21]
     assert backend.model.generate_kwargs["max_new_tokens"] == 17

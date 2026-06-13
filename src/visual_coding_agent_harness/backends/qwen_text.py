@@ -81,7 +81,7 @@ class QwenTextBackend:
         )
 
     def _generate_with_processor(self, request: BackendRequest) -> BackendResponse:
-        messages = [{"role": "user", "content": [{"type": "text", "text": request.prompt}]}]
+        messages = _qwen35_messages(request)
         inputs = _apply_qwen35_chat_template(self.processor, messages)
         inputs = _move_inputs_to_model(inputs, self.model)
         generation_kwargs = {
@@ -135,6 +135,43 @@ def _apply_qwen35_chat_template(processor: Any, messages: list[dict[str, Any]]) 
             raise
         kwargs.pop("chat_template_kwargs")
         return processor.apply_chat_template(messages, **kwargs)
+
+
+def _qwen35_messages(request: BackendRequest) -> list[dict[str, Any]]:
+    prompt = request.prompt
+    if request.task in _JSON_TEXT_TASKS:
+        prompt = (
+            f"{prompt}\n\n"
+            "IMPORTANT FOR THIS RESPONSE: Return only one parseable JSON object. "
+            "No prose, no bullets, no markdown, no analysis. "
+            "The first non-whitespace character must be `{`."
+        )
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Follow the user's requested output format exactly. "
+                        "Do not explain your reasoning, restate context, or add markdown. "
+                        "If JSON is requested, output only parseable JSON."
+                    ),
+                }
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": prompt}]},
+    ]
+
+
+_JSON_TEXT_TASKS = {
+    "replan",
+    "answer_from_evidence",
+    "ground_question",
+    "rewrite_exploration_question",
+    "verify_from_evidence",
+    "asr_claim_binding",
+}
 
 
 def _strip_qwen_thinking(text: str) -> str:
