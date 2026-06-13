@@ -94,6 +94,7 @@ def _resolve_qwen_model_class() -> Any:
 
     for name in [
         "Qwen3VLForConditionalGeneration",
+        "AutoModelForMultimodalLM",
         "AutoModelForImageTextToText",
         "Qwen2_5_VLForConditionalGeneration",
     ]:

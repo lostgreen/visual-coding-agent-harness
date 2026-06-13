@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Optional
 
 from .base import BackendRequest, BackendResponse
@@ -11,8 +12,10 @@ from .base import BackendRequest, BackendResponse
 @dataclass
 class QwenTextBackend:
     model: Any
-    tokenizer: Any
+    tokenizer: Any | None = None
+    processor: Any | None = None
     torch_dtype: Optional[Any] = None
+    model_family: str = "qwen"
 
     @classmethod
     def from_pretrained(
@@ -23,14 +26,22 @@ class QwenTextBackend:
         torch_dtype: str = "auto",
         attn_implementation: Optional[str] = None,
     ) -> "QwenTextBackend":
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-
         kwargs: dict[str, Any] = {"device_map": device_map}
         dtype = _resolve_dtype(torch_dtype)
         if dtype is not None:
             kwargs["torch_dtype"] = dtype
         if attn_implementation:
             kwargs["attn_implementation"] = attn_implementation
+        if _is_qwen35_model_path(model_path):
+            from transformers import AutoProcessor
+
+            model_class = _resolve_qwen35_model_class()
+            processor = AutoProcessor.from_pretrained(model_path)
+            model = model_class.from_pretrained(model_path, **kwargs)
+            return cls(model=model, processor=processor, torch_dtype=dtype, model_family="qwen3.5")
+
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         model = AutoModelForCausalLM.from_pretrained(model_path, **kwargs)
         return cls(model=model, tokenizer=tokenizer, torch_dtype=dtype)
@@ -38,7 +49,11 @@ class QwenTextBackend:
     def generate(self, request: BackendRequest) -> BackendResponse:
         if request.media_path or request.frames:
             raise ValueError("QwenTextBackend is text-only and cannot handle media requests")
+        if self.processor is not None:
+            return self._generate_with_processor(request)
 
+        if self.tokenizer is None:
+            raise RuntimeError("QwenTextBackend requires either tokenizer or processor")
         messages = [{"role": "user", "content": request.prompt}]
         text = self.tokenizer.apply_chat_template(
             messages,
@@ -61,9 +76,69 @@ class QwenTextBackend:
             clean_up_tokenization_spaces=False,
         )
         return BackendResponse(
-            text=output_text.strip(),
+            text=_strip_qwen_thinking(output_text).strip(),
             raw={"backend": "qwen_text", "task": request.task},
         )
+
+    def _generate_with_processor(self, request: BackendRequest) -> BackendResponse:
+        messages = [{"role": "user", "content": [{"type": "text", "text": request.prompt}]}]
+        inputs = _apply_qwen35_chat_template(self.processor, messages)
+        inputs = _move_inputs_to_model(inputs, self.model)
+        generation_kwargs = {
+            **inputs,
+            "max_new_tokens": request.max_new_tokens,
+            "do_sample": request.temperature > 0,
+        }
+        if request.temperature > 0:
+            generation_kwargs["temperature"] = request.temperature
+        generated_ids = self.model.generate(**generation_kwargs)
+        input_ids = inputs.input_ids if hasattr(inputs, "input_ids") else inputs["input_ids"]
+        trimmed_ids = generated_ids[0][len(input_ids[0]) :]
+        output_text = self.processor.decode(
+            trimmed_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )
+        return BackendResponse(
+            text=_strip_qwen_thinking(output_text).strip(),
+            raw={"backend": "qwen_text", "task": request.task, "model_family": self.model_family},
+        )
+
+
+def _is_qwen35_model_path(model_path: str) -> bool:
+    normalized = str(model_path).lower().replace("_", ".")
+    return bool(re.search(r"(?:^|[/.-])qwen3\.5(?:-|/|$)", normalized))
+
+
+def _resolve_qwen35_model_class() -> Any:
+    import transformers
+
+    for name in ["AutoModelForMultimodalLM", "AutoModelForImageTextToText"]:
+        model_class = getattr(transformers, name, None)
+        if model_class is not None:
+            return model_class
+    raise ImportError("Qwen3.5 text planner requires AutoModelForMultimodalLM-compatible transformers")
+
+
+def _apply_qwen35_chat_template(processor: Any, messages: list[dict[str, Any]]) -> Any:
+    kwargs = {
+        "add_generation_prompt": True,
+        "tokenize": True,
+        "return_dict": True,
+        "return_tensors": "pt",
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    try:
+        return processor.apply_chat_template(messages, **kwargs)
+    except TypeError as exc:
+        if "chat_template_kwargs" not in str(exc):
+            raise
+        kwargs.pop("chat_template_kwargs")
+        return processor.apply_chat_template(messages, **kwargs)
+
+
+def _strip_qwen_thinking(text: str) -> str:
+    return re.sub(r"^\s*<think>.*?</think>\s*", "", str(text), flags=re.DOTALL | re.IGNORECASE)
 
 
 def _resolve_dtype(torch_dtype: str) -> Any:

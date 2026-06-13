@@ -66,9 +66,70 @@ class FakeModel:
         return [[10, 11, 12, 20, 21]]
 
 
+class FakeQwen35Processor:
+    loaded_path = None
+
+    def __init__(self) -> None:
+        self.chat_messages = None
+        self.chat_template_kwargs = None
+        self.decoded_tokens = None
+
+    @classmethod
+    def from_pretrained(cls, model_path):
+        cls.loaded_path = model_path
+        return cls()
+
+    def apply_chat_template(
+        self,
+        messages,
+        *,
+        add_generation_prompt,
+        tokenize,
+        return_dict,
+        return_tensors,
+        chat_template_kwargs=None,
+    ):
+        self.chat_messages = messages
+        self.chat_template_kwargs = chat_template_kwargs
+        assert add_generation_prompt is True
+        assert tokenize is True
+        assert return_dict is True
+        assert return_tensors == "pt"
+        return FakeBatch()
+
+    def decode(self, token_ids, *, skip_special_tokens, clean_up_tokenization_spaces):
+        self.decoded_tokens = list(token_ids)
+        assert skip_special_tokens is True
+        assert clean_up_tokenization_spaces is False
+        return "  <think>private planner scratchpad</think>\n\n{\"status\":\"final\",\"answer\":\"A\"}  "
+
+
+class FakeQwen35Model(FakeModel):
+    loaded_path = None
+    loaded_kwargs = None
+
+
+class ForbiddenCausalLM:
+    @classmethod
+    def from_pretrained(cls, model_path, **kwargs):
+        raise AssertionError("Qwen3.5 planner should not load AutoModelForCausalLM")
+
+
 @pytest.fixture
 def fake_transformers(monkeypatch):
     module = types.SimpleNamespace(AutoTokenizer=FakeTokenizer, AutoModelForCausalLM=FakeModel)
+    monkeypatch.setitem(sys.modules, "transformers", module)
+    return module
+
+
+@pytest.fixture
+def fake_qwen35_transformers(monkeypatch):
+    module = types.SimpleNamespace(
+        AutoTokenizer=FakeTokenizer,
+        AutoModelForCausalLM=ForbiddenCausalLM,
+        AutoProcessor=FakeQwen35Processor,
+        AutoModelForMultimodalLM=FakeQwen35Model,
+    )
     monkeypatch.setitem(sys.modules, "transformers", module)
     return module
 
@@ -118,3 +179,36 @@ def test_qwen_text_rejects_media_requests(fake_transformers):
 
     with pytest.raises(ValueError, match="text-only"):
         backend.generate(BackendRequest(task="caption_frames", prompt="Describe.", frames=["frame-1.png"]))
+
+
+def test_qwen35_text_planner_uses_multimodal_processor_and_disables_thinking(fake_qwen35_transformers):
+    from visual_coding_agent_harness.backends.qwen_text import QwenTextBackend
+
+    backend = QwenTextBackend.from_pretrained(
+        "/m2v_intern/xuboshen/models/Qwen3.5-9B",
+        device_map="cpu",
+        torch_dtype="auto",
+    )
+
+    response = backend.generate(
+        BackendRequest(
+            task="replan",
+            prompt="Return planner JSON only.",
+            max_new_tokens=17,
+            temperature=0.0,
+        )
+    )
+
+    assert FakeQwen35Processor.loaded_path == "/m2v_intern/xuboshen/models/Qwen3.5-9B"
+    assert FakeQwen35Model.loaded_path == "/m2v_intern/xuboshen/models/Qwen3.5-9B"
+    assert FakeQwen35Model.loaded_kwargs == {"device_map": "cpu"}
+    assert backend.processor.chat_messages == [
+        {"role": "user", "content": [{"type": "text", "text": "Return planner JSON only."}]}
+    ]
+    assert backend.processor.chat_template_kwargs == {"enable_thinking": False}
+    assert backend.processor.decoded_tokens == [20, 21]
+    assert backend.model.generate_kwargs["max_new_tokens"] == 17
+    assert backend.model.generate_kwargs["do_sample"] is False
+    assert "temperature" not in backend.model.generate_kwargs
+    assert response.text == '{"status":"final","answer":"A"}'
+    assert response.raw == {"backend": "qwen_text", "task": "replan", "model_family": "qwen3.5"}
