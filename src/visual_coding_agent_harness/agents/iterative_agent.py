@@ -380,7 +380,7 @@ class IterativeVisualAgent:
                     prompt=planner_prompt,
                     media_path=video_path if self.budget.planner_receives_media else None,
                     media_type="video" if self.budget.planner_receives_media else None,
-                    max_new_tokens=768,
+                    max_new_tokens=4096,
                     metadata={
                         "round": round_number,
                         "segment_count": len(self.scene_index.segments),

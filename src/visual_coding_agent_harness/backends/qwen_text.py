@@ -101,7 +101,11 @@ class QwenTextBackend:
         )
 
     def _generate_with_processor_messages(self, messages: list[dict[str, Any]], request: BackendRequest) -> str:
-        inputs = _apply_qwen35_chat_template(self.processor, messages)
+        inputs = _apply_qwen35_chat_template(
+            self.processor,
+            messages,
+            enable_thinking=False if request.task in _JSON_TEXT_TASKS else None,
+        )
         inputs = _move_inputs_to_model(inputs, self.model)
         max_new_tokens, max_time = _qwen35_structured_generation_budget(request)
         generation_kwargs = {
@@ -109,6 +113,13 @@ class QwenTextBackend:
             "max_new_tokens": max_new_tokens,
             "do_sample": request.temperature > 0,
         }
+        stopping_criteria = _structured_json_stopping_criteria(
+            processor=self.processor,
+            inputs=inputs,
+            task=request.task,
+        )
+        if stopping_criteria is not None:
+            generation_kwargs["stopping_criteria"] = stopping_criteria
         if max_time is not None:
             generation_kwargs["max_time"] = max_time
         if request.temperature > 0:
@@ -157,6 +168,7 @@ def _apply_qwen35_chat_template(
     messages: list[dict[str, Any]],
     *,
     processor_kwargs: dict[str, Any] | None = None,
+    enable_thinking: bool | None = None,
 ) -> Any:
     kwargs: dict[str, Any] = {
         "add_generation_prompt": True,
@@ -166,6 +178,15 @@ def _apply_qwen35_chat_template(
     }
     if processor_kwargs:
         kwargs["processor_kwargs"] = processor_kwargs
+    if enable_thinking is not None:
+        for thinking_kwargs in (
+            {"chat_template_kwargs": {"enable_thinking": bool(enable_thinking)}},
+            {"enable_thinking": bool(enable_thinking)},
+        ):
+            try:
+                return processor.apply_chat_template(messages, **kwargs, **thinking_kwargs)
+            except TypeError:
+                continue
     return processor.apply_chat_template(messages, **kwargs)
 
 
@@ -205,8 +226,8 @@ _JSON_TEXT_TASKS = {
     "asr_claim_binding",
 }
 
-_QWEN35_JSON_MAX_NEW_TOKENS = 1024
-_QWEN35_JSON_MAX_TIME_SECONDS = 90.0
+_QWEN35_JSON_MAX_NEW_TOKENS = 4096
+_QWEN35_JSON_MAX_TIME_SECONDS = 180.0
 
 
 def _qwen35_structured_generation_budget(request: BackendRequest) -> tuple[int, float | None]:
@@ -217,6 +238,52 @@ def _qwen35_structured_generation_budget(request: BackendRequest) -> tuple[int, 
     if max_time is None:
         max_time = _QWEN35_JSON_MAX_TIME_SECONDS
     return max_new_tokens, float(max_time)
+
+
+def _structured_json_stopping_criteria(*, processor: Any, inputs: Any, task: str) -> Any | None:
+    if task not in _JSON_TEXT_TASKS:
+        return None
+    try:
+        import torch
+        import transformers
+    except Exception:
+        return None
+    stopping_base = getattr(transformers, "StoppingCriteria", None)
+    stopping_list = getattr(transformers, "StoppingCriteriaList", None)
+    if stopping_base is None or stopping_list is None:
+        return None
+    input_ids = inputs.input_ids if hasattr(inputs, "input_ids") else inputs.get("input_ids")
+    try:
+        prompt_length = int(input_ids.shape[-1])
+    except Exception:
+        try:
+            prompt_length = len(input_ids[0])
+        except Exception:
+            return None
+
+    class StopOnStructuredJson(stopping_base):  # type: ignore[misc, valid-type]
+        def __init__(self) -> None:
+            self.tail_tokens = 4096
+
+        def __call__(self, input_ids: Any, scores: Any = None, **kwargs: Any) -> bool:
+            del scores, kwargs
+            if not torch.is_tensor(input_ids) or input_ids.ndim < 2:
+                return False
+            generated_ids = input_ids[0, prompt_length:]
+            if generated_ids.numel() <= 0:
+                return False
+            tail_ids = generated_ids[-self.tail_tokens :]
+            try:
+                tail_text = processor.decode(
+                    tail_ids,
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+            except Exception:
+                return False
+            return _normalized_structured_json_output(_strip_qwen_thinking(str(tail_text)), task=task) is not None
+
+    return stopping_list([StopOnStructuredJson()])
 
 
 def _qwen35_json_repair_messages(*, request: BackendRequest, draft: str) -> list[dict[str, Any]]:
@@ -323,17 +390,41 @@ def _structured_json_score(payload: dict[str, Any], *, task: str) -> int:
 
 
 def _strip_qwen_thinking(text: str) -> str:
-    cleaned = re.sub(r"^\s*<think>.*?</think>\s*", "", str(text), flags=re.DOTALL | re.IGNORECASE)
-    if re.match(r"^\s*thinking process\s*:", cleaned, flags=re.IGNORECASE):
-        json_start = _first_json_start(cleaned)
-        if json_start is not None:
-            return cleaned[json_start:]
+    cleaned = re.sub(r"<think\b.*?</think>\s*", "", str(text), flags=re.DOTALL | re.IGNORECASE)
+    closing_think = cleaned.lower().rfind("</think>")
+    if closing_think >= 0:
+        cleaned = cleaned[closing_think + len("</think>") :].lstrip()
+    json_start = _first_json_start(cleaned)
+    if json_start is not None and (
+        json_start == 0
+        or re.match(r"^\s*thinking process\s*:", cleaned, flags=re.IGNORECASE)
+        or _looks_like_qwen_reasoning_prefix(cleaned[:json_start])
+    ):
+        return cleaned[json_start:]
     return cleaned
 
 
 def _first_json_start(text: str) -> int | None:
     candidates = [idx for idx in (text.find("{"), text.find("[")) if idx >= 0]
     return min(candidates) if candidates else None
+
+
+def _looks_like_qwen_reasoning_prefix(text: str) -> bool:
+    prefix = str(text or "").strip().lower()
+    if not prefix:
+        return False
+    return any(
+        marker in prefix
+        for marker in (
+            "the user",
+            "i need",
+            "i should",
+            "looking at",
+            "current state",
+            "analyze",
+            "reasoning",
+        )
+    )
 
 
 def _resolve_dtype(torch_dtype: str) -> Any:

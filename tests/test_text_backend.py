@@ -274,8 +274,8 @@ def test_qwen35_text_planner_caps_structured_json_generation_budget(fake_qwen35_
         )
     )
 
-    assert backend.model.generate_kwargs["max_new_tokens"] == 1024
-    assert backend.model.generate_kwargs["max_time"] == 90.0
+    assert backend.model.generate_kwargs["max_new_tokens"] == 4096
+    assert backend.model.generate_kwargs["max_time"] == 180.0
     assert backend.model.generate_kwargs["do_sample"] is False
 
 
@@ -353,3 +353,15 @@ def test_qwen35_structured_json_normalizer_requires_answer_shape():
 
     assert repaired == '{"answer":"need_more_evidence","citations":[],"missing_evidence":["count missing"],"confidence":0}'
     assert _normalized_structured_json_output('{"args":{"query":"not an answer"}}', task="answer_from_evidence") is None
+
+
+def test_qwen35_strip_thinking_removes_reasoning_prefix_before_json():
+    from visual_coding_agent_harness.backends.qwen_text import _strip_qwen_thinking
+
+    assert _strip_qwen_thinking(
+        "The user wants me to inspect evidence first.\n"
+        "{\"status\":\"continue\",\"program\":[]}"
+    ) == '{"status":"continue","program":[]}'
+    assert _strip_qwen_thinking(
+        "draft </think>\n{\"status\":\"final\",\"answer\":\"C\"}"
+    ) == '{"status":"final","answer":"C"}'
