@@ -19,6 +19,7 @@ class QwenVLBackend:
     processor: Any
     device: Optional[str] = None
     torch_dtype: Optional[Any] = None
+    model_family: str = "qwen-vl"
 
     @classmethod
     def from_pretrained(
@@ -41,7 +42,8 @@ class QwenVLBackend:
             kwargs["attn_implementation"] = attn_implementation
         model = model_class.from_pretrained(model_path, **kwargs)
         processor = AutoProcessor.from_pretrained(model_path)
-        return cls(model=model, processor=processor, torch_dtype=dtype)
+        model_family = "qwen3.5" if _is_qwen35_model_path(model_path) else "qwen-vl"
+        return cls(model=model, processor=processor, torch_dtype=dtype, model_family=model_family)
 
     def generate(self, request: BackendRequest) -> BackendResponse:
         messages = [
@@ -50,6 +52,9 @@ class QwenVLBackend:
                 "content": _message_content(request),
             }
         ]
+        if self.model_family == "qwen3.5":
+            return self._generate_qwen35(messages=messages, request=request)
+
         text = self.processor.apply_chat_template(
             messages,
             tokenize=False,
@@ -88,6 +93,34 @@ class QwenVLBackend:
             raw={"model": self.model.__class__.__name__, "task": request.task},
         )
 
+    def _generate_qwen35(self, *, messages: list[Mapping[str, Any]], request: BackendRequest) -> BackendResponse:
+        from .qwen_text import _apply_qwen35_chat_template, _strip_qwen_thinking
+
+        inputs = _apply_qwen35_chat_template(self.processor, list(messages))
+        inputs = _move_inputs_to_model(inputs, self.model)
+        generation_kwargs = {
+            **inputs,
+            "max_new_tokens": request.max_new_tokens,
+            "do_sample": request.temperature > 0,
+        }
+        if request.temperature > 0:
+            generation_kwargs["temperature"] = request.temperature
+        for key in ("repetition_penalty", "no_repeat_ngram_size", "top_p", "top_k"):
+            if key in request.metadata:
+                generation_kwargs[key] = request.metadata[key]
+        generated_ids = self.model.generate(**generation_kwargs)
+        input_ids = inputs.input_ids if hasattr(inputs, "input_ids") else inputs["input_ids"]
+        trimmed_ids = generated_ids[0][len(input_ids[0]) :]
+        output_text = self.processor.decode(
+            trimmed_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )
+        return BackendResponse(
+            text=_strip_qwen_thinking(output_text).strip(),
+            raw={"model": self.model.__class__.__name__, "task": request.task, "model_family": self.model_family},
+        )
+
 
 def _resolve_qwen_model_class() -> Any:
     import transformers
@@ -102,6 +135,11 @@ def _resolve_qwen_model_class() -> Any:
         if model_class is not None:
             return model_class
     raise ImportError("No Qwen-VL compatible model class found in transformers")
+
+
+def _is_qwen35_model_path(model_path: str) -> bool:
+    normalized = str(model_path).lower().replace("_", ".")
+    return bool(re.search(r"(?:^|[/.-])qwen3\.5(?:-|/|$)", normalized))
 
 
 def _resolve_dtype(*, torch_dtype: str, torch_module: Any) -> Any:
