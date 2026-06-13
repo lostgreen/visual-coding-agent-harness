@@ -109,10 +109,10 @@ def _render_round(
         f"## Round {round_number}",
         "",
         "### Planner input",
-        _fenced(_artifact_text(trajectory, turn.get("prompt_artifact", {}))),
+        *_render_planner_input_summary(turn),
         "",
         "### Planner output",
-        _fenced(_planner_output_text(trajectory, turn)),
+        *_render_planner_output_summary(turn),
         "",
     ]
     lines.extend(_render_planner_plans(plans))
@@ -186,10 +186,32 @@ def _render_tool_results(results: Sequence[Mapping[str, Any]]) -> list[str]:
 
 
 def _planner_output_text(trajectory: Mapping[str, Any], turn: Mapping[str, Any]) -> str:
-    artifact_text = _artifact_text(trajectory, turn.get("response_artifact", {}))
-    if artifact_text:
-        return artifact_text
+    del trajectory
     return _text(turn.get("response_excerpt", ""))
+
+
+def _render_planner_input_summary(turn: Mapping[str, Any]) -> list[str]:
+    lines = [_artifact_summary_line("prompt_artifact", turn.get("prompt_artifact", {}))]
+    evidence_ids = turn.get("evidence_observation_ids", [])
+    lines.append(f"- evidence_observation_ids: {_text(evidence_ids)}")
+    lines.append(f"- evidence_snapshot_chars: {_text(turn.get('evidence_snapshot_chars', 0))}")
+    lines.append(f"- empty_evidence_claim_count: {_text(turn.get('empty_evidence_claim_count', 0))}")
+    return lines
+
+
+def _render_planner_output_summary(turn: Mapping[str, Any]) -> list[str]:
+    lines = [_artifact_summary_line("response_artifact", turn.get("response_artifact", {}))]
+    output = _planner_output_text({}, turn).strip()
+    lines.append(_fenced(output or "(no public planner action summary recorded)"))
+    return lines
+
+
+def _artifact_summary_line(label: str, artifact: Any) -> str:
+    payload = artifact if isinstance(artifact, Mapping) else {}
+    path = _text(payload.get("path", ""))
+    sha = _text(payload.get("sha256", ""))
+    chars = _text(payload.get("chars", payload.get("stored_chars", "")))
+    return f"- {label}: path={path or '(missing)'} chars={chars or '0'} sha256={sha[:12] if sha else '(missing)'}"
 
 
 def _artifact_text(trajectory: Mapping[str, Any], artifact: Any) -> str:

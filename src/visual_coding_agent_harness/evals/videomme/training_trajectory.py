@@ -88,6 +88,154 @@ class TrainingTrajectory:
         return asdict(self)
 
 
+_REASONING_LEAK_PATTERNS = (
+    re.compile(r"<think\b.*?</think>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"\bthe user (?:is asking|asked|wants|needs|provided)\b", re.IGNORECASE),
+    re.compile(r"\b(?:i need to|i should|i will|let me|let's|we need to)\b", re.IGNORECASE),
+    re.compile(r"\bcurrent state\b", re.IGNORECASE),
+)
+
+
+def _planner_response_excerpt(text: str) -> str:
+    payload = _json_object_from_text(text)
+    if payload is None:
+        return "(unparsed planner response; raw artifact retained for debug only)"
+    summary = _planner_action_summary(payload)
+    if not summary:
+        return "(planner response contained no public action fields)"
+    return json.dumps(summary, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _planner_action_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for key in ("status", "skill"):
+        if key in payload:
+            summary[key] = payload.get(key)
+    if "program" in payload:
+        summary["program"] = _bounded_sequence(payload.get("program", []), max_items=8)
+    if "Actions" in payload:
+        summary["Actions"] = _bounded_sequence(payload.get("Actions", []), max_items=8)
+    if "Finish" in payload and isinstance(payload.get("Finish"), Mapping):
+        finish = dict(payload["Finish"])
+        summary["Finish"] = {
+            key: finish.get(key)
+            for key in ("chain_complete", "completion_basis", "answer")
+            if key in finish
+        }
+    for key in ("answer", "citations", "selected_option"):
+        if key in payload:
+            summary[key] = payload.get(key)
+    return summary
+
+
+def _json_object_from_text(text: str) -> dict[str, Any] | None:
+    stripped = str(text or "").strip()
+    candidates = [stripped]
+    fenced = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, flags=re.IGNORECASE | re.DOTALL)
+    candidates.extend(fenced)
+    for candidate in candidates:
+        parsed = _parse_json_object(candidate)
+        if parsed is not None:
+            return parsed
+    for candidate in _balanced_json_candidates(stripped):
+        parsed = _parse_json_object(candidate)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return dict(payload) if isinstance(payload, Mapping) else None
+
+
+def _balanced_json_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escape = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+            continue
+        if char != "}" or depth == 0:
+            continue
+        depth -= 1
+        if depth == 0 and start is not None:
+            candidates.append(text[start : index + 1])
+            start = None
+    return candidates
+
+
+def _sanitize_public_text(text: str, *, max_chars: int) -> tuple[str, bool]:
+    original = str(text or "")
+    cleaned = _REASONING_LEAK_PATTERNS[0].sub("", original)
+    redacted = cleaned != original
+    payload = _json_object_from_text(cleaned)
+    if payload is not None:
+        for key in ("claim", "summary", "description", "answer", "value"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return _limit_text(value, max_chars=max_chars), True
+    lines = _public_text_units(cleaned)
+    kept: list[str] = []
+    for line in lines:
+        if _looks_like_reasoning_leak(line):
+            redacted = True
+            continue
+        kept.append(line)
+    if not kept and lines:
+        kept = lines[-1:]
+        redacted = True
+    sanitized = " ".join(kept)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    if _looks_like_reasoning_leak(sanitized):
+        return "", True
+    return _limit_text(sanitized, max_chars=max_chars), redacted or sanitized != original.strip()
+
+
+def _looks_like_reasoning_leak(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return any(pattern.search(stripped) for pattern in _REASONING_LEAK_PATTERNS[1:])
+
+
+def _public_text_units(text: str) -> list[str]:
+    units: list[str] = []
+    for line in str(text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pieces = re.split(r"(?<=[.!?])\s+", line)
+        units.extend(piece.strip() for piece in pieces if piece.strip())
+    return units
+
+
+def _limit_text(text: str, *, max_chars: int) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max(0, max_chars - 3)].rstrip() + "..."
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -116,6 +264,7 @@ def _planner_turns(events: Sequence[Mapping[str, Any]], *, workspace: EvidenceWo
         prompt_artifact = _artifact_summary(workspace.root, payload.get("prompt", {}))
         response_artifact = _artifact_summary(workspace.root, payload.get("response", {}))
         prompt_text = _artifact_text(workspace.root, prompt_artifact)
+        response_text = _artifact_text(workspace.root, response_artifact) or str(payload.get("response_excerpt", ""))
         evidence_section = _evidence_section(prompt_text)
         turns.append(
             {
@@ -123,7 +272,7 @@ def _planner_turns(events: Sequence[Mapping[str, Any]], *, workspace: EvidenceWo
                 "planner_input_mode": str(payload.get("planner_input_mode", "")),
                 "prompt_artifact": prompt_artifact,
                 "response_artifact": response_artifact,
-                "response_excerpt": str(payload.get("response_excerpt", "")),
+                "response_excerpt": _planner_response_excerpt(response_text),
                 "evidence_observation_ids": _evidence_observation_ids_from_section(evidence_section),
                 "empty_evidence_claim_count": _empty_claim_line_count(evidence_section),
                 "evidence_snapshot_chars": len(evidence_section),
@@ -184,17 +333,21 @@ def _tool_results(
         observation = observations.get(observation_id, {})
         raw_output = observation.get("raw_output", {})
         raw_mapping = raw_output if isinstance(raw_output, Mapping) else {}
+        claim, claim_redacted = _sanitize_public_text(str(observation.get("claim", "")), max_chars=1000)
+        limitations, limitations_redacted = _sanitize_public_text(
+            str(observation.get("limitations", "")), max_chars=1000
+        )
         result = {
             "step": int(payload.get("step", len(results) + 1) or len(results) + 1),
             "tool": str(payload.get("tool", "")),
             "observation_id": observation_id,
-            "claim": str(observation.get("claim", "")),
+            "claim": claim,
             "confidence": float(observation.get("confidence", 0.0) or 0.0),
             "confidence_signal": str(
                 observation.get("confidence_signal", "") or raw_mapping.get("confidence_signal", "")
             ),
             "grounding_quality": str(raw_mapping.get("grounding_quality", "")),
-            "limitations": str(observation.get("limitations", "")),
+            "limitations": limitations,
             "regions": _bounded_sequence(observation.get("regions", []), max_items=8),
             "frame_set_id": str(observation.get("frame_set_id", "")),
             "input_artifacts": _bounded_sequence(observation.get("input_artifacts", []), max_items=8),
@@ -206,6 +359,10 @@ def _tool_results(
         relations = raw_mapping.get("candidate_option_relations")
         if isinstance(relations, Sequence) and not isinstance(relations, (str, bytes)):
             result["candidate_option_relations"] = _bounded_sequence(relations, max_items=8)
+        if claim_redacted:
+            result["claim_redacted"] = True
+        if limitations_redacted:
+            result["limitations_redacted"] = True
         results.append(result)
     return results
 
@@ -219,13 +376,17 @@ def _planner_plans(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(payload, Mapping):
             continue
         program = payload.get("program", [])
+        rationale, rationale_redacted = _sanitize_public_text(str(payload.get("rationale", "")), max_chars=400)
+        plan = {
+            "round": int(payload.get("round", len(plans) + 1) or len(plans) + 1),
+            "rationale": rationale,
+            "program": _bounded_sequence(program, max_items=8),
+            "created_at": str(event.get("created_at", "")),
+        }
+        if rationale_redacted:
+            plan["rationale_redacted"] = True
         plans.append(
-            {
-                "round": int(payload.get("round", len(plans) + 1) or len(plans) + 1),
-                "rationale": str(payload.get("rationale", "")),
-                "program": _bounded_sequence(program, max_items=8),
-                "created_at": str(event.get("created_at", "")),
-            }
+            plan
         )
     return plans
 

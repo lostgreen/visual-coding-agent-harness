@@ -76,6 +76,68 @@ def test_training_trajectory_export_does_not_inline_raw_output(tmp_path):
     assert "raw_output" not in json.dumps(payload)
 
 
+def test_training_trajectory_redacts_reasoning_leaks_from_public_fields(tmp_path):
+    workspace = _workspace_with_chain(
+        tmp_path,
+        claim=(
+            "The user is asking me to inspect the clip. "
+            "The localized window shows a red car near the curb."
+        ),
+    )
+    response_meta = workspace.write_text_artifact(
+        "artifacts/planner_io/round_0001_response.txt",
+        (
+            "<think>The user wants hidden chain-of-thought.</think>"
+            '{"status":"continue","rationale":"The user wants me to inspect the car",'
+            '"program":[{"tool":"vision_read","args":{"segment_id":"seg_0001"}}]}'
+        ),
+    )
+    prompt_meta = workspace.write_text_artifact(
+        "artifacts/planner_io/round_0001_prompt.txt",
+        "## Evidence\n(none)\n## Feedback\nnone",
+    )
+    workspace.write_trace_event(
+        "planner_io",
+        {
+            "round": 1,
+            "prompt": prompt_meta,
+            "response": response_meta,
+            "response_excerpt": (
+                "<think>The user wants hidden chain-of-thought.</think>"
+                '{"status":"continue","rationale":"The user wants me to inspect the car",'
+                '"program":[{"tool":"vision_read","args":{"segment_id":"seg_0001"}}]}'
+            ),
+        },
+    )
+    workspace.write_trace_event(
+        "iterative_plan",
+        {
+            "round": 1,
+            "rationale": "The user wants me to inspect the car before answering.",
+            "program": [{"tool": "vision_read", "args": {"segment_id": "seg_0001"}}],
+        },
+    )
+    workspace.write_trace_event("tool_result", {"step": 1, "tool": "vision_read", "observation_id": "obs_0001"})
+
+    trajectory = TrainingTrajectory.from_workspace(
+        workspace,
+        case_id="case_001",
+        question="Which object is visible?",
+        output_path="artifacts/training/case_001.json",
+    )
+    payload = json.loads(Path(trajectory.trajectory_path).read_text(encoding="utf-8"))
+    encoded = json.dumps(payload)
+
+    assert "hidden chain-of-thought" not in encoded
+    assert "The user wants" not in encoded
+    assert '"status":"continue"' in trajectory.planner_turns[0]["response_excerpt"]
+    assert "rationale" not in trajectory.planner_turns[0]["response_excerpt"]
+    assert trajectory.planner_plans[0]["rationale"] == ""
+    assert trajectory.planner_plans[0]["rationale_redacted"] is True
+    assert trajectory.tool_results[0]["claim"] == "The localized window shows a red car near the curb."
+    assert trajectory.tool_results[0]["claim_redacted"] is True
+
+
 def test_planner_turns_show_context_growth_without_inlining_prompts(tmp_path):
     workspace = _workspace_with_chain(tmp_path)
     first_prompt = workspace.write_text_artifact(
@@ -152,11 +214,15 @@ def test_planner_turns_show_context_growth_without_inlining_prompts(tmp_path):
     assert "## Evidence" not in json.dumps(payload)
 
 
-def _workspace_with_chain(tmp_path) -> EvidenceWorkspace:
+def _workspace_with_chain(
+    tmp_path,
+    *,
+    claim: str = "The localized window shows a red car.",
+) -> EvidenceWorkspace:
     workspace = EvidenceWorkspace.create(tmp_path, run_id="trajectory_case")
     observation = workspace.write_observation(
         tool_name="vision_read",
-        claim="The localized window shows a red car.",
+        claim=claim,
         confidence=0.9,
         regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
         raw_output={"secret_raw_output": "should not be exported"},

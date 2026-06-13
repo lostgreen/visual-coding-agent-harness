@@ -11,7 +11,10 @@ def test_render_trajectory_markdown_groups_planner_io_and_tool_results(tmp_path)
     response = tmp_path / "artifacts" / "planner_io" / "round_0001_response.txt"
     prompt.parent.mkdir(parents=True)
     prompt.write_text("## Task\nWhich object is visible?\n## Evidence\n(none)\n", encoding="utf-8")
-    response.write_text('{"status":"continue","program":[{"tool":"vision_read"}]}', encoding="utf-8")
+    response.write_text(
+        '<think>The user wants hidden reasoning.</think>{"status":"continue","program":[{"tool":"vision_read"}]}',
+        encoding="utf-8",
+    )
     trajectory = {
         "schema_version": "TrainingTrajectoryV1",
         "case_id": "case_001",
@@ -26,6 +29,7 @@ def test_render_trajectory_markdown_groups_planner_io_and_tool_results(tmp_path)
                 "round": 1,
                 "prompt_artifact": {"path": "artifacts/planner_io/round_0001_prompt.txt"},
                 "response_artifact": {"path": "artifacts/planner_io/round_0001_response.txt"},
+                "response_excerpt": '{"program":[{"tool":"vision_read"}],"status":"continue"}',
                 "evidence_observation_ids": [],
             }
         ],
@@ -70,9 +74,11 @@ def test_render_trajectory_markdown_groups_planner_io_and_tool_results(tmp_path)
     assert "# Trajectory case_001" in markdown
     assert "## Round 1" in markdown
     assert "### Planner input" in markdown
-    assert "## Task" in markdown
+    assert "prompt_artifact: path=artifacts/planner_io/round_0001_prompt.txt" in markdown
+    assert "## Task" not in markdown
     assert "### Planner output" in markdown
     assert '"status":"continue"' in markdown
+    assert "The user wants hidden reasoning" not in markdown
     assert "### Tool results" in markdown
     assert "obs_0001" in markdown
     assert "The window shows a red car." in markdown
