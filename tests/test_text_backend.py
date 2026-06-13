@@ -302,3 +302,15 @@ def test_qwen35_text_planner_repairs_unparseable_structured_json(monkeypatch):
     assert "Draft response to repair" in repair_user_text
     assert backend.model.generate_calls[-1]["max_new_tokens"] == 512
     assert backend.model.generate_calls[-1]["max_time"] == 45.0
+
+
+def test_qwen35_structured_json_normalizer_requires_answer_shape():
+    from visual_coding_agent_harness.backends.qwen_text import _normalized_structured_json_output
+
+    repaired = _normalized_structured_json_output(
+        'analysis {"answer":"need_more_evidence","citations":[],"missing_evidence":["count missing"],"confidence":0}',
+        task="answer_from_evidence",
+    )
+
+    assert repaired == '{"answer":"need_more_evidence","citations":[],"missing_evidence":["count missing"],"confidence":0}'
+    assert _normalized_structured_json_output('{"args":{"query":"not an answer"}}', task="answer_from_evidence") is None

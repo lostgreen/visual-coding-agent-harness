@@ -260,6 +260,12 @@ def _json_task_shape_hint(task: str) -> str:
             'For replan, use either {"status":"continue","program":[],"rationale":"..."} '
             'or {"status":"final","answer":"A","citations":[],"confidence":0.0}.'
         )
+    if task == "answer_from_evidence":
+        return (
+            'For answer_from_evidence, use {"answer":"need_more_evidence","rationale":"...",'
+            '"citations":[],"candidate_option_relations":[],"missing_evidence":["..."],"confidence":0.0} '
+            'or the same schema with an option-letter answer and cited observation ids.'
+        )
     return "Preserve the JSON schema requested by the original instruction."
 
 
@@ -305,6 +311,12 @@ def _structured_json_score(payload: dict[str, Any], *, task: str) -> int:
             if key in payload:
                 score += 20
         return score
+    if task == "answer_from_evidence":
+        if "answer" in payload:
+            return 100
+        if "candidate_option_relations" in payload or "missing_evidence" in payload:
+            return 60
+        return 0
     return 50
 
 
