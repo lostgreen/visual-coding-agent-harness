@@ -9,7 +9,6 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 SlotName = Literal[
     "task",
     "trajectory",
-    "navigation",
     "hypothesis",
     "evidence",
     "scene_index",
@@ -28,6 +27,10 @@ DEFAULT_SLOT_RATIOS: Dict[SlotName, float] = {
     "budget": 0.05,
     "tooling": 0.08,
 }
+
+
+class BudgetExceededError(ValueError):
+    """Raised when strict context budgeting cannot fit a prompt slot."""
 
 
 @dataclass
@@ -63,10 +66,12 @@ class ContextBudgetAllocator:
         total_budget_tokens: int = 12000,
         slot_ratios: Optional[Dict[SlotName, float]] = None,
         token_counter: Callable[[str], int] = lambda s: len(s) // 4,
+        raise_on_overflow: bool = False,
     ):
         self.total = total_budget_tokens
         self.ratios = slot_ratios or DEFAULT_SLOT_RATIOS
         self.count_tokens = token_counter
+        self.raise_on_overflow = bool(raise_on_overflow)
         self._strategies: Dict[SlotName, CompactStrategy] = {}
         self._turn = 0
 
@@ -107,6 +112,10 @@ class ContextBudgetAllocator:
                     )
                 if tokens > budget:
                     report.overflow = True
+                    if self.raise_on_overflow:
+                        raise BudgetExceededError(
+                            f"Context budget exceeded for slot {name}: used {tokens}, budget {budget}"
+                        )
 
             final[name] = content
             report.used_tokens_per_slot[name] = tokens
@@ -201,7 +210,6 @@ def default_context_budget_allocator(
     allocator = ContextBudgetAllocator(total_budget_tokens=total_budget_tokens, slot_ratios=slot_ratios)
     allocator.register_strategy("task", TaskSlotCompact())
     allocator.register_strategy("trajectory", NavLatestWinsCompact())
-    allocator.register_strategy("navigation", NavLatestWinsCompact())
     allocator.register_strategy("hypothesis", TaskSlotCompact())
     allocator.register_strategy("evidence", EvidenceTieredCompact())
     allocator.register_strategy("scene_index", NavLatestWinsCompact())

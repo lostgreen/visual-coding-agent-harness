@@ -1,4 +1,7 @@
+import pytest
+
 from visual_coding_agent_harness.agents.context_budget import (
+    BudgetExceededError,
     CompactStrategy,
     ContextBudgetAllocator,
     EvidenceTieredCompact,
@@ -97,18 +100,36 @@ def test_overflow_flag_when_strategy_insufficient():
     assert report.overflow is True
 
 
+def test_total_budget_enforced():
+    allocator = ContextBudgetAllocator(
+        total_budget_tokens=10,
+        slot_ratios={"task": 1.0},
+        token_counter=len,
+        raise_on_overflow=True,
+    )
+    allocator.register_strategy("task", NoopStrategy())
+
+    with pytest.raises(BudgetExceededError, match="Context budget exceeded"):
+        allocator.allocate({"task": "too long for budget"})
+
+
 def test_nav_latest_wins_keeps_newest_block():
     allocator = ContextBudgetAllocator(
         total_budget_tokens=1,
-        slot_ratios={"navigation": 1.0},
+        slot_ratios={"trajectory": 1.0},
         token_counter=len,
     )
-    allocator.register_strategy("navigation", NavLatestWinsCompact())
+    allocator.register_strategy("trajectory", NavLatestWinsCompact())
 
-    allocated, report = allocator.allocate({"navigation": "old block\n\nnew block"})
+    allocated, report = allocator.allocate({"trajectory": "old block\n\nnew block"})
 
-    assert allocated["navigation"] == "new block"
+    assert allocated["trajectory"] == "new block"
     assert report.compact_events[0]["strategy"] == "nav_latest_wins"
+
+
+def test_parse_budget_ratios_rejects_removed_navigation_slot():
+    with pytest.raises(ValueError, match="Unknown budget slot: navigation"):
+        parse_budget_ratios("navigation:1.0")
 
 
 def test_evidence_tiered_keeps_relevant_row():

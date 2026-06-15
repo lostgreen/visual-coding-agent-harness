@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from .protocol import ToolRequest, ToolResult
@@ -28,6 +29,23 @@ class ToolSpec:
         return inspect.signature(self.handler).parameters
 
 
+class DuplicateGuardPolicy(str, Enum):
+    STRICT = "strict"
+    ADVISORY = "advisory"
+    OFF = "off"
+
+
+@dataclass(frozen=True)
+class ToolRuntimeSpec:
+    tool_spec: ToolSpec
+    argument_normalizer: Any | None = None
+    semantic_key_builder: Any | None = None
+    duplicate_guard_policy: DuplicateGuardPolicy = DuplicateGuardPolicy.STRICT
+    observation_adapter: Any | None = None
+    evidence_promoter: Any | None = None
+    permission_predicate: Any | None = None
+
+
 def tool(name: str, description: str) -> Callable[[Callable[..., Mapping[str, Any]]], ToolSpec]:
     """Decorate a Python function as a harness tool."""
 
@@ -41,21 +59,29 @@ class ToolRegistry:
     """Register and execute named visual tools."""
 
     def __init__(self) -> None:
-        self._tools: Dict[str, ToolSpec] = {}
+        self._tools: Dict[str, ToolRuntimeSpec] = {}
 
-    def register(self, spec: ToolSpec) -> None:
-        if spec.name in self._tools:
-            raise ToolError(f"Tool already registered: {spec.name}")
-        self._tools[spec.name] = spec
+    def register(self, spec: ToolSpec | ToolRuntimeSpec) -> None:
+        runtime_spec = spec if isinstance(spec, ToolRuntimeSpec) else ToolRuntimeSpec(tool_spec=spec)
+        tool_spec = runtime_spec.tool_spec
+        if tool_spec.name in self._tools:
+            raise ToolError(f"Tool already registered: {tool_spec.name}")
+        self._tools[tool_spec.name] = runtime_spec
 
     def extend(self, other: "ToolRegistry") -> None:
         for spec in other.list_specs():
             self.register(spec)
 
     def list_specs(self) -> Sequence[ToolSpec]:
+        return tuple(runtime_spec.tool_spec for runtime_spec in self._tools.values())
+
+    def list_runtime_specs(self) -> Sequence[ToolRuntimeSpec]:
         return tuple(self._tools.values())
 
     def get(self, name: str) -> ToolSpec:
+        return self.get_runtime_spec(name).tool_spec
+
+    def get_runtime_spec(self, name: str) -> ToolRuntimeSpec:
         try:
             return self._tools[name]
         except KeyError as exc:

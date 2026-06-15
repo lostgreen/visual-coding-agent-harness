@@ -46,12 +46,7 @@ class QwenVLBackend:
         return cls(model=model, processor=processor, torch_dtype=dtype, model_family=model_family)
 
     def generate(self, request: BackendRequest) -> BackendResponse:
-        messages = [
-            {
-                "role": "user",
-                "content": _message_content(request),
-            }
-        ]
+        messages = _messages_for_request(request)
         if self.model_family == "qwen3.5":
             return self._generate_qwen35(messages=messages, request=request)
 
@@ -206,6 +201,15 @@ def _message_content(request: BackendRequest) -> list[Mapping[str, Any]]:
             content.append({"type": "image", "image": request.media_path})
     content.append({"type": "text", "text": request.prompt})
     return content
+
+
+def _messages_for_request(request: BackendRequest) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    system_prompt = str(getattr(request, "system_prompt", "") or "").strip()
+    if system_prompt:
+        messages.append({"role": "system", "content": [{"type": "text", "text": system_prompt}]})
+    messages.append({"role": "user", "content": _message_content(request)})
+    return messages
 
 
 def _process_vision_info_with_nframes_clamp(messages: list[Mapping[str, Any]]) -> tuple[Any, Any]:

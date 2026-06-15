@@ -55,7 +55,7 @@ class QwenTextBackend:
 
         if self.tokenizer is None:
             raise RuntimeError("QwenTextBackend requires either tokenizer or processor")
-        messages = [{"role": "user", "content": request.prompt}]
+        messages = _text_messages_for_request(request)
         text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -138,6 +138,7 @@ class QwenTextBackend:
         repair_request = BackendRequest(
             task=request.task,
             prompt=request.prompt,
+            system_prompt=request.system_prompt,
             max_new_tokens=min(512, max(128, request.max_new_tokens)),
             temperature=0.0,
             metadata={**dict(request.metadata), "max_time": 45.0},
@@ -199,22 +200,35 @@ def _qwen35_messages(request: BackendRequest) -> list[dict[str, Any]]:
             "No prose, no bullets, no markdown, no analysis. "
             "The first non-whitespace character must be `{`."
         )
+    system_text = (
+        "Follow the user's requested output format exactly. "
+        "Do not explain your reasoning, restate context, or add markdown. "
+        "If JSON is requested, output only parseable JSON."
+    )
+    system_prompt = str(getattr(request, "system_prompt", "") or "").strip()
+    if system_prompt:
+        system_text = f"{system_prompt}\n\n{system_text}"
     return [
         {
             "role": "system",
             "content": [
                 {
                     "type": "text",
-                    "text": (
-                        "Follow the user's requested output format exactly. "
-                        "Do not explain your reasoning, restate context, or add markdown. "
-                        "If JSON is requested, output only parseable JSON."
-                    ),
+                    "text": system_text,
                 }
             ],
         },
         {"role": "user", "content": [{"type": "text", "text": prompt}]},
     ]
+
+
+def _text_messages_for_request(request: BackendRequest) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    system_prompt = str(getattr(request, "system_prompt", "") or "").strip()
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": request.prompt})
+    return messages
 
 
 _JSON_TEXT_TASKS = {

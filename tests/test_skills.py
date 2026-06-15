@@ -1,4 +1,13 @@
-from visual_coding_agent_harness.agents.skills.specs import builtin_skill_registry, select_skill, skill_catalog_prompt
+import pytest
+
+from visual_coding_agent_harness.agents.skills.specs import (
+    SkillRegistry,
+    SkillSpec,
+    SkillTrigger,
+    builtin_skill_registry,
+    select_skill,
+    skill_catalog_prompt,
+)
 from visual_coding_agent_harness.tools.inspector import _mutex_read_prompt
 
 
@@ -15,18 +24,64 @@ def test_main_idea_uses_global_gist_as_topic_hint_not_option_floor():
 
 def test_skill_catalog_redacts_exhausted_one_shot_tool():
     rendered = skill_catalog_prompt(exhausted_tools=frozenset({"global_gist"}))
-    main_idea_line = next(line for line in rendered.splitlines() if line.startswith("- main_idea@"))
-    suggested_actions = main_idea_line.split("suggested_actions=", 1)[1].split(";", 1)[0]
+    suggested_actions = _catalog_field(rendered, "main_idea", "suggested_actions")
 
     assert "global_gist" not in suggested_actions.split("(", 1)[0]
-    assert "(global_gist=exhausted)" in main_idea_line
+    assert "(global_gist=exhausted)" in suggested_actions
 
 
 def test_skill_catalog_keeps_one_shot_tool_when_available():
     rendered = skill_catalog_prompt()
-    main_idea_line = next(line for line in rendered.splitlines() if line.startswith("- main_idea@"))
 
-    assert "global_gist" in main_idea_line
+    assert "global_gist" in _catalog_field(rendered, "main_idea", "suggested_actions")
+
+
+def test_skill_registry_init_rejects_duplicate_names():
+    skill = SkillSpec(
+        name="duplicate",
+        version=1,
+        trigger=SkillTrigger(route="needle_local"),
+        input_slots=(),
+        procedure=(),
+        sufficiency=(),
+        verifier_checks=(),
+    )
+
+    with pytest.raises(ValueError, match="Skill already registered: duplicate"):
+        SkillRegistry([skill, skill])
+
+
+def test_builtin_skill_registry_has_expected_unique_skill_names():
+    assert set(builtin_skill_registry().names()) == {
+        "general_exploration",
+        "grounded_factual_qa",
+        "main_idea",
+        "complement_absence_qa",
+        "causal_asr_qa",
+        "universal_set_qa",
+        "mutex_fact_qa",
+        "timeline_ordering",
+        "narration_timeline_qa",
+        "visual_timeline_qa",
+        "mixed_asr_visual_qa",
+    }
+
+
+def test_grounded_factual_playbook_retains_merged_final_check():
+    skill = builtin_skill_registry().get("grounded_factual_qa")
+
+    assert skill.recovery["insufficient"]["target"] == "distinguishing fact window"
+    assert skill.self_check == ("decision.citations all visually_confirmed",)
+
+
+def test_skill_spec_decomposition():
+    for skill in builtin_skill_registry().list():
+        assert skill.guide.name == skill.name
+        assert skill.guide.version == skill.version
+        assert skill.guide.description
+        assert skill.guide.when_to_use
+        assert skill.policy.allowed_modalities
+        assert skill.policy.verifier_checks == tuple(skill.verifier_checks)
 
 
 def test_mutex_fact_skill_one_call_per_window():
@@ -52,3 +107,15 @@ def test_mutex_fact_skill_one_call_per_window():
     assert "option B (`the statue is upper-class`) true" in prompt
     assert "OR NEITHER true" in prompt
     assert "Cite only visible frames" in prompt
+
+
+def _catalog_field(rendered: str, skill_name: str, field_name: str) -> str:
+    lines = rendered.splitlines()
+    start = lines.index(next(line for line in lines if line.startswith(f"- {skill_name}@")))
+    for line in lines[start + 1 :]:
+        if line.startswith("- "):
+            break
+        prefix = f"  {field_name}: "
+        if line.startswith(prefix):
+            return line[len(prefix) :]
+    raise AssertionError(f"{field_name} not found for {skill_name}")

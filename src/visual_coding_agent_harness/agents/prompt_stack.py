@@ -27,55 +27,68 @@ class PromptBlock:
         return f"# {self.title}\n{self.body.strip()}\n"
 
 
+@dataclass(frozen=True)
+class PromptPair:
+    system_prompt: str
+    user_prompt: str
+    context_report: ContextBudgetReport
+
+
 def render_prompt_blocks(blocks: Sequence[PromptBlock]) -> str:
     return "\n".join(block.render() for block in blocks).strip()
 
 
-def _route_playbook_body(playbook: QuestionPlaybook, *, option_blind: bool = False) -> str:
-    if not option_blind:
-        return playbook.to_prompt()
-    if playbook.route == "gist_global":
-        return QuestionPlaybook(
-            name=playbook.name,
-            route=playbook.route,
-            instructions=[
-                "Start with global_gist to get a sparse whole-video topic and coverage hint.",
-                "Use local inspection or indexed transcript evidence to verify full-video coverage.",
-                "Collect factual coverage across the full narrative arc before handing off to AnswerAgent.",
-            ],
-            sufficiency_rules=[
-                "A global_gist observation is a topic hint, not final support.",
-                "Record whether cited facts cover the main entity, time span, and major narrative stages.",
-            ],
-        ).to_prompt()
-    if playbook.route == "temporal_order":
-        return QuestionPlaybook(
-            name=playbook.name,
-            route=playbook.route,
-            instructions=[
-                "Use coarse captions to locate target event/entity segments before focused timestamp reads.",
-                "Inspect the relevant earlier and later windows when order matters.",
-                "Local workers should report facts and presentation order only.",
-            ],
-            sufficiency_rules=[
-                "Citations must include timestamped answer-grade visual, ASR, OCR, or QA evidence for the ordered events.",
-                "Evidence must not conflict with the claimed temporal relation.",
-                "Record the observed order with segment or timestamp evidence before final handoff.",
-            ],
-        ).to_prompt()
-    return QuestionPlaybook(
-        name=playbook.name,
-        route=playbook.route,
-        instructions=[
-            "Use query-conditioned navigation to localize likely evidence.",
-            "Delegate visual reading to vision_read or inspect_segment once a candidate segment is localized.",
-            "Local workers should report facts only.",
-        ],
-        sufficiency_rules=[
-            "Final handoff needs cited answer-grade visual, ASR, OCR, or QA evidence.",
-            "State uncertainty when evidence is incomplete or ambiguous.",
-        ],
-    ).to_prompt()
+SLOT_OF_BLOCK: Mapping[str, SlotName] = {
+    "base_identity": "task",
+    "route_playbook": "task",
+    "skill_catalog": "task",
+    "trajectory_snapshot": "trajectory",
+    "hypothesis": "hypothesis",
+    "evidence_snapshot": "evidence",
+    "scene_index_snapshot": "scene_index",
+    "normalization_notes": "feedback",
+    "answer_feedback": "feedback",
+    "diagnostic_repair_hint": "feedback",
+    "reflection_memory": "feedback",
+    "pending_inference": "feedback",
+    "budget_snapshot": "budget",
+    "tool_schema": "tooling",
+    "final_gate": "tooling",
+    "response_contract": "tooling",
+}
+
+
+_RENDERED_SLOT_BLOCKS = frozenset(
+    {
+        "base_identity",
+        "route_playbook",
+        "skill_catalog",
+        "evidence_snapshot",
+        "normalization_notes",
+        "answer_feedback",
+        "diagnostic_repair_hint",
+        "reflection_memory",
+        "pending_inference",
+        "tool_schema",
+        "final_gate",
+        "response_contract",
+    }
+)
+
+
+def _blocks_to_slots(blocks: Sequence[PromptBlock]) -> dict[SlotName, str]:
+    grouped: dict[SlotName, list[str]] = {}
+    for block in blocks:
+        slot = SLOT_OF_BLOCK.get(block.name)
+        if slot is None:
+            continue
+        rendered = block.render().strip() if block.name in _RENDERED_SLOT_BLOCKS else block.body.strip()
+        grouped.setdefault(slot, []).append(rendered)
+    slots: dict[SlotName, str] = {}
+    for slot in ("task", "trajectory", "hypothesis", "evidence", "scene_index", "feedback", "budget", "tooling"):
+        parts = grouped.get(slot, [])
+        slots[slot] = "\n\n".join(part for part in parts if part).strip() if parts else "(none)"
+    return slots
 
 
 def build_replanning_prompt(
@@ -137,6 +150,99 @@ def build_replanning_prompt(
     return _join_slots(allocated), report
 
 
+def compose_planner_prompts(
+    *,
+    prompt_role_split_enabled: bool,
+    question: str,
+    scene_index: SceneIndex,
+    ledger_text: str,
+    round_number: int,
+    budget: Any,
+    allocator: ContextBudgetAllocator,
+    inspected_segment_ids: Sequence[str] = (),
+    tool_class_counts: Mapping[str, int] | None = None,
+    final_round_reserved: bool = False,
+    answer_feedback: Sequence[str] = (),
+    pending_inferences: Sequence[str] = (),
+    normalization_notes: Sequence[Any] = (),
+    hypothesis_text: str = "",
+    reflection_memory: Sequence[str] = (),
+    evidence_status_summary: Mapping[str, Any] | None = None,
+    recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
+    exhausted_tools: frozenset[str] | None = None,
+    active_skill: str | None = None,
+    route: str | None = None,
+    target_hints: Sequence[str] = (),
+    target_ref_descriptions: Sequence[str] = (),
+    projection_status: Mapping[str, Any] | None = None,
+    diagnostic_repair_hint: str | None = None,
+) -> PromptPair:
+    if not prompt_role_split_enabled:
+        prompt, report = build_replanning_prompt(
+            question=question,
+            scene_index=scene_index,
+            ledger_text=ledger_text,
+            round_number=round_number,
+            budget=budget,
+            allocator=allocator,
+            inspected_segment_ids=inspected_segment_ids,
+            tool_class_counts=tool_class_counts,
+            final_round_reserved=final_round_reserved,
+            answer_feedback=answer_feedback,
+            pending_inferences=pending_inferences,
+            normalization_notes=normalization_notes,
+            hypothesis_text=hypothesis_text,
+            reflection_memory=reflection_memory,
+            evidence_status_summary=evidence_status_summary,
+            recent_tool_outputs=recent_tool_outputs,
+            exhausted_tools=exhausted_tools,
+            active_skill=active_skill,
+            route=route,
+            target_hints=target_hints,
+            target_ref_descriptions=target_ref_descriptions,
+            projection_status=projection_status,
+            diagnostic_repair_hint=diagnostic_repair_hint,
+        )
+        return PromptPair(system_prompt="", user_prompt=prompt, context_report=report)
+    slots = compose_replanning_prompt_slots(
+        question=question,
+        scene_index=scene_index,
+        ledger_text=ledger_text,
+        round_number=round_number,
+        budget=budget,
+        inspected_segment_ids=inspected_segment_ids,
+        tool_class_counts=tool_class_counts,
+        final_round_reserved=final_round_reserved,
+        answer_feedback=answer_feedback,
+        pending_inferences=pending_inferences,
+        normalization_notes=normalization_notes,
+        hypothesis_text=hypothesis_text,
+        reflection_memory=reflection_memory,
+        evidence_status_summary=evidence_status_summary,
+        recent_tool_outputs=recent_tool_outputs,
+        exhausted_tools=exhausted_tools,
+        active_skill=active_skill,
+        route=route,
+        target_hints=target_hints,
+        target_ref_descriptions=target_ref_descriptions,
+        projection_status=projection_status,
+        diagnostic_repair_hint=diagnostic_repair_hint,
+    )
+    allocated, report = allocator.allocate(
+        slots,
+        ctx={
+            "round": round_number,
+            "active_followup_target_query": str(answer_feedback[0]) if answer_feedback else "",
+        },
+    )
+    legacy_prompt = _join_slots(allocated)
+    split_marker = "\n\n## Trajectory\n"
+    if split_marker not in legacy_prompt:
+        return PromptPair(system_prompt=legacy_prompt, user_prompt="", context_report=report)
+    system_prompt, user_tail = legacy_prompt.split(split_marker, 1)
+    return PromptPair(system_prompt=system_prompt, user_prompt=f"## Trajectory\n{user_tail}", context_report=report)
+
+
 def compose_replanning_prompt_slots(
     *,
     question: str,
@@ -162,111 +268,31 @@ def compose_replanning_prompt_slots(
     projection_status: Mapping[str, Any] | None = None,
     diagnostic_repair_hint: str | None = None,
 ) -> dict[SlotName, str]:
-    playbook = select_question_playbook(question)
-    resolved_route = route or playbook.route
-    if route and route != playbook.route:
-        playbook = QuestionPlaybook(name=str(route), route=str(route))
-    option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
-    task_blocks = [
-        PromptBlock(
-            name="base_identity",
-            title="Base Identity",
-            body=(
-                "You are an autonomous visual agent exploring a long video with tools.\n"
-                "Planner input mode: text-only. Use the scene index and evidence ledger; tools inspect pixels/video.\n"
-                "Use a short ReAct shell: pick the next action, observe tool output, then decide whether evidence is sufficient.\n"
-                "Allowed ReAct actions: ground_question, vision_read, answer_agent, verify.\n"
-                "Do not include step-by-step private reasoning in the JSON response."
-            ),
-        ),
-        PromptBlock(
-            name="route_playbook",
-            title="Route Playbook",
-            body=_route_playbook_body(playbook, option_blind=option_blind),
-        ),
-        PromptBlock(
-            name="skill_catalog",
-            title="Skill Catalog",
-            body=_skill_catalog_block(
-                active_skill=active_skill,
-                exhausted_tools=exhausted_tools,
-                question=question,
-                target_hints=target_hints,
-                projection_status=projection_status,
-                diagnostic_repair_hint=diagnostic_repair_hint,
-            ),
-        ),
-    ]
-    tooling_blocks = [
-        PromptBlock(
-            name="tool_schema",
-            title="Tool Schema",
-            body=_tool_schema_block(
-                option_blind=option_blind,
-                active_skill=active_skill,
-                exhausted=exhausted_tools or frozenset(),
-                target_ref_descriptions=target_ref_descriptions,
-            ),
-        ),
-        PromptBlock(
-            name="final_gate",
-            title="Final Gate",
-            body=_final_gate_block(
-                final_round_reserved=final_round_reserved,
-                option_blind=option_blind,
-                route=resolved_route,
-                include_target_refs=bool(target_ref_descriptions),
-            ),
-        ),
-        PromptBlock(
-            name="response_contract",
-            title="Response Contract",
-            body=(
-                "Return only JSON with one of these schemas:\n"
-                '{"status": "continue", "skill": string, "rationale": string, '
-                '"hypothesis": {"option": "A|B|C|D", "why": string, "missing": [string]}, '
-                '"program": [{"tool": string, "args": object, "assign": string}]}\n'
-                '{"status": "final", "skill": string, "answer": string, "citations": [observation_id], "confidence": number}'
-            ),
-        ),
-    ]
-    evidence_status_text = _evidence_status_summary_text(evidence_status_summary)
-    evidence_body = "# Evidence Snapshot\n"
-    if evidence_status_text:
-        evidence_body += evidence_status_text + "\n"
-    recent_outputs_text = _recent_tool_outputs_block(recent_tool_outputs)
-    if recent_outputs_text:
-        evidence_body += recent_outputs_text + "\n"
-    evidence_body += "Evidence ledger:\n" + (ledger_text or "(none)")
-    return {
-        "task": render_prompt_blocks(task_blocks),
-        "trajectory": _trajectory_snapshot_block(
-            round_number=round_number,
-            budget=budget,
-            inspected_segment_ids=inspected_segment_ids,
-        ),
-        "hypothesis": _hypothesis_slot(hypothesis_text),
-        "evidence": evidence_body,
-        "scene_index": _scene_index_snapshot_block(
-            question=question,
-            scene_index=scene_index,
-            inspected_segment_ids=inspected_segment_ids,
-            target_hints=target_hints,
-        ),
-        "feedback": _feedback_slot(
-            answer_feedback=answer_feedback,
-            pending_inferences=pending_inferences,
-            normalization_notes=normalization_notes,
-            reflection_memory=reflection_memory,
-            diagnostic_repair_hint=diagnostic_repair_hint,
-        ),
-        "budget": _budget_snapshot_block(
-            round_number=round_number,
-            budget=budget,
-            final_round_reserved=final_round_reserved,
-        ),
-        "tooling": render_prompt_blocks(tooling_blocks),
-    }
+    blocks = compose_replanning_prompt_blocks(
+        question=question,
+        scene_index=scene_index,
+        ledger_text=ledger_text,
+        round_number=round_number,
+        budget=budget,
+        inspected_segment_ids=inspected_segment_ids,
+        tool_class_counts=tool_class_counts,
+        final_round_reserved=final_round_reserved,
+        answer_feedback=answer_feedback,
+        pending_inferences=pending_inferences,
+        normalization_notes=normalization_notes,
+        hypothesis_text=hypothesis_text,
+        reflection_memory=reflection_memory,
+        evidence_status_summary=evidence_status_summary,
+        recent_tool_outputs=recent_tool_outputs,
+        exhausted_tools=exhausted_tools,
+        active_skill=active_skill,
+        route=route,
+        target_hints=target_hints,
+        target_ref_descriptions=target_ref_descriptions,
+        projection_status=projection_status,
+        diagnostic_repair_hint=diagnostic_repair_hint,
+    )
+    return _blocks_to_slots(blocks)
 
 
 def compose_replanning_prompt_blocks(
@@ -280,10 +306,12 @@ def compose_replanning_prompt_blocks(
     tool_class_counts: Mapping[str, int] | None = None,
     final_round_reserved: bool = False,
     answer_feedback: Sequence[str] = (),
+    pending_inferences: Sequence[str] = (),
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
     evidence_status_summary: Mapping[str, Any] | None = None,
+    recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
     exhausted_tools: frozenset[str] | None = None,
     active_skill: str | None = None,
     route: str | None = None,
@@ -294,6 +322,8 @@ def compose_replanning_prompt_blocks(
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
     resolved_route = route or playbook.route
+    if route and route != playbook.route:
+        playbook = QuestionPlaybook(name=str(route), route=str(route))
     option_blind = bool(getattr(budget, "rewrite_mcq_for_exploration", False))
     blocks = [
         PromptBlock(
@@ -304,13 +334,15 @@ def compose_replanning_prompt_blocks(
                 "Planner input mode: text-only. Use the scene index and evidence ledger; tools inspect pixels/video.\n"
                 "Use a short ReAct shell: pick the next action, observe tool output, then decide whether evidence is sufficient.\n"
                 "Allowed ReAct actions: ground_question, vision_read, answer_agent, verify.\n"
+                "Skill selection is your choice; read each skill description and when_to_use guidance to pick.\n"
+                "Evidence policy is the harness's responsibility; it does not change automatically with your skill choice.\n"
                 "Do not include step-by-step private reasoning in the JSON response."
             ),
         ),
         PromptBlock(
             name="route_playbook",
             title="Route Playbook",
-            body=_route_playbook_body(playbook, option_blind=option_blind),
+            body=playbook.to_prompt(option_blind=option_blind),
         ),
         PromptBlock(
             name="skill_catalog",
@@ -339,6 +371,7 @@ def compose_replanning_prompt_blocks(
             body=_evidence_only_snapshot_block(
                 ledger_text=ledger_text,
                 evidence_status_summary=evidence_status_summary,
+                recent_tool_outputs=recent_tool_outputs,
             ),
         ),
         PromptBlock(
@@ -357,6 +390,15 @@ def compose_replanning_prompt_blocks(
             ),
         ),
     ]
+    if pending_inferences:
+        rendered_pending = _dedupe_pending_inferences(pending_inferences)
+        blocks.append(
+            PromptBlock(
+                name="pending_inference",
+                title="Pending Inference",
+                body="\n".join(f"- {item}" for item in rendered_pending[:3]),
+            )
+        )
     if normalization_notes:
         blocks.append(
             PromptBlock(
@@ -505,6 +547,7 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         "summarize_ledger_evidence(max_claims: int = 5)",
         verifier_schema,
         "view_observation(obs_id: str, line_range: tuple | None = None)",
+        "read_observation_detail(obs_id: str, line_range: tuple | None = None)",
         "grep_evidence(pattern: str, in_field: str = 'claim')",
         "query_evidence_table(filter: dict)",
         "read_timeline_sorted()",
@@ -526,7 +569,7 @@ def _skill_catalog_block(
     projection_status: Mapping[str, Any] | None = None,
     diagnostic_repair_hint: str | None = None,
 ) -> str:
-    lines = [skill_catalog_prompt(exhausted_tools=exhausted_tools)]
+    lines = [skill_catalog_prompt(exhausted_tools=exhausted_tools, active_skill_id=active_skill or "")]
     if active_skill:
         playbook_block = render_skill_playbook_for_prompt(
             active_skill,
@@ -539,13 +582,14 @@ def _skill_catalog_block(
             lines.extend(["", playbook_block])
         lines.extend(
             [
-                "# Effective Skill State",
-                f"recommended_skill: {active_skill}",
-                f"effective_skill: {active_skill}",
-                "skill_locked: true",
-                "unlock_used: false",
-                "The `skill` field in your response must match effective_skill.",
-                "Changing it will not change the active gate.",
+                "# Active Skill",
+                f"current_skill: {active_skill}",
+                "last_round_rationale: (initial round)",
+                (
+                    'To switch skill: set "skill" field in your JSON to the new name and explain the switch '
+                    'in "rationale". The harness will accept or reject the switch based on evidence-state compatibility.'
+                ),
+                'If no specialized skill fits, choose "general_exploration".',
             ]
         )
         if skill_has_playbook(active_skill):
@@ -556,7 +600,7 @@ def _skill_catalog_block(
         lines.append(
             "Select the skill that best matches this case in every planner JSON as `skill`. "
             "Choose from the catalog yourself; the route playbook is guidance, not a skill assignment. "
-            "If no catalog skill fits, omit `skill` and use ordinary tool exploration."
+            'If no catalog skill fits, choose "general_exploration".'
         )
     lines.append("Tools listed as `=exhausted` are one-shot and cannot be requested again.")
     return "\n".join(lines)
@@ -593,7 +637,6 @@ def _join_slots(slots: Mapping[SlotName, str]) -> str:
     titles = {
         "task": "Task",
         "trajectory": "Trajectory",
-        "navigation": "Navigation",
         "hypothesis": "Hypothesis",
         "evidence": "Evidence",
         "scene_index": "Compact scene index",
@@ -638,35 +681,6 @@ def _evidence_status_summary_text(summary: Mapping[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
-def _navigation_snapshot_block(
-    *,
-    question: str,
-    scene_index: SceneIndex,
-    round_number: int,
-    budget: Any,
-    inspected_segment_ids: Sequence[str],
-    tool_class_counts: Mapping[str, int] | None,
-    final_round_reserved: bool,
-) -> str:
-    inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
-    uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
-    final_round_line = (
-        "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
-        if final_round_reserved
-        else ""
-    )
-    return (
-        f"Round: {round_number}/{getattr(budget, 'max_rounds', '?')}\n"
-        f"Question: {question}\n"
-        f"Already inspected segments: {inspected_line}\n"
-        f"Uninspected segment candidates: {uninspected_line}\n"
-        f"Request at most {getattr(budget, 'max_tool_calls_per_round', 1)} new tool call(s) this round.\n"
-        f"{final_round_line}"
-        "Scene index:\n"
-        f"{scene_index.summary(max_segments=64)}"
-    )
-
-
 def _trajectory_snapshot_block(
     *,
     round_number: int,
@@ -708,7 +722,6 @@ def _budget_snapshot_block(
         else ""
     )
     return (
-        f"Round: {round_number}/{getattr(budget, 'max_rounds', '?')}\n"
         f"Request at most {getattr(budget, 'max_tool_calls_per_round', 1)} new tool call(s) this round.\n"
         f"{final_round_line}"
     )
@@ -800,6 +813,19 @@ def _recent_tool_outputs_block(outputs: Sequence[Mapping[str, Any]]) -> str:
         claim = str(output.get("claim", "")).strip()
         title = f"## {obs_id or '(unknown obs)'} | {tool_name or '(unknown tool)'}"
         lines.append(title)
+        if bool(output.get("in_evidence_table")):
+            raw_output = output.get("raw_output", {})
+            raw_map = raw_output if isinstance(raw_output, Mapping) else {}
+            segment_id = str(output.get("segment_id") or raw_map.get("segment_id") or "-").strip() or "-"
+            modality = str(output.get("modality") or raw_map.get("modality") or "-").strip() or "-"
+            verdict = str(output.get("verdict") or raw_map.get("verdict") or "supported").strip() or "supported"
+            lines.append(
+                f"[obs:{obs_id or '?'}] segment={segment_id} modality={modality} verdict={verdict} "
+                "-> see workspace/evidence_table.jsonl"
+            )
+            if claim:
+                lines.append(f"claim: {claim}")
+            continue
         if claim:
             lines.append(f"claim: {claim}")
         raw_output = output.get("raw_output", {})
@@ -845,56 +871,24 @@ def _note_mapping(note: Any, name: str) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
-def _evidence_snapshot_block(
-    *,
-    question: str,
-    scene_index: SceneIndex,
-    ledger_text: str,
-    round_number: int,
-    budget: Any,
-    inspected_segment_ids: Sequence[str],
-    tool_class_counts: Mapping[str, int] | None,
-    final_round_reserved: bool,
-    evidence_status_summary: Mapping[str, Any] | None = None,
-) -> str:
-    inspected_line = ", ".join(inspected_segment_ids) if inspected_segment_ids else "(none)"
-    uninspected_line = _uninspected_segment_summary(scene_index=scene_index, inspected_segment_ids=inspected_segment_ids)
-    final_round_line = (
-        "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
-        if final_round_reserved
-        else ""
-    )
-    evidence_status_text = _evidence_status_summary_text(evidence_status_summary)
-    status_block = f"{evidence_status_text}\n" if evidence_status_text else ""
-    return (
-        f"Round: {round_number}/{getattr(budget, 'max_rounds', '?')}\n"
-        f"Question: {question}\n"
-        f"Already inspected segments: {inspected_line}\n"
-        f"Uninspected segment candidates: {uninspected_line}\n"
-        f"Request at most {getattr(budget, 'max_tool_calls_per_round', 1)} new tool call(s) this round.\n"
-        f"{final_round_line}"
-        "Scene index:\n"
-        f"{scene_index.summary(max_segments=64)}\n"
-        f"{status_block}"
-        "Evidence ledger:\n"
-        f"{ledger_text}"
-    )
-
-
 def _evidence_only_snapshot_block(
     *,
     ledger_text: str,
     evidence_status_summary: Mapping[str, Any] | None = None,
+    recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     evidence_status_text = _evidence_status_summary_text(evidence_status_summary)
-    status_block = f"{evidence_status_text}\n" if evidence_status_text else ""
-    return f"{status_block}Evidence ledger:\n{ledger_text}"
+    lines: list[str] = []
+    if evidence_status_text:
+        lines.append(evidence_status_text)
+    recent_outputs_text = _recent_tool_outputs_block(recent_tool_outputs)
+    if recent_outputs_text:
+        lines.append(recent_outputs_text)
+    lines.append("Evidence ledger:\n" + (ledger_text or "(none)"))
+    return "\n".join(lines)
 
 
 _ROUTE_AGNOSTIC_FINAL_RULES = (
-    "- The compact scene index is the default map; do not call video_ls for short indexed videos.",
-    "- Use target_coverage when MCQ/QA targets need a segment coverage matrix.",
-    "- Use read_segment_detail to expand one selected segment before spending VLM calls.",
     "- Use navigation output as a map, then delegate localized visual reading to one focused evidence tool on one candidate segment.",
     "- Do not spend every round on navigation-only tools; gather evidence-grade visual observations before finalizing.",
     "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.",

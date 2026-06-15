@@ -1,6 +1,8 @@
 ---
 name: visual_timeline_qa
 version: 1
+description: Visual event ordering and motion questions requiring timestamped onscreen evidence.
+when_to_use: Use when the question asks about before, after, first, last, movement, or visible event sequence.
 default_claim_modality: visual_fact
 recovery_rules:
   missing_event:

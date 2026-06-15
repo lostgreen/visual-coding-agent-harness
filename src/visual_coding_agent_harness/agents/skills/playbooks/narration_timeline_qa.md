@@ -1,6 +1,8 @@
 ---
 name: narration_timeline_qa
 version: 1
+description: Timeline or biography-style questions whose evidence is mainly narrated or spoken.
+when_to_use: Use when the question asks for narrated sequence, life story, reason, or background information.
 default_claim_modality: narrated_fact
 recovery_rules:
   missing_asr:

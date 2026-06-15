@@ -11,10 +11,18 @@ from dataclasses import dataclass, field
 from string import Formatter
 from typing import Any, Callable, Dict, Mapping, Sequence
 
+from .agents.runtime.lifecycle import (
+    PostToolHook,
+    PreToolHook,
+    RunContext,
+    apply_post_tool_chain,
+    evaluate_pre_tool_chain,
+)
 from .agents.contracts import resolve_nframes
 from .agents.distill import distill
 from .agents.output_quality import DEGENERATE_CONFIDENCE_SIGNAL, is_degenerate
 from .registry import ToolRegistry
+from .protocol import ToolRequest, ToolResult
 from .workspace import EvidenceRecord, EvidenceWorkspace, MapUpdateProposal, Observation
 
 
@@ -28,9 +36,20 @@ class ProgramResult:
 class ProgramInterpreter:
     """Run a simple visual program against a tool registry and workspace."""
 
-    def __init__(self, registry: ToolRegistry, workspace: EvidenceWorkspace) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        workspace: EvidenceWorkspace,
+        *,
+        lifecycle_context: RunContext | None = None,
+        pre_tool_hooks: Sequence[PreToolHook] = (),
+        post_tool_hooks: Sequence[PostToolHook] = (),
+    ) -> None:
         self.registry = registry
         self.workspace = workspace
+        self.lifecycle_context = lifecycle_context
+        self.pre_tool_hooks = tuple(pre_tool_hooks)
+        self.post_tool_hooks = tuple(post_tool_hooks)
 
     def run(
         self,
@@ -103,6 +122,35 @@ class ProgramInterpreter:
             "tool_use",
             {"step": step_index, "tool": tool_name, "arguments": arguments},
         )
+        request = ToolRequest(tool=tool_name, arguments=arguments, request_id=str(step_index))
+        if self.lifecycle_context is not None and self.pre_tool_hooks:
+            decision = evaluate_pre_tool_chain(self.pre_tool_hooks, self.lifecycle_context, request)
+            if decision.rejected:
+                self.workspace.write_trace_event(
+                    "tool_call_rejected",
+                    {
+                        "step": step_index,
+                        "tool": tool_name,
+                        "reason": decision.reason,
+                        "message": decision.message,
+                        "payload": dict(decision.payload),
+                    },
+                )
+                raw_output = {
+                    "claim": "",
+                    "confidence": 0.0,
+                    "limitations": decision.message or decision.reason,
+                    "rejected": True,
+                    "rejection_reason": decision.reason,
+                }
+                return self._write_tool_observation(
+                    step=step,
+                    step_index=step_index,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    raw_output=raw_output,
+                    assignments=assignments,
+                )
 
         raw_output = dict(self.registry.execute(tool_name, arguments))
         is_bad_output, fingerprint = is_degenerate(str(raw_output.get("claim", "")))
@@ -117,6 +165,25 @@ class ProgramInterpreter:
                     "fingerprint": fingerprint,
                 },
             )
+        return self._write_tool_observation(
+            step=step,
+            step_index=step_index,
+            tool_name=tool_name,
+            arguments=arguments,
+            raw_output=raw_output,
+            assignments=assignments,
+        )
+
+    def _write_tool_observation(
+        self,
+        *,
+        step: Mapping[str, Any],
+        step_index: int,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+        raw_output: Mapping[str, Any],
+        assignments: Dict[str, str],
+    ) -> str:
         observation = self.workspace.write_observation(
             tool_name=tool_name,
             input_artifacts=raw_output.get("input_artifacts", []),
@@ -141,6 +208,13 @@ class ProgramInterpreter:
                 "observation_id": observation.observation_id,
             },
         )
+        if self.lifecycle_context is not None and self.post_tool_hooks:
+            request = ToolRequest(tool=tool_name, arguments=arguments, request_id=str(step_index))
+            result = ToolResult.from_mapping(
+                request=request,
+                output=raw_output,
+            )
+            apply_post_tool_chain(self.post_tool_hooks, self.lifecycle_context, request, result)
         self._write_answer_evidence_rows(observation=observation, raw_output=raw_output)
         distilled_records = distill(observation, self.workspace)
         for evidence_record in distilled_records:

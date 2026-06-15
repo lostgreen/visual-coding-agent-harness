@@ -1362,8 +1362,8 @@ def test_planner_owned_grounding_controls_runtime_route_skill_and_target_hints(t
     )
     prompt = next(request.prompt for request in backend.requests if request.task == "replan")
     assert "Question route: temporal_order" in prompt
-    assert "recommended_skill: narration_timeline_qa@v1" in prompt
-    assert "effective_skill: narration_timeline_qa@v1" in prompt
+    assert "current_skill: narration_timeline_qa@v1" in prompt
+    assert "To switch skill: set" in prompt
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert '"route": "temporal_order"' in trace
     assert '"recommended_skill": "narration_timeline_qa@v1"' in trace
@@ -4330,8 +4330,8 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("candidate option B", result.answer)
             self.assertEqual(result.evidence_ids, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("effective_skill_locked", trace)
-            self.assertIn("effective_skill_change_ignored", trace)
+            self.assertIn("skill_recommended", trace)
+            self.assertIn("skill_transition_rejected", trace)
             self.assertIn("prefinal_evidence_repair_requested", trace)
             self.assertNotIn("planner_final_after_prefinal_evidence_repair", trace)
 
@@ -5291,7 +5291,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertLessEqual(workspace.observation_count(tool_name="caption_segment"), 1)
             self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("effective_skill_locked", trace)
+            self.assertIn("skill_recommended", trace)
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("timeline_caption_", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
@@ -5589,7 +5589,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "low_confidence_final")
             self.assertEqual(result.rounds[0].program, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("effective_skill_locked", trace)
+            self.assertIn("skill_recommended", trace)
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
             self.assertEqual(calls, [])
@@ -5704,7 +5704,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual([call[0] for call in calls].count("caption_segment"), 1)
             self.assertEqual([call[0] for call in calls].count("vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("effective_skill_locked", trace)
+            self.assertIn("skill_recommended", trace)
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("timeline_ordering_missing_entity", trace)
             self.assertIn("mcq_forced_fallback", trace)

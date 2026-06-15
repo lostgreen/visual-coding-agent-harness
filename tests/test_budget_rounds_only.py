@@ -24,7 +24,7 @@ def test_budget_snapshot_block_omits_per_class_budgets() -> None:
         final_round_reserved=False,
     )
 
-    assert "Round: 3/20" in body
+    assert "Round: 3/20" not in body
     assert "Request at most 2 new tool call(s)" in body
     assert "Remaining tool budgets" not in body
     assert "cheap=" not in body

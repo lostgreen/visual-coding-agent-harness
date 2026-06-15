@@ -1,0 +1,48 @@
+{
+  "input": {
+    "question": "Question: What is the video mainly about?\nA. A cooking contest\nB. A city traffic update\nC. A sports highlight reel\nD. The rise and fall of an ancient empire",
+    "video_path": "/videos/replay.mp4"
+  },
+  "output": {
+    "answer": "A",
+    "citations": [
+      "obs_0002"
+    ],
+    "confidence": 0.0,
+    "evidence_ids": [],
+    "status": "low_confidence_final"
+  },
+  "rounds": [
+    {
+      "observation_ids": [
+        "obs_0002"
+      ],
+      "planner_text": "{\"status\":\"continue\",\"program\":[{\"tool\":\"vision_read\",\"args\":{\"segment_id\":\"seg_0001\",\"ask_for\":\"Describe the main factual content of this segment.\"}}]}",
+      "program": [
+        {
+          "args": {
+            "ask_for": "Describe the main factual content of this segment? Do not choose an option. main_idea",
+            "end_sec": 120.0,
+            "event_label": "Describe the main factual content of this segment? Do not choose an option. main_idea",
+            "nframes": 8,
+            "segment_id": "seg_0001",
+            "start_sec": 0.0,
+            "video_path": "/videos/replay.mp4"
+          },
+          "tool": "vision_read"
+        }
+      ],
+      "rationale": "",
+      "round_number": 1,
+      "status": "continue"
+    },
+    {
+      "observation_ids": [],
+      "planner_text": "",
+      "program": [],
+      "rationale": "MCQ budget exhausted; returning best-effort non-empty option.",
+      "round_number": 1,
+      "status": "low_confidence_final"
+    }
+  ]
+}

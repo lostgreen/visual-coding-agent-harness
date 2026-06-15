@@ -7,6 +7,7 @@ from pathlib import Path
 from string import Formatter
 from typing import Any, FrozenSet, Mapping, Sequence
 
+from ...contracts import ClaimModality
 from ..question_policy import classify_narration_subroute, classify_question_route
 from .playbook import Playbook, playbook_for_operator, render_playbook_block, with_suggested_actions
 
@@ -28,6 +29,27 @@ class SkillStep:
 
 
 @dataclass(frozen=True)
+class SkillGuide:
+    name: str
+    version: int
+    description: str
+    when_to_use: str
+    procedure: tuple[str, ...] = ()
+    suggested_actions: tuple[str, ...] = ()
+    decomposition_hint: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidencePolicy:
+    allowed_modalities: frozenset[ClaimModality]
+    required_evidence_kinds: frozenset[str] = field(default_factory=frozenset)
+    forbidden_actions: frozenset[str] = field(default_factory=frozenset)
+    verifier_checks: tuple[str, ...] = ()
+    final_conditions: tuple[str, ...] = ()
+    sufficiency_rule: str = ""
+
+
+@dataclass(frozen=True)
 class SkillSpec:
     name: str
     version: int
@@ -44,6 +66,53 @@ class SkillSpec:
     recovery_rules: Mapping[str, Any] = field(default_factory=dict)
     playbook_body: str = ""
     playbook: Playbook | None = None
+    description: str = ""
+    when_to_use: str = ""
+    guide: SkillGuide | None = None
+    policy: EvidencePolicy | None = None
+
+    def __post_init__(self) -> None:
+        if self.guide is None:
+            object.__setattr__(
+                self,
+                "guide",
+                SkillGuide(
+                    name=self.name,
+                    version=self.version,
+                    description=_bounded_text(
+                        self.description
+                        or _playbook_summary(
+                            self.playbook.decomposition if self.playbook is not None else self.playbook_body
+                        )
+                        or f"{self.name} planner guidance.",
+                    ),
+                    when_to_use=_bounded_text(
+                        self.when_to_use
+                        or _when_to_use_from_trigger(self.trigger)
+                        or f"Use when the question matches {self.name}."
+                    ),
+                    procedure=tuple(step.step for step in self.procedure),
+                    suggested_actions=tuple(
+                        self.playbook.suggested_actions
+                        if self.playbook is not None and self.playbook.suggested_actions
+                        else tuple(sorted(self.allowed_actions))
+                    ),
+                    decomposition_hint=self.playbook.decomposition if self.playbook is not None else None,
+                ),
+            )
+        if self.policy is None:
+            object.__setattr__(
+                self,
+                "policy",
+                EvidencePolicy(
+                    allowed_modalities=_modalities_for_default(self.default_claim_modality),
+                    required_evidence_kinds=frozenset({"answer_grade_evidence"}),
+                    forbidden_actions=frozenset(self.playbook.forbidden_actions) if self.playbook is not None else frozenset(),
+                    verifier_checks=tuple(self.verifier_checks),
+                    final_conditions=tuple(self.sufficiency),
+                    sufficiency_rule="; ".join(self.sufficiency),
+                ),
+            )
 
     def prompt_context(self) -> str:
         if self.playbook is not None:
@@ -93,11 +162,14 @@ class SkillSpec:
             sufficiency=tuple(sufficiency),
             verifier_checks=tuple(verifier_checks),
             recovery=dict(recovery_rules),
+            self_check=_metadata_sequence(metadata.get("self_check", ())),
             allowed_actions=allowed_actions,
             default_claim_modality=str(metadata["default_claim_modality"]),
             recovery_rules=dict(recovery_rules),
             playbook_body=body.strip(),
             playbook=playbook,
+            description=str(metadata.get("description", "")),
+            when_to_use=str(metadata.get("when_to_use", "")),
         )
 
     @classmethod
@@ -107,7 +179,9 @@ class SkillSpec:
 
 class SkillRegistry:
     def __init__(self, skills: Sequence[SkillSpec] = ()) -> None:
-        self._skills = {skill.name: skill for skill in skills}
+        self._skills: dict[str, SkillSpec] = {}
+        for skill in skills:
+            self.register(skill)
 
     def register(self, skill: SkillSpec) -> None:
         if skill.name in self._skills:
@@ -119,6 +193,9 @@ class SkillRegistry:
 
     def list(self) -> Sequence[SkillSpec]:
         return tuple(self._skills.values())
+
+    def names(self) -> Sequence[str]:
+        return tuple(self._skills)
 
 
 def _split_front_matter(text: str) -> tuple[str, str]:
@@ -172,6 +249,16 @@ def _parse_scalar(value: str) -> Any:
     return stripped
 
 
+def _metadata_sequence(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Mapping):
+        return tuple(str(value[key]) for key in sorted(value))
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(str(item) for item in value)
+    return ()
+
+
 def _playbook_summary(body: str, *, max_chars: int = 220) -> str:
     paragraphs = [line.strip() for line in body.splitlines() if line.strip() and not line.lstrip().startswith("#")]
     if not paragraphs:
@@ -182,6 +269,30 @@ def _playbook_summary(body: str, *, max_chars: int = 220) -> str:
     return summary[: max_chars - 3].rstrip() + "..."
 
 
+def _bounded_text(value: str, *, max_chars: int = 240) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _when_to_use_from_trigger(trigger: SkillTrigger) -> str:
+    markers = ", ".join(str(marker) for marker in trigger.markers[:6])
+    if markers:
+        return f"Use for {trigger.route} questions with markers such as {markers}."
+    return f"Use for {trigger.route} questions."
+
+
+def _modalities_for_default(default_claim_modality: str) -> frozenset[ClaimModality]:
+    raw = str(default_claim_modality or "").strip()
+    if raw == ClaimModality.MIXED.value:
+        return frozenset({ClaimModality.MIXED, ClaimModality.VISUAL_FACT, ClaimModality.NARRATED_FACT})
+    try:
+        return frozenset({ClaimModality(raw)})
+    except ValueError:
+        return frozenset({ClaimModality.UNKNOWN})
+
+
 _LEGACY_CATALOG_SKILLS = frozenset({"timeline_ordering"})
 
 
@@ -190,27 +301,28 @@ def skill_catalog_prompt(
     registry: SkillRegistry | None = None,
     exhausted_tools: frozenset[str] | None = None,
     include_legacy: bool = False,
+    active_skill_id: str = "",
 ) -> str:
     resolved_registry = registry or builtin_skill_registry()
     blocked = frozenset(exhausted_tools or ())
+    active_name = str(active_skill_id or "").split("@", 1)[0].strip()
     lines = ["Available skills:"]
     for skill in resolved_registry.list():
         if not include_legacy and skill.name in _LEGACY_CATALOG_SKILLS:
             continue
-        marker_text = ", ".join(skill.trigger.markers) if skill.trigger.markers else "(none)"
         suggested = tuple(skill.playbook.suggested_actions) if skill.playbook is not None else tuple(skill.allowed_actions)
         remaining = sorted(action for action in suggested if action not in blocked)
         spent = sorted(action for action in suggested if action in blocked)
         suffix = f" ({', '.join(f'{tool}=exhausted' for tool in spent)})" if spent else ""
-        lines.append(
-            f"- {skill.name}@v{skill.version}: route={skill.trigger.route}; markers={marker_text}; "
-            f"default_claim_modality={skill.default_claim_modality}; "
-            f"suggested_actions={', '.join(remaining) or '(none)'}{suffix}; "
-            f"sufficiency={'; '.join(skill.sufficiency)}"
-        )
-        summary = _playbook_summary(skill.playbook.decomposition if skill.playbook is not None else skill.playbook_body)
-        if summary:
-            lines.append(f"  playbook: {summary}")
+        if active_name and skill.name != active_name:
+            lines.append(f"- {skill.guide.name}@v{skill.guide.version}: {_bounded_text(skill.guide.description, max_chars=80)}")
+            continue
+        lines.append(f"- {skill.guide.name}@v{skill.guide.version}")
+        lines.append(f"  description: {skill.guide.description}")
+        lines.append(f"  when_to_use: {skill.guide.when_to_use}")
+        lines.append(f"  suggested_actions: {', '.join(remaining) or '(none)'}{suffix}")
+        if skill.guide.decomposition_hint:
+            lines.append(f"  playbook: {_bounded_text(skill.guide.decomposition_hint, max_chars=220)}")
     return "\n".join(lines)
 
 
@@ -447,6 +559,16 @@ def builtin_skill_registry() -> SkillRegistry:
     )
     return SkillRegistry(
         [
+            _load_builtin_playbook(
+                "general_exploration.md",
+                trigger_route="general",
+                trigger_markers=(),
+                input_slots=("question", "options", "video_id"),
+                procedure=(),
+                sufficiency=("at_least_one_citation", "at_least_one_inspect_segment"),
+                verifier_checks=("basic_grounding_check",),
+                allowed_actions=grounded_allowed_actions | timeline_allowed_actions | {"bind_asr_claim"},
+            ),
             SkillSpec(
                 name="main_idea",
                 version=1,
@@ -574,23 +696,6 @@ def builtin_skill_registry() -> SkillRegistry:
                     }
                     | {"verify_ledger_answer"}
                 ),
-            ),
-            SkillSpec(
-                name="grounded_factual_qa",
-                version=1,
-                trigger=SkillTrigger(route="needle_local", markers=("which", "what", "where", "who")),
-                input_slots=("question", "options", "video_id", "target_fact"),
-                procedure=grounded_steps,
-                sufficiency=("distinguishing_fact_exists",),
-                verifier_checks=(
-                    "selected_option_has_structured_support",
-                    "no_decisive_weak_grounding",
-                    "no_unaddressed_conflict",
-                ),
-                recovery={"insufficient": {"action": "need_more_evidence", "target": "distinguishing fact window"}},
-                self_check=("decision.citations all visually_confirmed",),
-                allowed_actions=grounded_allowed_actions,
-                playbook=grounded_playbook,
             ),
             _load_builtin_playbook(
                 "narration_timeline_qa.md",

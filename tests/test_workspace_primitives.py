@@ -34,6 +34,7 @@ def test_workspace_primitives_return_deterministic_results(tmp_path: Path):
     registry = build_workspace_primitives_registry(workspace=workspace)
 
     view = registry.execute("view_observation", {"obs_id": "obs_0001"})
+    detail = registry.execute("read_observation_detail", {"obs_id": "obs_0001"})
     grep = registry.execute("grep_evidence", {"pattern": "red door"})
     query = registry.execute("query_evidence_table", {"filter": {"confidence_signal": "confirmed"}})
     timeline = registry.execute("read_timeline_sorted", {})
@@ -45,6 +46,7 @@ def test_workspace_primitives_return_deterministic_results(tmp_path: Path):
     hypothesis_after = registry.execute("read_hypothesis", {})
 
     assert view["regions"][0]["claim"] == "The red door opens."
+    assert detail["regions"][0]["claim"] == "The red door opens."
     assert grep["regions"][0]["obs_ids"] == ["obs_0001"]
     assert query["regions"][0]["rows"][0]["obs_id"] == "obs_0001"
     assert timeline["regions"][0]["entries"][0]["obs_id"] == "obs_0001"
@@ -66,10 +68,22 @@ def test_recent_tool_outputs_returns_latest_three_with_raw_payload(tmp_path: Pat
                 "long_field": "x" * 1200,
             },
         )
+    workspace.write_evidence_row(
+        {
+            "obs_id": "obs_0004",
+            "tool": "vision_read",
+            "claim": "Observation 3.",
+            "segment_id": "seg_0003",
+            "grounding_quality": "visually_confirmed",
+        }
+    )
 
     outputs = workspace.recent_tool_outputs(limit=3)
 
     assert [item["observation_id"] for item in outputs] == ["obs_0002", "obs_0003", "obs_0004"]
+    assert outputs[-1]["in_evidence_table"] is True
+    assert outputs[-1]["segment_id"] == "seg_0003"
+    assert outputs[-1]["modality"] == "visually_confirmed"
     assert outputs[-1]["raw_output"]["visual_caption"] == "caption 3"
     assert outputs[-1]["raw_output"]["anchors_for_vlm"] == [{"segment_id": "seg_0003"}]
     assert len(outputs[-1]["raw_output"]["long_field"]) < 1200

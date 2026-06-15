@@ -1,0 +1,24 @@
+{"payload":{"route":"needle_local","skill":"mutex_fact_qa@v1","source":"hard_skill_runtime"},"type":"iterative_route"}
+{"payload":{"skill":"mutex_fact_qa@v1","target_facts":["red cube is lifted","blue box is opened","yellow card is shown","green door is closed"]},"type":"hard_skill_runtime"}
+{"payload":{"arguments":{"query":"red cube is lifted","top_k":3},"step":1,"tool":"ground_question"},"type":"tool_use"}
+{"payload":{"observation_id":"obs_0001","step":1,"tool":"ground_question"},"type":"tool_result"}
+{"payload":{"observation_id":"obs_0001","slots":{"candidates":1},"step":1},"type":"foreach_slot_update"}
+{"payload":{"arguments":{"ask_for":"red cube is lifted","end_sec":20.0,"event_label":"red cube is lifted","mutex_group_id":"option_fact_mutex","segment_id":"seg_0001","start_sec":0.0,"video_path":"/videos/replay.mp4"},"step":1,"tool":"vision_read"},"type":"tool_use"}
+{"payload":{"frame_set_id":"fs_replay_612_1_00001","observation_id":"obs_0002"},"type":"observation_manifest_link"}
+{"payload":{"observation_id":"obs_0002","step":1,"tool":"vision_read"},"type":"tool_result"}
+{"payload":{"proposal_id":"mp_replay_612_1_00001","source_evidence_id":"ev_distilled_replay_612_1_00003","source_frame_set_id":"fs_replay_612_1_00001","target_segment_id":"seg_0001","tool":"vision_read"},"type":"map_proposal_created"}
+{"payload":{"assigned_by":"vision_read","mapped_evidence_count":1,"mapped_evidence_orphan_count":0,"observation_ids":["obs_0002"],"relation_count":2},"type":"answer_agent_relations_persisted"}
+{"payload":{"observation_id":"obs_0002","slots":{"candidates":1},"step":1},"type":"foreach_slot_update"}
+{"payload":{"attempt_count":1,"event_label":"red cube is lifted","new_evidence_count":2,"observation_ids":["obs_0001","obs_0002"],"query":"red cube is lifted","round":1,"route":"needle_local","target_id":"fu_replay_612_1_0001"},"type":"followup_attempt"}
+{"payload":{"arguments":{"query":"blue box is opened","top_k":3},"step":1,"tool":"ground_question"},"type":"tool_use"}
+{"payload":{"observation_id":"obs_0003","step":1,"tool":"ground_question"},"type":"tool_result"}
+{"payload":{"observation_id":"obs_0003","slots":{"candidates":1},"step":1},"type":"foreach_slot_update"}
+{"payload":{"arguments":{"ask_for":"blue box is opened","end_sec":20.0,"event_label":"blue box is opened","mutex_group_id":"option_fact_mutex","segment_id":"seg_0001","start_sec":0.0,"video_path":"/videos/replay.mp4"},"step":1,"tool":"vision_read"},"type":"tool_use"}
+{"payload":{"frame_set_id":"fs_replay_612_1_00002","observation_id":"obs_0004"},"type":"observation_manifest_link"}
+{"payload":{"observation_id":"obs_0004","step":1,"tool":"vision_read"},"type":"tool_result"}
+{"payload":{"proposal_id":"mp_replay_612_1_00002","source_evidence_id":"ev_distilled_replay_612_1_00008","source_frame_set_id":"fs_replay_612_1_00002","target_segment_id":"seg_0001","tool":"vision_read"},"type":"map_proposal_created"}
+{"payload":{"assigned_by":"vision_read","mapped_evidence_count":1,"mapped_evidence_orphan_count":0,"observation_ids":["obs_0004"],"relation_count":2},"type":"answer_agent_relations_persisted"}
+{"payload":{"observation_id":"obs_0004","slots":{"candidates":1},"step":1},"type":"foreach_slot_update"}
+{"payload":{"attempt_count":1,"event_label":"blue box is opened","new_evidence_count":2,"observation_ids":["obs_0003","obs_0004"],"query":"blue box is opened","round":1,"route":"needle_local","target_id":"fu_replay_612_1_0002"},"type":"followup_attempt"}
+{"payload":{"answer":"need_more_evidence","answer_operator":"select_present","citations":[],"diagnostic_repair_hint":"","failure_tag":"answer_agent_need_more_evidence","final_gate_rejection_reason":"","missing_evidence":["mutex_conflict: obs_0002 vs obs_0004"],"projection_candidate":"","projection_reason":"","round":1,"source":"hard_skill_runtime","status":"need_more_evidence"},"type":"iterative_answer_agent"}
+{"payload":{"failure_tag":"answer_agent_need_more_evidence","route":"needle_local","rule":"request targeted evidence when AnswerAgent abstains instead of forcing an option"},"type":"reflection_memory"}

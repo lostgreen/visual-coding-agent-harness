@@ -27,6 +27,20 @@ class QuestionPolicyTest(unittest.TestCase):
         self.assertEqual(playbook.name, "timeline_ordering")
         self.assertIn("timestamped", " ".join(playbook.sufficiency_rules))
 
+    def test_question_playbook_renders_option_blind_variants(self):
+        cases = [
+            ("What is the video mainly about?", "global_gist to get a sparse whole-video topic"),
+            ("What happens before the person opens the door?", "Local workers should report facts and presentation order only."),
+            ("Which option is visible?\nA. red car\nB. blue cup", "Local workers should report facts only."),
+        ]
+
+        for question, expected in cases:
+            with self.subTest(question=question):
+                playbook = select_question_playbook(question)
+
+                self.assertEqual(playbook.to_prompt(), playbook.to_prompt(option_blind=False))
+                self.assertIn(expected, playbook.to_prompt(option_blind=True))
+
     def test_classifies_synopsis_mcq_as_global_gist_route(self):
         route = classify_question_route(
             "What is the video mainly about?\n"

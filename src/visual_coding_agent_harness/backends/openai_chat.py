@@ -121,7 +121,7 @@ def _messages_for_request(request: BackendRequest) -> list[dict[str, str]]:
             "No prose, no bullets, no markdown, no analysis. "
             "The first non-whitespace character must be `{`."
         )
-    return [
+    messages = [
         {
             "role": "system",
             "content": (
@@ -132,6 +132,10 @@ def _messages_for_request(request: BackendRequest) -> list[dict[str, str]]:
         },
         {"role": "user", "content": prompt},
     ]
+    system_prompt = str(getattr(request, "system_prompt", "") or "").strip()
+    if system_prompt:
+        messages.insert(0, {"role": "system", "content": system_prompt})
+    return messages
 
 
 def _extract_message_text(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:

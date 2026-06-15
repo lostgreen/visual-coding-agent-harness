@@ -1,0 +1,71 @@
+{
+  "input": {
+    "question": "Which option is true in the video?\nA. red cube is lifted\nB. blue box is opened\nC. yellow card is shown\nD. green door is closed",
+    "video_path": "/videos/replay.mp4"
+  },
+  "output": {
+    "answer": "need_more_evidence",
+    "citations": [],
+    "confidence": 0.0,
+    "evidence_ids": [],
+    "status": "need_more_evidence"
+  },
+  "rounds": [
+    {
+      "observation_ids": [
+        "obs_0001",
+        "obs_0002",
+        "obs_0003",
+        "obs_0004"
+      ],
+      "planner_text": "",
+      "program": [
+        {
+          "args": {
+            "query": "red cube is lifted",
+            "top_k": 3
+          },
+          "assign": "ground_1",
+          "tool": "ground_question"
+        },
+        {
+          "args": {
+            "ask_for": "red cube is lifted",
+            "end_sec": 20.0,
+            "event_label": "red cube is lifted",
+            "mutex_group_id": "option_fact_mutex",
+            "segment_id": "seg_0001",
+            "start_sec": 0.0,
+            "video_path": "/videos/replay.mp4"
+          },
+          "assign": "fact_1",
+          "tool": "vision_read"
+        },
+        {
+          "args": {
+            "query": "blue box is opened",
+            "top_k": 3
+          },
+          "assign": "ground_3",
+          "tool": "ground_question"
+        },
+        {
+          "args": {
+            "ask_for": "blue box is opened",
+            "end_sec": 20.0,
+            "event_label": "blue box is opened",
+            "mutex_group_id": "option_fact_mutex",
+            "segment_id": "seg_0001",
+            "start_sec": 0.0,
+            "video_path": "/videos/replay.mp4"
+          },
+          "assign": "fact_3",
+          "tool": "vision_read"
+        }
+      ],
+      "rationale": "mutex_conflict: obs_0002 vs obs_0004",
+      "round_number": 1,
+      "status": "need_more_evidence"
+    }
+  ]
+}

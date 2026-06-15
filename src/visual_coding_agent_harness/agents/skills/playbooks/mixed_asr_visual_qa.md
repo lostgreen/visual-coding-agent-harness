@@ -1,6 +1,8 @@
 ---
 name: mixed_asr_visual_qa
 version: 1
+description: Questions that require combining narrated or spoken content with visual corroboration.
+when_to_use: Use when the answer depends on both what is said and what is shown, or when modalities may conflict.
 default_claim_modality: mixed
 recovery_rules:
   missing_modality:

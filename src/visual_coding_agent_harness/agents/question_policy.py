@@ -14,12 +14,57 @@ class QuestionPlaybook:
     instructions: Sequence[str] = field(default_factory=list)
     sufficiency_rules: Sequence[str] = field(default_factory=list)
 
-    def to_prompt(self) -> str:
-        lines = [f"Task playbook: {self.name}", f"Question route: {self.route}", "Playbook instructions:"]
-        lines.extend(f"- {instruction}" for instruction in self.instructions)
+    def to_prompt(self, *, option_blind: bool = False) -> str:
+        playbook = self._option_blind_variant() if option_blind else self
+        lines = [f"Task playbook: {playbook.name}", f"Question route: {playbook.route}", "Playbook instructions:"]
+        lines.extend(f"- {instruction}" for instruction in playbook.instructions)
         lines.append("Evidence sufficiency:")
-        lines.extend(f"- {rule}" for rule in self.sufficiency_rules)
+        lines.extend(f"- {rule}" for rule in playbook.sufficiency_rules)
         return "\n".join(lines)
+
+    def _option_blind_variant(self) -> "QuestionPlaybook":
+        if self.route == "gist_global":
+            return QuestionPlaybook(
+                name=self.name,
+                route=self.route,
+                instructions=[
+                    "Start with global_gist to get a sparse whole-video topic and coverage hint.",
+                    "Use local inspection or indexed transcript evidence to verify full-video coverage.",
+                    "Collect factual coverage across the full narrative arc before handing off to AnswerAgent.",
+                ],
+                sufficiency_rules=[
+                    "A global_gist observation is a topic hint, not final support.",
+                    "Record whether cited facts cover the main entity, time span, and major narrative stages.",
+                ],
+            )
+        if self.route == "temporal_order":
+            return QuestionPlaybook(
+                name=self.name,
+                route=self.route,
+                instructions=[
+                    "Use coarse captions to locate target event/entity segments before focused timestamp reads.",
+                    "Inspect the relevant earlier and later windows when order matters.",
+                    "Local workers should report facts and presentation order only.",
+                ],
+                sufficiency_rules=[
+                    "Citations must include timestamped answer-grade visual, ASR, OCR, or QA evidence for the ordered events.",
+                    "Evidence must not conflict with the claimed temporal relation.",
+                    "Record the observed order with segment or timestamp evidence before final handoff.",
+                ],
+            )
+        return QuestionPlaybook(
+            name=self.name,
+            route=self.route,
+            instructions=[
+                "Use query-conditioned navigation to localize likely evidence.",
+                "Delegate visual reading to vision_read or inspect_segment once a candidate segment is localized.",
+                "Local workers should report facts only.",
+            ],
+            sufficiency_rules=[
+                "Final handoff needs cited answer-grade visual, ASR, OCR, or QA evidence.",
+                "State uncertainty when evidence is incomplete or ambiguous.",
+            ],
+        )
 
 
 @dataclass(frozen=True)

@@ -12,8 +12,7 @@ from ..workspace import EvidenceWorkspace
 def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace] = None) -> ToolRegistry:
     registry = ToolRegistry()
 
-    @tool(name="view_observation", description="Fetch one observation claim by id from the workspace.")
-    def view_observation(obs_id: str, line_range: tuple[int, int] | None = None) -> Mapping[str, object]:
+    def observation_detail_payload(obs_id: str, line_range: tuple[int, int] | None = None) -> Mapping[str, object]:
         observation = workspace.get_observation(obs_id) if workspace is not None else None
         if observation is None:
             return {
@@ -36,6 +35,15 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
             ],
             "limitations": "Cheap workspace read; no video frames inspected.",
         }
+
+    @tool(name="view_observation", description="Fetch one observation claim by id from the workspace.")
+    def view_observation(obs_id: str, line_range: tuple[int, int] | None = None) -> Mapping[str, object]:
+        return observation_detail_payload(obs_id=obs_id, line_range=line_range)
+
+    @tool(name="read_observation_detail", description="Fetch one compact observation detail by id from the workspace.")
+    def read_observation_detail(obs_id: str, line_range: tuple[int, int] | None = None) -> Mapping[str, object]:
+        return observation_detail_payload(obs_id=obs_id, line_range=line_range)
+
 
     @tool(name="grep_evidence", description="Regex search over persisted observations/evidence rows.")
     def grep_evidence(pattern: str, in_field: str = "claim") -> Mapping[str, object]:
@@ -111,6 +119,7 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
         }
 
     registry.register(view_observation)
+    registry.register(read_observation_detail)
     registry.register(grep_evidence)
     registry.register(query_evidence_table)
     registry.register(read_timeline_sorted)

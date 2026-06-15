@@ -1,0 +1,62 @@
+{
+  "input": {
+    "question": "Which order is shown?\nA. door opens then light turns on\nB. door opens then light turns on\nC. door opens then light turns on\nD. light turns on then door opens",
+    "video_path": "/videos/replay.mp4"
+  },
+  "output": {
+    "answer": "D",
+    "citations": [
+      "obs_0001",
+      "obs_0002"
+    ],
+    "confidence": 0.9,
+    "evidence_ids": [],
+    "status": "final"
+  },
+  "rounds": [
+    {
+      "observation_ids": [
+        "obs_0001",
+        "obs_0002"
+      ],
+      "planner_text": "{\"status\":\"continue\",\"skill\":\"visual_timeline_qa@v1\",\"program\":[{\"tool\":\"vision_read\",\"args\":{\"segment_id\":\"seg_0001\",\"ask_for\":\"At what timestamp does the light turn on?\",\"event_label\":\"light turns on\"}},{\"tool\":\"vision_read\",\"args\":{\"segment_id\":\"seg_0003\",\"ask_for\":\"At what timestamp does the door open?\",\"event_label\":\"door opens\"}}]}",
+      "program": [
+        {
+          "args": {
+            "ask_for": "At what timestamp does the light turn on? Do not choose an option. visual_timeline_qa",
+            "end_sec": 20.0,
+            "event_label": "light turns on",
+            "nframes": 8,
+            "segment_id": "seg_0001",
+            "start_sec": 0.0,
+            "video_path": "/videos/replay.mp4"
+          },
+          "tool": "vision_read"
+        },
+        {
+          "args": {
+            "ask_for": "At what timestamp does the door open? Do not choose an option. visual_timeline_qa",
+            "end_sec": 60.0,
+            "event_label": "door opens",
+            "nframes": 8,
+            "segment_id": "seg_0003",
+            "start_sec": 40.0,
+            "video_path": "/videos/replay.mp4"
+          },
+          "tool": "vision_read"
+        }
+      ],
+      "rationale": "",
+      "round_number": 1,
+      "status": "continue"
+    },
+    {
+      "observation_ids": [],
+      "planner_text": "{\"status\":\"final\",\"skill\":\"visual_timeline_qa@v1\",\"answer\":\"D\",\"citations\":[\"obs_0001\",\"obs_0002\"],\"confidence\":0.9}",
+      "program": [],
+      "rationale": "",
+      "round_number": 2,
+      "status": "final"
+    }
+  ]
+}

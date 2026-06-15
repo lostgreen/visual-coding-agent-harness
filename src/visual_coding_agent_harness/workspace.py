@@ -881,17 +881,37 @@ class EvidenceWorkspace:
         """Return recent observation payloads for verbatim-safe planner feedback."""
 
         selected = self.read_observations()[-max(0, int(limit or 0)) :]
+        evidence_rows_by_observation: dict[str, Mapping[str, Any]] = {}
+        for row in self._read_jsonl_dicts("evidence_table.jsonl"):
+            obs_id = str(row.get("observation_id") or row.get("obs_id") or "").strip()
+            if obs_id and obs_id not in evidence_rows_by_observation:
+                evidence_rows_by_observation[obs_id] = row
         outputs: list[dict[str, Any]] = []
         for observation in selected:
-            outputs.append(
-                {
-                    "observation_id": observation.observation_id,
-                    "tool": observation.tool,
-                    "claim": observation.claim,
-                    "confidence": observation.confidence,
-                    "raw_output": _compact_recent_tool_payload(observation.raw_output),
-                }
-            )
+            payload = {
+                "observation_id": observation.observation_id,
+                "tool": observation.tool,
+                "claim": observation.claim,
+                "confidence": observation.confidence,
+                "raw_output": _compact_recent_tool_payload(observation.raw_output),
+            }
+            evidence_row = evidence_rows_by_observation.get(observation.observation_id)
+            if evidence_row is not None:
+                payload.update(
+                    {
+                        "in_evidence_table": True,
+                        "evidence_id": str(evidence_row.get("evidence_id", "")),
+                        "segment_id": str(evidence_row.get("segment_id") or evidence_row.get("segment") or ""),
+                        "modality": str(
+                            evidence_row.get("modality")
+                            or evidence_row.get("claim_modality")
+                            or evidence_row.get("grounding_quality")
+                            or ""
+                        ),
+                        "verdict": str(evidence_row.get("verdict") or evidence_row.get("status") or "supported"),
+                    }
+                )
+            outputs.append(payload)
         return outputs
 
     def read_evidence_table_v3(

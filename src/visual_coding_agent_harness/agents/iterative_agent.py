@@ -25,7 +25,12 @@ from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, Followup
 from .grounding import CompiledGroundingPlan, compile_fallback_plan, compile_grounding_plan, ground_question_with_model
 from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
 from .output_quality import is_unsupported_claim
-from .prompt_stack import build_replanning_prompt, compose_replanning_prompt_blocks, render_prompt_blocks
+from .prompt_stack import (
+    build_replanning_prompt,
+    compose_planner_prompts,
+    compose_replanning_prompt_blocks,
+    render_prompt_blocks,
+)
 from .question_policy import (
     classify_narration_subroute,
     classify_question_route,
@@ -42,6 +47,14 @@ from .skills.predicates import (
     temporal_order_consistent,
 )
 from .skills.specs import SkillSpec, builtin_skill_registry, select_skill
+from .skill_runtime import (
+    _initial_skill_runtime_state as _build_initial_skill_runtime_state,
+    _planner_selected_skill as _select_planner_skill,
+    _recommended_effective_skill,
+    _skill_id as _runtime_skill_id,
+    _skill_id_from_name as _runtime_skill_id_from_name,
+    update_effective_skill_runtime as _update_effective_skill_runtime,
+)
 
 
 _SEGMENT_MEDIA_TOOLS = {"caption_segment", "qa_segment", "inspect_segment", "vision_read", "verify_segment_anchors"}
@@ -95,6 +108,7 @@ class AgentBudget:
     max_repeated_invalid_programs: int = 3
     hard_skill_runtime: bool = False
     planner_owned_grounding: bool = False
+    prompt_role_split_enabled: bool = False
     reflection_memory_max_items: int = 5
     disable_global_gist_route: bool = False
     rewrite_mcq_for_exploration: bool = False
@@ -182,17 +196,6 @@ class FinalEvidenceBridgeResult:
 class SkillTargetFact:
     fact: str
     mutex_group_id: str = ""
-
-
-@dataclass
-class SkillRuntimeState:
-    recommended_skill: SkillSpec
-    compatible_skill_ids: tuple[str, ...]
-    effective_skill: SkillSpec | None = None
-    locked: bool = False
-    selected_round: int | None = None
-    unlock_used: bool = False
-    override_reason: str = ""
 
 
 class IterativeVisualAgent:
@@ -315,7 +318,7 @@ class IterativeVisualAgent:
         evidence_repair_candidate_answer = ""
         evidence_repair_failure_reason = ""
         skill_runtime = (
-            _initial_skill_runtime_state(
+            _build_initial_skill_runtime_state(
                 raw_question,
                 route=effective_route,
                 recommended_skill_id=grounding_runtime.recommended_skill_id if grounding_runtime else "",
@@ -323,15 +326,16 @@ class IterativeVisualAgent:
             if self.budget.hard_skill_runtime
             else None
         )
-        last_selected_skill_id: str | None = _skill_id(skill_runtime.effective_skill) if skill_runtime else None
+        last_selected_skill_id: str | None = _runtime_skill_id(skill_runtime.effective_skill) if skill_runtime else None
         if skill_runtime is not None:
             self.workspace.write_trace_event(
-                "effective_skill_locked",
+                "skill_recommended",
                 {
                     "round": len(rounds) + 1,
-                    "recommended_skill": _skill_id(skill_runtime.recommended_skill),
-                    "effective_skill": _skill_id(skill_runtime.effective_skill),
+                    "recommended_skill": _runtime_skill_id(skill_runtime.recommended_skill),
+                    "effective_skill": _runtime_skill_id(skill_runtime.effective_skill),
                     "compatible_skills": list(skill_runtime.compatible_skill_ids),
+                    "recommendation_source": skill_runtime.recommendation_source,
                     "reason": "question_policy_recommended",
                 },
             )
@@ -344,7 +348,8 @@ class IterativeVisualAgent:
                 options=extract_candidate_options(raw_question),
             )
             exhausted_tools = _exhausted_one_shot_tools(self.workspace)
-            planner_prompt, context_report = build_replanning_prompt(
+            prompt_pair = compose_planner_prompts(
+                prompt_role_split_enabled=self.budget.prompt_role_split_enabled,
                 question=exploration_question_text,
                 scene_index=self.scene_index,
                 ledger_text=ledger_text,
@@ -368,6 +373,9 @@ class IterativeVisualAgent:
                 projection_status=last_projection_status,
                 diagnostic_repair_hint=last_diagnostic_repair_hint,
             )
+            planner_prompt = prompt_pair.user_prompt
+            system_prompt = prompt_pair.system_prompt
+            context_report = prompt_pair.context_report
             self.workspace.write_trace_event("context_budget_report", asdict(context_report))
             self.workspace.write_trace_event(
                 "iterative_round_start",
@@ -382,6 +390,7 @@ class IterativeVisualAgent:
                 BackendRequest(
                     task="replan",
                     prompt=planner_prompt,
+                    system_prompt=system_prompt,
                     media_path=video_path if self.budget.planner_receives_media else None,
                     media_type="video" if self.budget.planner_receives_media else None,
                     max_new_tokens=4096,
@@ -395,6 +404,7 @@ class IterativeVisualAgent:
             self._persist_planner_io(
                 round_number=round_number,
                 prompt=planner_prompt,
+                system_prompt=system_prompt,
                 response=planner_response.text,
                 planner_input_mode="video" if self.budget.planner_receives_media else "text-only",
             )
@@ -437,8 +447,16 @@ class IterativeVisualAgent:
             status = str(action.get("status", "continue"))
             rationale = str(action.get("rationale", ""))
             planned_program: Any = action.get("program", [])
-            planner_skill, skill_status = _planner_selected_skill(action)
+            planner_skill, skill_status = _select_planner_skill(action)
             if skill_status["status"] == "selected":
+                self.workspace.write_trace_event(
+                    "skill_selected",
+                    {
+                        "round": round_number,
+                        "requested_skill": skill_status["requested_skill"],
+                        "resolved_skill": planner_skill.name,
+                    },
+                )
                 self.workspace.write_trace_event(
                     "planner_skill_selection",
                     {
@@ -448,8 +466,8 @@ class IterativeVisualAgent:
                     },
                 )
                 if skill_runtime is not None:
-                    self._update_effective_skill_runtime(
-                        state=skill_runtime,
+                    _update_effective_skill_runtime(
+                        skill_runtime,
                         requested_skill=planner_skill,
                         requested_skill_text=skill_status["requested_skill"],
                         round_number=round_number,
@@ -457,13 +475,14 @@ class IterativeVisualAgent:
                         executed_rounds=len(rounds),
                         supported_binding_no_growth_rounds=supported_binding_no_growth_rounds,
                         no_evidence_growth_rounds=no_evidence_growth_rounds,
+                        write_trace_event=self.workspace.write_trace_event,
                     )
                 else:
                     last_selected_skill_id = f"{planner_skill.name}@v{planner_skill.version}"
             elif skill_status["status"] == "missing":
                 payload = {"round": round_number}
                 if skill_runtime is not None:
-                    payload["effective_skill"] = _skill_id(skill_runtime.effective_skill)
+                    payload["effective_skill"] = _runtime_skill_id(skill_runtime.effective_skill)
                     payload["message"] = "Planner omitted skill; using the run-level effective skill."
                 else:
                     payload["message"] = "Planner omitted skill; continuing with ordinary exploration policy."
@@ -471,14 +490,14 @@ class IterativeVisualAgent:
             elif skill_status["status"] == "invalid":
                 payload = {"round": round_number, "requested_skill": skill_status["requested_skill"]}
                 if skill_runtime is not None:
-                    payload["effective_skill"] = _skill_id(skill_runtime.effective_skill)
+                    payload["effective_skill"] = _runtime_skill_id(skill_runtime.effective_skill)
                     payload["message"] = "Planner requested an unknown skill; using the run-level effective skill."
                 else:
                     payload["message"] = "Planner requested an unknown skill; continuing with ordinary exploration policy."
                 self.workspace.write_trace_event("planner_skill_invalid", payload)
             active_skill = skill_runtime.effective_skill if skill_runtime is not None else planner_skill
             if skill_runtime is not None or planner_skill is not None:
-                last_selected_skill_id = _skill_id(active_skill)
+                last_selected_skill_id = _runtime_skill_id(active_skill)
 
             if status == "final":
                 final_citations = [str(item) for item in action.get("citations", [])]
@@ -1345,7 +1364,7 @@ class IterativeVisualAgent:
                             "recommended_to_planner": True,
                         },
                     )
-                elif round_number >= self.budget.max_rounds:
+                elif round_number >= self.budget.max_rounds and not prefinal_evidence_repair_failed:
                     low_confidence_result = self._try_low_confidence_final(
                         answer_result=answer_result,
                         question=raw_question,
@@ -1398,6 +1417,18 @@ class IterativeVisualAgent:
                     "reason": "planner_final_auto_final_blocked",
                 },
             )
+        if prefinal_evidence_repair_failed:
+            return self._evidence_repair_exhausted_result(
+                question=raw_question,
+                video_path=video_path,
+                rounds=rounds,
+                round_number=self.budget.max_rounds,
+                planner_text="",
+                rationale="budget_exhausted_after_prefinal_evidence_repair_failed",
+                citations=citations,
+                candidate_answer=evidence_repair_candidate_answer,
+                failure_reason=evidence_repair_failure_reason or "budget_exhausted_after_prefinal_evidence_repair_failed",
+            )
         budget_answer_result: AnswerAgentResult | None = None
         if extract_candidate_options(raw_question) and citations and not planner_final_auto_final_blocked:
             answer_result = AnswerAgent(self.backend).run(
@@ -1433,18 +1464,6 @@ class IterativeVisualAgent:
             )
             if low_confidence_result is not None:
                 return low_confidence_result
-        if prefinal_evidence_repair_failed:
-            return self._evidence_repair_exhausted_result(
-                question=raw_question,
-                video_path=video_path,
-                rounds=rounds,
-                round_number=self.budget.max_rounds,
-                planner_text="",
-                rationale="budget_exhausted_after_prefinal_evidence_repair_failed",
-                citations=citations,
-                candidate_answer=evidence_repair_candidate_answer,
-                failure_reason=evidence_repair_failure_reason or "budget_exhausted_after_prefinal_evidence_repair_failed",
-            )
         forced_mcq = self._forced_mcq_fallback_result(
             question=raw_question,
             video_path=video_path,
@@ -1736,7 +1755,7 @@ class IterativeVisualAgent:
                 "version": compiled.registry.version,
                 "plan_hash": compiled.plan_hash,
                 "route": compiled.route,
-                "recommended_skill": _skill_id_from_name(compiled.recommended_skill_id),
+                "recommended_skill": _runtime_skill_id_from_name(compiled.recommended_skill_id),
                 "answer_operator": compiled.answer_operator,
                 "central_subjects": list(compiled.central_subjects),
                 "acceptable_evidence_sources": list(compiled.acceptable_evidence_sources),
@@ -2292,7 +2311,7 @@ class IterativeVisualAgent:
                     resolved={"tool": tool_name, "args": args},
                 )
             segment_id = args.get("segment_id")
-            if segment_id and tool_name == "read_segment":
+            if segment_id and _tool_is(tool_name, "read_segment"):
                 segment = _scene_segment_or_none(self.scene_index, str(segment_id))
                 if segment is not None and not _segment_has_index_text(segment):
                     original_tool_name = tool_name
@@ -2379,7 +2398,7 @@ class IterativeVisualAgent:
                     original={"tool": tool_name, "args": original_args},
                     resolved={"tool": tool_name, "args": args},
                 )
-            if tool_name == "verify_ledger_answer" and "ledger_text" in args:
+            if _tool_is(tool_name, "verify_ledger_answer") and "ledger_text" in args:
                 original_args = dict(args)
                 args.pop("ledger_text", None)
                 self.workspace.write_trace_event(
@@ -2397,7 +2416,7 @@ class IterativeVisualAgent:
                     resolved={"tool": tool_name, "args": args},
                     next_action="verify_ledger_answer reads the workspace ledger automatically; do not pass ledger_text.",
                 )
-            if tool_name == "verify_ledger_answer":
+            if _tool_is(tool_name, "verify_ledger_answer"):
                 verifier_question = raw_question or question
                 if verifier_question and self._tool_accepts_argument(tool_name, "question") and not args.get("question"):
                     args["question"] = verifier_question
@@ -2417,7 +2436,7 @@ class IterativeVisualAgent:
                 if args is None:
                     blocked_route_violation = True
                     continue
-            if tool_name == "read_segment_detail":
+            if _tool_is(tool_name, "read_segment_detail"):
                 if (
                     self._exploration_target_entities
                     and self._tool_accepts_argument(tool_name, "targets")
@@ -2441,7 +2460,7 @@ class IterativeVisualAgent:
                 )
                 continue
 
-            if tool_name == "verify_segment_anchors":
+            if _tool_is(tool_name, "verify_segment_anchors"):
                 normalized_verify_args = self._normalize_verify_segment_anchors_args(
                     args=args,
                     question=question,
@@ -2562,7 +2581,7 @@ class IterativeVisualAgent:
                         },
                     )
                 preserve_focused_ordered_window = (
-                    tool_name == "vision_read"
+                    _tool_is(tool_name, "vision_read")
                     and (
                         route_kind == "focused_ordered_list_vision"
                         or _is_focused_ordered_list_vision_args(args)
@@ -2574,7 +2593,7 @@ class IterativeVisualAgent:
                 if not preserve_focused_ordered_window:
                     args["start_sec"] = segment.start_sec
                     args["end_sec"] = segment.end_sec
-                if tool_name == "vision_read":
+                if _tool_is(tool_name, "vision_read"):
                     args.setdefault("ask_for", args.pop("question", question))
                     if not preserve_focused_ordered_window:
                         args["ask_for"] = _tool_exploration_question(
@@ -2599,7 +2618,7 @@ class IterativeVisualAgent:
                     )
                 candidate_options = list(extract_candidate_options(question))
                 if candidate_options:
-                    if tool_name == "vision_read":
+                    if _tool_is(tool_name, "vision_read"):
                         args.setdefault("event_label", str(args.get("ask_for", "")))
                 if preserve_focused_ordered_window:
                     args.setdefault("nframes", 128)
@@ -2658,7 +2677,7 @@ class IterativeVisualAgent:
                     "end_sec": segment.end_sec,
                     "nframes": self.budget.default_nframes,
                 }
-                if fallback_tool_name == "vision_read":
+                if _tool_is(fallback_tool_name, "vision_read"):
                     target_question = _local_fact_question(
                         question=question,
                         planner_skill=active_skill,
@@ -2740,13 +2759,13 @@ class IterativeVisualAgent:
             normalized["additional_targets"] = _unique_nonempty_strings(
                 str(target).strip() for target in additional_targets
             )
-            if tool_name == "search_segments":
+            if _tool_is(tool_name, "search_segments"):
                 normalized["query"] = _append_additional_targets_to_text(
                     normalized.get("query"),
                     normalized["additional_targets"],
                 )
             elif tool_name in {"vision_read", "caption_segment"}:
-                field_name = "ask_for" if tool_name == "vision_read" else "question"
+                field_name = _tool_text_field(tool_name, default="question")
                 normalized[field_name] = _append_additional_targets_to_text(
                     normalized.get(field_name),
                     normalized["additional_targets"],
@@ -2889,11 +2908,11 @@ class IterativeVisualAgent:
         if not extras:
             normalized.pop("targets", None)
             return normalized
-        if tool_name == "search_segments":
+        if _tool_is(tool_name, "search_segments"):
             normalized["query"] = _append_additional_targets_to_text(normalized.get("query"), extras)
-        elif tool_name == "vision_read":
+        elif _tool_is(tool_name, "vision_read"):
             normalized["ask_for"] = _append_additional_targets_to_text(normalized.get("ask_for"), extras)
-        elif tool_name == "caption_segment":
+        elif _tool_is(tool_name, "caption_segment"):
             source_field = "question" if "question" in normalized else "ask_for"
             normalized["question"] = _append_additional_targets_to_text(normalized.get(source_field), extras)
         normalized.pop("targets", None)
@@ -3074,85 +3093,6 @@ class IterativeVisualAgent:
                 {"keys": [_route_repair_key_payload(key) for key in reset_keys]},
             )
 
-    def _update_effective_skill_runtime(
-        self,
-        *,
-        state: SkillRuntimeState,
-        requested_skill: SkillSpec | None,
-        requested_skill_text: str,
-        round_number: int,
-        rationale: str,
-        executed_rounds: int,
-        supported_binding_no_growth_rounds: int,
-        no_evidence_growth_rounds: int,
-    ) -> None:
-        if requested_skill is None:
-            return
-        current_id = _skill_id(state.effective_skill)
-        requested_id = _skill_id(requested_skill)
-        if requested_skill.name == "timeline_ordering" and current_id in {
-            "narration_timeline_qa@v1",
-            "visual_timeline_qa@v1",
-        }:
-            self.workspace.write_trace_event(
-                "legacy_skill_deprecated",
-                {
-                    "round": round_number,
-                    "requested_skill": requested_skill_text,
-                    "effective_skill": current_id,
-                    "message": "timeline_ordering@v1 is retained for replay only; the run-level effective skill stays locked.",
-                },
-            )
-            return
-        if requested_id == current_id:
-            return
-        if requested_id not in state.compatible_skill_ids:
-            self.workspace.write_trace_event(
-                "effective_skill_change_rejected",
-                {
-                    "round": round_number,
-                    "requested_skill": requested_skill_text,
-                    "effective_skill": current_id,
-                    "reason": "incompatible_skill",
-                    "compatible_skills": list(state.compatible_skill_ids),
-                },
-            )
-            return
-        can_unlock = (
-            state.locked
-            and not state.unlock_used
-            and executed_rounds >= 3
-            and supported_binding_no_growth_rounds >= 3
-            and no_evidence_growth_rounds >= 2
-            and _rationale_mentions_modality_mismatch(rationale)
-        )
-        if can_unlock:
-            previous_id = current_id
-            state.effective_skill = requested_skill
-            state.unlock_used = True
-            state.override_reason = rationale
-            self.workspace.write_trace_event(
-                "effective_skill_unlocked_once",
-                {
-                    "round": round_number,
-                    "from": previous_id,
-                    "to": requested_id,
-                    "reason": rationale,
-                    "supported_binding_no_growth_rounds": supported_binding_no_growth_rounds,
-                    "no_evidence_growth_rounds": no_evidence_growth_rounds,
-                },
-            )
-            return
-        self.workspace.write_trace_event(
-            "effective_skill_change_ignored",
-            {
-                "round": round_number,
-                "requested_skill": requested_skill_text,
-                "effective_skill": current_id,
-                "reason": "locked_effective_skill",
-            },
-        )
-
     def _normalize_text_segment_tool_args(
         self,
         *,
@@ -3315,7 +3255,7 @@ class IterativeVisualAgent:
         video_path: str,
     ) -> tuple[str, dict[str, Any], str] | None:
         is_main_idea_route = active_skill is not None and active_skill.name == "main_idea"
-        if is_main_idea_route and tool_name == "vision_read" and self._has_tool("global_gist"):
+        if is_main_idea_route and _tool_is(tool_name, "vision_read") and self._has_tool("global_gist"):
             if self.workspace.observation_count(tool_name="global_gist") >= 1:
                 return None
             repaired_args: dict[str, Any] = {
@@ -3328,7 +3268,7 @@ class IterativeVisualAgent:
             return "global_gist", repaired_args, "repair_main_idea_vision_read_to_global_gist"
         if (
             is_main_idea_route
-            and tool_name == "global_gist"
+            and _tool_is(tool_name, "global_gist")
             and self.workspace.observation_count(tool_name="global_gist") >= 1
             and self._has_tool("vision_read")
         ):
@@ -3350,7 +3290,7 @@ class IterativeVisualAgent:
         if (
             active_skill is not None
             and active_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}
-            and tool_name == "locate_targets_in_segment"
+            and _tool_is(tool_name, "locate_targets_in_segment")
         ):
             if active_skill.name in {"timeline_ordering", "visual_timeline_qa"} and self._has_tool("vision_read"):
                 recommended_action = self._latest_locator_recommended_action(
@@ -3431,7 +3371,7 @@ class IterativeVisualAgent:
             active_skill is not None
             and active_skill.name
             in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa", "grounded_factual_qa", "mutex_fact_qa"}
-            and tool_name == "read_segment"
+            and _tool_is(tool_name, "read_segment")
             and self._has_tool("read_segment_detail")
         ):
             repaired_args = dict(args)
@@ -3445,7 +3385,7 @@ class IterativeVisualAgent:
         if (
             active_skill is not None
             and active_skill.name == "mutex_fact_qa"
-            and tool_name == "inspect_segment"
+            and _tool_is(tool_name, "inspect_segment")
             and self._has_tool("vision_read")
         ):
             repaired_args = {
@@ -3459,8 +3399,8 @@ class IterativeVisualAgent:
             active_skill is not None
             and active_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}
             and (
-                tool_name == "caption_segments"
-                or (tool_name == "caption_segment" and args.get("segment_ids") and not args.get("segment_id"))
+                _tool_is(tool_name, "caption_segments")
+                or (_tool_is(tool_name, "caption_segment") and args.get("segment_ids") and not args.get("segment_id"))
             )
             and self._has_tool("caption_segment")
         ):
@@ -3783,7 +3723,7 @@ class IterativeVisualAgent:
             planner_skill=planner_skill,
             target_entities=self._exploration_target_entities,
         )
-        if tool_name == "vision_read":
+        if _tool_is(tool_name, "vision_read"):
             args["ask_for"] = target_question
             args["event_label"] = target_question
         else:
@@ -3826,7 +3766,7 @@ class IterativeVisualAgent:
                 planner_skill=planner_skill,
                 target_entities=self._exploration_target_entities,
             )
-            if tool_name == "vision_read":
+            if _tool_is(tool_name, "vision_read"):
                 media_args["ask_for"] = target_question
                 media_args["event_label"] = target_question
             else:
@@ -3996,6 +3936,7 @@ class IterativeVisualAgent:
         *,
         round_number: int,
         prompt: str,
+        system_prompt: str = "",
         response: str,
         planner_input_mode: str,
     ) -> None:
@@ -4012,12 +3953,20 @@ class IterativeVisualAgent:
             response,
             max_chars=self.budget.planner_io_max_chars,
         )
+        system_prompt_meta = None
+        if system_prompt:
+            system_prompt_meta = self.workspace.write_text_artifact(
+                f"{prefix}_system_prompt.txt",
+                system_prompt,
+                max_chars=self.budget.planner_io_max_chars,
+            )
         self.workspace.write_trace_event(
             "planner_io",
             {
                 "round": round_number,
                 "planner_input_mode": planner_input_mode,
                 "prompt": prompt_meta,
+                "system_prompt": system_prompt_meta,
                 "response": response_meta,
                 "response_excerpt": _compact_planner_response(response),
             },
@@ -4733,7 +4682,7 @@ class IterativeVisualAgent:
                 failure_tag=last_failure_tag,
                 rule=_reflection_rule_for_failure(last_failure_tag),
             )
-            if round_number >= self.budget.max_rounds:
+            if round_number >= self.budget.max_rounds and not gate_reason:
                 low_confidence_result = self._try_low_confidence_final(
                     answer_result=answer_result,
                     question=question,
@@ -5015,111 +4964,6 @@ def _parse_replan_action(text: str) -> Mapping[str, Any]:
     return payload
 
 
-def _planner_selected_skill(action: Mapping[str, Any]) -> tuple[SkillSpec | None, dict[str, str]]:
-    requested = str(action.get("skill", "") or "").strip()
-    if not requested:
-        return None, {"status": "missing", "requested_skill": ""}
-    name = requested.split("@", 1)[0].strip()
-    registry = builtin_skill_registry()
-    try:
-        return registry.get(name), {"status": "selected", "requested_skill": requested}
-    except KeyError:
-        return None, {"status": "invalid", "requested_skill": requested}
-
-
-def _initial_skill_runtime_state(
-    question: str,
-    *,
-    route: str | None = None,
-    recommended_skill_id: str = "",
-) -> SkillRuntimeState:
-    recommended = _recommended_effective_skill(
-        question,
-        route=route,
-        recommended_skill_id=recommended_skill_id,
-    )
-    state = SkillRuntimeState(
-        recommended_skill=recommended,
-        compatible_skill_ids=_compatible_skill_ids(question=question, recommended=recommended, route=route),
-        effective_skill=recommended,
-        locked=True,
-        selected_round=1,
-    )
-    return state
-
-
-def _recommended_effective_skill(
-    question: str,
-    *,
-    route: str | None = None,
-    recommended_skill_id: str = "",
-) -> SkillSpec:
-    registry = builtin_skill_registry()
-    skill_name = _skill_name_from_id(recommended_skill_id)
-    if skill_name:
-        try:
-            return registry.get(skill_name)
-        except KeyError:
-            pass
-    resolved_route = route or classify_question_route(question)
-    if resolved_route == "temporal_order":
-        if classify_narration_subroute(question) == "narration_timeline":
-            try:
-                return registry.get("narration_timeline_qa")
-            except KeyError:
-                pass
-        try:
-            return registry.get("visual_timeline_qa")
-        except KeyError:
-            pass
-    return select_skill(question, route=resolved_route)
-
-
-def _compatible_skill_ids(
-    *,
-    question: str,
-    recommended: SkillSpec,
-    route: str | None = None,
-) -> tuple[str, ...]:
-    recommended_id = _skill_id(recommended)
-    resolved_route = route or classify_question_route(question)
-    if resolved_route == "temporal_order":
-        if recommended.name == "narration_timeline_qa" or classify_narration_subroute(question) == "narration_timeline":
-            return _unique_tuple(
-                [
-                    recommended_id,
-                    "mixed_asr_visual_qa@v1",
-                    "visual_timeline_qa@v1",
-                ]
-            )
-        return _unique_tuple([recommended_id, "mixed_asr_visual_qa@v1"])
-    return (recommended_id,)
-
-
-def _unique_tuple(values: Sequence[str]) -> tuple[str, ...]:
-    return tuple(_unique_preserving_order([str(value) for value in values if str(value)]))
-
-
-def _skill_id(skill: SkillSpec | None) -> str:
-    if skill is None:
-        return ""
-    return f"{skill.name}@v{skill.version}"
-
-
-def _skill_name_from_id(skill_id: str) -> str:
-    return str(skill_id or "").strip().split("@", 1)[0].strip()
-
-
-def _skill_id_from_name(skill_name: str) -> str:
-    name = _skill_name_from_id(skill_name)
-    if not name:
-        return ""
-    try:
-        return _skill_id(builtin_skill_registry().get(name))
-    except KeyError:
-        return name
-
-
 def _target_entities_from_registry(registry: object) -> tuple[str, ...]:
     targets_by_id = getattr(registry, "targets_by_id", None)
     if not isinstance(targets_by_id, Mapping):
@@ -5139,23 +4983,6 @@ def _raw_options_by_id(options: Sequence[str]) -> dict[str, str]:
             continue
         raw_options[match.group(1).upper()] = " ".join(match.group(2).split()).strip()
     return raw_options
-
-
-def _rationale_mentions_modality_mismatch(rationale: str) -> bool:
-    lowered = str(rationale or "").lower()
-    if "modality" in lowered and any(marker in lowered for marker in ("mismatch", "wrong", "switch", "instead")):
-        return True
-    return any(
-        marker in lowered
-        for marker in (
-            "visual evidence is insufficient",
-            "need narration",
-            "narration is required",
-            "asr is required",
-            "transcript is required",
-            "cannot be verified visually",
-        )
-    )
 
 
 def _extract_json_object(text: str) -> str:
@@ -7169,7 +6996,7 @@ def _normalization_failure_signature(
     reason = protocol_notes[0].reason
     affected_tools = tuple(_unique_preserving_order([note.tool for note in protocol_notes if note.tool]))
     signature_payload = {
-        "effective_skill": _skill_id(active_skill),
+        "effective_skill": _runtime_skill_id(active_skill),
         "planned_program": planned_program if isinstance(planned_program, Sequence) else [],
         "failures": [
             {
@@ -7838,12 +7665,20 @@ def _workspace_has_target_registry(workspace: Any) -> bool:
     return isinstance(getattr(registry, "targets_by_id", None), Mapping)
 
 
+def _tool_is(tool_name: str | None, expected: str) -> bool:
+    return str(tool_name or "").strip() in {expected}
+
+
+def _tool_text_field(tool_name: str, *, default: str) -> str:
+    return {"vision_read": "ask_for"}.get(str(tool_name or "").strip(), default)
+
+
 def _additional_targets_allowed(*, tool_name: str, args: Mapping[str, Any]) -> bool:
-    if tool_name == "search_segments":
+    if _tool_is(tool_name, "search_segments"):
         return "query" in args
-    if tool_name == "vision_read":
+    if _tool_is(tool_name, "vision_read"):
         return "ask_for" in args
-    if tool_name == "caption_segment":
+    if _tool_is(tool_name, "caption_segment"):
         return "question" in args or "ask_for" in args
     return False
 

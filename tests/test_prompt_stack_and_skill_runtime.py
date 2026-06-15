@@ -11,10 +11,13 @@ from visual_coding_agent_harness.agents.iterative_agent import (
 )
 from visual_coding_agent_harness.agents.skills.specs import SkillSpec, allowed_actions_for_skill, builtin_skill_registry, skill_catalog_prompt
 from visual_coding_agent_harness.agents.prompt_stack import (
+    _blocks_to_slots,
     _final_gate_block,
+    _join_slots,
     _normalization_notes_body,
     _tool_schema_block,
     build_replanning_prompt,
+    compose_replanning_prompt_slots,
     compose_replanning_prompt_blocks,
     render_prompt_blocks,
 )
@@ -111,8 +114,10 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("narration_timeline_qa@v1", catalog)
         self.assertIn("visual_timeline_qa@v1", catalog)
         self.assertNotIn("timeline_ordering@v1", catalog)
-        self.assertIn("default_claim_modality=narrated_fact", catalog)
-        self.assertIn("narrated life story", catalog)
+        self.assertIn("description:", catalog)
+        self.assertIn("when_to_use:", catalog)
+        self.assertNotIn("default_claim_modality=", catalog)
+        self.assertIn("life story", catalog)
         self.assertEqual(registry.get("timeline_ordering").name, "timeline_ordering")
 
     def test_skill_playbook_parser_keeps_structured_recovery_out_of_markdown_prose(self):
@@ -164,6 +169,60 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertNotIn("caption_segments(segment_ids", prompt)
         self.assertIn("verify_ledger_answer(answer: str, question: str", prompt)
         self.assertNotIn("verify_ledger_answer(answer: str, ledger_text", prompt)
+
+    def test_compose_slots_are_derived_from_canonical_blocks(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        kwargs = {
+            "question": "Which event happened first?\nA. red then blue\nB. blue then red",
+            "scene_index": scene_index,
+            "ledger_text": "# Compact Evidence Context\nobs_0001 | red car",
+            "round_number": 2,
+            "budget": AgentBudget(max_rounds=4),
+            "inspected_segment_ids": ["seg_0001"],
+            "tool_class_counts": {"cheap": 1, "expensive": 0, "verifier": 0},
+            "answer_feedback": ["confirm timestamps for both events"],
+            "pending_inferences": ["AnswerAgent partial-support suggestion unchanged."],
+            "normalization_notes": [
+                {
+                    "tool": "vision_read",
+                    "reason": "missing_segment",
+                    "original": {"tool": "vision_read", "segment_id": "seg_9999"},
+                    "resolved": {"tool": "vision_read", "segment_id": "seg_0002"},
+                    "next_action": "Read seg_0002.",
+                }
+            ],
+            "hypothesis_text": "# Hypothesis\n\n- A: pending",
+            "reflection_memory": ["temporal_order: confirm every event timestamp before comparing options"],
+            "evidence_status_summary": {"coverage_pct": 50, "hypothesis_gaps": ["blue timestamp"]},
+            "recent_tool_outputs": [
+                {
+                    "observation_id": "obs_0007",
+                    "tool": "locate_targets_in_segment",
+                    "claim": "Locator found candidate anchors.",
+                    "raw_output": {"anchors_for_vlm": [{"segment_id": "seg_0002", "targets": ["blue"]}]},
+                }
+            ],
+        }
+
+        slots = compose_replanning_prompt_slots(**kwargs)
+        blocks = compose_replanning_prompt_blocks(**kwargs)
+        block_slots = _blocks_to_slots(blocks)
+
+        self.assertEqual(slots, block_slots)
+        self.assertEqual(_join_slots(slots), _join_slots(block_slots))
+
+    def test_replanning_prompt_renders_round_line_once(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        prompt, _report = build_replanning_prompt(
+            question="What is visible?",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\nobs_0001 | red car",
+            round_number=2,
+            budget=AgentBudget(max_rounds=4),
+            allocator=default_context_budget_allocator(total_budget_tokens=12000),
+        )
+
+        self.assertEqual(prompt.count("Round: 2/4"), 1)
 
     def test_replanning_prompt_includes_recent_tool_outputs_before_ledger(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
@@ -328,9 +387,10 @@ The prose says recovery_rules: this sentence must not define metadata.
             active_skill="visual_timeline_qa@v1",
         )
 
-        self.assertIn("effective_skill: visual_timeline_qa@v1", prompt)
-        self.assertIn("skill_locked: true", prompt)
-        self.assertIn("Changing it will not change the active gate", prompt)
+        self.assertIn("current_skill: visual_timeline_qa@v1", prompt)
+        self.assertNotIn("skill_locked: true", prompt)
+        self.assertIn("To switch skill: set", prompt)
+        self.assertIn("The harness will accept or reject the switch", prompt)
 
     def test_prompt_renders_active_operator_playbook_for_main_idea(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
@@ -459,10 +519,9 @@ The prose says recovery_rules: this sentence must not define metadata.
         )
 
         catalog_block = prompt.split("# Skill Catalog", 1)[1].split("# ", 1)[0]
-        main_idea_line = next(line for line in catalog_block.splitlines() if line.startswith("- main_idea@"))
-        suggested_actions = main_idea_line.split("suggested_actions=", 1)[1].split(";", 1)[0]
+        suggested_actions = _catalog_field(catalog_block, "main_idea", "suggested_actions")
         self.assertNotIn("global_gist", suggested_actions.split("(", 1)[0])
-        self.assertIn("(global_gist=exhausted)", main_idea_line)
+        self.assertIn("(global_gist=exhausted)", suggested_actions)
 
     def test_normalization_next_action_is_rendered_as_do_next(self):
         rendered = _normalization_notes_body(
@@ -941,6 +1000,18 @@ def _caption_only_registry() -> ToolRegistry:
 
     registry.register(caption_segment)
     return registry
+
+
+def _catalog_field(rendered: str, skill_name: str, field_name: str) -> str:
+    lines = rendered.splitlines()
+    start = lines.index(next(line for line in lines if line.startswith(f"- {skill_name}@")))
+    for line in lines[start + 1 :]:
+        if line.startswith("- "):
+            break
+        prefix = f"  {field_name}: "
+        if line.startswith(prefix):
+            return line[len(prefix) :]
+    raise AssertionError(f"{field_name} not found for {skill_name}")
 
 
 if __name__ == "__main__":

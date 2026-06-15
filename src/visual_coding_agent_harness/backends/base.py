@@ -10,6 +10,7 @@ from typing import Any, Mapping, Optional, Protocol, Sequence
 class BackendRequest:
     task: str
     prompt: str
+    system_prompt: str = ""
     media_path: Optional[str] = None
     media_type: Optional[str] = None
     frames: Sequence[str] = field(default_factory=list)
