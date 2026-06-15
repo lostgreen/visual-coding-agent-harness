@@ -20,6 +20,25 @@ class FakeFrameCache:
         return ()
 
 
+class FakeSceneIndexBuilder:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def build(self, **kwargs):
+        return SceneIndex(
+            video_path=kwargs["video_path"],
+            duration_sec=kwargs["duration_sec"],
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=300.0,
+                    source="dual_source_scene_index",
+                )
+            ],
+        )
+
+
 class EvalRunnerTest(unittest.TestCase):
     def test_eval_runner_script_entrypoint_imports_summary_schema(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -38,6 +57,41 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr[:500])
         self.assertIn("Run reproducible VideoMME", completed.stdout)
+
+    def test_videomme_runner_only_accepts_agent_v2_strategy(self):
+        from runs import eval_runner
+
+        self.assertEqual(eval_runner.parse_strategies(None), ("agent_v2",))
+        with self.assertRaisesRegex(ValueError, "Unknown strategy: direct_full_video"):
+            eval_runner.parse_strategies(("direct_full_video",))
+
+    def test_make_question_keeps_agent_input_to_raw_question_and_options(self):
+        from runs import eval_runner
+
+        question = eval_runner.make_question(
+            {
+                "question": "What's the main idea of the video?",
+                "options": [
+                    "A. What did the French gain from World War One.",
+                    "B. Why the Austro-Hungarian Empire was divided.",
+                    "C. The process of World War One.",
+                    "D. How the Austro-Hungarian Empire rises and falls.",
+                ],
+            }
+        )
+
+        self.assertEqual(
+            question,
+            "Question: What's the main idea of the video?\n"
+            "Options:\n"
+            "A. What did the French gain from World War One.\n"
+            "B. Why the Austro-Hungarian Empire was divided.\n"
+            "C. The process of World War One.\n"
+            "D. How the Austro-Hungarian Empire rises and falls.",
+        )
+        self.assertNotIn("VideoMME", question)
+        self.assertNotIn("outside knowledge", question)
+        self.assertNotIn("exactly one option letter", question)
 
     def test_run_eval_cases_writes_summary_for_requested_strategy_and_budget(self):
         from runs import eval_runner
@@ -83,19 +137,20 @@ class EvalRunnerTest(unittest.TestCase):
                 video_dir=Path("/dataset/video"),
                 subtitle_dir=Path("/dataset/subtitle"),
                 cases=("605-1",),
-                strategies=("empty_index_loop",),
+                strategies=("agent_v2",),
                 window_sec=300.0,
                 budget=AgentBudget(max_rounds=8, max_tool_calls_per_round=2, default_nframes=12),
             )
 
             with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
-                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                    summary = eval_runner.run_eval_cases(
-                        backend=object(),
-                        rows_by_id=rows_by_id,
-                        config=config,
-                        duration_fn=lambda path: 1896.0,
-                    )
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeSceneIndexBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                        summary = eval_runner.run_eval_cases(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 1896.0,
+                        )
 
             summary_path = run_root / "summary.json"
             run_config_path = run_root / "run_config.json"
@@ -116,14 +171,14 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(summary["per_case"], summary["cases"])
             case = summary["cases"][0]
             self.assertEqual(case["question_id"], "605-1")
-            self.assertEqual(case["strategies"]["empty_index_loop"]["choice"], "B")
-            self.assertTrue(case["strategies"]["empty_index_loop"]["correct"])
-            self.assertEqual(case["raw_artifacts"]["workspaces"]["empty_index_loop"], str(config.workspace_root / "runs" / captured["run_id"]))
+            self.assertEqual(case["strategies"]["agent_v2"]["choice"], "B")
+            self.assertTrue(case["strategies"]["agent_v2"]["correct"])
+            self.assertEqual(case["raw_artifacts"]["workspaces"]["agent_v2"], str(config.workspace_root / "runs" / captured["run_id"]))
             self.assertEqual(captured["budget"].max_rounds, 8)
             self.assertEqual(captured["budget"].max_tool_calls_per_round, 2)
             self.assertEqual(captured["budget"].default_nframes, 12)
             self.assertIsInstance(captured["scene_index"], SceneIndex)
-            self.assertEqual(captured["scene_index"].segments[0].source, "fixed_window_empty")
+            self.assertEqual(captured["scene_index"].segments[0].source, "dual_source_scene_index")
 
     def test_run_eval_cases_precomputes_two_fps_frame_cache_for_agent_loop(self):
         from runs import eval_runner
@@ -179,19 +234,20 @@ class EvalRunnerTest(unittest.TestCase):
                 video_dir=Path("/dataset/video"),
                 subtitle_dir=Path("/dataset/subtitle"),
                 cases=("605-1",),
-                strategies=("empty_index_loop",),
+                strategies=("agent_v2",),
                 window_sec=300.0,
                 budget=AgentBudget(max_rounds=8),
             )
 
             with patch.object(eval_runner, "build_frame_cache_for_video", side_effect=fake_build_frame_cache_for_video):
-                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                    summary = eval_runner.run_eval_cases(
-                        backend=object(),
-                        rows_by_id=rows_by_id,
-                        config=config,
-                        duration_fn=lambda path: 1896.0,
-                    )
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeSceneIndexBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                        summary = eval_runner.run_eval_cases(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 1896.0,
+                        )
 
         self.assertEqual(
             build_calls,
@@ -293,13 +349,14 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertTrue(config.export_training)
 
             with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
-                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                    eval_runner.run_eval_cases(
-                        backend=object(),
-                        rows_by_id=rows_by_id,
-                        config=config,
-                        duration_fn=lambda path: 60.0,
-                    )
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeSceneIndexBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                        eval_runner.run_eval_cases(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 60.0,
+                        )
 
             resolved_path = run_root / "resolved_config.json"
             self.assertTrue(resolved_path.exists())
@@ -499,72 +556,6 @@ class EvalRunnerTest(unittest.TestCase):
 
             self.assertEqual(summary["evidence_provenance_completeness"], 0.5)
 
-    def test_agent_v2_uses_subtitle_index_when_explicitly_requested(self):
-        from runs import eval_runner
-
-        captured = {}
-
-        def fake_run_loop(backend, **kwargs):
-            captured["scene_index"] = kwargs["scene_index"]
-            return {
-                "answer": "D. Based on subtitles and visual inspection.",
-                "choice": "D",
-                "status": "final",
-                "confidence": 0.7,
-                "citations": ["obs_0001"],
-                "rounds": 1,
-                "tools": ["inspect_segment"],
-                "segments": ["seg_0001"],
-                "seconds": 7.0,
-            }
-
-        rows_by_id = {
-            "611-2": {
-                "question_id": "611-2",
-                "video_id": "vid611",
-                "videoID": "video611",
-                "task_type": "Temporal Reasoning",
-                "question": "What happens last?",
-                "options": ["A. one", "B. two", "C. three", "D. four"],
-                "answer": "D",
-            }
-        }
-
-        with tempfile.TemporaryDirectory() as tmp:
-            run_root = Path(tmp) / "eval"
-            subtitle_dir = Path(tmp) / "subtitle"
-            subtitle_dir.mkdir()
-            (subtitle_dir / "video611.srt").write_text(
-                "1\n00:00:02,000 --> 00:00:03,000\nopening clue\n",
-                encoding="utf-8",
-            )
-            config = eval_runner.EvalConfig(
-                run_root=run_root,
-                workspace_root=run_root / "workspaces",
-                model_path="/model",
-                data_root=Path("/dataset"),
-                parquet_path=Path("/dataset/videomme/test.parquet"),
-                video_dir=Path("/dataset/video"),
-                subtitle_dir=subtitle_dir,
-                cases=("611-2",),
-                strategies=("agent_v2",),
-                window_sec=300.0,
-                scene_index_mode="subtitle",
-                budget=AgentBudget(),
-            )
-
-            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
-                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                    eval_runner.run_eval_cases(
-                        backend=object(),
-                        rows_by_id=rows_by_id,
-                        config=config,
-                        duration_fn=lambda path: 1805.0,
-                    )
-
-            self.assertEqual(captured["scene_index"].segments[0].source, "fixed_window_subtitle")
-            self.assertIn("ASR/subtitle excerpt: opening clue", captured["scene_index"].segments[0].low_fps_caption)
-
     def test_agent_v2_dual_source_scene_index_uses_builder_and_cache_root(self):
         from runs import eval_runner
 
@@ -639,7 +630,6 @@ class EvalRunnerTest(unittest.TestCase):
                 cases=("611-2",),
                 strategies=("agent_v2",),
                 window_sec=300.0,
-                scene_index_mode="dual-source",
                 scene_index_cache_dir=cache_dir,
                 budget=AgentBudget(),
             )
@@ -839,7 +829,7 @@ class EvalRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sum to 1.0"):
             eval_runner.config_from_args(args)
 
-    def test_dual_model_and_scene_index_cli_flags_build_agent_config(self):
+    def test_dual_model_and_scene_cache_cli_flags_build_agent_config(self):
         from runs import eval_runner
 
         parser = eval_runner.build_arg_parser()
@@ -849,8 +839,6 @@ class EvalRunnerTest(unittest.TestCase):
                 "/home/xuboshen/models/Qwen3-VL-4B-Instruct",
                 "--planner-model-path",
                 "/home/xuboshen/models/Qwen3-4B-Instruct-2507",
-                "--scene-index-mode",
-                "dual-source",
                 "--scene-index-cache-dir",
                 "/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache",
             ]
@@ -860,7 +848,6 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(config.model_path, "/home/xuboshen/models/Qwen3-VL-4B-Instruct")
         self.assertEqual(config.planner_model_path, "/home/xuboshen/models/Qwen3-4B-Instruct-2507")
-        self.assertEqual(config.scene_index_mode, "dual-source")
         self.assertEqual(
             config.scene_index_cache_dir,
             Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache"),
@@ -882,7 +869,6 @@ class EvalRunnerTest(unittest.TestCase):
             config.scene_index_cache_dir,
             Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache"),
         )
-        self.assertEqual(config.scene_index_mode, "dual-source")
 
     def test_build_backend_uses_routed_backend_for_dual_model_config(self):
         from runs import eval_runner
@@ -1023,57 +1009,71 @@ class EvalRunnerTest(unittest.TestCase):
     def test_run_loop_exports_longvideoagent_trajectory(self):
         from runs import eval_runner
 
-        def fake_run_iterative_smoke(**kwargs):
-            workspace = EvidenceWorkspace.create(base_dir=kwargs["base_dir"], run_id=kwargs["run_id"])
-            workspace.write_trace_event(
-                "tool_use",
-                {"step": 1, "tool": "vision_read", "arguments": {"segment_id": "seg_0001"}},
-            )
-            observation = workspace.write_observation(
-                tool_name="vision_read",
-                claim="The localized window shows a red car.",
-                confidence=0.9,
-                regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
-                raw_output={
-                    "grounding_quality": "visually_confirmed",
-                    "candidate_option_relations": [{"option": "B", "relation": "support", "strength": 0.9}],
-                },
-            )
-            distilled = EvidenceRecord(
-                evidence_id=workspace.next_evidence_id("distilled"),
-                stage="distilled",
-                parent_id=None,
-                tool="vision_read",
-                observation_id=observation.observation_id,
-                frame_set_id=None,
-                content={"claim": observation.claim},
-                grounding_quality="visually_confirmed",
-                confidence=0.9,
-                created_at=1.0,
-            )
-            workspace.write_evidence(distilled)
-            workspace.write_ledger_entry(observation, parent_records=[distilled])
-            workspace.write_trace_event(
-                "tool_result",
-                {"step": 1, "tool": "vision_read", "observation_id": observation.observation_id},
-            )
-            return IterativeRunResult(
-                question=kwargs["question"],
-                video_path=kwargs["media_path"],
-                answer="B. red car",
-                status="final",
-                citations=[observation.observation_id],
-                confidence=0.9,
-                rounds=[
-                    IterativeRound(
-                        round_number=1,
-                        status="final",
-                        planner_text="",
-                        program=[{"tool": "vision_read", "args": {"segment_id": "seg_0001"}}],
-                        observation_ids=[observation.observation_id],
-                    )
-                ],
-            )
+        class FakeIterativeVisualAgent:
+            def __init__(self, *, backend, registry, workspace, scene_index, budget):
+                self.backend = backend
+                self.registry = registry
+                self.workspace = workspace
+                self.scene_index = scene_index
+                self.budget = budget
+
+            def run(self, *, question, video_path):
+                workspace = self.workspace
+                workspace.write_trace_event(
+                    "tool_use",
+                    {"step": 1, "tool": "vision_read", "arguments": {"segment_id": "seg_0001"}},
+                )
+                observation = workspace.write_observation(
+                    tool_name="vision_read",
+                    claim="The localized window shows a red car.",
+                    confidence=0.9,
+                    regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
+                    raw_output={
+                        "grounding_quality": "visually_confirmed",
+                        "candidate_option_relations": [{"option": "B", "relation": "support", "strength": 0.9}],
+                    },
+                )
+                distilled = EvidenceRecord(
+                    evidence_id=workspace.next_evidence_id("distilled"),
+                    stage="distilled",
+                    parent_id=None,
+                    tool="vision_read",
+                    observation_id=observation.observation_id,
+                    frame_set_id=None,
+                    content={"claim": observation.claim},
+                    grounding_quality="visually_confirmed",
+                    confidence=0.9,
+                    created_at=1.0,
+                )
+                workspace.write_evidence(distilled)
+                workspace.write_ledger_entry(observation, parent_records=[distilled])
+                workspace.write_trace_event(
+                    "tool_result",
+                    {"step": 1, "tool": "vision_read", "observation_id": observation.observation_id},
+                )
+                return IterativeRunResult(
+                    question=question,
+                    video_path=video_path,
+                    answer="B. red car",
+                    status="final",
+                    citations=[observation.observation_id],
+                    confidence=0.9,
+                    rounds=[
+                        IterativeRound(
+                            round_number=1,
+                            status="final",
+                            planner_text="",
+                            program=[{"tool": "vision_read", "args": {"segment_id": "seg_0001"}}],
+                            observation_ids=[observation.observation_id],
+                        )
+                    ],
+                )
+
+        registry_calls = []
+
+        def fake_build_registry(**kwargs):
+            registry_calls.append(kwargs)
+            return object()
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace_root = Path(tmp) / "workspaces"
@@ -1082,18 +1082,23 @@ class EvalRunnerTest(unittest.TestCase):
                 duration_sec=12.0,
                 segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
             )
-            with patch.object(eval_runner, "run_iterative_smoke", side_effect=fake_run_iterative_smoke):
-                raw = eval_runner.run_loop(
-                    backend=object(),
-                    video_path="/videos/demo.mp4",
-                    question="Which object is visible?\nA. blue car\nB. red car",
-                    duration_sec=12.0,
-                    run_id="case_agent_v2",
-                    scene_index=scene_index,
-                    workspace_root=workspace_root,
-                    budget=AgentBudget(),
-                    extract_clips=False,
-                )
+            with patch.object(eval_runner, "build_video_exploration_registry", side_effect=fake_build_registry):
+                with patch.object(eval_runner, "IterativeVisualAgent", FakeIterativeVisualAgent):
+                    raw = eval_runner.run_loop(
+                        backend=object(),
+                        video_path="/videos/demo.mp4",
+                        question="Which object is visible?\nA. blue car\nB. red car",
+                        duration_sec=12.0,
+                        run_id="case_agent_v2",
+                        scene_index=scene_index,
+                        workspace_root=workspace_root,
+                        budget=AgentBudget(),
+                        extract_clips=False,
+                    )
+
+            self.assertEqual(len(registry_calls), 1)
+            self.assertFalse(registry_calls[0]["extract_clips"])
+            self.assertIsNone(registry_calls[0]["frame_sampler"])
 
             trajectory_path = Path(raw["trajectory_path"])
             self.assertTrue(trajectory_path.exists())
@@ -1147,19 +1152,19 @@ class EvalRunnerTest(unittest.TestCase):
                 cases=("605-1",),
                 strategies=("agent_v2",),
                 window_sec=300.0,
-                scene_index_mode="subtitle",
                 budget=AgentBudget(),
                 export_training=True,
             )
 
             with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
-                with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
-                    summary = eval_runner.run_eval_cases(
-                        backend=object(),
-                        rows_by_id=rows_by_id,
-                        config=config,
-                        duration_fn=lambda path: 30.0,
-                    )
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeSceneIndexBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                        summary = eval_runner.run_eval_cases(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 30.0,
+                        )
 
             case = summary["cases"][0]
             trajectory_path = Path(case["raw_artifacts"]["training_trajectories"]["agent_v2"])

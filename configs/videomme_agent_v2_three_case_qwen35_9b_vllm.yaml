@@ -1,16 +1,33 @@
+# KML remote profile: Qwen3.5-9B planner served by vLLM, Qwen3-VL-4B kept
+# in-process for video/image tool calls.
 cases: [605-1, 611-2, 612-1]
 strategies: [agent_v2]
-run_root: /m2v_intern/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_eval_agent_v2_three_case
-model_path: /home/xuboshen/models/Qwen3-VL-4B-Instruct
+
+run_root: /m2v_intern/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_eval_agent_v2_three_case_qwen35_9b_vllm
+workspace_root: /m2v_intern/xuboshen/zgw/visual-coding-agent-harness/runs/videomme_agent_eval_agent_v2_three_case_qwen35_9b_vllm/workspaces
+
+model_path: /m2v_intern/xuboshen/models/Qwen3-VL-4B-Instruct
 planner_model_path: ""
+planner_api:
+  base: http://127.0.0.1:18080/v1
+  model: qwen35-9b
+  api_key: EMPTY
+  timeout: 300
+  enable_thinking: false
+
 data_root: /ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/datasets--lmms-lab--Video-MME/snapshots/ead1408f75b618502df9a1d8e0950166bf0a2a0b
 parquet_path: /ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/datasets--lmms-lab--Video-MME/snapshots/ead1408f75b618502df9a1d8e0950166bf0a2a0b/videomme/test-00000-of-00001.parquet
 video_dir: /ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/datasets--lmms-lab--Video-MME/snapshots/ead1408f75b618502df9a1d8e0950166bf0a2a0b/video
 subtitle_dir: /ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/datasets--lmms-lab--Video-MME/snapshots/ead1408f75b618502df9a1d8e0950166bf0a2a0b/subtitle
+
+scene_index_cache_dir: /m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache
+frame_cache_root: /m2v_intern/xuboshen/zgw/visual-coding-agent-harness/frame_cache/qwen3_vl_4b
 frame_cache_fps: 2.0
+
 nframes: 8
 max_rounds: 8
 max_tool_calls_per_round: 2
 hard_skill_runtime: true
+disable_global_gist_route: true
 export_training: true
 planner_owned_grounding: true

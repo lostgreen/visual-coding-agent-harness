@@ -108,7 +108,7 @@ def _inspect_registry(counter: dict[str, int]) -> ToolRegistry:
     return registry
 
 
-def test_gist_qa_blocks_inspect_segment(tmp_path: Path):
+def test_main_idea_playbook_treats_non_suggested_tool_as_advisory(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(
         json.dumps(
@@ -132,8 +132,10 @@ def test_gist_qa_blocks_inspect_segment(tmp_path: Path):
 
     agent.run(question="What is the video mainly about?", video_path="/videos/demo.mp4")
 
-    assert counter.get("inspect_segment", 0) == 0
-    assert "route_violation" in (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert counter.get("inspect_segment", 0) == 1
+    assert "skill_action_advisory" in trace
+    assert "route_violation" not in trace
 
 
 def test_main_idea_repairs_only_first_planner_vision_read_to_global_gist(tmp_path: Path):
@@ -1340,7 +1342,7 @@ def test_timeline_skill_repairs_caption_segment_with_segment_ids_argument(tmp_pa
     assert "segment_ids" not in normalized[0]["args"]
 
 
-def test_skill_allowed_actions_still_apply_under_round_only_budget(tmp_path: Path):
+def test_playbook_skill_suggested_actions_are_not_hard_blocked_under_round_only_budget(tmp_path: Path):
     counter: dict[str, int] = {}
     backend = StaticBackend(
         json.dumps(
@@ -1364,4 +1366,7 @@ def test_skill_allowed_actions_still_apply_under_round_only_budget(tmp_path: Pat
 
     agent.run(question="What is the video mainly about?", video_path="/videos/demo.mp4")
 
-    assert counter.get("inspect_segment", 0) == 0
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert counter.get("inspect_segment", 0) == 1
+    assert "skill_action_advisory" in trace
+    assert "tool_not_in_allowed_actions" not in trace

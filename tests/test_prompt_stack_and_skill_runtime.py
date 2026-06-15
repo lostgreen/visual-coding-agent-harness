@@ -216,7 +216,7 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("previous suggestion unchanged (x2 rounds)", prompt)
         self.assertEqual(prompt.count("AnswerAgent partial-support suggestion"), 1)
 
-    def test_tool_schema_filters_to_active_skill_allowed_actions(self):
+    def test_tool_schema_keeps_legacy_skill_filtering(self):
         rendered = _tool_schema_block(
             option_blind=True,
             active_skill="timeline_ordering@v1",
@@ -234,6 +234,17 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertNotIn("zoom(", rendered)
         self.assertNotIn("expand_window(", rendered)
         self.assertNotIn("read_segment(", rendered)
+
+    def test_tool_schema_does_not_filter_playbook_skill_to_suggested_actions(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="main_idea@v1",
+            exhausted=frozenset(),
+        )
+
+        self.assertIn("global_gist(", rendered)
+        self.assertIn("inspect_segment(", rendered)
+        self.assertIn("grep_evidence(", rendered)
 
     def test_search_segments_schema_lists_search_modalities(self):
         rendered = _tool_schema_block(
@@ -321,6 +332,27 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("skill_locked: true", prompt)
         self.assertIn("Changing it will not change the active gate", prompt)
 
+    def test_prompt_renders_active_operator_playbook_for_main_idea(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        allocator = default_context_budget_allocator(total_budget_tokens=1200)
+
+        prompt, _report = build_replanning_prompt(
+            question="Question: What's the main idea of the video?\nOptions:\nA. first theme\nB. second theme",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\n(none)",
+            round_number=1,
+            budget=AgentBudget(max_rounds=3),
+            allocator=allocator,
+            active_skill="main_idea@v1",
+        )
+
+        self.assertIn("## Skill Playbook: main_idea", prompt)
+        self.assertIn("Operator: main_arc", prompt)
+        self.assertIn("global_gist is not an option vote", prompt)
+        self.assertIn("compare top-2 option coverage", prompt)
+        self.assertIn("Suggested actions", prompt)
+        self.assertNotIn("The tool schema below is filtered to the effective skill", prompt)
+
     def test_tool_schema_marks_exhausted_tools_inline(self):
         rendered = _tool_schema_block(
             option_blind=True,
@@ -400,8 +432,8 @@ The prose says recovery_rules: this sentence must not define metadata.
 
         catalog_block = prompt.split("# Skill Catalog", 1)[1].split("# ", 1)[0]
         main_idea_line = next(line for line in catalog_block.splitlines() if line.startswith("- main_idea@"))
-        allowed_actions = main_idea_line.split("allowed_actions=", 1)[1].split(";", 1)[0]
-        self.assertNotIn("global_gist", allowed_actions.split("(", 1)[0])
+        suggested_actions = main_idea_line.split("suggested_actions=", 1)[1].split(";", 1)[0]
+        self.assertNotIn("global_gist", suggested_actions.split("(", 1)[0])
         self.assertIn("(global_gist=exhausted)", main_idea_line)
 
     def test_normalization_next_action_is_rendered_as_do_next(self):

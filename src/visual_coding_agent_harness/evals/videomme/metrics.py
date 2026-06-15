@@ -40,7 +40,6 @@ def build_report(summary_path: Path) -> dict[str, Any]:
 
 
 def _case_report(case: Mapping[str, Any], *, summary_path: Path) -> dict[str, Any]:
-    direct_seconds = _seconds(case.get("strategies", {}).get("direct_full_video", {}))
     raw_artifacts = case.get("raw_artifacts", {}) if isinstance(case.get("raw_artifacts", {}), Mapping) else {}
     return {
         "question_id": str(case.get("question_id", "")),
@@ -51,7 +50,6 @@ def _case_report(case: Mapping[str, Any], *, summary_path: Path) -> dict[str, An
                 raw=raw,
                 raw_artifacts=raw_artifacts,
                 summary_path=summary_path,
-                direct_seconds=direct_seconds,
                 question=str(case.get("question", case.get("question_excerpt", ""))),
                 options=case.get("options", []),
             )
@@ -66,7 +64,6 @@ def _case_strategy_report(
     raw: Mapping[str, Any],
     raw_artifacts: Mapping[str, Any],
     summary_path: Path,
-    direct_seconds: float | None,
     question: str,
     options: Sequence[str] | Any,
 ) -> dict[str, Any]:
@@ -98,7 +95,6 @@ def _case_strategy_report(
         "unique_inspected_segments": unique_segments,
         "citations": citations,
         "citation_count": int(raw.get("citation_count", 0) or len(citations) or 0),
-        "walltime_vs_direct": _ratio(seconds, direct_seconds),
         "workspace": str(workspace_path) if workspace_path is not None else "",
         "error": str(raw.get("error", "")),
         "unsupported_citation_final": bool(trace["unsupported_citation_final"]),
@@ -133,12 +129,9 @@ def _strategy_report(cases: Sequence[Mapping[str, Any]], strategy: str) -> dict[
     consistency_rows = [row for row in rows if row["option_support_consistency"] is not None]
     consistent = sum(1 for row in consistency_rows if row["option_support_consistency"])
     seconds = [row["seconds"] for row in rows if row["seconds"] is not None]
-    ratios = [row["walltime_vs_direct"] for row in rows if row["walltime_vs_direct"] is not None]
-    direct_regressions = _direct_regressions(cases=cases, strategy=strategy)
     return {
         "accuracy": f"{correct}/{total}",
         "accuracy_rate": correct / total if total else 0.0,
-        "direct_regressions": direct_regressions,
         "final_rate": finals / total if total else 0.0,
         "incomplete_rate": incomplete / total if total else 0.0,
         "conflict_rate": conflict / total if total else 0.0,
@@ -154,23 +147,7 @@ def _strategy_report(cases: Sequence[Mapping[str, Any]], strategy: str) -> dict[
         "legacy_worker_vote_rows": legacy_worker_vote_rows,
         "option_support_consistency_rate": consistent / len(consistency_rows) if consistency_rows else 0.0,
         "avg_seconds": round(sum(seconds) / len(seconds), 3) if seconds else None,
-        "avg_walltime_vs_direct": round(sum(ratios) / len(ratios), 3) if ratios else None,
     }
-
-
-def _direct_regressions(*, cases: Sequence[Mapping[str, Any]], strategy: str) -> int:
-    if strategy == "direct_full_video":
-        return 0
-    regressions = 0
-    for case in cases:
-        strategies = case.get("strategies", {}) if isinstance(case.get("strategies", {}), Mapping) else {}
-        direct = strategies.get("direct_full_video")
-        row = strategies.get(strategy)
-        if not isinstance(direct, Mapping) or not isinstance(row, Mapping):
-            continue
-        if bool(direct.get("correct")) and not bool(row.get("correct")):
-            regressions += 1
-    return regressions
 
 
 def _trace_summary(workspace_path: Path | None) -> dict[str, Any]:
@@ -288,12 +265,7 @@ def _workspace_path(*, strategy: str, raw_artifacts: Mapping[str, Any], summary_
     workspaces = raw_artifacts.get("workspaces", {}) if isinstance(raw_artifacts.get("workspaces", {}), Mapping) else {}
     if strategy in workspaces:
         return _resolve_path(Path(str(workspaces[strategy])), summary_path=summary_path)
-    legacy_keys = {
-        "empty_index_loop": "empty_workspace",
-        "subtitle_index_loop": "subtitle_workspace",
-        "agent_v2": "agent_v2_workspace",
-    }
-    legacy = raw_artifacts.get(legacy_keys.get(strategy, ""))
+    legacy = raw_artifacts.get("agent_v2_workspace" if strategy == "agent_v2" else "")
     if legacy:
         return _resolve_path(Path(str(legacy)), summary_path=summary_path)
     return None
@@ -309,8 +281,6 @@ def _resolve_path(path: Path, *, summary_path: Path) -> Path:
 
 def _is_final(strategy: str, raw: Mapping[str, Any]) -> bool:
     status = str(raw.get("status", "")).lower()
-    if strategy == "direct_full_video":
-        return status not in INCOMPLETE_STATUSES and not raw.get("error")
     return status == "final"
 
 
@@ -318,7 +288,7 @@ def _is_incomplete(strategy: str, raw: Mapping[str, Any], *, final: bool) -> boo
     status = str(raw.get("status", "")).lower()
     if status in INCOMPLETE_STATUSES or raw.get("error"):
         return True
-    if strategy != "direct_full_video" and not final:
+    if not final:
         return True
     return False
 
@@ -522,12 +492,6 @@ def _seconds(raw: Mapping[str, Any]) -> float | None:
     return float(value)
 
 
-def _ratio(value: float | None, baseline: float | None) -> float | None:
-    if value is None or baseline is None or baseline <= 0:
-        return None
-    return round(value / baseline, 3)
-
-
 def _unique(values: Sequence[str] | Any) -> list[str]:
     seen = set()
     result = []
@@ -543,8 +507,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines = [
         "# VideoMME Metrics",
         "",
-        "| Strategy | Accuracy | Direct Regressions | Legacy Worker Votes | Final Rate | Incomplete Rate | Unsupported Citations | Mutex Conflicts | Timeline Completeness | Degenerate Obs | Norm Notes/Round | Avg Sec | Avg vs Direct |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Strategy | Accuracy | Legacy Worker Votes | Final Rate | Incomplete Rate | Unsupported Citations | Mutex Conflicts | Timeline Completeness | Degenerate Obs | Norm Notes/Round | Avg Sec |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for strategy, metrics in report["strategies"].items():
         lines.append(
@@ -553,7 +517,6 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                     [
                         strategy,
                         str(metrics["accuracy"]),
-                        str(metrics["direct_regressions"]),
                         str(metrics["legacy_worker_vote_rows"]),
                         _pct(metrics["final_rate"]),
                         _pct(metrics["incomplete_rate"]),
@@ -563,7 +526,6 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                         _pct(metrics["degenerate_observation_rate"]),
                         _fmt(metrics["normalization_notes_per_round"]),
                         _fmt(metrics["avg_seconds"]),
-                        _fmt(metrics["avg_walltime_vs_direct"]),
                     ]
             )
             + " |"

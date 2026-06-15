@@ -11,14 +11,14 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from visual_coding_agent_harness.agents.iterative_agent import AgentBudget
+from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
 from visual_coding_agent_harness.agents.context_budget import parse_budget_ratios
-from visual_coding_agent_harness.backends.base import BackendRequest
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
-from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
+from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
-from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment, fixed_window_scene_index
+from visual_coding_agent_harness.video_index import SceneIndex
+from visual_coding_agent_harness.video_map import VideoMap
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 from .summary_schema import RunSummary, validate as validate_run_summary
@@ -40,12 +40,10 @@ DEFAULT_SUBTITLE_DIR = DATA_ROOT / "subtitle"
 DEFAULT_RUN_ROOT = KML_MANAGED_ROOT / "runs" / "videomme_agent_eval"
 DEFAULT_SCENE_INDEX_CACHE_DIR = KML_MANAGED_ROOT / "scene_index_cache"
 DEFAULT_CASES = ("605-1", "611-2", "612-1")
-DEFAULT_STRATEGIES = ("direct_full_video", "agent_v2")
-STRATEGIES = ("direct_full_video", "empty_index_loop", "subtitle_index_loop", "agent_v2")
+DEFAULT_STRATEGIES = ("agent_v2",)
+STRATEGIES = ("agent_v2",)
 WINDOW_SEC = 300.0
-DIRECT_NFRAMES = 64
 SEGMENT_NFRAMES = 8
-MAX_PIXELS = 151200
 FRAME_CACHE_FPS = 2.0
 
 
@@ -68,7 +66,6 @@ class EvalConfig:
     planner_thinking_token_budget: int | None = None
     planner_enable_thinking: bool | None = None
     window_sec: float = WINDOW_SEC
-    scene_index_mode: str = "dual-source"
     scene_index_cache_dir: Path = DEFAULT_SCENE_INDEX_CACHE_DIR
     scene_index_cache_enabled: bool = True
     scene_caption_nframes: int = SEGMENT_NFRAMES
@@ -122,9 +119,6 @@ def row_get(row: Any, key: str, default: Any = "") -> Any:
 def make_question(row: Any) -> str:
     options = normalize_options(row_get(row, "options", []))
     return (
-        "VideoMME multiple-choice question. Answer with exactly one option letter (A/B/C/D) first, "
-        "then one short evidence-based reason.\n"
-        "Do not use outside knowledge unless it is directly supported by the video evidence.\n"
         f"Question: {row_get(row, 'question')}\n"
         "Options:\n"
         + "\n".join(options)
@@ -164,10 +158,6 @@ def clean_subtitle_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def parse_srt(path: Path) -> list[tuple[float, str]]:
-    return [(cue.start_sec, cue.text) for cue in parse_srt_cues(path)]
-
-
 def parse_srt_cues(path: Path) -> list[SubtitleCue]:
     if not path.exists():
         return []
@@ -196,61 +186,6 @@ def parse_srt_cues(path: Path) -> list[SubtitleCue]:
     return cues
 
 
-def subtitle_scene_index(
-    *,
-    video_path: str,
-    video_id: str,
-    duration_sec: float,
-    subtitle_dir: Path,
-    window_sec: float = WINDOW_SEC,
-) -> SceneIndex:
-    base = fixed_window_scene_index(
-        video_path=video_path,
-        duration_sec=duration_sec,
-        window_sec=window_sec,
-        source="fixed_window_subtitle",
-    )
-    buckets = [[] for _ in base.segments]
-    for start_sec, text in parse_srt(subtitle_dir / f"{video_id}.srt"):
-        idx = min(int(start_sec // window_sec), len(buckets) - 1)
-        if idx >= 0:
-            buckets[idx].append(text)
-    enriched = []
-    for segment, texts in zip(base.segments, buckets):
-        excerpt = compact_text(" ".join(texts), limit=720)
-        caption = f"ASR/subtitle excerpt: {excerpt}" if excerpt else ""
-        enriched.append(
-            VideoSegment(
-                segment_id=segment.segment_id,
-                start_sec=segment.start_sec,
-                end_sec=segment.end_sec,
-                low_fps_caption=caption,
-                source="fixed_window_subtitle",
-            )
-        )
-    return SceneIndex(video_path=video_path, duration_sec=duration_sec, segments=enriched)
-
-
-def direct_answer(backend: Any, *, video_path: str, question: str, duration_sec: float) -> dict[str, Any]:
-    start = time.perf_counter()
-    response = backend.generate(
-        BackendRequest(
-            task="videomme_direct_qa",
-            prompt=(
-                "Answer the multiple-choice question directly from the sampled full-video context. "
-                "Start with exactly one option letter. Mention uncertainty if the sampled context is insufficient.\n"
-                f"Video duration: {duration_sec:.1f} seconds.\n{question}"
-            ),
-            media_path=video_path,
-            media_type="video",
-            max_new_tokens=256,
-            metadata={"nframes": DIRECT_NFRAMES, "max_pixels": MAX_PIXELS},
-        )
-    )
-    seconds = time.perf_counter() - start
-    return {"answer": response.text.strip(), "choice": extract_choice(response.text), "seconds": round(seconds, 3), "status": "ok"}
-
-
 def run_loop(
     backend: Any,
     *,
@@ -265,21 +200,22 @@ def run_loop(
     frame_sampler: FrameSampler | None = None,
 ) -> dict[str, Any]:
     start = time.perf_counter()
-    result = run_iterative_smoke(
-        base_dir=workspace_root,
+    workspace = EvidenceWorkspace.create(base_dir=workspace_root, run_id=run_id)
+    agent = IterativeVisualAgent(
         backend=backend,
-        media_path=video_path,
-        question=question,
-        duration_sec=duration_sec,
-        window_sec=WINDOW_SEC,
-        run_id=run_id,
+        registry=build_video_exploration_registry(
+            video_map=VideoMap.from_scene_index(scene_index),
+            backend=backend,
+            workspace=workspace,
+            extract_clips=extract_clips,
+            frame_sampler=frame_sampler,
+        ),
+        workspace=workspace,
         scene_index=scene_index,
         budget=budget,
-        extract_clips=extract_clips,
-        frame_sampler=frame_sampler,
     )
+    result = agent.run(question=question, video_path=video_path)
     seconds = time.perf_counter() - start
-    workspace = EvidenceWorkspace(root=workspace_root / "runs" / run_id)
     reward_tags = _reward_tags_for_result(workspace=workspace, status=result.status, citations=result.citations)
     trajectory_payload = workspace.export_longvideoagent_trajectory(
         question=question,
@@ -411,7 +347,6 @@ def run_eval_cases(
         "parquet_path": str(config.parquet_path),
         "video_dir": str(config.video_dir),
         "subtitle_dir": str(config.subtitle_dir),
-        "scene_index_mode": config.scene_index_mode,
         "scene_index_cache_dir": str(config.scene_index_cache_dir),
         "scene_index_cache_enabled": config.scene_index_cache_enabled,
         "scene_caption_nframes": config.scene_caption_nframes,
@@ -446,13 +381,12 @@ def run_eval_cases(
         video_path = str(config.video_dir / f"{video_id}.mp4")
         duration_sec = duration_fn(Path(video_path))
         frame_cache = None
-        if _uses_frame_cache(config.strategies):
-            frame_cache = build_frame_cache_for_video(
-                video_path=Path(video_path),
-                frame_dir=_frame_cache_dir(config=config, video_id=video_id),
-                fps=float(config.frame_cache_fps),
-                duration_sec=duration_sec,
-            )
+        frame_cache = build_frame_cache_for_video(
+            video_path=Path(video_path),
+            frame_dir=_frame_cache_dir(config=config, video_id=video_id),
+            fps=float(config.frame_cache_fps),
+            duration_sec=duration_sec,
+        )
         frame_sampler = frame_cache.sample_paths if frame_cache is not None else None
         question = make_question(row)
         gt = str(row_get(row, "answer")).strip().upper()
@@ -494,26 +428,25 @@ def run_eval_cases(
                     frame_sampler=frame_sampler,
                 )
                 case["strategies"][strategy] = summarize_strategy(raw, gt)
-                if strategy != "direct_full_video":
-                    workspace_path = config.workspace_root / "runs" / f"{case_prefix}_{strategy}"
-                    case["raw_artifacts"]["workspaces"][strategy] = str(workspace_path)
-                    if config.export_training:
-                        trajectory_path = _export_training_trajectory(
-                            workspace_path=workspace_path,
-                            run_root=config.run_root,
-                            case_id=str(qid),
-                            strategy=strategy,
-                            question=question,
-                            options=case["options"],
-                            gt=gt,
-                            strategy_summary=case["strategies"][strategy],
-                        )
-                        if trajectory_path is not None:
-                            markdown_path = trajectory_path.with_suffix(".md")
-                            case["raw_artifacts"].setdefault("training_trajectories", {})[strategy] = str(trajectory_path)
-                            case["raw_artifacts"].setdefault("training_trajectory_markdown", {})[strategy] = str(markdown_path)
-                            case["strategies"][strategy]["training_trajectory_path"] = str(trajectory_path)
-                            case["strategies"][strategy]["training_trajectory_markdown_path"] = str(markdown_path)
+                workspace_path = config.workspace_root / "runs" / f"{case_prefix}_{strategy}"
+                case["raw_artifacts"]["workspaces"][strategy] = str(workspace_path)
+                if config.export_training:
+                    trajectory_path = _export_training_trajectory(
+                        workspace_path=workspace_path,
+                        run_root=config.run_root,
+                        case_id=str(qid),
+                        strategy=strategy,
+                        question=question,
+                        options=case["options"],
+                        gt=gt,
+                        strategy_summary=case["strategies"][strategy],
+                    )
+                    if trajectory_path is not None:
+                        markdown_path = trajectory_path.with_suffix(".md")
+                        case["raw_artifacts"].setdefault("training_trajectories", {})[strategy] = str(trajectory_path)
+                        case["raw_artifacts"].setdefault("training_trajectory_markdown", {})[strategy] = str(markdown_path)
+                        case["strategies"][strategy]["training_trajectory_path"] = str(trajectory_path)
+                        case["strategies"][strategy]["training_trajectory_markdown_path"] = str(markdown_path)
             except Exception as exc:
                 case["strategies"][strategy] = {
                     "choice": "",
@@ -1047,42 +980,23 @@ def run_strategy(
 ) -> dict[str, Any]:
     if strategy not in STRATEGIES:
         raise ValueError(f"Unknown strategy: {strategy}")
-    if strategy == "direct_full_video":
-        return direct_answer(backend, video_path=video_path, question=question, duration_sec=duration_sec)
-
-    if strategy == "empty_index_loop":
-        scene_index = fixed_window_scene_index(
-            video_path=video_path,
-            duration_sec=duration_sec,
-            window_sec=config.window_sec,
-            source="fixed_window_empty",
-        )
-    elif config.scene_index_mode == "dual-source":
-        cache = SceneIndexCache(config.scene_index_cache_dir) if config.scene_index_cache_enabled else None
-        builder = SceneIndexBuilder(
-            backend=backend,
-            text_model_id=config.planner_model_path or config.model_path,
-            vl_model_id=config.model_path,
-            window_sec=config.window_sec,
-            caption_nframes=config.scene_caption_nframes,
-            cache=cache,
-            clip_root=None if frame_sampler is not None else config.scene_index_cache_dir / "clips",
-            frame_sampler=frame_sampler,
-        )
-        scene_index = builder.build(
-            video_id=video_id,
-            video_path=video_path,
-            duration_sec=duration_sec,
-            subtitle_cues=parse_srt_cues(config.subtitle_dir / f"{video_id}.srt"),
-        )
-    else:
-        scene_index = subtitle_scene_index(
-            video_path=video_path,
-            video_id=video_id,
-            duration_sec=duration_sec,
-            subtitle_dir=config.subtitle_dir,
-            window_sec=config.window_sec,
-        )
+    cache = SceneIndexCache(config.scene_index_cache_dir) if config.scene_index_cache_enabled else None
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id=config.planner_model_path or config.model_path,
+        vl_model_id=config.model_path,
+        window_sec=config.window_sec,
+        caption_nframes=config.scene_caption_nframes,
+        cache=cache,
+        clip_root=None if frame_sampler is not None else config.scene_index_cache_dir / "clips",
+        frame_sampler=frame_sampler,
+    )
+    scene_index = builder.build(
+        video_id=video_id,
+        video_path=video_path,
+        duration_sec=duration_sec,
+        subtitle_cues=parse_srt_cues(config.subtitle_dir / f"{video_id}.srt"),
+    )
     return run_loop(
         backend,
         video_path=video_path,
@@ -1099,12 +1013,6 @@ def run_strategy(
 
 def parse_csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
-
-
-def _uses_frame_cache(strategies: Sequence[str]) -> bool:
-    return any(strategy != "direct_full_video" for strategy in strategies)
-
-
 def _frame_cache_root(config: EvalConfig) -> Path:
     return config.frame_cache_root or (config.run_root / "frame_cache")
 
@@ -1263,7 +1171,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--video-dir", type=Path, default=None)
     parser.add_argument("--subtitle-dir", type=Path, default=None)
     parser.add_argument("--window-sec", type=float, default=None)
-    parser.add_argument("--scene-index-mode", choices=("subtitle", "dual-source"), default=None)
     parser.add_argument("--scene-index-cache-dir", type=Path, default=None)
     parser.add_argument("--no-scene-index-cache", action="store_true", default=None)
     parser.add_argument("--scene-caption-nframes", type=int, default=None)
@@ -1484,7 +1391,6 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         cases=cases,
         strategies=strategies,
         window_sec=float(_arg_or_config(args, config_data, "window_sec", default=WINDOW_SEC)),
-        scene_index_mode=str(_arg_or_config(args, config_data, "scene_index_mode", default="dual-source")),
         scene_index_cache_dir=_as_path(
             _arg_or_config(args, config_data, "scene_index_cache_dir", default=DEFAULT_SCENE_INDEX_CACHE_DIR)
         ),

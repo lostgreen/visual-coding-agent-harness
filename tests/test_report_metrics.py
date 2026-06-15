@@ -6,12 +6,12 @@ from pathlib import Path
 
 
 class ReportMetricsTest(unittest.TestCase):
-    def test_build_report_counts_exhausted_runs_as_incomplete_even_with_choice(self):
+    def test_build_report_counts_agent_exhausted_runs_as_incomplete_even_with_choice(self):
         from runs import report_metrics
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            workspace = root / "workspaces" / "runs" / "case_empty"
+            workspace = root / "workspaces" / "runs" / "case_agent_v2"
             workspace.mkdir(parents=True)
             (workspace / "trace.jsonl").write_text(
                 "\n".join(
@@ -37,13 +37,7 @@ class ReportMetricsTest(unittest.TestCase):
                                 "question_id": "605-1",
                                 "gt": "D",
                                 "strategies": {
-                                    "direct_full_video": {
-                                        "choice": "D",
-                                        "correct": True,
-                                        "seconds": 5.0,
-                                        "status": "ok",
-                                    },
-                                    "empty_index_loop": {
+                                    "agent_v2": {
                                         "choice": "D",
                                         "correct": True,
                                         "seconds": 40.0,
@@ -52,20 +46,14 @@ class ReportMetricsTest(unittest.TestCase):
                                     },
                                 },
                                 "raw_artifacts": {
-                                    "workspaces": {"empty_index_loop": str(workspace)}
+                                    "workspaces": {"agent_v2": str(workspace)}
                                 },
                             },
                             {
                                 "question_id": "611-2",
                                 "gt": "B",
                                 "strategies": {
-                                    "direct_full_video": {
-                                        "choice": "A",
-                                        "correct": False,
-                                        "seconds": 5.0,
-                                        "status": "ok",
-                                    },
-                                    "empty_index_loop": {
+                                    "agent_v2": {
                                         "choice": "A",
                                         "correct": False,
                                         "seconds": 20.0,
@@ -85,26 +73,24 @@ class ReportMetricsTest(unittest.TestCase):
 
             report = report_metrics.build_report(summary_path)
 
-            direct = report["strategies"]["direct_full_video"]
-            self.assertEqual(direct["accuracy"], "1/2")
-            self.assertEqual(direct["final_rate"], 1.0)
-            self.assertEqual(direct["incomplete_rate"], 0.0)
+            agent = report["strategies"]["agent_v2"]
+            self.assertEqual(agent["accuracy"], "1/2")
+            self.assertEqual(agent["final_rate"], 0.5)
+            self.assertEqual(agent["incomplete_rate"], 0.5)
+            self.assertEqual(agent["avg_seconds"], 30.0)
+            self.assertNotIn("direct_regressions", agent)
+            self.assertNotIn("avg_walltime_vs_direct", agent)
 
-            empty = report["strategies"]["empty_index_loop"]
-            self.assertEqual(empty["accuracy"], "1/2")
-            self.assertEqual(empty["final_rate"], 0.5)
-            self.assertEqual(empty["incomplete_rate"], 0.5)
-            self.assertEqual(empty["avg_seconds"], 30.0)
-            self.assertEqual(empty["avg_walltime_vs_direct"], 6.0)
-
-            detail = report["cases"][0]["strategies"]["empty_index_loop"]
+            detail = report["cases"][0]["strategies"]["agent_v2"]
             self.assertTrue(detail["incomplete"])
             self.assertEqual(detail["tool_sequence"], ["video_ls", "inspect_segment"])
             self.assertEqual(detail["unique_inspected_segments"], ["seg_0002"])
             self.assertEqual(detail["citation_count"], 2)
 
             rendered = report_metrics.render_markdown(report)
-            self.assertIn("empty_index_loop", rendered)
+            self.assertIn("agent_v2", rendered)
+            self.assertNotIn("Direct Regressions", rendered)
+            self.assertNotIn("Avg vs Direct", rendered)
             self.assertIn("50.0%", rendered)
             self.assertIn("video_ls -> inspect_segment", rendered)
 
@@ -186,47 +172,6 @@ class ReportMetricsTest(unittest.TestCase):
             self.assertEqual(metrics["final_with_conflict_rate"], 1.0)
             self.assertEqual(metrics["unsupported_final_rate"], 1.0)
             self.assertEqual(metrics["option_support_consistency_rate"], 0.0)
-
-    def test_build_report_counts_direct_regressions_per_strategy(self):
-        from runs import report_metrics
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            summary_path = root / "summary.json"
-            summary_path.write_text(
-                json.dumps(
-                    {
-                        "cases": [
-                            {
-                                "question_id": "605-1",
-                                "gt": "D",
-                                "strategies": {
-                                    "direct_full_video": {"choice": "D", "correct": True, "status": "ok"},
-                                    "agent_v2": {"choice": "C", "correct": False, "status": "final"},
-                                },
-                            },
-                            {
-                                "question_id": "611-2",
-                                "gt": "D",
-                                "strategies": {
-                                    "direct_full_video": {"choice": "A", "correct": False, "status": "ok"},
-                                    "agent_v2": {"choice": "A", "correct": False, "status": "final"},
-                                },
-                            },
-                        ]
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-
-            report = report_metrics.build_report(summary_path)
-
-            self.assertEqual(report["strategies"]["agent_v2"]["direct_regressions"], 1)
-            self.assertEqual(report["strategies"]["direct_full_video"]["direct_regressions"], 0)
-            rendered = report_metrics.render_markdown(report)
-            self.assertIn("Direct Regressions", rendered)
-            self.assertIn("agent_v2", rendered)
 
     def test_build_report_counts_legacy_worker_vote_rows(self):
         from runs import report_metrics
@@ -321,7 +266,6 @@ class ReportMetricsTest(unittest.TestCase):
                                 "question": "Question: What's the main idea of the video?",
                                 "options": ["A. one", "B. two", "C. three", "D. whole-video synopsis"],
                                 "strategies": {
-                                    "direct_full_video": {"choice": "D", "correct": True, "status": "ok"},
                                     "agent_v2": {
                                         "choice": "D",
                                         "correct": True,

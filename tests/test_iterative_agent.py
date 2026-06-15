@@ -2213,7 +2213,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("global_gist_one_shot_exhausted", trace)
             self.assertNotIn("repair_repeated_main_idea_global_gist_to_vision_read", trace)
 
-    def test_disallowed_skill_tool_is_dropped_with_imperative_note(self):
+    def test_playbook_non_suggested_skill_tool_runs_with_advisory_note(self):
         backend = ScriptedPlannerBackend(
             [
                 (
@@ -2241,11 +2241,12 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="What is the video mainly about?", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.rounds[0].program, [])
-            self.assertTrue(any("ground_question" in entry and "denied" in entry for entry in workspace.reflection_memory(max_items=10)))
+            self.assertEqual(result.rounds[0].program[0]["tool"], "ground_question")
+            self.assertFalse(any("ground_question" in entry and "denied" in entry for entry in workspace.reflection_memory(max_items=10)))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("tool_not_in_allowed_actions", trace)
-            self.assertIn("Pick one of", trace)
+            self.assertIn("skill_action_advisory", trace)
+            self.assertIn("non_suggested_action", trace)
+            self.assertNotIn("tool_not_in_allowed_actions", trace)
 
     def test_segment_pool_exhaustion_is_reported_without_fallback(self):
         backend = ScriptedPlannerBackend(

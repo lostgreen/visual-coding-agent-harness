@@ -1,0 +1,39 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "VideoMME agent_v2: 9B planner vLLM + 4B tools",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python",
+      "module": "visual_coding_agent_harness.cli.eval_videomme",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src:.",
+        "CUDA_VISIBLE_DEVICES": "1"
+      },
+      "args": [
+        "--config",
+        "configs/videomme_agent_v2_three_case_qwen35_9b_vllm.yaml"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Attach: Video harness debugpy :5678",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": {
+        "host": "127.0.0.1",
+        "port": 5678
+      },
+      "pathMappings": [
+        {
+          "localRoot": "${workspaceFolder}",
+          "remoteRoot": "${workspaceFolder}"
+        }
+      ],
+      "justMyCode": false
+    }
+  ]
+}

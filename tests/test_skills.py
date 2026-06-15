@@ -16,9 +16,9 @@ def test_main_idea_uses_global_gist_as_topic_hint_not_option_floor():
 def test_skill_catalog_redacts_exhausted_one_shot_tool():
     rendered = skill_catalog_prompt(exhausted_tools=frozenset({"global_gist"}))
     main_idea_line = next(line for line in rendered.splitlines() if line.startswith("- main_idea@"))
-    allowed_actions = main_idea_line.split("allowed_actions=", 1)[1].split(";", 1)[0]
+    suggested_actions = main_idea_line.split("suggested_actions=", 1)[1].split(";", 1)[0]
 
-    assert "global_gist" not in allowed_actions.split("(", 1)[0]
+    assert "global_gist" not in suggested_actions.split("(", 1)[0]
     assert "(global_gist=exhausted)" in main_idea_line
 
 

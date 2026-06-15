@@ -8,6 +8,7 @@ from string import Formatter
 from typing import Any, FrozenSet, Mapping, Sequence
 
 from ..question_policy import classify_narration_subroute, classify_question_route
+from .playbook import Playbook, playbook_for_operator, render_playbook_block, with_suggested_actions
 
 
 @dataclass(frozen=True)
@@ -42,8 +43,11 @@ class SkillSpec:
     default_claim_modality: str = "visual_fact"
     recovery_rules: Mapping[str, Any] = field(default_factory=dict)
     playbook_body: str = ""
+    playbook: Playbook | None = None
 
     def prompt_context(self) -> str:
+        if self.playbook is not None:
+            return render_playbook_block(self.playbook)
         lines = [f"Skill: {self.name}@v{self.version}", "Procedure:"]
         for step in self.procedure:
             foreach = f" foreach={step.foreach}" if step.foreach else ""
@@ -73,6 +77,7 @@ class SkillSpec:
         sufficiency: Sequence[str] = (),
         verifier_checks: Sequence[str] = (),
         allowed_actions: FrozenSet[str] = frozenset(),
+        playbook: Playbook | None = None,
     ) -> "SkillSpec":
         front_matter, body = _split_front_matter(text)
         metadata = _parse_front_matter(front_matter)
@@ -92,6 +97,7 @@ class SkillSpec:
             default_claim_modality=str(metadata["default_claim_modality"]),
             recovery_rules=dict(recovery_rules),
             playbook_body=body.strip(),
+            playbook=playbook,
         )
 
     @classmethod
@@ -192,16 +198,17 @@ def skill_catalog_prompt(
         if not include_legacy and skill.name in _LEGACY_CATALOG_SKILLS:
             continue
         marker_text = ", ".join(skill.trigger.markers) if skill.trigger.markers else "(none)"
-        remaining = sorted(action for action in skill.allowed_actions if action not in blocked)
-        spent = sorted(action for action in skill.allowed_actions if action in blocked)
+        suggested = tuple(skill.playbook.suggested_actions) if skill.playbook is not None else tuple(skill.allowed_actions)
+        remaining = sorted(action for action in suggested if action not in blocked)
+        spent = sorted(action for action in suggested if action in blocked)
         suffix = f" ({', '.join(f'{tool}=exhausted' for tool in spent)})" if spent else ""
         lines.append(
             f"- {skill.name}@v{skill.version}: route={skill.trigger.route}; markers={marker_text}; "
             f"default_claim_modality={skill.default_claim_modality}; "
-            f"allowed_actions={', '.join(remaining) or '(none)'}{suffix}; "
+            f"suggested_actions={', '.join(remaining) or '(none)'}{suffix}; "
             f"sufficiency={'; '.join(skill.sufficiency)}"
         )
-        summary = _playbook_summary(skill.playbook_body)
+        summary = _playbook_summary(skill.playbook.decomposition if skill.playbook is not None else skill.playbook_body)
         if summary:
             lines.append(f"  playbook: {summary}")
     return "\n".join(lines)
@@ -209,14 +216,58 @@ def skill_catalog_prompt(
 
 def allowed_actions_for_skill(skill_id: str) -> frozenset[str]:
     """Return allowed tool actions for a built-in skill id or short skill name."""
+    skill = skill_for_id(skill_id)
+    return frozenset(skill.allowed_actions) if skill is not None else frozenset()
+
+
+def skill_for_id(skill_id: str) -> SkillSpec | None:
     normalized = str(skill_id).strip()
     if not normalized:
-        return frozenset()
+        return None
     short_name = normalized.split("@", 1)[0]
     for skill in builtin_skill_registry().list():
         if skill.name == short_name or f"{skill.name}@v{skill.version}" == normalized:
-            return frozenset(skill.allowed_actions)
-    return frozenset()
+            return skill
+    return None
+
+
+def suggested_actions_for_skill(skill_id: str) -> frozenset[str]:
+    skill = skill_for_id(skill_id)
+    if skill is None:
+        return frozenset()
+    if skill.playbook is not None and skill.playbook.suggested_actions:
+        return frozenset(skill.playbook.suggested_actions)
+    return frozenset(skill.allowed_actions)
+
+
+def forbidden_actions_for_skill(skill_id: str) -> frozenset[str]:
+    skill = skill_for_id(skill_id)
+    if skill is None or skill.playbook is None:
+        return frozenset()
+    return frozenset(skill.playbook.forbidden_actions)
+
+
+def skill_has_playbook(skill_id: str) -> bool:
+    skill = skill_for_id(skill_id)
+    return bool(skill is not None and skill.playbook is not None)
+
+
+def render_skill_playbook_for_prompt(
+    skill_id: str,
+    *,
+    option_labels: Sequence[str] = (),
+    central_subjects: Sequence[str] = (),
+    max_chars: int = 4000,
+) -> str:
+    skill = skill_for_id(skill_id)
+    if skill is None or skill.playbook is None:
+        return ""
+    return render_playbook_block(
+        skill.playbook,
+        option_labels=option_labels,
+        central_subjects=central_subjects,
+        max_chars=max_chars,
+    )
 
 
 def _playbook_dir() -> Path:
@@ -233,6 +284,7 @@ def _load_builtin_playbook(
     sufficiency: Sequence[str],
     verifier_checks: Sequence[str],
     allowed_actions: FrozenSet[str],
+    playbook: Playbook | None = None,
 ) -> SkillSpec:
     return SkillSpec.from_markdown_playbook_path(
         _playbook_dir() / filename,
@@ -243,6 +295,7 @@ def _load_builtin_playbook(
         sufficiency=sufficiency,
         verifier_checks=verifier_checks,
         allowed_actions=allowed_actions,
+        playbook=playbook,
     )
 
 
@@ -360,6 +413,34 @@ def builtin_skill_registry() -> SkillRegistry:
     timeline_allowed_actions = _timeline_allowed_actions()
     grounded_steps = _grounded_factual_steps()
     grounded_allowed_actions = _grounded_allowed_actions()
+    main_idea_actions = frozenset(
+        {"global_gist", "query_context", "vision_read", "target_coverage", "read_segment_detail", "search_segments"}
+        | {"bind_asr_claim"}
+        | {"verify_ledger_answer"}
+    )
+    main_idea_playbook = with_suggested_actions(
+        playbook_for_operator("main_arc", question="", options=(), registry=None),
+        sorted(main_idea_actions),
+    )
+    grounded_playbook = with_suggested_actions(
+        playbook_for_operator("select_present", question="", options=(), registry=None),
+        sorted(grounded_allowed_actions),
+    )
+    complement_actions = grounded_allowed_actions | {"bind_asr_claim"}
+    complement_playbook = with_suggested_actions(
+        playbook_for_operator("select_absent", question="", options=(), registry=None),
+        sorted(complement_actions),
+    )
+    causal_actions = grounded_allowed_actions | {"bind_asr_claim"}
+    causal_playbook = with_suggested_actions(
+        playbook_for_operator("causal_bind", question="", options=(), registry=None),
+        sorted(causal_actions),
+    )
+    universal_actions = grounded_allowed_actions | {"bind_asr_claim"}
+    universal_playbook = with_suggested_actions(
+        playbook_for_operator("universal_intersection", question="", options=(), registry=None),
+        sorted(universal_actions),
+    )
     return SkillRegistry(
         [
             SkillSpec(
@@ -396,11 +477,47 @@ def builtin_skill_registry() -> SkillRegistry:
                     "Q: what is the video mainly about -> sparse global topic hint -> local/indexed coverage facts -> answer",
                 ),
                 self_check=("global_gist is not an option vote", "decision cites coverage evidence"),
-                allowed_actions=frozenset(
-                    {"global_gist", "query_context", "vision_read", "target_coverage", "read_segment_detail", "search_segments"}
-                    | {"bind_asr_claim"}
-                    | {"verify_ledger_answer"}
-                ),
+                allowed_actions=main_idea_actions,
+                playbook=main_idea_playbook,
+            ),
+            SkillSpec(
+                name="complement_absence_qa",
+                version=1,
+                trigger=SkillTrigger(route="needle_local", markers=("not", "absent", "not seen", "not described")),
+                input_slots=("question", "options", "video_id", "target_fact"),
+                procedure=(),
+                sufficiency=("all_competitors_present", "single_absent_candidate_after_probe"),
+                verifier_checks=("selected_absent_option_has_no_positive_support", "competitors_have_structured_support"),
+                recovery={"insufficient": {"action": "need_more_evidence", "target": "missing competitor presence"}},
+                self_check=("do not infer absence from silence",),
+                allowed_actions=complement_actions,
+                playbook=complement_playbook,
+            ),
+            SkillSpec(
+                name="causal_asr_qa",
+                version=1,
+                trigger=SkillTrigger(route="mixed_asr_visual", markers=("why", "reason", "because", "according to")),
+                input_slots=("question", "options", "video_id", "target_fact"),
+                procedure=(),
+                sufficiency=("selected_cause_has_binding_sourced_support",),
+                verifier_checks=("topic_overlap_is_not_causal_support", "selected_option_has_structured_support"),
+                recovery={"insufficient": {"action": "need_more_evidence", "target": "causal binding"}},
+                self_check=("bind cause claims before final",),
+                allowed_actions=causal_actions,
+                playbook=causal_playbook,
+            ),
+            SkillSpec(
+                name="universal_set_qa",
+                version=1,
+                trigger=SkillTrigger(route="needle_local", markers=("all", "every", "each", "universally", "across")),
+                input_slots=("question", "options", "video_id", "target_fact"),
+                procedure=(),
+                sufficiency=("candidate_supported_across_relevant_groups",),
+                verifier_checks=("single_group_support_is_insufficient", "coverage_groups_complete"),
+                recovery={"insufficient": {"action": "need_more_evidence", "target": "unvisited group"}},
+                self_check=("track group coverage before final",),
+                allowed_actions=universal_actions,
+                playbook=universal_playbook,
             ),
             SkillSpec(
                 name="mutex_fact_qa",
@@ -469,6 +586,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 recovery={"insufficient": {"action": "need_more_evidence", "target": "distinguishing fact window"}},
                 self_check=("decision.citations all visually_confirmed",),
                 allowed_actions=grounded_allowed_actions,
+                playbook=grounded_playbook,
             ),
             _load_builtin_playbook(
                 "narration_timeline_qa.md",
@@ -513,6 +631,7 @@ def builtin_skill_registry() -> SkillRegistry:
                     "no_unaddressed_conflict",
                 ),
                 allowed_actions=grounded_allowed_actions,
+                playbook=grounded_playbook,
             ),
             SkillSpec(
                 name="timeline_ordering",

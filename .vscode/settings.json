@@ -1,0 +1,10 @@
+{
+  "python.defaultInterpreterPath": "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/src"
+  ],
+  "terminal.integrated.env.linux": {
+    "PYTHONPATH": "${workspaceFolder}/src:.",
+    "CUDA_VISIBLE_DEVICES": "1"
+  }
+}

@@ -8,8 +8,13 @@ from typing import Any, Mapping, Sequence
 
 from ..video_index import SceneIndex
 from .context_budget import ContextBudgetAllocator, ContextBudgetReport, SlotName
-from .question_policy import QuestionPlaybook, select_question_playbook
-from .skills.specs import allowed_actions_for_skill, skill_catalog_prompt
+from .question_policy import QuestionPlaybook, extract_candidate_options, select_question_playbook
+from .skills.specs import (
+    allowed_actions_for_skill,
+    render_skill_playbook_for_prompt,
+    skill_catalog_prompt,
+    skill_has_playbook,
+)
 
 
 @dataclass(frozen=True)
@@ -176,7 +181,12 @@ def compose_replanning_prompt_slots(
         PromptBlock(
             name="skill_catalog",
             title="Skill Catalog",
-            body=_skill_catalog_block(active_skill=active_skill, exhausted_tools=exhausted_tools),
+            body=_skill_catalog_block(
+                active_skill=active_skill,
+                exhausted_tools=exhausted_tools,
+                question=question,
+                target_hints=target_hints,
+            ),
         ),
     ]
     tooling_blocks = [
@@ -294,7 +304,12 @@ def compose_replanning_prompt_blocks(
         PromptBlock(
             name="skill_catalog",
             title="Skill Catalog",
-            body=_skill_catalog_block(active_skill=active_skill, exhausted_tools=exhausted_tools),
+            body=_skill_catalog_block(
+                active_skill=active_skill,
+                exhausted_tools=exhausted_tools,
+                question=question,
+                target_hints=target_hints,
+            ),
         ),
         PromptBlock(
             name="trajectory_snapshot",
@@ -413,7 +428,7 @@ def _tool_schema_block(
     has_registered_refs = bool([item for item in target_ref_descriptions if str(item).strip()])
     signatures = list(_tool_schema_signatures(option_blind=option_blind, include_target_refs=has_registered_refs))
     allowed = allowed_actions_for_skill(active_skill or "") if active_skill else frozenset()
-    if allowed:
+    if allowed and not skill_has_playbook(active_skill or ""):
         signatures = [signature for signature in signatures if _tool_name_from_signature(signature) in allowed]
     rendered = [_maybe_mark_exhausted(signature, exhausted) for signature in signatures]
     lines = [
@@ -481,9 +496,22 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
     )
 
 
-def _skill_catalog_block(*, active_skill: str | None, exhausted_tools: frozenset[str] | None) -> str:
+def _skill_catalog_block(
+    *,
+    active_skill: str | None,
+    exhausted_tools: frozenset[str] | None,
+    question: str = "",
+    target_hints: Sequence[str] = (),
+) -> str:
     lines = [skill_catalog_prompt(exhausted_tools=exhausted_tools)]
     if active_skill:
+        playbook_block = render_skill_playbook_for_prompt(
+            active_skill,
+            option_labels=extract_candidate_options(question),
+            central_subjects=target_hints,
+        )
+        if playbook_block:
+            lines.extend(["", playbook_block])
         lines.extend(
             [
                 "# Effective Skill State",
@@ -493,9 +521,12 @@ def _skill_catalog_block(*, active_skill: str | None, exhausted_tools: frozenset
                 "unlock_used: false",
                 "The `skill` field in your response must match effective_skill.",
                 "Changing it will not change the active gate.",
-                "The tool schema below is filtered to the effective skill.",
             ]
         )
+        if skill_has_playbook(active_skill):
+            lines.append("Suggested actions are advisory; valid non-suggested tools may be used with a trace note.")
+        else:
+            lines.append("The tool schema below is filtered to the effective skill.")
     else:
         lines.append(
             "Select the skill that best matches this case in every planner JSON as `skill`. "

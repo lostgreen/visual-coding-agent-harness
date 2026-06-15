@@ -2266,6 +2266,16 @@ class IterativeVisualAgent:
                         original={"tool": original_tool_name, "segment_id": segment.segment_id},
                         resolved={"tool": tool_name, "segment_id": segment.segment_id},
                     )
+            if _tool_forbidden_by_skill(tool_name=tool_name, active_skill=active_skill):
+                blocked_route_violation = True
+                _record_skill_forbidden_action(
+                    workspace=self.workspace,
+                    notes_out=notes_out,
+                    tool_name=tool_name,
+                    args=args,
+                    active_skill=active_skill,
+                )
+                continue
             if _tool_denied_by_skill(tool_name=tool_name, active_skill=active_skill):
                 blocked_route_violation = True
                 _record_skill_deny_list_violation(
@@ -2276,6 +2286,14 @@ class IterativeVisualAgent:
                     active_skill=active_skill,
                 )
                 continue
+            if _tool_non_suggested_by_playbook(tool_name=tool_name, active_skill=active_skill):
+                _record_skill_action_advisory(
+                    workspace=self.workspace,
+                    notes_out=notes_out,
+                    tool_name=tool_name,
+                    args=args,
+                    active_skill=active_skill,
+                )
             violation = _route_violation(tool_name=tool_name, active_skill=active_skill)
             if violation is not None:
                 blocked_route_violation = True
@@ -7132,7 +7150,25 @@ def _signature_value(value: Any) -> Any:
 
 
 def _tool_denied_by_skill(*, tool_name: str, active_skill: SkillSpec | None) -> bool:
-    return active_skill is not None and tool_name not in active_skill.allowed_actions
+    return (
+        active_skill is not None
+        and active_skill.playbook is None
+        and active_skill.allowed_actions
+        and tool_name not in active_skill.allowed_actions
+    )
+
+
+def _tool_forbidden_by_skill(*, tool_name: str, active_skill: SkillSpec | None) -> bool:
+    if active_skill is None or active_skill.playbook is None:
+        return False
+    return tool_name in set(active_skill.playbook.forbidden_actions)
+
+
+def _tool_non_suggested_by_playbook(*, tool_name: str, active_skill: SkillSpec | None) -> bool:
+    if active_skill is None or active_skill.playbook is None:
+        return False
+    suggested = set(active_skill.playbook.suggested_actions or active_skill.allowed_actions)
+    return bool(suggested and tool_name not in suggested)
 
 
 def _skill_name_as_tool_reason(tool_name: str) -> str:
@@ -7182,6 +7218,64 @@ def _record_skill_deny_list_violation(
         notes_out,
         tool=tool_name,
         reason="tool_not_in_allowed_actions",
+        original={"tool": tool_name, "args": dict(args)},
+        next_action=next_action,
+    )
+
+
+def _record_skill_action_advisory(
+    *,
+    workspace: EvidenceWorkspace,
+    notes_out: list[NormalizationNote] | None,
+    tool_name: str,
+    args: Mapping[str, Any],
+    active_skill: SkillSpec | None,
+) -> None:
+    if active_skill is None:
+        return
+    suggested_actions = ", ".join(sorted(active_skill.playbook.suggested_actions or active_skill.allowed_actions)) or "(none)"
+    workspace.write_trace_event(
+        "skill_action_advisory",
+        {
+            "tool": tool_name,
+            "skill": active_skill.name,
+            "reason": "non_suggested_action",
+            "suggested_actions": suggested_actions,
+        },
+    )
+    _append_normalization_note(
+        notes_out,
+        tool=tool_name,
+        reason="non_suggested_action_advisory",
+        original={"tool": tool_name, "args": dict(args)},
+        next_action="This valid tool is outside the active playbook's suggested actions; use it only if it directly repairs the evidence gap.",
+    )
+
+
+def _record_skill_forbidden_action(
+    *,
+    workspace: EvidenceWorkspace,
+    notes_out: list[NormalizationNote] | None,
+    tool_name: str,
+    args: Mapping[str, Any],
+    active_skill: SkillSpec | None,
+) -> None:
+    if active_skill is None:
+        return
+    next_action = f"{tool_name} is forbidden by the active playbook ({active_skill.name}); choose a different valid tool."
+    workspace.write_trace_event(
+        "route_violation",
+        {
+            "tool": tool_name,
+            "error": "tool_forbidden_by_playbook",
+            "skill": active_skill.name,
+            "next_action": next_action,
+        },
+    )
+    _append_normalization_note(
+        notes_out,
+        tool=tool_name,
+        reason="tool_forbidden_by_playbook",
         original={"tool": tool_name, "args": dict(args)},
         next_action=next_action,
     )
@@ -7808,6 +7902,10 @@ def _content_words(text: str) -> list[str]:
 
 def _route_violation(*, tool_name: str, active_skill: SkillSpec | None) -> str | None:
     if active_skill is None or not active_skill.allowed_actions:
+        return None
+    if active_skill.playbook is not None:
+        if tool_name in set(active_skill.playbook.forbidden_actions):
+            return f"action '{tool_name}' is forbidden by skill '{active_skill.name}' playbook"
         return None
     if tool_name in active_skill.allowed_actions:
         return None
