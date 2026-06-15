@@ -4591,9 +4591,10 @@ class IterativeVisualAgent:
 
         rounds: list[IterativeRound] = []
         all_observation_ids: list[str] = []
+        target_budget_per_round = max(1, self.budget.max_tool_calls_per_round // 2)
         scheduler = FollowupScheduler(
             FollowupBudget(
-                global_max_followups=max(1, self.budget.max_rounds * self.budget.max_tool_calls_per_round)
+                global_max_followups=max(1, self.budget.max_rounds * target_budget_per_round)
             )
         )
         scheduler.enqueue(
@@ -4618,18 +4619,22 @@ class IterativeVisualAgent:
         for round_number in range(1, self.budget.max_rounds + 1):
             targets = _next_followup_chunk(
                 scheduler=scheduler,
-                chunk_size=max(1, self.budget.max_tool_calls_per_round),
+                chunk_size=target_budget_per_round,
             )
             if not targets:
                 break
 
+            runtime_context = self._runtime_context(
+                question=question,
+                video_path=video_path,
+                route=route or _followup_route_for_skill(skill.name),
+                round_number=round_number,
+            )
             program: list[dict[str, Any]] = []
             round_observation_ids: list[str] = []
             for target in targets:
                 new_observation_ids = self._run_hard_skill_followup_target(
-                    question=question,
-                    route=route or _followup_route_for_skill(skill.name),
-                    round_number=round_number,
+                    runtime_context=runtime_context,
                     target=target,
                     video_path=video_path,
                     assign_suffix=len(all_observation_ids) + len(round_observation_ids) + 1,
@@ -4711,6 +4716,8 @@ class IterativeVisualAgent:
                 selected_option=selected_option,
                 citations=answer_result.citations,
             )
+            if answer_result.status == "final" and not gate_reason and skill.name == "mutex_fact_qa" and scheduler.queue:
+                gate_reason = "mutex_pending_targets"
             if answer_result.status == "final" and not gate_reason:
                 self.workspace.write_trace_event(
                     "iterative_answer_agent",
@@ -4974,9 +4981,7 @@ class IterativeVisualAgent:
     def _run_hard_skill_followup_target(
         self,
         *,
-        question: str,
-        route: str,
-        round_number: int,
+        runtime_context: RunContext,
         target: FollowupTarget,
         video_path: str,
         assign_suffix: int,
@@ -4990,13 +4995,7 @@ class IterativeVisualAgent:
                 "assign": f"ground_{assign_suffix}",
             }
         ]
-        ground_result = self._run_program(
-            ground_program,
-            question=question,
-            video_path=video_path,
-            route=route,
-            round_number=round_number,
-        )
+        ground_result = self._run_program(ground_program, ctx=runtime_context)
         program.extend(ground_program)
         observation_ids.extend(str(observation_id) for observation_id in ground_result.observation_ids)
         if not ground_result.observation_ids:
@@ -5018,13 +5017,7 @@ class IterativeVisualAgent:
         if target.mutex_group_id and self._tool_accepts_argument("vision_read", "mutex_group_id"):
             vision_args["mutex_group_id"] = target.mutex_group_id
         vision_program = [{"tool": "vision_read", "args": vision_args, "assign": f"fact_{assign_suffix}"}]
-        vision_result = self._run_program(
-            vision_program,
-            question=question,
-            video_path=video_path,
-            route=route,
-            round_number=round_number,
-        )
+        vision_result = self._run_program(vision_program, ctx=runtime_context)
         program.extend(vision_program)
         observation_ids.extend(str(observation_id) for observation_id in vision_result.observation_ids)
         return {"program": program, "observation_ids": observation_ids}

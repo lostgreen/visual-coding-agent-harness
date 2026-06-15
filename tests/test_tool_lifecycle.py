@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
 from visual_coding_agent_harness.agents.runtime.hooks.budget import BudgetHook
 from visual_coding_agent_harness.agents.runtime.hooks.duplicate_guard import DuplicateGuardHook
@@ -13,9 +15,12 @@ from visual_coding_agent_harness.agents.runtime.program_normalizer import Progra
 from visual_coding_agent_harness.agents.runtime.state import RoundState, RunState
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.contracts import TargetRegistry, TargetSpec
 from visual_coding_agent_harness.protocol import ToolRequest, ToolResult
 from visual_coding_agent_harness.registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
+from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
+from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -73,6 +78,40 @@ def test_registry_extend_preserves_runtime_spec_metadata() -> None:
     assert runtime_spec.duplicate_guard_policy is DuplicateGuardPolicy.ADVISORY
 
 
+def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
+    class StaticBackend(VisionLanguageBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            return BackendResponse(text='{"T1":{"verdict":"supports","cue_ids":["cue_0001"],"quote":"alpha"}}')
+
+    workspace = EvidenceWorkspace.create(tmp_path, "video_runtime_specs")
+    video_map = VideoMap(
+        video_path="/videos/demo.mp4",
+        duration_sec=10.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=10.0,
+                low_fps_caption="alpha appears",
+                asr_sentences=[{"cue_id": "cue_0001", "start_sec": 0.0, "end_sec": 1.0, "text": "alpha appears"}],
+            )
+        ],
+    )
+
+    registry = build_video_exploration_registry(
+        video_map=video_map,
+        backend=StaticBackend(),
+        workspace=workspace,
+    )
+
+    assert registry.get_runtime_spec("bind_asr_claim").semantic_key_builder is not None
+    assert registry.get_runtime_spec("read_segment_detail").argument_normalizer is not None
+    assert registry.get_runtime_spec("vision_read").semantic_key_builder is not None
+    assert registry.get_runtime_spec("target_coverage").semantic_key_builder is not None
+    assert registry.get_runtime_spec("verify_segment_anchors").semantic_key_builder is not None
+    assert registry.get_runtime_spec("verify_ledger_answer").semantic_key_builder is not None
+
+
 def test_permission_hook_blocks_forbidden_action() -> None:
     @tool(name="echo", description="Echo a value.")
     def echo(value: str):
@@ -93,6 +132,31 @@ def test_permission_hook_blocks_forbidden_action() -> None:
 
     assert decision.rejected is True
     assert decision.reason == "permission_denied"
+
+
+def test_permission_hook_blocks_tool_outside_active_skill_allowed_actions() -> None:
+    @tool(name="echo", description="Echo a value.")
+    def echo(value: str):
+        return {"value": value}
+
+    registry = ToolRegistry()
+    registry.register(echo)
+    ctx = RunContext(
+        workspace=None,
+        scene_index=None,
+        budget=AgentBudget(max_tool_calls_per_round=2),
+        run_state=RunState(question="q", video_path="/v.mp4", question_route="needle_local"),
+        round_state=RoundState(round_number=1),
+        registry=registry,
+        skill_runtime=SimpleNamespace(
+            effective_skill=SimpleNamespace(name="focused_skill", allowed_actions=("other_tool",))
+        ),
+    )
+
+    decision = PermissionHook()(ctx, ToolRequest(tool="echo", arguments={"value": "ok"}))
+
+    assert decision.rejected is True
+    assert decision.reason == "tool_not_allowed_by_active_skill"
 
 
 def test_duplicate_guard_hook_blocks_repeated_semantic_key() -> None:
@@ -245,7 +309,47 @@ def test_program_interpreter_can_apply_lifecycle_post_hooks(tmp_path) -> None:
     ).run([{"tool": "echo", "args": {"value": "ok"}}])
 
     assert len(result.observation_ids) == 1
-    assert events == [("tool_lifecycle_result", {"tool": "echo", "args": {"value": "ok"}, "claim": "ok", "confidence": 1.0})]
+    assert events == [("tool_lifecycle_result", {"tool": "echo", "request_id": "1", "claim_chars": 2, "confidence": 1.0})]
+
+
+def test_program_interpreter_consumes_post_hook_observation_ids(tmp_path) -> None:
+    @tool(name="echo", description="Echo a value.")
+    def echo(value: str):
+        return {"claim": value, "confidence": 1.0}
+
+    registry = ToolRegistry()
+    workspace = EvidenceWorkspace.create(tmp_path, "post_hook_observation_ids")
+
+    def adapter(_ctx: RunContext, _request: ToolRequest, _result: ToolResult):
+        extra = workspace.write_observation(
+            tool_name="echo_adapter",
+            input_artifacts=[],
+            claim="adapter observation",
+            confidence=0.9,
+            regions=[],
+            raw_output={"claim": "adapter observation", "confidence": 0.9},
+        )
+        return (extra.observation_id,)
+
+    registry.register(ToolRuntimeSpec(tool_spec=echo, observation_adapter=adapter))
+    ctx = RunContext(
+        workspace=workspace,
+        scene_index=None,
+        budget=AgentBudget(),
+        run_state=RunState(question="q", video_path="/v.mp4", question_route="needle_local"),
+        round_state=RoundState(round_number=1),
+        registry=registry,
+    )
+
+    result = ProgramInterpreter(
+        registry,
+        workspace,
+        lifecycle_context=ctx,
+        post_tool_hooks=(ObservationAdapterHook(),),
+    ).run([{"tool": "echo", "args": {"value": "ok"}, "assign": "answer"}])
+
+    assert result.observation_ids == ["obs_0001", "obs_0002"]
+    assert result.assignments == {"answer": "obs_0001"}
 
 
 def test_pre_tool_rejection_does_not_write_observation_or_post_hooks(tmp_path) -> None:
@@ -407,6 +511,67 @@ def test_iterative_agent_real_path_uses_runtime_lifecycle(tmp_path) -> None:
     assert trace.count("tool_lifecycle_result") == 1
 
 
+def test_iterative_agent_real_registry_rejects_duplicate_bind_asr_claim(tmp_path) -> None:
+    class RuntimeBackend(VisionLanguageBackend):
+        def __init__(self) -> None:
+            self.requests: list[BackendRequest] = []
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            if request.task == "replan":
+                return BackendResponse(
+                    text=(
+                        '{"status":"continue","rationale":"bind once",'
+                        '"program":['
+                        '{"tool":"bind_asr_claim","args":{"segment_id":" seg_0001 ","target_refs":["T1"]}},'
+                        '{"tool":"bind_asr_claim","args":{"segment_id":"seg_0001","target_refs":["T1"]}}'
+                        "]} "
+                    )
+                )
+            if request.task == "asr_claim_binding":
+                return BackendResponse(text='{"T1":{"verdict":"supports","cue_ids":["cue_0001"],"quote":"alpha appears"}}')
+            if request.task == "answer_from_evidence":
+                return BackendResponse(text='{"answer":"need_more_evidence","citations":[],"confidence":0.0}')
+            raise AssertionError(request.task)
+
+    backend = RuntimeBackend()
+    workspace = EvidenceWorkspace.create(tmp_path, "real_registry_duplicate_bind")
+    workspace.target_registry = TargetRegistry.from_specs(
+        targets=[TargetSpec(target_id="T1", canonical_text="alpha appears")]
+    )
+    scene_index = SceneIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=10.0,
+        segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=10.0)],
+    )
+    video_map = VideoMap(
+        video_path="/videos/demo.mp4",
+        duration_sec=10.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=10.0,
+                asr_sentences=[{"cue_id": "cue_0001", "start_sec": 0.0, "end_sec": 1.0, "text": "alpha appears"}],
+            )
+        ],
+    )
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=build_video_exploration_registry(video_map=video_map, backend=backend, workspace=workspace),
+        workspace=workspace,
+        scene_index=scene_index,
+        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=3, reserve_final_round=False),
+    )
+
+    agent.run(question="What is visible?", video_path="/videos/demo.mp4")
+
+    assert workspace.observation_count(tool_name="bind_asr_claim") == 1
+    assert [request.task for request in backend.requests].count("asr_claim_binding") == 1
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "duplicate_tool_call" in trace
+
+
 def test_add_new_tool_no_loop_change(tmp_path) -> None:
     @tool(name="brand_new_probe", description="Probe a synthetic target.")
     def brand_new_probe(target: str):
@@ -450,6 +615,12 @@ def test_add_new_tool_no_loop_change(tmp_path) -> None:
     assert events == [
         (
             "tool_lifecycle_result",
-            {"tool": "brand_new_probe", "args": {"target": "alpha"}, "claim": "found alpha", "confidence": 0.9},
+            {
+                "tool": "brand_new_probe",
+                "request_id": "1",
+                "claim_chars": 11,
+                "confidence": 0.9,
+                "semantic_key": "brand_new_probe:alpha",
+            },
         )
     ]

@@ -7,7 +7,7 @@ coding-agent style tool dispatcher.
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
@@ -71,6 +71,10 @@ class ToolRegistry:
     def extend(self, other: "ToolRegistry") -> None:
         for runtime_spec in other.list_runtime_specs():
             self.register(runtime_spec)
+
+    def replace_runtime_spec(self, name: str, **updates: Any) -> None:
+        runtime_spec = self.get_runtime_spec(name)
+        self._tools[name] = replace(runtime_spec, **updates)
 
     def list_specs(self) -> Sequence[ToolSpec]:
         return tuple(runtime_spec.tool_spec for runtime_spec in self._tools.values())

@@ -67,42 +67,43 @@ class ProgramInterpreter:
         for index, step in enumerate(program, start=1):
             expanded_steps = _expand_foreach_step(step, slot_values)
             for expanded_step in expanded_steps:
-                observation_id = self._run_step(
+                step_observation_ids = self._run_step(
                     step_index=index,
                     step=expanded_step,
                     assignments=assignments,
                 )
-                if observation_id is None:
+                if not step_observation_ids:
                     continue
-                observation_ids.append(observation_id)
-                slot_updates = _dynamic_slot_updates_from_observation(self.workspace.get_observation(observation_id))
-                if slot_updates:
-                    slot_values.update(slot_updates)
-                    self.workspace.write_trace_event(
-                        "foreach_slot_update",
-                        {
-                            "step": index,
-                            "observation_id": observation_id,
-                            "slots": {key: len(value) for key, value in slot_updates.items()},
-                        },
-                    )
-                if sufficiency_predicate is None:
-                    continue
-                if sufficiency_predicate(self.workspace, assignments):
-                    stopped_by_sufficiency = True
-                    self.workspace.write_trace_event(
-                        "sufficiency_stop",
-                        {
-                            "step": index,
-                            "observation_id": observation_id,
-                            "assignments": dict(assignments),
-                        },
-                    )
-                    return ProgramResult(
-                        observation_ids=observation_ids,
-                        assignments=assignments,
-                        stopped_by_sufficiency=stopped_by_sufficiency,
-                    )
+                for observation_id in step_observation_ids:
+                    observation_ids.append(observation_id)
+                    slot_updates = _dynamic_slot_updates_from_observation(self.workspace.get_observation(observation_id))
+                    if slot_updates:
+                        slot_values.update(slot_updates)
+                        self.workspace.write_trace_event(
+                            "foreach_slot_update",
+                            {
+                                "step": index,
+                                "observation_id": observation_id,
+                                "slots": {key: len(value) for key, value in slot_updates.items()},
+                            },
+                        )
+                    if sufficiency_predicate is None:
+                        continue
+                    if sufficiency_predicate(self.workspace, assignments):
+                        stopped_by_sufficiency = True
+                        self.workspace.write_trace_event(
+                            "sufficiency_stop",
+                            {
+                                "step": index,
+                                "observation_id": observation_id,
+                                "assignments": dict(assignments),
+                            },
+                        )
+                        return ProgramResult(
+                            observation_ids=observation_ids,
+                            assignments=assignments,
+                            stopped_by_sufficiency=stopped_by_sufficiency,
+                        )
 
         return ProgramResult(
             observation_ids=observation_ids,
@@ -116,7 +117,7 @@ class ProgramInterpreter:
         step_index: int,
         step: Mapping[str, Any],
         assignments: Dict[str, str],
-    ) -> str | None:
+    ) -> Sequence[str]:
         if "tool" not in step and "op" not in step:
             raise ValueError(f"Program step {step_index} is missing required 'tool'")
         tool_name = str(step.get("tool") or step.get("op"))
@@ -139,7 +140,7 @@ class ProgramInterpreter:
                         "payload": dict(decision.payload),
                     },
                 )
-                return None
+                return ()
 
         if self.lifecycle_context is not None and self.pre_tool_hooks:
             self.lifecycle_context.issued_tool_calls += 1
@@ -176,7 +177,7 @@ class ProgramInterpreter:
         arguments: Mapping[str, Any],
         raw_output: Mapping[str, Any],
         assignments: Dict[str, str],
-    ) -> str:
+    ) -> Sequence[str]:
         observation = self.workspace.write_observation(
             tool_name=tool_name,
             input_artifacts=raw_output.get("input_artifacts", []),
@@ -207,7 +208,9 @@ class ProgramInterpreter:
                 request=request,
                 output=raw_output,
             )
-            apply_post_tool_chain(self.post_tool_hooks, self.lifecycle_context, request, result)
+            effects = apply_post_tool_chain(self.post_tool_hooks, self.lifecycle_context, request, result)
+        else:
+            effects = ()
         self._write_answer_evidence_rows(observation=observation, raw_output=raw_output)
         distilled_records = distill(observation, self.workspace)
         for evidence_record in distilled_records:
@@ -218,7 +221,13 @@ class ProgramInterpreter:
 
         if "assign" in step:
             assignments[str(step["assign"])] = observation.observation_id
-        return observation.observation_id
+        observation_ids = [observation.observation_id]
+        for effect in effects:
+            for observation_id in effect.observation_ids:
+                observation_id_text = str(observation_id).strip()
+                if observation_id_text and observation_id_text not in observation_ids:
+                    observation_ids.append(observation_id_text)
+        return observation_ids
 
     def _write_answer_evidence_rows(self, *, observation: Observation, raw_output: Mapping[str, Any]) -> None:
         rows = raw_output.get("answer_evidence_rows", [])

@@ -689,7 +689,7 @@ The prose says recovery_rules: this sentence must not define metadata.
             self.assertEqual(result.answer, "B. red car")
             self.assertEqual(
                 [step["tool"] for step in result.rounds[0].program],
-                ["ground_question", "vision_read", "ground_question", "vision_read"],
+                ["ground_question", "vision_read"],
             )
             self.assertEqual([request.task for request in backend.requests], [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -763,10 +763,6 @@ The prose says recovery_rules: this sentence must not define metadata.
             self.assertEqual(
                 [step["tool"] for round_item in result.rounds for step in round_item.program],
                 [
-                    "ground_question",
-                    "vision_read",
-                    "ground_question",
-                    "vision_read",
                     "ground_question",
                     "vision_read",
                     "ground_question",

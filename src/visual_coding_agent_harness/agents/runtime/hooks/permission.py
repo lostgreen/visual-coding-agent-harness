@@ -8,6 +8,16 @@ from ..lifecycle import PreToolDecision, RunContext
 
 class PermissionHook:
     def __call__(self, ctx: RunContext, request: ToolRequest) -> PreToolDecision:
+        effective_skill = getattr(ctx.skill_runtime, "effective_skill", None)
+        allowed_actions = set(getattr(effective_skill, "allowed_actions", ()) or ())
+        has_playbook = getattr(effective_skill, "playbook", None) is not None
+        if not has_playbook and allowed_actions and request.tool not in allowed_actions:
+            skill_name = str(getattr(effective_skill, "name", "") or "")
+            return PreToolDecision.reject(
+                "tool_not_allowed_by_active_skill",
+                message=f"{request.tool} is not allowed by the active skill{f' {skill_name}' if skill_name else ''}.",
+                payload={"tool": request.tool, "skill": skill_name, "allowed_actions": sorted(allowed_actions)},
+            )
         policy = ctx.evidence_policy
         forbidden = set(getattr(policy, "forbidden_actions", ()) or ())
         if request.tool in forbidden:

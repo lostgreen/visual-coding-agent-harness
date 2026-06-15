@@ -5,7 +5,9 @@
   },
   "output": {
     "answer": "need_more_evidence",
-    "citations": [],
+    "citations": [
+      "obs_0002"
+    ],
     "confidence": 0.0,
     "evidence_ids": [],
     "status": "need_more_evidence"
@@ -14,9 +16,7 @@
     {
       "observation_ids": [
         "obs_0001",
-        "obs_0002",
-        "obs_0003",
-        "obs_0004"
+        "obs_0002"
       ],
       "planner_text": "",
       "program": [
@@ -40,30 +40,9 @@
           },
           "assign": "fact_1",
           "tool": "vision_read"
-        },
-        {
-          "args": {
-            "query": "blue box is opened",
-            "top_k": 3
-          },
-          "assign": "ground_3",
-          "tool": "ground_question"
-        },
-        {
-          "args": {
-            "ask_for": "blue box is opened",
-            "end_sec": 20.0,
-            "event_label": "blue box is opened",
-            "mutex_group_id": "option_fact_mutex",
-            "segment_id": "seg_0001",
-            "start_sec": 0.0,
-            "video_path": "/videos/replay.mp4"
-          },
-          "assign": "fact_3",
-          "tool": "vision_read"
         }
       ],
-      "rationale": "mutex_conflict: obs_0002 vs obs_0004",
+      "rationale": "Option A has the strongest weighted support (0.90 vs 0.00). Cited evidence is obs_0002.",
       "round_number": 1,
       "status": "need_more_evidence"
     }
