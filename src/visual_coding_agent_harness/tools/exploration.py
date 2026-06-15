@@ -68,4 +68,4 @@ def build_video_exploration_registry(
             frame_sampler=frame_sampler,
         )
     )
-    return install_video_runtime_specs(registry)
+    return install_video_runtime_specs(registry, required=True)

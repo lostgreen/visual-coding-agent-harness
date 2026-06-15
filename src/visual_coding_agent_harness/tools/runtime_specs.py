@@ -11,12 +11,30 @@ from ..registry import DuplicateGuardPolicy, ToolError, ToolRegistry
 from ..agents.runtime.lifecycle import RunContext
 
 
-def install_video_runtime_specs(registry: ToolRegistry) -> ToolRegistry:
+_CORE_RUNTIME_SPEC_TOOLS = (
+    "bind_asr_claim",
+    "target_coverage",
+    "ground_question",
+    "read_segment_detail",
+    "vision_read",
+    "verify_segment_anchors",
+    "verify_ledger_answer",
+    "global_gist",
+    "query_context",
+    "search_segments",
+    "caption_segment",
+    "read_timeline_sorted",
+)
+
+
+def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = False) -> ToolRegistry:
     """Attach lifecycle metadata to the real video exploration tools."""
 
+    missing: list[str] = []
     _replace(
         registry,
         "bind_asr_claim",
+        missing=missing,
         argument_normalizer=_normalize_bind_asr_claim,
         semantic_key_builder=_key_from_normalizer("bind_asr_claim", _normalize_bind_asr_claim),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
@@ -24,6 +42,7 @@ def install_video_runtime_specs(registry: ToolRegistry) -> ToolRegistry:
     _replace(
         registry,
         "target_coverage",
+        missing=missing,
         argument_normalizer=_normalize_target_coverage,
         semantic_key_builder=_key_from_normalizer("target_coverage", _normalize_target_coverage),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
@@ -31,13 +50,23 @@ def install_video_runtime_specs(registry: ToolRegistry) -> ToolRegistry:
     _replace(
         registry,
         "ground_question",
+        missing=missing,
         argument_normalizer=_normalize_ground_question,
         semantic_key_builder=_key_from_normalizer("ground_question", _normalize_ground_question),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
     )
     _replace(
         registry,
+        "search_segments",
+        missing=missing,
+        argument_normalizer=_normalize_search_segments,
+        semantic_key_builder=_key_from_normalizer("search_segments", _normalize_search_segments),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
         "read_segment_detail",
+        missing=missing,
         argument_normalizer=_normalize_read_segment_detail,
         semantic_key_builder=_key_from_normalizer("read_segment_detail", _normalize_read_segment_detail),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
@@ -45,6 +74,7 @@ def install_video_runtime_specs(registry: ToolRegistry) -> ToolRegistry:
     _replace(
         registry,
         "vision_read",
+        missing=missing,
         argument_normalizer=_normalize_vision_read,
         semantic_key_builder=_key_from_normalizer("vision_read", _normalize_vision_read),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
@@ -52,6 +82,7 @@ def install_video_runtime_specs(registry: ToolRegistry) -> ToolRegistry:
     _replace(
         registry,
         "verify_segment_anchors",
+        missing=missing,
         argument_normalizer=_normalize_verify_segment_anchors,
         semantic_key_builder=_key_from_normalizer("verify_segment_anchors", _normalize_verify_segment_anchors),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
@@ -59,17 +90,55 @@ def install_video_runtime_specs(registry: ToolRegistry) -> ToolRegistry:
     _replace(
         registry,
         "verify_ledger_answer",
+        missing=missing,
         argument_normalizer=_normalize_verify_ledger_answer,
         semantic_key_builder=_key_from_normalizer("verify_ledger_answer", _normalize_verify_ledger_answer),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
     )
+    _replace(
+        registry,
+        "global_gist",
+        missing=missing,
+        argument_normalizer=_normalize_global_gist,
+        semantic_key_builder=_key_from_normalizer("global_gist", _normalize_global_gist),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
+        "query_context",
+        missing=missing,
+        argument_normalizer=_normalize_query_context,
+        semantic_key_builder=_key_from_normalizer("query_context", _normalize_query_context),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
+        "caption_segment",
+        missing=missing,
+        argument_normalizer=_normalize_caption_segment,
+        semantic_key_builder=_key_from_normalizer("caption_segment", _normalize_caption_segment),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
+        "read_timeline_sorted",
+        missing=missing,
+        argument_normalizer=_normalize_no_args,
+        semantic_key_builder=_read_timeline_sorted_key,
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    if required:
+        required_missing = [tool_name for tool_name in _CORE_RUNTIME_SPEC_TOOLS if tool_name in missing]
+        if required_missing:
+            raise ToolError("Missing required runtime spec tools: " + ", ".join(required_missing))
     return registry
 
 
-def _replace(registry: ToolRegistry, name: str, **updates: Any) -> None:
+def _replace(registry: ToolRegistry, name: str, *, missing: list[str], **updates: Any) -> None:
     try:
         registry.replace_runtime_spec(name, **updates)
     except ToolError:
+        missing.append(name)
         return
 
 
@@ -110,6 +179,16 @@ def _normalize_ground_question(_ctx: RunContext, request: ToolRequest) -> Mappin
     }
 
 
+def _normalize_search_segments(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "query": _text(args.get("query")),
+        "top_k": _positive_int(args.get("top_k"), default=5),
+        "modalities": _string_list(args.get("modalities")),
+        "additional_targets": _string_list(args.get("additional_targets")),
+    }
+
+
 def _normalize_read_segment_detail(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
@@ -143,6 +222,63 @@ def _normalize_vision_read(_ctx: RunContext, request: ToolRequest) -> Mapping[st
     if args.get("nframes") is not None:
         normalized["nframes"] = _positive_int(args.get("nframes"), default=8)
     return normalized
+
+
+def _normalize_global_gist(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    normalized: dict[str, Any] = {
+        "video_path": _text(args.get("video_path")),
+        "question": _text(args.get("question")),
+        "duration_sec": _float(args.get("duration_sec")),
+        "max_pixels": _positive_int(args.get("max_pixels"), default=151200),
+        "sample_offset_sec": _float(args.get("sample_offset_sec")),
+    }
+    if args.get("nframes") is not None:
+        normalized["nframes"] = _positive_int(args.get("nframes"), default=8)
+    return normalized
+
+
+def _normalize_query_context(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    normalized: dict[str, Any] = {
+        "video_path": _text(args.get("video_path")),
+        "query": _text(args.get("query")),
+        "scope": _text(args.get("scope")) or "full_video",
+        "max_pixels": _positive_int(args.get("max_pixels"), default=151200),
+    }
+    if args.get("duration_sec") is not None:
+        normalized["duration_sec"] = _float(args.get("duration_sec"))
+    if args.get("nframes") is not None:
+        normalized["nframes"] = _positive_int(args.get("nframes"), default=8)
+    return normalized
+
+
+def _normalize_caption_segment(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    normalized: dict[str, Any] = {
+        "video_path": _text(args.get("video_path")),
+        "segment_id": _text(args.get("segment_id")),
+        "start_sec": _float(args.get("start_sec")),
+        "end_sec": _float(args.get("end_sec")),
+        "question": _text(args.get("question")) or "Describe this video segment.",
+        "max_pixels": _positive_int(args.get("max_pixels"), default=360 * 420),
+        "fps": _float(args.get("fps")),
+    }
+    if args.get("nframes") is not None:
+        normalized["nframes"] = _positive_int(args.get("nframes"), default=8)
+    return normalized
+
+
+def _normalize_no_args(_ctx: RunContext, _request: ToolRequest) -> Mapping[str, Any]:
+    return {}
+
+
+def _read_timeline_sorted_key(ctx: RunContext, request: ToolRequest) -> str:
+    del request
+    entries = ctx.workspace.read_timeline_sorted() if ctx.workspace is not None else []
+    tail = entries[-1] if entries else {}
+    tail_key = _canonical_json(tail if isinstance(tail, Mapping) else {})
+    return f"read_timeline_sorted:{len(entries)}:{tail_key}"
 
 
 def _normalize_verify_segment_anchors(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:

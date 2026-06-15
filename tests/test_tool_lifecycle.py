@@ -17,8 +17,9 @@ from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import TargetRegistry, TargetSpec
 from visual_coding_agent_harness.protocol import ToolRequest, ToolResult
-from visual_coding_agent_harness.registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
+from visual_coding_agent_harness.registry import DuplicateGuardPolicy, ToolError, ToolRegistry, ToolRuntimeSpec, tool
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
+from visual_coding_agent_harness.tools.runtime_specs import install_video_runtime_specs
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -104,12 +105,36 @@ def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
         workspace=workspace,
     )
 
-    assert registry.get_runtime_spec("bind_asr_claim").semantic_key_builder is not None
-    assert registry.get_runtime_spec("read_segment_detail").argument_normalizer is not None
-    assert registry.get_runtime_spec("vision_read").semantic_key_builder is not None
-    assert registry.get_runtime_spec("target_coverage").semantic_key_builder is not None
-    assert registry.get_runtime_spec("verify_segment_anchors").semantic_key_builder is not None
-    assert registry.get_runtime_spec("verify_ledger_answer").semantic_key_builder is not None
+    runtime_spec_tools = [
+        "bind_asr_claim",
+        "target_coverage",
+        "ground_question",
+        "read_segment_detail",
+        "vision_read",
+        "verify_segment_anchors",
+        "verify_ledger_answer",
+        "global_gist",
+        "query_context",
+        "search_segments",
+        "caption_segment",
+        "read_timeline_sorted",
+    ]
+    for tool_name in runtime_spec_tools:
+        runtime_spec = registry.get_runtime_spec(tool_name)
+        assert runtime_spec.argument_normalizer is not None, tool_name
+        assert runtime_spec.semantic_key_builder is not None, tool_name
+
+
+def test_video_runtime_spec_required_mode_rejects_missing_core_tool() -> None:
+    registry = ToolRegistry()
+
+    try:
+        install_video_runtime_specs(registry, required=True)
+    except ToolError as exc:
+        assert "Missing required runtime spec tools" in str(exc)
+        assert "bind_asr_claim" in str(exc)
+    else:
+        raise AssertionError("required runtime spec installation should fail for missing core tools")
 
 
 def test_permission_hook_blocks_forbidden_action() -> None:
@@ -312,7 +337,7 @@ def test_program_interpreter_can_apply_lifecycle_post_hooks(tmp_path) -> None:
     assert events == [("tool_lifecycle_result", {"tool": "echo", "request_id": "1", "claim_chars": 2, "confidence": 1.0})]
 
 
-def test_program_interpreter_consumes_post_hook_observation_ids(tmp_path) -> None:
+def test_program_interpreter_consumes_post_hook_observation_ids_as_additional_observations(tmp_path) -> None:
     @tool(name="echo", description="Echo a value.")
     def echo(value: str):
         return {"claim": value, "confidence": 1.0}
@@ -350,6 +375,8 @@ def test_program_interpreter_consumes_post_hook_observation_ids(tmp_path) -> Non
 
     assert result.observation_ids == ["obs_0001", "obs_0002"]
     assert result.assignments == {"answer": "obs_0001"}
+    assert workspace.get_observation("obs_0001").tool == "echo"
+    assert workspace.get_observation("obs_0002").tool == "echo_adapter"
 
 
 def test_pre_tool_rejection_does_not_write_observation_or_post_hooks(tmp_path) -> None:
