@@ -257,6 +257,8 @@ def render_skill_playbook_for_prompt(
     *,
     option_labels: Sequence[str] = (),
     central_subjects: Sequence[str] = (),
+    projection_status: Mapping[str, Any] | None = None,
+    diagnostic_repair_hint: str | None = None,
     max_chars: int = 4000,
 ) -> str:
     skill = skill_for_id(skill_id)
@@ -266,6 +268,8 @@ def render_skill_playbook_for_prompt(
         skill.playbook,
         option_labels=option_labels,
         central_subjects=central_subjects,
+        projection_status=projection_status,
+        diagnostic_repair_hint=diagnostic_repair_hint,
         max_chars=max_chars,
     )
 

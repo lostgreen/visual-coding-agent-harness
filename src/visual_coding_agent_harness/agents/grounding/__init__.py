@@ -8,11 +8,14 @@ from .contracts import (
     GroundingSubject,
     GroundingTarget,
 )
+from .operators import ALLOWED_ANSWER_OPERATORS, AnswerOperator, derive_answer_operator
 from .planner import GroundingPlannerResult, ground_question_with_model
 from .validator import GroundingValidationFinding, GroundingValidationResult, validate_grounding_plan
 
 __all__ = [
     "CompiledGroundingPlan",
+    "ALLOWED_ANSWER_OPERATORS",
+    "AnswerOperator",
     "GroundingOption",
     "GroundingPlan",
     "GroundingPlannerResult",
@@ -23,6 +26,7 @@ __all__ = [
     "GroundingValidationResult",
     "compile_fallback_plan",
     "compile_grounding_plan",
+    "derive_answer_operator",
     "ground_question_with_model",
     "validate_grounding_plan",
 ]

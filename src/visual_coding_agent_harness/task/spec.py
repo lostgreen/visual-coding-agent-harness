@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
+from ..agents.grounding.operators import AnswerOperator, derive_answer_operator, normalize_answer_operator
 from ..contracts import TargetRegistry
 
 AnswerFormat = Literal["mcq", "short_answer", "freeform"]
@@ -41,12 +42,23 @@ class TaskSpec:
     route: str
     options: Sequence[OptionSpec | Sequence[Any]]
     target_registry: TargetRegistry | None = None
+    answer_operator: AnswerOperator = "select_present"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "task_id", str(self.task_id or "task"))
         object.__setattr__(self, "question", str(self.question or ""))
         object.__setattr__(self, "route", str(self.route or ""))
         object.__setattr__(self, "options", tuple(_normalize_option(option) for option in self.options))
+        object.__setattr__(
+            self,
+            "answer_operator",
+            normalize_answer_operator(
+                self.answer_operator,
+                question=self.question,
+                route=self.route,
+                options=tuple(option.text for option in self.options),
+            ),
+        )
 
     def normalized(self) -> "TaskSpec":
         """Return a copy-like normalized task.
@@ -67,6 +79,7 @@ def build_task_spec(
     route: str,
     target_registry: TargetRegistry | None = None,
     answer_format: AnswerFormat = "mcq",
+    answer_operator: str | None = None,
 ) -> TaskSpec:
     """Build a generic task spec from option text and a target registry."""
 
@@ -104,6 +117,12 @@ def build_task_spec(
         route=route,
         options=tuple(compiled_options),
         target_registry=target_registry,
+        answer_operator=normalize_answer_operator(
+            answer_operator,
+            question=question,
+            route=route,
+            options=tuple(option.text for option in compiled_options),
+        ),
     )
 
 

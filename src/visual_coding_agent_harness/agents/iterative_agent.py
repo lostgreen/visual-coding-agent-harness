@@ -306,6 +306,8 @@ class IterativeVisualAgent:
         all_segments_answer_attempted = False
         planner_final_verifier_disagreed = False
         planner_final_auto_final_blocked = False
+        last_projection_status: dict[str, Any] | None = None
+        last_diagnostic_repair_hint = ""
         prefinal_evidence_repair_done = False
         prefinal_evidence_repair_failed = False
         post_repair_action_rounds_remaining = 0
@@ -363,6 +365,8 @@ class IterativeVisualAgent:
                 route=effective_route,
                 target_hints=self._exploration_target_entities,
                 target_ref_descriptions=_registered_target_ref_descriptions(self.workspace),
+                projection_status=last_projection_status,
+                diagnostic_repair_hint=last_diagnostic_repair_hint,
             )
             self.workspace.write_trace_event("context_budget_report", asdict(context_report))
             self.workspace.write_trace_event(
@@ -605,6 +609,15 @@ class IterativeVisualAgent:
                         planner_final_auto_final_blocked = True
                     if blocked_reason == "planner_final_requires_supported_evidence_id":
                         planner_final_auto_final_blocked = True
+                    if blocked_reason.startswith("final_gate:"):
+                        reason_code, repair_hint = _final_gate_feedback_parts(blocked_reason)
+                        last_diagnostic_repair_hint = repair_hint
+                        last_projection_status = {
+                            "status": "rejected",
+                            "candidate_option": _answer_option_letter(final_answer) or "",
+                            "reason": reason_code,
+                            "missing": repair_hint,
+                        }
                     self.workspace.write_trace_event(
                         "iterative_final_blocked",
                         {
@@ -613,6 +626,7 @@ class IterativeVisualAgent:
                             "answer": final_answer,
                             "citations": final_citations,
                             "evidence_ids": final_evidence_ids,
+                            "diagnostic_repair_hint": last_diagnostic_repair_hint,
                         },
                     )
                     self.workspace.write_reflection_memory(
@@ -976,6 +990,11 @@ class IterativeVisualAgent:
                     question=raw_question,
                     evidence_text=ledger_text,
                     evidence_table=self._answer_evidence_table(raw_question),
+                    **_answer_agent_operator_kwargs(
+                        workspace=self.workspace,
+                        projection_status=last_projection_status,
+                        diagnostic_repair_hint=last_diagnostic_repair_hint,
+                    ),
                 )
                 self.workspace.write_trace_event(
                     "iterative_answer_agent",
@@ -986,6 +1005,7 @@ class IterativeVisualAgent:
                         "answer": answer_result.answer,
                         "citations": list(answer_result.citations),
                         "missing_evidence": list(answer_result.missing_evidence),
+                        **_answer_agent_trace_fields(answer_result),
                     },
                 )
                 if answer_result.status == "final":
@@ -1202,6 +1222,11 @@ class IterativeVisualAgent:
                     question=raw_question,
                     evidence_text=self._read_ledger(),
                     evidence_table=self._answer_evidence_table(raw_question),
+                    **_answer_agent_operator_kwargs(
+                        workspace=self.workspace,
+                        projection_status=last_projection_status,
+                        diagnostic_repair_hint=last_diagnostic_repair_hint,
+                    ),
                 )
                 self.workspace.write_trace_event(
                     "iterative_no_progress_guard",
@@ -1256,6 +1281,11 @@ class IterativeVisualAgent:
                     question=raw_question,
                     evidence_text=self._read_ledger(),
                     evidence_table=self._answer_evidence_table(raw_question),
+                    **_answer_agent_operator_kwargs(
+                        workspace=self.workspace,
+                        projection_status=last_projection_status,
+                        diagnostic_repair_hint=last_diagnostic_repair_hint,
+                    ),
                 )
                 self.workspace.write_trace_event(
                     "iterative_answer_agent",
@@ -1266,6 +1296,7 @@ class IterativeVisualAgent:
                         "answer": answer_result.answer,
                         "citations": list(answer_result.citations),
                         "missing_evidence": list(answer_result.missing_evidence),
+                        **_answer_agent_trace_fields(answer_result),
                     },
                 )
                 if answer_result.status == "final":
@@ -1373,6 +1404,11 @@ class IterativeVisualAgent:
                 question=raw_question,
                 evidence_text=self._read_ledger(),
                 evidence_table=self._answer_evidence_table(raw_question),
+                **_answer_agent_operator_kwargs(
+                    workspace=self.workspace,
+                    projection_status=last_projection_status,
+                    diagnostic_repair_hint=last_diagnostic_repair_hint,
+                ),
             )
             budget_answer_result = answer_result
             self.workspace.write_trace_event(
@@ -1384,6 +1420,7 @@ class IterativeVisualAgent:
                     "answer": answer_result.answer,
                     "citations": list(answer_result.citations),
                     "missing_evidence": list(answer_result.missing_evidence),
+                    **_answer_agent_trace_fields(answer_result),
                 },
             )
             low_confidence_result = self._try_low_confidence_final(
@@ -1455,6 +1492,7 @@ class IterativeVisualAgent:
             options=options,
             table=table,
             target_registry=getattr(self.workspace, "target_registry", None),
+            answer_operator=str(getattr(getattr(self.workspace, "grounding_runtime", None), "answer_operator", "") or ""),
         )
         projection_answer = projection_result.option_label if projection_result.status == "supported" else ""
         low_confidence = answer_result.as_low_confidence_final() if answer_result is not None else None
@@ -1506,6 +1544,9 @@ class IterativeVisualAgent:
                 "fallback_source": fallback_source or "fixed_first_option",
                 "answer_agent_parse_failed": _answer_agent_parse_failed(answer_result),
                 "projection_strategy": projection_result.strategy if projection_answer else "",
+                "projection_status": projection_result.status,
+                "projection_candidate": projection_result.option_label or "",
+                "projection_reason": projection_result.reason,
                 "projection_citations": projection_citations,
             },
         )
@@ -1696,6 +1737,7 @@ class IterativeVisualAgent:
                 "plan_hash": compiled.plan_hash,
                 "route": compiled.route,
                 "recommended_skill": _skill_id_from_name(compiled.recommended_skill_id),
+                "answer_operator": compiled.answer_operator,
                 "central_subjects": list(compiled.central_subjects),
                 "acceptable_evidence_sources": list(compiled.acceptable_evidence_sources),
                 "unresolved_ambiguities": list(compiled.unresolved_ambiguities),
@@ -1761,6 +1803,7 @@ class IterativeVisualAgent:
             question=question,
             evidence_text=self._read_ledger(),
             evidence_table=self._answer_evidence_table(question),
+            **_answer_agent_operator_kwargs(workspace=self.workspace),
         )
         planner_option = _answer_option_letter(answer)
         verifier_option = _answer_option_letter(answer_result.answer)
@@ -1789,6 +1832,7 @@ class IterativeVisualAgent:
                 "verifier_citations": list(answer_result.citations),
                 "missing_evidence": list(answer_result.missing_evidence),
                 "verifier_disagrees": verifier_disagrees,
+                **_answer_agent_trace_fields(answer_result),
             },
         )
         self.workspace.write_trace_event(
@@ -1800,6 +1844,7 @@ class IterativeVisualAgent:
                 "answer": answer_result.answer,
                 "citations": list(answer_result.citations),
                 "missing_evidence": list(answer_result.missing_evidence),
+                **_answer_agent_trace_fields(answer_result),
             },
         )
         if verifier_disagrees:
@@ -1895,6 +1940,7 @@ class IterativeVisualAgent:
             question=question,
             evidence_text=self._read_ledger(),
             evidence_table=self._answer_evidence_table(question),
+            **_answer_agent_operator_kwargs(workspace=self.workspace),
         )
         self.workspace.write_trace_event(
             "iterative_answer_agent",
@@ -1905,6 +1951,7 @@ class IterativeVisualAgent:
                 "answer": answer_result.answer,
                 "citations": list(answer_result.citations),
                 "missing_evidence": list(answer_result.missing_evidence),
+                **_answer_agent_trace_fields(answer_result),
             },
         )
         if answer_result.status != "final":
@@ -4609,6 +4656,7 @@ class IterativeVisualAgent:
                 question=question,
                 evidence_text=self._read_ledger(),
                 evidence_table=table,
+                **_answer_agent_operator_kwargs(workspace=self.workspace),
             )
             last_answer_result = answer_result
             if answer_result.status == "final" and answer_result.candidate_option_relations:
@@ -4617,7 +4665,7 @@ class IterativeVisualAgent:
                     relations=answer_result.candidate_option_relations,
                     assigned_by="answer_agent",
                 )
-                table = self._answer_evidence_table(question)
+            table = self._answer_evidence_table(question)
             selected_option = _answer_option_letter(answer_result.answer)
             gate_reason = _hard_skill_gate_reason(
                 workspace=self.workspace,
@@ -4637,6 +4685,7 @@ class IterativeVisualAgent:
                         "answer": answer_result.answer,
                         "citations": list(answer_result.citations),
                         "missing_evidence": list(answer_result.missing_evidence),
+                        **_answer_agent_trace_fields(answer_result),
                     },
                 )
                 self._write_final_trace(
@@ -4676,6 +4725,7 @@ class IterativeVisualAgent:
                     "citations": list(answer_result.citations),
                     "missing_evidence": list(answer_result.missing_evidence),
                     "failure_tag": last_failure_tag,
+                    **_answer_agent_trace_fields(answer_result),
                 },
             )
             self.workspace.write_reflection_memory(
@@ -5438,6 +5488,8 @@ def _blocked_planner_final_reason(
                 "proposed_option": gate_decision.proposed_option,
                 "gate_status": gate_decision.gate_status,
                 "reason_code": gate_decision.reason_code or "",
+                "answer_operator": str(getattr(getattr(workspace, "grounding_runtime", None), "answer_operator", "") or "select_present"),
+                "diagnostic_repair_hint": str(getattr(gate_decision, "diagnostic_repair_hint", "") or ""),
                 "supporting_evidence_ids": list(gate_decision.supporting_evidence_ids),
                 "missing_target_refs": list(gate_decision.missing_target_refs),
                 "missing_relation_refs": list(gate_decision.missing_relation_refs),
@@ -5445,7 +5497,9 @@ def _blocked_planner_final_reason(
         )
         if gate_decision.accepted:
             return ""
-        return "final_gate:" + str(gate_decision.reason_code or "verifier_failed")
+        hint = str(getattr(gate_decision, "diagnostic_repair_hint", "") or "")
+        suffix = f":{hint}" if hint else ""
+        return "final_gate:" + str(gate_decision.reason_code or "verifier_failed") + suffix
     base_reason = _blocked_final_reason(
         question=question,
         has_inspect_with_candidate_options=has_inspect_with_candidate_options,
@@ -5521,6 +5575,7 @@ def _structured_final_gate_decision(
             skill_name=policy_name,
             option_evaluations=_final_gate_option_evaluations(table),
             central_subjects=tuple(getattr(grounding_runtime, "central_subjects", ()) or ()),
+            answer_operator=str(getattr(grounding_runtime, "answer_operator", "") or "select_present"),
         )
     except KeyError:
         return None
@@ -5686,7 +5741,7 @@ def _row_time_bounds(*, row: Mapping[str, Any], binding: Mapping[str, Any]) -> t
 def _final_rejection_reason_code(blocked_reason: str) -> str:
     text = str(blocked_reason or "")
     if text.startswith("final_gate:"):
-        return text.split(":", 1)[1] or "verifier_failed"
+        return _final_gate_feedback_parts(text)[0] or "verifier_failed"
     if "missing_required_relations" in text or "missing_required_relations" in text:
         return "missing_relation_binding"
     if "requires_supported_evidence_id" in text or "answer_grade" in text:
@@ -5694,6 +5749,15 @@ def _final_rejection_reason_code(blocked_reason: str) -> str:
     if "verifier_disagrees" in text:
         return "verifier_failed"
     return "verifier_failed"
+
+
+def _final_gate_feedback_parts(blocked_reason: str) -> tuple[str, str]:
+    text = str(blocked_reason or "")
+    if not text.startswith("final_gate:"):
+        return "", ""
+    payload = text.split(":", 1)[1]
+    reason, sep, hint = payload.partition(":")
+    return reason or "verifier_failed", hint if sep else ""
 
 
 def _float_or_none(value: Any) -> float | None:
@@ -6317,6 +6381,7 @@ def _projected_option_from_evidence_table(
     options: Sequence[str],
     table: Mapping[str, Any],
     target_registry: TargetRegistry | None,
+    answer_operator: str = "",
 ) -> ProjectionResult:
     if target_registry is None:
         return ProjectionResult("unsupported", None, "none", 0.0, reason="missing_target_registry")
@@ -6329,6 +6394,7 @@ def _projected_option_from_evidence_table(
         options=options,
         route=route,
         target_registry=target_registry,
+        answer_operator=answer_operator,
     )
     return project_option_support(task, evidence)
 
@@ -6339,6 +6405,7 @@ def _projection_task_spec(
     options: Sequence[str],
     route: str,
     target_registry: TargetRegistry,
+    answer_operator: str = "",
 ) -> TaskSpec:
     fallback_task = build_task_spec(
         task_id="mcq_terminal_projection",
@@ -6346,6 +6413,7 @@ def _projection_task_spec(
         options=options,
         route=route,
         target_registry=target_registry,
+        answer_operator=answer_operator,
     )
     fallback_by_label = {option.label: option for option in fallback_task.options}
     registry_options = getattr(target_registry, "options_by_id", {})
@@ -6384,6 +6452,7 @@ def _projection_task_spec(
         route=route,
         options=tuple(compiled),
         target_registry=target_registry,
+        answer_operator=answer_operator,
     )
 
 
@@ -6448,7 +6517,8 @@ def _projection_evidence_from_table(table: Mapping[str, Any]) -> tuple[Projectio
                     confidence=_float_or_none(row.get("confidence")),
                     segment_id=str(row.get("segment_id") or row.get("source_segment_id") or ""),
                     support_status=_projection_support_status(row),
-                    source=str(row.get("tool") or ""),
+                    modality=str(row.get("modality") or row.get("claim_modality") or row.get("grounding_quality") or ""),
+                    source=str(row.get("tool") or row.get("source") or _projection_binding_value(row, "source") or ""),
                 )
             )
     return tuple(evidence)
@@ -6485,6 +6555,13 @@ def _projection_target_refs_from_row(row: Mapping[str, Any]) -> tuple[str, ...]:
     for candidate in candidates:
         _append_projection_target_refs(refs, candidate)
     return tuple(dict.fromkeys(refs))
+
+
+def _projection_binding_value(row: Mapping[str, Any], key: str) -> Any:
+    binding = row.get("evidence_binding")
+    if isinstance(binding, Mapping):
+        return binding.get(key)
+    return None
 
 
 def _append_projection_target_refs(refs: list[str], candidate: Any) -> None:
@@ -6714,6 +6791,36 @@ def _timeline_decision_pending_inference(decision: Mapping[str, Any]) -> str:
         f"{evidence_summary}. This is a pending inference, not an automatic final; decide whether to "
         "finalize with answer-grade citations or gather more evidence."
     )
+
+
+def _answer_agent_operator_kwargs(
+    *,
+    workspace: EvidenceWorkspace,
+    projection_status: Mapping[str, Any] | None = None,
+    diagnostic_repair_hint: str | None = None,
+) -> dict[str, str]:
+    runtime = getattr(workspace, "grounding_runtime", None)
+    operator = str(getattr(runtime, "answer_operator", "") or "select_present")
+    status = projection_status or {}
+    final_reason = str(status.get("reason") or "")
+    return {
+        "answer_operator": operator,
+        "projection_candidate": str(status.get("candidate_option") or ""),
+        "projection_reason": str(status.get("reason") or ""),
+        "missing_evidence_shape": str(status.get("missing") or ""),
+        "final_gate_rejection_reason": final_reason if str(status.get("status") or "") == "rejected" else "",
+        "diagnostic_repair_hint": str(diagnostic_repair_hint or ""),
+    }
+
+
+def _answer_agent_trace_fields(answer_result: AnswerAgentResult) -> dict[str, str]:
+    return {
+        "answer_operator": str(getattr(answer_result, "answer_operator", "") or "select_present"),
+        "projection_candidate": str(getattr(answer_result, "projection_candidate", "") or ""),
+        "projection_reason": str(getattr(answer_result, "projection_reason", "") or ""),
+        "final_gate_rejection_reason": str(getattr(answer_result, "final_gate_rejection_reason", "") or ""),
+        "diagnostic_repair_hint": str(getattr(answer_result, "diagnostic_repair_hint", "") or ""),
+    }
 
 
 def _answer_result_pending_inference(answer_result: AnswerAgentResult, *, source: str) -> str:

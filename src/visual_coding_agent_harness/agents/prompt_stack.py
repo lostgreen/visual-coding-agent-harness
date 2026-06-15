@@ -101,6 +101,8 @@ def build_replanning_prompt(
     route: str | None = None,
     target_hints: Sequence[str] = (),
     target_ref_descriptions: Sequence[str] = (),
+    projection_status: Mapping[str, Any] | None = None,
+    diagnostic_repair_hint: str | None = None,
 ) -> tuple[str, ContextBudgetReport]:
     slots = compose_replanning_prompt_slots(
         question=question,
@@ -122,6 +124,8 @@ def build_replanning_prompt(
         route=route,
         target_hints=target_hints,
         target_ref_descriptions=target_ref_descriptions,
+        projection_status=projection_status,
+        diagnostic_repair_hint=diagnostic_repair_hint,
     )
     allocated, report = allocator.allocate(
         slots,
@@ -155,6 +159,8 @@ def compose_replanning_prompt_slots(
     route: str | None = None,
     target_hints: Sequence[str] = (),
     target_ref_descriptions: Sequence[str] = (),
+    projection_status: Mapping[str, Any] | None = None,
+    diagnostic_repair_hint: str | None = None,
 ) -> dict[SlotName, str]:
     playbook = select_question_playbook(question)
     resolved_route = route or playbook.route
@@ -186,6 +192,8 @@ def compose_replanning_prompt_slots(
                 exhausted_tools=exhausted_tools,
                 question=question,
                 target_hints=target_hints,
+                projection_status=projection_status,
+                diagnostic_repair_hint=diagnostic_repair_hint,
             ),
         ),
     ]
@@ -250,6 +258,7 @@ def compose_replanning_prompt_slots(
             pending_inferences=pending_inferences,
             normalization_notes=normalization_notes,
             reflection_memory=reflection_memory,
+            diagnostic_repair_hint=diagnostic_repair_hint,
         ),
         "budget": _budget_snapshot_block(
             round_number=round_number,
@@ -280,6 +289,8 @@ def compose_replanning_prompt_blocks(
     route: str | None = None,
     target_hints: Sequence[str] = (),
     target_ref_descriptions: Sequence[str] = (),
+    projection_status: Mapping[str, Any] | None = None,
+    diagnostic_repair_hint: str | None = None,
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
     resolved_route = route or playbook.route
@@ -309,6 +320,8 @@ def compose_replanning_prompt_blocks(
                 exhausted_tools=exhausted_tools,
                 question=question,
                 target_hints=target_hints,
+                projection_status=projection_status,
+                diagnostic_repair_hint=diagnostic_repair_hint,
             ),
         ),
         PromptBlock(
@@ -361,6 +374,14 @@ def compose_replanning_prompt_blocks(
                     "Answer Agent says these evidence gaps must be resolved before final: "
                     + "; ".join(str(item) for item in answer_feedback[:5])
                 ),
+            )
+        )
+    if diagnostic_repair_hint:
+        blocks.append(
+            PromptBlock(
+                name="diagnostic_repair_hint",
+                title="Last-Round Repair Hint",
+                body="Last-round repair hint:\n" + str(diagnostic_repair_hint),
             )
         )
     if reflection_memory:
@@ -502,6 +523,8 @@ def _skill_catalog_block(
     exhausted_tools: frozenset[str] | None,
     question: str = "",
     target_hints: Sequence[str] = (),
+    projection_status: Mapping[str, Any] | None = None,
+    diagnostic_repair_hint: str | None = None,
 ) -> str:
     lines = [skill_catalog_prompt(exhausted_tools=exhausted_tools)]
     if active_skill:
@@ -509,6 +532,8 @@ def _skill_catalog_block(
             active_skill,
             option_labels=extract_candidate_options(question),
             central_subjects=target_hints,
+            projection_status=projection_status,
+            diagnostic_repair_hint=diagnostic_repair_hint,
         )
         if playbook_block:
             lines.extend(["", playbook_block])
@@ -695,6 +720,7 @@ def _feedback_slot(
     pending_inferences: Sequence[str] = (),
     normalization_notes: Sequence[Any],
     reflection_memory: Sequence[str],
+    diagnostic_repair_hint: str | None = None,
 ) -> str:
     blocks = []
     if pending_inferences:
@@ -723,6 +749,14 @@ def _feedback_slot(
                     "Answer Agent says these evidence gaps must be resolved before final: "
                     + "; ".join(str(item) for item in answer_feedback[:5])
                 ),
+            ).render()
+        )
+    if diagnostic_repair_hint:
+        blocks.append(
+            PromptBlock(
+                name="diagnostic_repair_hint",
+                title="Last-Round Repair Hint",
+                body="Last-round repair hint:\n" + str(diagnostic_repair_hint),
             ).render()
         )
     if reflection_memory:

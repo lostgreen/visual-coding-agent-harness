@@ -47,6 +47,20 @@ FinalRejectionReason = Literal[
     "no_per_option_coverage",
     "no_answer_grade_citation",
     "verifier_failed",
+    "absence_unconfirmed",
+    "absence_competitor_missing",
+    "candidate_has_positive_support",
+    "multiple_absent_candidates",
+    "causal_binding_missing",
+    "topic_overlap_only",
+    "universal_coverage_incomplete",
+    "universal_group_unvisited",
+    "single_group_only",
+    "ordered_item_missing",
+    "order_position_ambiguous",
+    "multiple_order_options_match",
+    "global_hint_only",
+    "arc_not_dominant",
 ]
 
 EvidenceSupportStatus = Literal[
@@ -127,6 +141,7 @@ class FinalGateDecision:
     supporting_evidence_ids: Sequence[str] = field(default_factory=tuple)
     missing_target_refs: Sequence[str] = field(default_factory=tuple)
     missing_relation_refs: Sequence[str] = field(default_factory=tuple)
+    diagnostic_repair_hint: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "supporting_evidence_ids", tuple(self.supporting_evidence_ids))

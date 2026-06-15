@@ -21,7 +21,7 @@ class OpenAIChatTextBackend:
     api_key: str = "EMPTY"
     timeout: float = 180.0
     thinking_token_budget: int | None = None
-    enable_thinking: bool | None = None
+    enable_thinking: bool | None = False
     extra_body: Mapping[str, Any] = field(default_factory=dict)
 
     def generate(self, request: BackendRequest) -> BackendResponse:
@@ -67,10 +67,8 @@ class OpenAIChatTextBackend:
             extra_body.update(dict(metadata_extra))
         body.update(extra_body)
 
+        metadata_has_thinking_budget = "thinking_token_budget" in request.metadata
         thinking_budget = request.metadata.get("thinking_token_budget", self.thinking_token_budget)
-        if thinking_budget is not None:
-            body["thinking_token_budget"] = int(thinking_budget)
-
         enable_thinking = request.metadata.get("enable_thinking", self.enable_thinking)
         chat_template_kwargs = dict(body.get("chat_template_kwargs") or {})
         metadata_chat_kwargs = request.metadata.get("chat_template_kwargs")
@@ -80,6 +78,9 @@ class OpenAIChatTextBackend:
             chat_template_kwargs["enable_thinking"] = bool(enable_thinking)
         elif thinking_budget is not None and "enable_thinking" not in chat_template_kwargs:
             chat_template_kwargs["enable_thinking"] = int(thinking_budget) > 0
+        effective_enable_thinking = chat_template_kwargs.get("enable_thinking", enable_thinking)
+        if thinking_budget is not None and (metadata_has_thinking_budget or effective_enable_thinking is not False):
+            body["thinking_token_budget"] = int(thinking_budget)
         if chat_template_kwargs:
             body["chat_template_kwargs"] = chat_template_kwargs
         return body

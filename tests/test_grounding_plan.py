@@ -93,6 +93,16 @@ def test_validate_grounding_plan_accepts_structural_plan() -> None:
     assert result.findings == ()
 
 
+def test_grounding_plan_carries_answer_operator_through_compile() -> None:
+    plan = replace(_valid_plan(), answer_operator="ordered_projection")
+
+    compiled = compile_grounding_plan(plan, raw_options={"A": "Alpha then Beta", "B": "Beta then Alpha"})
+
+    assert plan.to_dict()["answer_operator"] == "ordered_projection"
+    assert GroundingPlan.from_mapping(plan.to_dict()).answer_operator == "ordered_projection"
+    assert compiled.answer_operator == "ordered_projection"
+
+
 def test_validate_grounding_plan_rejects_unknown_target_ref() -> None:
     bad_plan = replace(
         _valid_plan(),

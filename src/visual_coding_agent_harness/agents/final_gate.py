@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from .contracts import FinalGateDecision, FinalRejectionReason, OptionEvaluation
+from .grounding.operators import normalize_answer_operator
 from .skills.policy_constants import (
     MAIN_IDEA_RECOVERY_TOP_K,
     SkillPolicy,
@@ -50,6 +51,7 @@ def evaluate_final_candidate(
     skill_name: SkillPolicyName | str | None = None,
     option_evaluations: Sequence[OptionEvaluation | Any] | None = None,
     central_subjects: Sequence[str] = (),
+    answer_operator: str = "select_present",
 ) -> FinalGateDecision:
     """Evaluate whether a proposed option has answer-grade grounded support."""
 
@@ -62,6 +64,7 @@ def evaluate_final_candidate(
     relations = tuple(_normalize_relation(binding, evidence) for binding in relation_bindings)
     option_eval_by_id = _option_evaluation_by_id(option_evaluations or ())
     expected_option_ids = _registry_option_ids(registry)
+    operator = normalize_answer_operator(answer_operator, route=str(skill_name or skill_policy.skill_name or ""))
 
     selected_evidence = tuple(binding for binding in evidence if _applies_to_option(binding, option_id))
     conflicting_ids = tuple(
@@ -71,6 +74,44 @@ def evaluate_final_candidate(
     )
     if conflicting_ids:
         return _reject(option_id, "conflicting_evidence", supporting_evidence_ids=conflicting_ids)
+
+    if operator == "select_absent":
+        return _evaluate_select_absent_operator(
+            option_id=option_id,
+            option=option,
+            registry=registry,
+            evidence=evidence,
+        )
+    if operator == "causal_bind":
+        return _evaluate_causal_bind_operator(
+            option_id=option_id,
+            target_refs=target_refs,
+            evidence=selected_evidence,
+        )
+    if operator == "universal_intersection":
+        return _evaluate_universal_operator(
+            option_id=option_id,
+            target_refs=target_refs,
+            evidence=selected_evidence,
+        )
+    if operator == "ordered_projection":
+        ordered_decision = _evaluate_ordered_operator(
+            option_id=option_id,
+            target_refs=target_refs,
+            evidence=selected_evidence,
+            relations=relations,
+        )
+        if not ordered_decision.accepted:
+            return ordered_decision
+    if operator == "main_arc":
+        main_arc_decision = _evaluate_main_arc_operator(
+            option_id=option_id,
+            target_refs=target_refs,
+            evidence=selected_evidence,
+            option_evaluation=option_eval_by_id.get(option_id),
+        )
+        if not main_arc_decision.accepted:
+            return main_arc_decision
 
     if skill_policy.skill_name == "main_idea":
         return _evaluate_main_idea(
@@ -322,6 +363,137 @@ def _evaluate_mutex_fact(
     return _accept(option_id, supporting_evidence_ids=supporting_evidence_ids)
 
 
+def _evaluate_select_absent_operator(
+    *,
+    option_id: str,
+    option: Any,
+    registry: Any,
+    evidence: Sequence[_NormalizedEvidence],
+) -> FinalGateDecision:
+    target_refs = _option_target_refs(option)
+    selected_support = _supported_for_targets(evidence, target_refs)
+    if selected_support:
+        return _reject(
+            option_id,
+            "candidate_has_positive_support",
+            supporting_evidence_ids=tuple(binding.evidence_id for binding in selected_support),
+        )
+
+    missing_competitor_refs: list[str] = []
+    unsupported_options: list[str] = [option_id]
+    options_by_id = _field(registry, "options_by_id", default={})
+    if hasattr(options_by_id, "items"):
+        for competitor_id, competitor in options_by_id.items():
+            competitor_id = str(competitor_id)
+            if competitor_id == option_id:
+                continue
+            refs = _option_target_refs(competitor)
+            if not _supported_for_targets(evidence, refs):
+                unsupported_options.append(competitor_id)
+                missing_competitor_refs.extend(refs)
+    if len(unsupported_options) > 2:
+        return _reject(
+            option_id,
+            "multiple_absent_candidates",
+            missing_target_refs=missing_competitor_refs,
+        )
+    if missing_competitor_refs:
+        return _reject(
+            option_id,
+            "absence_competitor_missing",
+            missing_target_refs=missing_competitor_refs,
+        )
+    return _accept(option_id, supporting_evidence_ids=())
+
+
+def _evaluate_causal_bind_operator(
+    *,
+    option_id: str,
+    target_refs: tuple[str, ...],
+    evidence: Sequence[_NormalizedEvidence],
+) -> FinalGateDecision:
+    binding_support = tuple(
+        binding
+        for binding in evidence
+        if binding.target_ref in target_refs and binding.support_status == "supported" and _is_causal_binding(binding)
+    )
+    if binding_support:
+        return _accept(option_id, supporting_evidence_ids=tuple(binding.evidence_id for binding in binding_support))
+    topical = tuple(
+        binding
+        for binding in evidence
+        if binding.target_ref in target_refs and binding.support_status == "supported"
+    )
+    if topical:
+        return _reject(option_id, "topic_overlap_only", supporting_evidence_ids=tuple(binding.evidence_id for binding in topical))
+    return _reject(option_id, "causal_binding_missing")
+
+
+def _evaluate_universal_operator(
+    *,
+    option_id: str,
+    target_refs: tuple[str, ...],
+    evidence: Sequence[_NormalizedEvidence],
+) -> FinalGateDecision:
+    supported = tuple(
+        binding
+        for binding in evidence
+        if binding.target_ref in target_refs and binding.support_status == "supported"
+    )
+    groups = {_group_key(binding) for binding in supported if _group_key(binding)}
+    if len(groups) <= 1:
+        return _reject(
+            option_id,
+            "single_group_only",
+            supporting_evidence_ids=tuple(binding.evidence_id for binding in supported),
+        )
+    return _accept(option_id, supporting_evidence_ids=tuple(binding.evidence_id for binding in supported))
+
+
+def _evaluate_ordered_operator(
+    *,
+    option_id: str,
+    target_refs: tuple[str, ...],
+    evidence: Sequence[_NormalizedEvidence],
+    relations: Sequence[_NormalizedRelation],
+) -> FinalGateDecision:
+    supported_refs = {binding.target_ref for binding in evidence if binding.support_status == "supported"}
+    missing = tuple(target_ref for target_ref in target_refs if target_ref not in supported_refs)
+    if missing:
+        return _reject(option_id, "ordered_item_missing", missing_target_refs=missing)
+    if relations:
+        matching_relation = any(relation.support_status == "supported" for relation in relations)
+        if not matching_relation:
+            return _reject(option_id, "order_position_ambiguous")
+    return _accept(option_id, supporting_evidence_ids=tuple(binding.evidence_id for binding in evidence))
+
+
+def _evaluate_main_arc_operator(
+    *,
+    option_id: str,
+    target_refs: tuple[str, ...],
+    evidence: Sequence[_NormalizedEvidence],
+    option_evaluation: OptionEvaluation | Any | None,
+) -> FinalGateDecision:
+    supported = tuple(
+        binding
+        for binding in evidence
+        if binding.target_ref in target_refs and binding.support_status == "supported"
+    )
+    if supported and all(_is_global_hint(binding) for binding in supported):
+        return _reject(option_id, "global_hint_only", supporting_evidence_ids=tuple(binding.evidence_id for binding in supported))
+    distinct_segments = {_segment_key(binding) for binding in supported if not _is_global_hint(binding)}
+    coverage_breadth = _int_field(option_evaluation, "coverage_breadth", default=len(distinct_segments))
+    if len(distinct_segments) < 2 or coverage_breadth < 2:
+        return _reject(
+            option_id,
+            "insufficient_breadth",
+            supporting_evidence_ids=tuple(binding.evidence_id for binding in supported),
+            missing_target_refs=tuple(target for target in target_refs if target not in {binding.target_ref for binding in supported}),
+        )
+    return _accept(option_id, supporting_evidence_ids=tuple(binding.evidence_id for binding in supported))
+
+
 def _target_support(
     *,
     target_refs: tuple[str, ...],
@@ -425,7 +597,7 @@ def _registry_relation(registry: Any, relation_ref: str) -> Any | None:
 def _resolve_policy(policy: SkillPolicy | str | None, skill_name: str | None) -> SkillPolicy:
     if isinstance(policy, SkillPolicy):
         return policy
-    policy_name = str(policy or skill_name or "").strip()
+    policy_name = str(policy or skill_name or "grounded_factual_qa").strip() or "grounded_factual_qa"
     return get_skill_policy(policy_name)
 
 
@@ -601,6 +773,51 @@ def _has_timestamp(binding: _NormalizedEvidence) -> bool:
     return binding.timestamp_start is not None or binding.timestamp_end is not None
 
 
+def _supported_for_targets(
+    evidence: Sequence[_NormalizedEvidence],
+    target_refs: Sequence[str],
+) -> tuple[_NormalizedEvidence, ...]:
+    refs = set(target_refs)
+    return tuple(
+        binding
+        for binding in evidence
+        if binding.target_ref in refs and binding.support_status == "supported"
+    )
+
+
+def _is_causal_binding(binding: _NormalizedEvidence) -> bool:
+    source = _normalize_text(binding.source)
+    modality = _normalize_text(binding.modality)
+    grounding = _normalize_text(binding.grounding_quality)
+    return (
+        "bind_asr_claim" in source
+        or "claim_binding" in source
+        or "causal" in source
+        or "explicit_cause" in source
+        or modality in {"indexed_transcript", "claim_binding"}
+        or grounding in {"indexed_transcript", "claim_binding"}
+    )
+
+
+def _group_key(binding: _NormalizedEvidence) -> str:
+    if binding.source:
+        return binding.source
+    if binding.timestamp_start is not None:
+        return f"t{int(float(binding.timestamp_start) // 30)}"
+    if binding.timestamp_end is not None:
+        return f"t{int(float(binding.timestamp_end) // 30)}"
+    return ""
+
+
+def _is_global_hint(binding: _NormalizedEvidence) -> bool:
+    markers = {
+        _normalize_text(binding.modality),
+        _normalize_text(binding.source),
+        _normalize_text(binding.grounding_quality),
+    }
+    return bool(markers & {"global_gist", "global_sparse", "query_global_context"})
+
+
 def _segment_key(binding: _NormalizedEvidence) -> tuple[Any, ...]:
     if binding.source:
         return (binding.source,)
@@ -754,12 +971,34 @@ def _reject(
         supporting_evidence_ids=_unique_ids(supporting_evidence_ids),
         missing_target_refs=tuple(missing_target_refs),
         missing_relation_refs=tuple(missing_relation_refs),
+        diagnostic_repair_hint=_diagnostic_repair_hint(reason_code),
     )
     return _attach_feedback_fields(
         decision,
         actionable_next_program=actionable_next_program,
         do_not_repeat=do_not_repeat,
     )
+
+
+def _diagnostic_repair_hint(reason_code: str | None) -> str | None:
+    hints = {
+        "absence_unconfirmed": "probe the selected candidate before treating it as absent",
+        "absence_competitor_missing": "confirm positive support for every competitor option",
+        "candidate_has_positive_support": "reject the absent candidate or re-check the complement set",
+        "multiple_absent_candidates": "probe each unconfirmed option until exactly one remains unsupported",
+        "causal_binding_missing": "bind the option cause to transcript or explicit cause/effect evidence",
+        "topic_overlap_only": "collect binding-sourced causal evidence rather than topical overlap",
+        "universal_coverage_incomplete": "inspect the missing group before finalizing an all/every answer",
+        "universal_group_unvisited": "visit the highest-priority unvisited group",
+        "single_group_only": "collect support from another relevant group",
+        "ordered_item_missing": "probe the missing ordered item",
+        "order_position_ambiguous": "inspect narrower timestamps to disambiguate item order",
+        "multiple_order_options_match": "collect another item position to choose a unique sequence",
+        "global_hint_only": "use global gist only as a seed and collect answer-grade local arc evidence",
+        "insufficient_breadth": "collect broader distinct-segment coverage before finalizing",
+        "arc_not_dominant": "compare top two arcs by broad coverage before finalizing",
+    }
+    return hints.get(str(reason_code or ""))
 
 
 def _attach_feedback_fields(

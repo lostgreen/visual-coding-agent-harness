@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
+from .operators import ALLOWED_ANSWER_OPERATORS, normalize_answer_operator
+
 ClaimKind = Literal[
     "entity",
     "visible_event",
@@ -181,6 +183,7 @@ class GroundingOption:
 class GroundingPlan:
     route: str
     recommended_skill: str
+    answer_operator: str = "select_present"
     central_subjects: Sequence[str] = field(default_factory=tuple)
     subjects: Sequence[GroundingSubject] = field(default_factory=tuple)
     targets: Sequence[GroundingTarget] = field(default_factory=tuple)
@@ -191,6 +194,11 @@ class GroundingPlan:
     unresolved_ambiguities: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "answer_operator",
+            normalize_answer_operator(self.answer_operator, route=self.route),
+        )
         object.__setattr__(self, "central_subjects", _string_tuple(self.central_subjects))
         object.__setattr__(self, "subjects", tuple(self.subjects))
         object.__setattr__(self, "targets", tuple(self.targets))
@@ -204,6 +212,7 @@ class GroundingPlan:
         return {
             "route": self.route,
             "recommended_skill": self.recommended_skill,
+            "answer_operator": self.answer_operator,
             "central_subjects": list(self.central_subjects),
             "subjects": [subject.to_dict() for subject in self.subjects],
             "targets": [target.to_dict() for target in self.targets],
@@ -219,6 +228,10 @@ class GroundingPlan:
         return cls(
             route=str(payload.get("route", "")).strip(),
             recommended_skill=str(payload.get("recommended_skill", "")).strip(),
+            answer_operator=normalize_answer_operator(
+                str(payload.get("answer_operator", "")).strip(),
+                route=str(payload.get("route", "")).strip(),
+            ),
             central_subjects=_string_tuple(payload.get("central_subjects", ())),
             subjects=_subject_sequence(payload.get("subjects", ())),
             targets=tuple(

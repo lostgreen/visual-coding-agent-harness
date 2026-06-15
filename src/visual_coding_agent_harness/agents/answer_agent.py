@@ -22,6 +22,11 @@ class AnswerAgentResult:
     confidence: float = 0.0
     conflict: Mapping[str, Any] = field(default_factory=dict)
     raw_text: str = ""
+    answer_operator: str = "select_present"
+    projection_candidate: str = ""
+    projection_reason: str = ""
+    final_gate_rejection_reason: str = ""
+    diagnostic_repair_hint: str = ""
 
     def has_partial_support(self) -> bool:
         return any(_is_visual_support_relation(relation) for relation in self.candidate_option_relations)
@@ -48,6 +53,15 @@ class AnswerAgentResult:
         confidence = (sum(strengths) / len(strengths)) * 0.7 if strengths else 0.0
         if not answer_grade:
             confidence = min(confidence, 0.5)
+        operator = str(self.answer_operator or "select_present")
+        operator_suffix = ""
+        if operator != "select_present":
+            confidence = min(confidence, 0.35)
+            operator_suffix = (
+                f" (operator-gated uncertainty: {operator}"
+                f"{', projection_reason=' + self.projection_reason if self.projection_reason else ''}"
+                f"{', final_gate=' + self.final_gate_rejection_reason if self.final_gate_rejection_reason else ''})"
+            )
         citations = [
             str(relation.get("observation_id", ""))
             for relation in winning_supports
@@ -57,13 +71,18 @@ class AnswerAgentResult:
         return AnswerAgentResult(
             status="low_confidence_final",
             answer=option,
-            rationale=f"Follow-up budget exhausted; option {option} has partial support{rationale_suffix}.",
+            rationale=f"Follow-up budget exhausted; option {option} has partial support{rationale_suffix}{operator_suffix}.",
             citations=citations,
             candidate_option_relations=list(self.candidate_option_relations),
             missing_evidence=list(self.missing_evidence),
             confidence=confidence,
             conflict=dict(self.conflict),
             raw_text=self.raw_text,
+            answer_operator=self.answer_operator,
+            projection_candidate=self.projection_candidate,
+            projection_reason=self.projection_reason,
+            final_gate_rejection_reason=self.final_gate_rejection_reason,
+            diagnostic_repair_hint=self.diagnostic_repair_hint,
         )
 
 
@@ -80,17 +99,47 @@ class AnswerAgent:
         evidence_text: str = "",
         evidence_table: Mapping[str, Any] | None = None,
         hypothesis_option: str = "",
+        answer_operator: str = "select_present",
+        projection_candidate: str = "",
+        projection_reason: str = "",
+        missing_evidence_shape: str = "",
+        final_gate_rejection_reason: str = "",
+        diagnostic_repair_hint: str = "",
     ) -> AnswerAgentResult:
         if evidence_table is not None and _has_option_support(evidence_table):
-            return arbitrate_evidence_table(evidence_table, hypothesis_option=hypothesis_option)
+            result = arbitrate_evidence_table(evidence_table, hypothesis_option=hypothesis_option)
+            return _with_operator_context(
+                result,
+                answer_operator=answer_operator,
+                projection_candidate=projection_candidate,
+                projection_reason=projection_reason,
+                final_gate_rejection_reason=final_gate_rejection_reason,
+                diagnostic_repair_hint=diagnostic_repair_hint,
+            )
         response = self.backend.generate(
             BackendRequest(
                 task="answer_from_evidence",
-                prompt=_answer_prompt(question=question, evidence_text=evidence_text),
+                prompt=_answer_prompt(
+                    question=question,
+                    evidence_text=evidence_text,
+                    answer_operator=answer_operator,
+                    projection_candidate=projection_candidate,
+                    projection_reason=projection_reason,
+                    missing_evidence_shape=missing_evidence_shape,
+                    final_gate_rejection_reason=final_gate_rejection_reason,
+                    diagnostic_repair_hint=diagnostic_repair_hint,
+                ),
                 max_new_tokens=512,
             )
         )
-        return _parse_answer_response(response.text)
+        return _with_operator_context(
+            _parse_answer_response(response.text),
+            answer_operator=answer_operator,
+            projection_candidate=projection_candidate,
+            projection_reason=projection_reason,
+            final_gate_rejection_reason=final_gate_rejection_reason,
+            diagnostic_repair_hint=diagnostic_repair_hint,
+        )
 
 
 GROUNDING_WEIGHTS = {
@@ -200,7 +249,25 @@ def arbitrate_evidence_table(
     )
 
 
-def _answer_prompt(*, question: str, evidence_text: str) -> str:
+def _answer_prompt(
+    *,
+    question: str,
+    evidence_text: str,
+    answer_operator: str = "select_present",
+    projection_candidate: str = "",
+    projection_reason: str = "",
+    missing_evidence_shape: str = "",
+    final_gate_rejection_reason: str = "",
+    diagnostic_repair_hint: str = "",
+) -> str:
+    operator_context = _operator_context_block(
+        answer_operator=answer_operator,
+        projection_candidate=projection_candidate,
+        projection_reason=projection_reason,
+        missing_evidence_shape=missing_evidence_shape,
+        final_gate_rejection_reason=final_gate_rejection_reason,
+        diagnostic_repair_hint=diagnostic_repair_hint,
+    )
     return (
         "You are the Answer Agent for a long-video evidence workspace.\n"
         "Use only the evidence table below. Do not use raw video or outside knowledge.\n"
@@ -216,8 +283,64 @@ def _answer_prompt(*, question: str, evidence_text: str) -> str:
         "- Every support relation must name the observation_id that directly supports it.\n"
         '- If evidence is insufficient, set answer to "need_more_evidence" and explain missing_evidence.\n'
         "- Do not cite navigation-only evidence as sole support.\n"
+        "- For non-select_present operators, do not override projection/final-gate rejection as a confident final.\n"
+        f"{operator_context}"
         f"Question:\n{question}\n\n"
         f"Evidence:\n{evidence_text}\n"
+    )
+
+
+def _operator_context_block(
+    *,
+    answer_operator: str,
+    projection_candidate: str,
+    projection_reason: str,
+    missing_evidence_shape: str,
+    final_gate_rejection_reason: str,
+    diagnostic_repair_hint: str,
+) -> str:
+    fields = {
+        "answer_operator": answer_operator or "select_present",
+        "projection_candidate": projection_candidate,
+        "projection_reason": projection_reason,
+        "missing_evidence_shape": missing_evidence_shape,
+        "final_gate_rejection_reason": final_gate_rejection_reason,
+        "diagnostic_repair_hint": diagnostic_repair_hint,
+    }
+    if all(not str(value or "").strip() for key, value in fields.items() if key != "answer_operator") and fields["answer_operator"] == "select_present":
+        return ""
+    lines = ["Operator context:"]
+    for key, value in fields.items():
+        text = str(value or "").strip()
+        if text:
+            lines.append(f"{key}: {text}")
+    return "\n".join(lines) + "\n"
+
+
+def _with_operator_context(
+    result: AnswerAgentResult,
+    *,
+    answer_operator: str,
+    projection_candidate: str,
+    projection_reason: str,
+    final_gate_rejection_reason: str,
+    diagnostic_repair_hint: str,
+) -> AnswerAgentResult:
+    return AnswerAgentResult(
+        status=result.status,
+        answer=result.answer,
+        rationale=result.rationale,
+        citations=list(result.citations),
+        candidate_option_relations=list(result.candidate_option_relations),
+        missing_evidence=list(result.missing_evidence),
+        confidence=result.confidence,
+        conflict=dict(result.conflict),
+        raw_text=result.raw_text,
+        answer_operator=answer_operator or "select_present",
+        projection_candidate=projection_candidate,
+        projection_reason=projection_reason,
+        final_gate_rejection_reason=final_gate_rejection_reason,
+        diagnostic_repair_hint=diagnostic_repair_hint,
     )
 
 

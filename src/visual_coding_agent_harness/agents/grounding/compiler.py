@@ -16,6 +16,7 @@ from ..question_policy import (
     extract_option_target_atoms_for_option,
 )
 from .contracts import ALLOWED_GROUNDING_ROUTES, GroundingOption, GroundingPlan, GroundingSubject, GroundingTarget
+from .operators import derive_answer_operator
 from .validator import validate_grounding_plan
 
 
@@ -27,6 +28,7 @@ class CompiledGroundingPlan:
     plan_hash: str
     route: str
     recommended_skill_id: str
+    answer_operator: str
     central_subjects: tuple[str, ...]
     acceptable_evidence_sources: tuple[str, ...]
     unresolved_ambiguities: tuple[str, ...]
@@ -106,6 +108,7 @@ def compile_grounding_plan(
         plan_hash=plan_hash,
         route=plan.route,
         recommended_skill_id=_skill_id(plan.recommended_skill),
+        answer_operator=plan.answer_operator,
         central_subjects=tuple(plan.central_subjects),
         acceptable_evidence_sources=acceptable_evidence_sources,
         unresolved_ambiguities=tuple(plan.unresolved_ambiguities),
@@ -138,6 +141,7 @@ def compile_fallback_plan(
         return GroundingPlan(
             route=route,
             recommended_skill=_fallback_recommended_skill(question, route),
+            answer_operator=derive_answer_operator(question, route=route, options=options),
             central_subjects=(subject.canonical_name,),
             subjects=(subject,),
             targets=tuple(targets),
@@ -179,6 +183,7 @@ def compile_fallback_plan(
     return GroundingPlan(
         route=route,
         recommended_skill=_fallback_recommended_skill(question, route),
+        answer_operator=derive_answer_operator(question, route=route, options=options),
         central_subjects=(subject.canonical_name,),
         subjects=(subject,),
         targets=tuple(targets),

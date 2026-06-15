@@ -353,6 +353,34 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("Suggested actions", prompt)
         self.assertNotIn("The tool schema below is filtered to the effective skill", prompt)
 
+    def test_prompt_renders_projection_status_and_repair_hint_in_playbook(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+        allocator = default_context_budget_allocator(total_budget_tokens=1200)
+
+        prompt, _report = build_replanning_prompt(
+            question="Question: Which object is NOT shown?\nOptions:\nA. alpha\nB. beta",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\n(none)",
+            round_number=2,
+            budget=AgentBudget(max_rounds=3),
+            allocator=allocator,
+            active_skill="complement_absence_qa@v1",
+            projection_status={
+                "status": "ambiguous",
+                "candidate_option": "B",
+                "reason": "multiple_absent_candidates",
+                "missing": "competitor A has no support",
+            },
+            diagnostic_repair_hint="probe each unconfirmed option until exactly one remains unsupported",
+        )
+
+        self.assertIn("Current operator projection:", prompt)
+        self.assertIn("status: ambiguous", prompt)
+        self.assertIn("candidate_option: B", prompt)
+        self.assertIn("reason: multiple_absent_candidates", prompt)
+        self.assertIn("Last-round repair hint:", prompt)
+        self.assertIn("probe each unconfirmed option", prompt)
+
     def test_tool_schema_marks_exhausted_tools_inline(self):
         rendered = _tool_schema_block(
             option_blind=True,

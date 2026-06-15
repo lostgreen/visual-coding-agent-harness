@@ -1,4 +1,5 @@
 from visual_coding_agent_harness.agents.skills.playbook import playbook_for_operator
+from visual_coding_agent_harness.contracts import OptionSpec, TargetRegistry, TargetSpec
 
 
 def test_each_operator_playbook_has_structural_diagnostics():
@@ -67,3 +68,37 @@ def test_operator_playbooks_are_benchmark_content_free():
 
 def test_unknown_operator_has_no_playbook():
     assert playbook_for_operator("unsupported_operator", question="", options=(), registry=None) is None
+
+
+def test_playbook_builders_include_dynamic_option_and_registry_shape():
+    registry = TargetRegistry.from_specs(
+        targets=[
+            TargetSpec(target_id="T1", canonical_text="alpha appears"),
+            TargetSpec(target_id="T2", canonical_text="beta appears"),
+            TargetSpec(target_id="T3", canonical_text="gamma appears"),
+        ],
+        options=[
+            OptionSpec("A", target_sequence=("T1", "T2"), raw_option_text="alpha then beta", option_kind="sequence"),
+            OptionSpec("B", target_sequence=("T1", "T3"), raw_option_text="alpha then gamma", option_kind="sequence"),
+        ],
+    )
+
+    ordered = playbook_for_operator(
+        "ordered_projection",
+        question="Which order happens successively?",
+        options=("A. alpha then beta", "B. alpha then gamma"),
+        registry=registry,
+    )
+    absent = playbook_for_operator(
+        "select_absent",
+        question="Which object is NOT shown?",
+        options=("A. alpha", "B. beta"),
+        registry=registry,
+    )
+
+    assert ordered is not None
+    assert "A: T1 -> T2" in ordered.decomposition
+    assert "B: T1 -> T3" in ordered.decomposition
+    assert absent is not None
+    assert "Competitor-presence checklist" in absent.decomposition
+    assert "A/T1" in absent.decomposition

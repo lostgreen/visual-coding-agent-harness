@@ -34,6 +34,8 @@ def render_playbook_block(
     registry: TargetRegistry | None = None,
     option_labels: Sequence[str] = (),
     central_subjects: Sequence[str] = (),
+    projection_status: Mapping[str, Any] | None = None,
+    diagnostic_repair_hint: str | None = None,
     max_chars: int = 4000,
 ) -> str:
     """Render a compact SKILL.md-like prompt block for the active investigation playbook."""
@@ -53,6 +55,10 @@ def render_playbook_block(
         lines.extend(["", "### Registered Targets", *target_lines])
     if option_lines:
         lines.extend(["", "### Option Target Map", *option_lines])
+    lines.extend(["", "### Current Operator Projection"])
+    lines.extend(_projection_status_lines(projection_status))
+    if diagnostic_repair_hint:
+        lines.extend(["", "Last-round repair hint:", _clip_text(str(diagnostic_repair_hint), 500)])
     lines.extend(["", "### Decomposition", _clip_text(playbook.decomposition, 1200)])
     if playbook.evidence_shape_target:
         lines.extend(["", "### Evidence Shape Required To Stop"])
@@ -79,7 +85,7 @@ def playbook_for_operator(
     registry: TargetRegistry | None,
     route: str | None = None,
 ) -> Playbook | None:
-    del question, options, registry, route
+    del route
     builders = {
         "select_present": _select_present_playbook,
         "select_absent": _select_absent_playbook,
@@ -89,7 +95,14 @@ def playbook_for_operator(
         "main_arc": _main_arc_playbook,
     }
     builder = builders.get(str(operator or "").strip())
-    return builder() if builder is not None else None
+    if builder is None:
+        return None
+    return _with_runtime_shape(
+        builder(),
+        question=question,
+        options=options,
+        registry=registry,
+    )
 
 
 def with_suggested_actions(playbook: Playbook | None, actions: Sequence[str]) -> Playbook | None:
@@ -280,6 +293,63 @@ def _main_arc_playbook() -> Playbook:
     )
 
 
+def _with_runtime_shape(
+    playbook: Playbook,
+    *,
+    question: str,
+    options: Sequence[str],
+    registry: TargetRegistry | None,
+) -> Playbook:
+    option_lines = _compact_option_sequence_lines(registry=registry, options=options)
+    if not option_lines:
+        return playbook
+    if playbook.answer_operator == "ordered_projection":
+        addition = " Option target sequences: " + "; ".join(option_lines) + "."
+    elif playbook.answer_operator == "select_absent":
+        addition = " Competitor-presence checklist: " + "; ".join(_competitor_checklist_lines(option_lines)) + "."
+    elif playbook.answer_operator == "universal_intersection":
+        addition = " Group coverage must be checked for these option targets: " + "; ".join(option_lines) + "."
+    elif playbook.answer_operator == "causal_bind":
+        addition = " Cause candidates to bind: " + "; ".join(option_lines) + "."
+    elif playbook.answer_operator == "main_arc":
+        addition = " Compare broad coverage for option targets: " + "; ".join(option_lines) + "."
+    else:
+        addition = " Current option targets: " + "; ".join(option_lines) + "."
+    if question:
+        addition += " Use only the question form and registered targets, not benchmark-specific knowledge."
+    return replace(playbook, decomposition=playbook.decomposition + addition)
+
+
+def _compact_option_sequence_lines(*, registry: TargetRegistry | None, options: Sequence[str]) -> list[str]:
+    options_by_id = getattr(registry, "options_by_id", None)
+    if isinstance(options_by_id, Mapping) and options_by_id:
+        lines: list[str] = []
+        for option_id in sorted(str(key) for key in options_by_id):
+            option = options_by_id.get(option_id)
+            sequence = tuple(str(item) for item in getattr(option, "target_sequence", ()) or ())
+            if sequence:
+                lines.append(f"{option_id}: {' -> '.join(sequence)}")
+        return lines[:8]
+    lines = []
+    for option in options[:8]:
+        text = str(option).strip()
+        if text:
+            lines.append(text)
+    return lines
+
+
+def _competitor_checklist_lines(option_lines: Sequence[str]) -> list[str]:
+    lines: list[str] = []
+    for line in option_lines:
+        option_id, sep, refs = line.partition(":")
+        first_ref = refs.strip().split(" -> ", 1)[0] if sep else ""
+        if option_id and first_ref:
+            lines.append(f"{option_id}/{first_ref}: unknown")
+        else:
+            lines.append(f"{line}: unknown")
+    return lines
+
+
 def _registry_target_lines(registry: TargetRegistry | None) -> list[str]:
     targets_by_id = getattr(registry, "targets_by_id", None)
     if not isinstance(targets_by_id, Mapping):
@@ -291,6 +361,23 @@ def _registry_target_lines(registry: TargetRegistry | None) -> list[str]:
         if text:
             lines.append(f"- {target_id}: {text}")
     return lines[:12]
+
+
+def _projection_status_lines(projection_status: Mapping[str, Any] | None) -> list[str]:
+    if not projection_status:
+        return ["No projection computed yet."]
+    fields = (
+        ("status", "status"),
+        ("candidate_option", "candidate_option"),
+        ("reason", "reason"),
+        ("missing", "missing"),
+    )
+    lines = ["Current operator projection:"]
+    for label, key in fields:
+        value = projection_status.get(key)
+        if value not in (None, "", (), []):
+            lines.append(f"{label}: {_clip_text(str(value), 300)}")
+    return lines
 
 
 def _option_mapping_lines(*, registry: TargetRegistry | None, option_labels: Sequence[str]) -> list[str]:

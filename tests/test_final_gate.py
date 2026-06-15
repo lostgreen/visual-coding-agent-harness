@@ -224,3 +224,106 @@ def test_main_idea_rejects_insufficient_breadth_with_closed_reason() -> None:
     assert not decision.accepted
     assert decision.reason_code == "insufficient_breadth"
     assert decision.missing_target_refs == ("T2",)
+
+
+def test_absent_operator_rejects_selected_present_option() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[_target("T1", "alpha"), _target("T2", "beta")],
+        options=[
+            OptionSpec("A", target_sequence=("T1",), raw_option_text="alpha"),
+            OptionSpec("B", target_sequence=("T2",), raw_option_text="beta"),
+        ],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="A",
+        registry=registry,
+        evidence_bindings=[_evidence("E1", "T1"), _evidence("E2", "T2")],
+        relation_bindings=[],
+        answer_operator="select_absent",
+    )
+
+    assert not decision.accepted
+    assert decision.reason_code == "candidate_has_positive_support"
+    assert decision.diagnostic_repair_hint
+
+
+def test_absent_operator_rejects_when_competitor_presence_missing() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[_target("T1", "alpha"), _target("T2", "beta"), _target("T3", "gamma")],
+        options=[
+            OptionSpec("A", target_sequence=("T1",), raw_option_text="alpha"),
+            OptionSpec("B", target_sequence=("T2",), raw_option_text="beta"),
+            OptionSpec("C", target_sequence=("T3",), raw_option_text="gamma"),
+        ],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="C",
+        registry=registry,
+        evidence_bindings=[_evidence("E1", "T1")],
+        relation_bindings=[],
+        answer_operator="select_absent",
+    )
+
+    assert not decision.accepted
+    assert decision.reason_code == "absence_competitor_missing"
+    assert decision.missing_target_refs == ("T2",)
+    assert decision.diagnostic_repair_hint
+
+
+def test_causal_operator_rejects_topic_overlap_only_support() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[_target("T1", "cause one")],
+        options=[OptionSpec("A", target_sequence=("T1",), raw_option_text="cause one")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="A",
+        registry=registry,
+        evidence_bindings=[_evidence("E1", "T1", modality="asr")],
+        relation_bindings=[],
+        answer_operator="causal_bind",
+    )
+
+    assert not decision.accepted
+    assert decision.reason_code == "topic_overlap_only"
+    assert decision.diagnostic_repair_hint
+
+
+def test_universal_operator_rejects_single_group_support() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[_target("T1", "shared")],
+        options=[OptionSpec("A", target_sequence=("T1",), raw_option_text="shared")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="A",
+        registry=registry,
+        evidence_bindings=[_evidence("E1", "T1", option_id="A")],
+        relation_bindings=[],
+        answer_operator="universal_intersection",
+    )
+
+    assert not decision.accepted
+    assert decision.reason_code == "single_group_only"
+    assert decision.diagnostic_repair_hint
+
+
+def test_main_arc_operator_rejects_global_gist_only_support() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[_target("T1", "broad theme"), _target("T2", "second theme")],
+        options=[OptionSpec("A", target_sequence=("T1", "T2"), option_kind="topic_arc")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="A",
+        registry=registry,
+        evidence_bindings=[_evidence("E1", "T1", modality="global_gist", start=None, end=None)],
+        relation_bindings=[],
+        answer_operator="main_arc",
+    )
+
+    assert not decision.accepted
+    assert decision.reason_code == "global_hint_only"
+    assert decision.diagnostic_repair_hint

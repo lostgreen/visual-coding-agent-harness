@@ -32,6 +32,29 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.candidate_option_relations[0]["observation_id"], "obs_0002")
         self.assertIn("candidate_option_relations", backend.requests[0].prompt)
 
+    def test_answer_agent_prompt_includes_operator_projection_context(self):
+        backend = StaticBackend(
+            '{"answer": "need_more_evidence", "rationale": "need binding", '
+            '"citations": [], "missing_evidence": ["bind causal claim"], "confidence": 0.0}'
+        )
+
+        AnswerAgent(backend).run(
+            question="Why did the narrator recommend stopping?\nA. rain\nB. traffic",
+            evidence_text="- obs_0002 mentions traffic",
+            answer_operator="causal_bind",
+            projection_candidate="B",
+            projection_reason="topic_overlap_only",
+            final_gate_rejection_reason="topic_overlap_only",
+            diagnostic_repair_hint="collect binding-sourced causal evidence rather than topical overlap",
+        )
+
+        prompt = backend.requests[0].prompt
+        self.assertIn("answer_operator: causal_bind", prompt)
+        self.assertIn("projection_candidate: B", prompt)
+        self.assertIn("projection_reason: topic_overlap_only", prompt)
+        self.assertIn("final_gate_rejection_reason: topic_overlap_only", prompt)
+        self.assertIn("diagnostic_repair_hint: collect binding-sourced causal evidence", prompt)
+
     def test_answer_agent_parses_single_quoted_json_like_response(self):
         backend = StaticBackend(
             "Here is the final JSON:\n"
@@ -549,6 +572,29 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(low_conf.status, "low_confidence_final")
         self.assertAlmostEqual(low_conf.confidence, 0.525)
         self.assertNotIn("navigation-only", low_conf.rationale)
+
+    def test_non_select_present_low_confidence_keeps_explicit_uncertainty(self):
+        backend = StaticBackend(
+            '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '
+            '"candidate_option_relations": ['
+            '{"option": "B", "relation": "support", "strength": 0.8, "observation_id": "obs_0002", "grounding_quality": "indexed_transcript"}'
+            '], "missing_evidence": ["need causal binding"], "confidence": 0.0}'
+        )
+        result = AnswerAgent(backend).run(
+            question="Why did it happen?",
+            evidence_text="- partial evidence",
+            answer_operator="causal_bind",
+            projection_candidate="B",
+            projection_reason="topic_overlap_only",
+            final_gate_rejection_reason="topic_overlap_only",
+        )
+
+        low_conf = result.as_low_confidence_final()
+
+        self.assertEqual(low_conf.status, "low_confidence_final")
+        self.assertEqual(low_conf.answer, "B")
+        self.assertLessEqual(low_conf.confidence, 0.35)
+        self.assertIn("operator-gated uncertainty", low_conf.rationale)
 
     def test_low_conf_requires_at_least_one_visual(self):
         backend = StaticBackend(
