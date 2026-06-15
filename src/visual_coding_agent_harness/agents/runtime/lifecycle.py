@@ -79,3 +79,13 @@ def apply_post_tool_chain(
     result: ToolResult,
 ) -> tuple[PostToolEffects, ...]:
     return tuple(hook(ctx, request, result) for hook in hooks)
+
+
+def mark_successful_tool_call(ctx: RunContext, request: ToolRequest) -> None:
+    runtime_spec = ctx.registry.get_runtime_spec(request.tool)
+    builder = runtime_spec.semantic_key_builder
+    if builder is None:
+        return
+    key = str(builder(ctx, request) or "").strip()
+    if key:
+        ctx.seen_tool_semantic_keys.add(key)

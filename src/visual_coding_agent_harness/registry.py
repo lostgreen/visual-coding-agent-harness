@@ -69,8 +69,8 @@ class ToolRegistry:
         self._tools[tool_spec.name] = runtime_spec
 
     def extend(self, other: "ToolRegistry") -> None:
-        for spec in other.list_specs():
-            self.register(spec)
+        for runtime_spec in other.list_runtime_specs():
+            self.register(runtime_spec)
 
     def list_specs(self) -> Sequence[ToolSpec]:
         return tuple(runtime_spec.tool_spec for runtime_spec in self._tools.values())

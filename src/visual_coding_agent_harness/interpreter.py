@@ -17,6 +17,7 @@ from .agents.runtime.lifecycle import (
     RunContext,
     apply_post_tool_chain,
     evaluate_pre_tool_chain,
+    mark_successful_tool_call,
 )
 from .agents.contracts import resolve_nframes
 from .agents.distill import distill
@@ -71,6 +72,8 @@ class ProgramInterpreter:
                     step=expanded_step,
                     assignments=assignments,
                 )
+                if observation_id is None:
+                    continue
                 observation_ids.append(observation_id)
                 slot_updates = _dynamic_slot_updates_from_observation(self.workspace.get_observation(observation_id))
                 if slot_updates:
@@ -113,7 +116,7 @@ class ProgramInterpreter:
         step_index: int,
         step: Mapping[str, Any],
         assignments: Dict[str, str],
-    ) -> str:
+    ) -> str | None:
         if "tool" not in step and "op" not in step:
             raise ValueError(f"Program step {step_index} is missing required 'tool'")
         tool_name = str(step.get("tool") or step.get("op"))
@@ -136,23 +139,13 @@ class ProgramInterpreter:
                         "payload": dict(decision.payload),
                     },
                 )
-                raw_output = {
-                    "claim": "",
-                    "confidence": 0.0,
-                    "limitations": decision.message or decision.reason,
-                    "rejected": True,
-                    "rejection_reason": decision.reason,
-                }
-                return self._write_tool_observation(
-                    step=step,
-                    step_index=step_index,
-                    tool_name=tool_name,
-                    arguments=arguments,
-                    raw_output=raw_output,
-                    assignments=assignments,
-                )
+                return None
 
+        if self.lifecycle_context is not None and self.pre_tool_hooks:
+            self.lifecycle_context.issued_tool_calls += 1
         raw_output = dict(self.registry.execute(tool_name, arguments))
+        if self.lifecycle_context is not None and self.pre_tool_hooks:
+            mark_successful_tool_call(self.lifecycle_context, request)
         is_bad_output, fingerprint = is_degenerate(str(raw_output.get("claim", "")))
         if is_bad_output:
             raw_output["confidence_signal"] = DEGENERATE_CONFIDENCE_SIGNAL

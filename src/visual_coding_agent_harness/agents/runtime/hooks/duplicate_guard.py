@@ -26,5 +26,4 @@ class DuplicateGuardHook:
                     payload={"tool": request.tool, "semantic_key": key},
                 )
             return PreToolDecision.allow()
-        ctx.seen_tool_semantic_keys.add(key)
         return PreToolDecision.allow()

@@ -11,7 +11,6 @@ from typing import Any, Mapping, Optional, Sequence
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..contracts import ClaimModality, ClaimRelation, OptionSpec, TargetRegistry, TargetSpec
 from ..evidence.projection import ProjectionEvidence, ProjectionResult, project_option_support
-from ..interpreter import ProgramInterpreter
 from ..registry import ToolError, ToolRegistry
 from ..task.spec import OptionSpec as ProjectionOptionSpec
 from ..task.spec import TaskSpec, build_task_spec
@@ -39,6 +38,9 @@ from .question_policy import (
     extract_option_target_atoms,
     select_question_playbook,
 )
+from .runtime.host import ToolRuntimeHost
+from .runtime.lifecycle import RunContext
+from .runtime.state import RoundState, RunState
 from .skills.predicates import (
     grounding_quality_floor,
     no_decisive_weak_grounding,
@@ -224,6 +226,8 @@ class IterativeVisualAgent:
         self._answer_suggestion_state = AnswerSuggestionState()
         self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure: Mapping[str, Any] | None = None
+        self._successful_tool_semantic_keys: set[str] = set()
+        self.runtime_host = ToolRuntimeHost(registry=self.registry, workspace=self.workspace)
         self.context_allocator = default_context_budget_allocator(
             total_budget_tokens=self.budget.context_budget_tokens,
             slot_ratios=dict(self.budget.context_budget_ratios) if self.budget.context_budget_ratios else None,
@@ -238,6 +242,7 @@ class IterativeVisualAgent:
         self._answer_suggestion_state = AnswerSuggestionState()
         self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure = None
+        self._successful_tool_semantic_keys = set()
         question_context = build_question_context(question)
         raw_question = question_context.raw_question
         vlm_safe_question = question_context.vlm_safe_question
@@ -1145,7 +1150,15 @@ class IterativeVisualAgent:
                 "iterative_plan",
                 {"round": round_number, "rationale": rationale, "program": program},
             )
-            program_result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(program)
+            program_result = self._run_program(
+                program,
+                question=raw_question,
+                video_path=video_path,
+                route=effective_route,
+                round_number=round_number,
+                skill_runtime=skill_runtime,
+                evidence_policy=skill_runtime.effective_policy if skill_runtime is not None else None,
+            )
             observation_ids = [str(observation_id) for observation_id in program_result.observation_ids]
             self._record_zero_yield_tool_calls(program=program, observation_ids=observation_ids)
             self._write_recovery_execution_traces(
@@ -3194,7 +3207,12 @@ class IterativeVisualAgent:
                     "answer": answer,
                 },
             )
-            result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(program)
+            result = self._run_program(
+                program,
+                question=question,
+                video_path=self.scene_index.video_path,
+                route=classify_question_route(question),
+            )
             observation_ids.extend(str(obs_id) for obs_id in result.observation_ids)
         after_ids = _supported_evidence_ids_for_answer(workspace=self.workspace, question=question, answer=answer)
         new_ids = [evidence_id for evidence_id in after_ids if evidence_id not in before_ids]
@@ -3931,6 +3949,61 @@ class IterativeVisualAgent:
     def _read_ledger(self) -> str:
         return self.workspace.compact_ledger_text()
 
+    def _runtime_context(
+        self,
+        *,
+        question: str = "",
+        video_path: str = "",
+        route: str = "",
+        round_number: int = 0,
+        skill_runtime: Any | None = None,
+        evidence_policy: Any | None = None,
+    ) -> RunContext:
+        return RunContext(
+            workspace=self.workspace,
+            scene_index=self.scene_index,
+            budget=self.budget,
+            run_state=RunState(
+                question=question,
+                video_path=video_path or self.scene_index.video_path,
+                question_route=route or classify_question_route(question),
+            ),
+            round_state=RoundState(round_number=round_number),
+            registry=self.registry,
+            skill_runtime=skill_runtime,
+            evidence_policy=evidence_policy,
+            seen_tool_semantic_keys=self._successful_tool_semantic_keys,
+            record_trace=self.workspace.write_trace_event,
+            record_observation=None,
+        )
+
+    def _run_program(
+        self,
+        program: Sequence[Mapping[str, Any]],
+        *,
+        ctx: RunContext | None = None,
+        question: str = "",
+        video_path: str = "",
+        route: str = "",
+        round_number: int = 0,
+        skill_runtime: Any | None = None,
+        evidence_policy: Any | None = None,
+        slots: Mapping[str, Any] | None = None,
+    ):
+        return self.runtime_host.run(
+            program,
+            ctx=ctx
+            or self._runtime_context(
+                question=question,
+                video_path=video_path,
+                route=route,
+                round_number=round_number,
+                skill_runtime=skill_runtime,
+                evidence_policy=evidence_policy,
+            ),
+            slots=slots,
+        )
+
     def _persist_planner_io(
         self,
         *,
@@ -4071,14 +4144,17 @@ class IterativeVisualAgent:
         else:
             coverage_args["targets"] = targets
         try:
-            result = ProgramInterpreter(self.registry, self.workspace).run(
+            result = self._run_program(
                 [
                     {
                         "tool": "target_coverage",
                         "args": coverage_args,
                         "assign": "auto_target_coverage",
                     }
-                ]
+                ],
+                question="",
+                video_path=self.scene_index.video_path,
+                route="",
             )
         except ToolError as exc:
             fallback_targets = [str(target).strip() for target in self._exploration_target_entities if str(target).strip()]
@@ -4094,14 +4170,17 @@ class IterativeVisualAgent:
                 },
             )
             coverage_args = {"targets": fallback_targets, "top_k": 3}
-            result = ProgramInterpreter(self.registry, self.workspace).run(
+            result = self._run_program(
                 [
                     {
                         "tool": "target_coverage",
                         "args": coverage_args,
                         "assign": "auto_target_coverage",
                     }
-                ]
+                ],
+                question="",
+                video_path=self.scene_index.video_path,
+                route="",
             )
         self.workspace.write_trace_event(
             "target_coverage_seeded",
@@ -4387,13 +4466,16 @@ class IterativeVisualAgent:
         self._auto_evidence_promotion_attempted_keys.add(key)
         before = self._supported_evidence_binding_count()
         try:
-            result = ProgramInterpreter(registry=self.registry, workspace=self.workspace).run(
+            result = self._run_program(
                 [
                     {
                         "tool": "bind_asr_claim",
                         "args": {"segment_id": segment_id, "target_refs": candidate_target_refs},
                     }
-                ]
+                ],
+                question=question,
+                video_path=self.scene_index.video_path,
+                route=classify_question_route(question),
             )
         except Exception as exc:
             self.workspace.write_trace_event(
@@ -4442,8 +4524,12 @@ class IterativeVisualAgent:
             "iterative_route",
             {"route": "gist_global", "tool": "global_gist", "passes_required": 1, "mode": "topic_hint_seed"},
         )
-        interpreter = ProgramInterpreter(registry=self.registry, workspace=self.workspace)
-        result = interpreter.run([first_step])
+        result = self._run_program(
+            [first_step],
+            question=question,
+            video_path=video_path,
+            route="gist_global",
+        )
         self.workspace.write_trace_event(
             "global_gist_topic_seeded",
             {"observation_ids": list(result.observation_ids), "source": "global_gist_route"},
@@ -4505,7 +4591,6 @@ class IterativeVisualAgent:
 
         rounds: list[IterativeRound] = []
         all_observation_ids: list[str] = []
-        interpreter = ProgramInterpreter(registry=self.registry, workspace=self.workspace)
         scheduler = FollowupScheduler(
             FollowupBudget(
                 global_max_followups=max(1, self.budget.max_rounds * self.budget.max_tool_calls_per_round)
@@ -4542,7 +4627,9 @@ class IterativeVisualAgent:
             round_observation_ids: list[str] = []
             for target in targets:
                 new_observation_ids = self._run_hard_skill_followup_target(
-                    interpreter=interpreter,
+                    question=question,
+                    route=route or _followup_route_for_skill(skill.name),
+                    round_number=round_number,
                     target=target,
                     video_path=video_path,
                     assign_suffix=len(all_observation_ids) + len(round_observation_ids) + 1,
@@ -4748,8 +4835,13 @@ class IterativeVisualAgent:
             }
             for index, segment in enumerate(segments, start=1)
         ]
-        interpreter = ProgramInterpreter(registry=self.registry, workspace=self.workspace)
-        caption_result = interpreter.run(caption_program)
+        runtime_context = self._runtime_context(
+            question=question,
+            video_path=video_path,
+            route="timeline_ordering",
+            round_number=1,
+        )
+        caption_result = self._run_program(caption_program, ctx=runtime_context)
         caption_rows = _caption_rows_for_program(
             workspace=self.workspace,
             program=caption_program,
@@ -4787,7 +4879,7 @@ class IterativeVisualAgent:
             }
             for index, match in enumerate(matched_reads, start=1)
         ]
-        vision_result = interpreter.run(vision_program) if vision_program else type(caption_result)([])
+        vision_result = self._run_program(vision_program, ctx=runtime_context) if vision_program else type(caption_result)([])
         program = [*caption_program, *vision_program]
         observation_ids = [
             *[str(observation_id) for observation_id in caption_result.observation_ids],
@@ -4882,7 +4974,9 @@ class IterativeVisualAgent:
     def _run_hard_skill_followup_target(
         self,
         *,
-        interpreter: ProgramInterpreter,
+        question: str,
+        route: str,
+        round_number: int,
         target: FollowupTarget,
         video_path: str,
         assign_suffix: int,
@@ -4896,7 +4990,13 @@ class IterativeVisualAgent:
                 "assign": f"ground_{assign_suffix}",
             }
         ]
-        ground_result = interpreter.run(ground_program)
+        ground_result = self._run_program(
+            ground_program,
+            question=question,
+            video_path=video_path,
+            route=route,
+            round_number=round_number,
+        )
         program.extend(ground_program)
         observation_ids.extend(str(observation_id) for observation_id in ground_result.observation_ids)
         if not ground_result.observation_ids:
@@ -4918,7 +5018,13 @@ class IterativeVisualAgent:
         if target.mutex_group_id and self._tool_accepts_argument("vision_read", "mutex_group_id"):
             vision_args["mutex_group_id"] = target.mutex_group_id
         vision_program = [{"tool": "vision_read", "args": vision_args, "assign": f"fact_{assign_suffix}"}]
-        vision_result = interpreter.run(vision_program)
+        vision_result = self._run_program(
+            vision_program,
+            question=question,
+            video_path=video_path,
+            route=route,
+            round_number=round_number,
+        )
         program.extend(vision_program)
         observation_ids.extend(str(observation_id) for observation_id in vision_result.observation_ids)
         return {"program": program, "observation_ids": observation_ids}
