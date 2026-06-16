@@ -236,6 +236,11 @@ def test_budget_exhaustion_requests_required_model_final_from_current_evidence()
             if request.task == "final_decision":
                 assert "The exploration budget is exhausted" in request.prompt
                 assert "The second option has direct support." in request.prompt
+                assert "Evidence table (compact JSON):" in request.prompt
+                assert '"supported_option":"B"' in request.prompt
+                assert "Projection status (diagnostic, not a framework final):" in request.prompt
+                assert '"candidate_option":"B"' in request.prompt
+                assert "AnswerAgent status (diagnostic, not a framework final):" in request.prompt
                 assert '{"status":"no_model_final","reason"' not in request.prompt
                 assert "must return a final answer" in request.prompt
                 assert 'Never return {"status":"continue"} or {"status":"no_model_final"} here.' in request.prompt
@@ -250,6 +255,10 @@ def test_budget_exhaustion_requests_required_model_final_from_current_evidence()
     scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
     with tempfile.TemporaryDirectory() as tmp:
         workspace = EvidenceWorkspace.create(Path(tmp), run_id="budget_required_final")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[TargetSpec("T2", "The second option has direct support.")],
+            options=[OptionSpec("B", target_sequence=("T2",), raw_option_text="B. second")],
+        )
         agent = IterativeVisualAgent(
             backend=BudgetFinalBackend(),
             registry=ToolRegistry(),
@@ -272,6 +281,17 @@ def test_budget_exhaustion_requests_required_model_final_from_current_evidence()
                 "claim": "The second option has direct support.",
                 "confidence": 0.9,
                 "grounding_quality": "visually_confirmed",
+                "answer_evidence_rows": [
+                    {
+                        "tool": "vision_read",
+                        "segment_id": segment_id,
+                        "claim": "The second option has direct support.",
+                        "confidence": 0.9,
+                        "grounding_quality": "visually_confirmed",
+                        "target_ref": "T2",
+                        "supported_option": "B",
+                    }
+                ],
             }
 
         agent.registry.register(vision_read)

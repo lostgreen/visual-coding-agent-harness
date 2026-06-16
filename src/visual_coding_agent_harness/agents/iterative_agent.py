@@ -422,6 +422,7 @@ class IterativeVisualAgent:
         planner_final_verifier_disagreed = False
         planner_final_auto_final_blocked = False
         last_projection_status: dict[str, Any] | None = None
+        last_answer_agent_status: dict[str, Any] | None = None
         last_diagnostic_repair_hint = ""
         prefinal_evidence_repair_done = False
         prefinal_evidence_repair_failed = False
@@ -1027,6 +1028,11 @@ class IterativeVisualAgent:
                         diagnostic_repair_hint=last_diagnostic_repair_hint,
                     ),
                 )
+                last_answer_agent_status = _answer_agent_status_payload(
+                    answer_result,
+                    source="reserved_final",
+                    round_number=round_number,
+                )
                 self.workspace.write_trace_event(
                     "iterative_answer_agent",
                     {
@@ -1199,6 +1205,16 @@ class IterativeVisualAgent:
             else:
                 no_evidence_growth_rounds = 0
             last_evidence_table_row_count = current_evidence_table_row_count
+            current_projection_status = self._current_projection_status(raw_question)
+            if current_projection_status != last_projection_status:
+                last_projection_status = current_projection_status
+                self.workspace.write_trace_event(
+                    "operator_projection_status",
+                    {
+                        "round": round_number,
+                        **(current_projection_status or {"status": "unsupported", "reason": "no_projection"}),
+                    },
+                )
             current_supported_binding_count = self._supported_evidence_binding_count()
             if current_supported_binding_count <= last_supported_binding_count:
                 supported_binding_no_growth_rounds += 1
@@ -1265,6 +1281,11 @@ class IterativeVisualAgent:
                         diagnostic_repair_hint=last_diagnostic_repair_hint,
                     ),
                 )
+                last_answer_agent_status = _answer_agent_status_payload(
+                    answer_result,
+                    source="evidence_table_no_growth",
+                    round_number=round_number,
+                )
                 self.workspace.write_trace_event(
                     "iterative_no_progress_guard",
                     {
@@ -1321,6 +1342,11 @@ class IterativeVisualAgent:
                         projection_status=last_projection_status,
                         diagnostic_repair_hint=last_diagnostic_repair_hint,
                     ),
+                )
+                last_answer_agent_status = _answer_agent_status_payload(
+                    answer_result,
+                    source="prefinal_probe",
+                    round_number=round_number,
                 )
                 self.workspace.write_trace_event(
                     "iterative_answer_agent",
@@ -1393,6 +1419,8 @@ class IterativeVisualAgent:
         budget_decision = self._request_budget_exhausted_model_final(
             question=raw_question,
             round_number=self.budget.max_rounds,
+            projection_status=last_projection_status or self._current_projection_status(raw_question),
+            answer_agent_status=last_answer_agent_status,
         )
         if budget_decision.is_final:
             final_citations = [str(item) for item in budget_decision.citations]
@@ -1485,6 +1513,8 @@ class IterativeVisualAgent:
         *,
         question: str,
         round_number: int,
+        projection_status: Mapping[str, Any] | None = None,
+        answer_agent_status: Mapping[str, Any] | None = None,
     ) -> ModelFinalDecision:
         try:
             response = self.backend.generate(
@@ -1493,6 +1523,9 @@ class IterativeVisualAgent:
                     prompt=_budget_final_decision_prompt(
                         question=question,
                         evidence_text=self._read_ledger(),
+                        evidence_table=self._answer_evidence_table(question),
+                        projection_status=projection_status,
+                        answer_agent_status=answer_agent_status,
                     ),
                     max_new_tokens=1024,
                     metadata={"round": round_number, "source": "budget_exhausted"},
@@ -4078,6 +4111,20 @@ class IterativeVisualAgent:
             options=extract_candidate_options(question),
         )
 
+    def _current_projection_status(self, question: str) -> dict[str, Any] | None:
+        options = extract_candidate_options(question)
+        if not options:
+            return None
+        runtime = getattr(self.workspace, "grounding_runtime", None)
+        result = _projected_option_from_evidence_table(
+            question=question,
+            options=options,
+            table=self._answer_evidence_table(question),
+            target_registry=getattr(self.workspace, "target_registry", None),
+            answer_operator=str(getattr(runtime, "answer_operator", "") or ""),
+        )
+        return _projection_status_payload(result)
+
     def _write_final_trace(
         self,
         *,
@@ -6384,6 +6431,19 @@ def _projected_option_from_evidence_table(
     return project_option_support(task, evidence)
 
 
+def _projection_status_payload(result: ProjectionResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "status": result.status,
+        "candidate_option": result.option_label or "",
+        "reason": result.reason,
+        "strategy": result.strategy,
+        "score": float(result.score),
+        "supporting_evidence_ids": list(result.supporting_evidence_ids),
+        "candidate_option_labels": list(result.candidate_option_labels),
+    }
+    return {key: value for key, value in payload.items() if value not in ("", [], None)}
+
+
 def _projection_task_spec(
     *,
     question: str,
@@ -6707,10 +6767,24 @@ def _planner_final_answer_with_option(*, question: str, answer: str) -> str:
     return str(answer)
 
 
-def _budget_final_decision_prompt(*, question: str, evidence_text: str) -> str:
+def _budget_final_decision_prompt(
+    *,
+    question: str,
+    evidence_text: str,
+    evidence_table: Mapping[str, Any] | None = None,
+    projection_status: Mapping[str, Any] | None = None,
+    answer_agent_status: Mapping[str, Any] | None = None,
+) -> str:
+    compact_table = _compact_budget_final_evidence_table(evidence_table or {})
+    compact_projection = _compact_prompt_json(projection_status or {"status": "unsupported", "reason": "not_available"})
+    compact_answer_status = _compact_prompt_json(answer_agent_status or {"status": "not_run"})
     return (
         "The exploration budget is exhausted. You own the final decision.\n"
         "Use only the evidence below. Do not call tools and do not return a program.\n"
+        "Treat the evidence table, projection status, and AnswerAgent status as diagnostic constraints, "
+        "not as a framework-owned answer.\n"
+        "If diagnostics say evidence is insufficient or ambiguous, do not upgrade weak or unmapped evidence into "
+        "strong support; make the best evidence-based final with evidence_sufficiency=partial and explain the gap.\n"
         "You must return a final answer for this case. If evidence is partial, choose the best evidence-based "
         "answer and set evidence_sufficiency to partial with low confidence.\n"
         "Return only JSON using this schema:\n"
@@ -6718,8 +6792,63 @@ def _budget_final_decision_prompt(*, question: str, evidence_text: str) -> str:
         '"evidence_sufficiency":"sufficient|partial","rationale":"brief evidence-only reason"}\n'
         'Never return {"status":"continue"} or {"status":"no_model_final"} here.\n'
         f"Question:\n{question}\n\n"
-        f"Evidence:\n{evidence_text}\n"
+        f"Evidence ledger:\n{evidence_text}\n\n"
+        f"Evidence table (compact JSON):\n{compact_table}\n\n"
+        f"Projection status (diagnostic, not a framework final):\n{compact_projection}\n\n"
+        f"AnswerAgent status (diagnostic, not a framework final):\n{compact_answer_status}\n"
     )
+
+
+def _compact_budget_final_evidence_table(table: Mapping[str, Any], *, max_rows: int = 16) -> str:
+    rows = table.get("rows", [])
+    compact_rows: list[dict[str, Any]] = []
+    if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            binding = row.get("evidence_binding")
+            if not isinstance(binding, Mapping):
+                binding = {}
+            compact_rows.append(
+                {
+                    "evidence_id": str(row.get("evidence_id") or ""),
+                    "obs_id": str(row.get("obs_id") or ""),
+                    "tool": str(row.get("tool") or ""),
+                    "supported_option": str(row.get("supported_option") or ""),
+                    "target_ref": str(
+                        binding.get("target_ref")
+                        or binding.get("target_id")
+                        or row.get("target_ref")
+                        or row.get("target_id")
+                        or row.get("event_label")
+                        or row.get("entity")
+                        or ""
+                    ),
+                    "grounding_quality": str(row.get("grounding_quality") or ""),
+                    "support_status": str(binding.get("status") or binding.get("support_status") or row.get("support_status") or ""),
+                    "segment_id": str(row.get("segment_id") or row.get("source_segment_id") or ""),
+                    "claim": _compact_prompt_text(str(row.get("claim") or ""), limit=220),
+                }
+            )
+            if len(compact_rows) >= max_rows:
+                break
+    payload = {
+        "schema_version": str(table.get("schema_version") or ""),
+        "row_count": len(rows) if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)) else 0,
+        "rows": compact_rows,
+    }
+    return _compact_prompt_json(payload)
+
+
+def _compact_prompt_json(value: Mapping[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _compact_prompt_text(text: str, *, limit: int) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _format_repair_final_decision_prompt(*, question: str, raw_text: str, locked_answer: str) -> str:
@@ -6832,6 +6961,24 @@ def _answer_agent_trace_fields(answer_result: AnswerAgentResult) -> dict[str, st
         "projection_reason": str(getattr(answer_result, "projection_reason", "") or ""),
         "final_gate_rejection_reason": str(getattr(answer_result, "final_gate_rejection_reason", "") or ""),
         "diagnostic_repair_hint": str(getattr(answer_result, "diagnostic_repair_hint", "") or ""),
+    }
+
+
+def _answer_agent_status_payload(
+    answer_result: AnswerAgentResult,
+    *,
+    source: str,
+    round_number: int,
+) -> dict[str, Any]:
+    return {
+        "round": int(round_number),
+        "source": str(source),
+        "status": answer_result.status,
+        "answer": answer_result.answer,
+        "citations": list(answer_result.citations),
+        "missing_evidence": list(answer_result.missing_evidence),
+        "confidence": float(answer_result.confidence),
+        **_answer_agent_trace_fields(answer_result),
     }
 
 
