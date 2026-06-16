@@ -48,7 +48,14 @@ from .skills.predicates import (
     selected_option_has_structured_support,
     temporal_order_consistent,
 )
-from .skills.specs import PrefinalRepairKind, SkillSpec, builtin_skill_registry, select_skill
+from .skills.specs import (
+    ExplorationProfile,
+    PrefinalRepairKind,
+    SchedulerKind,
+    SkillSpec,
+    builtin_skill_registry,
+    select_skill,
+)
 from .skill_runtime import (
     _initial_skill_runtime_state as _build_initial_skill_runtime_state,
     _planner_selected_skill as _select_planner_skill,
@@ -93,10 +100,25 @@ _ANSWER_AGENT_AUTO_FINAL_SOURCES = frozenset(
 )
 
 
-def _prefinal_repair_kind(skill: SkillSpec | None) -> PrefinalRepairKind:
+def _skill_behavior_value(skill: Any | None, field_name: str, default: Any) -> Any:
     if skill is None:
-        return PrefinalRepairKind.NONE
-    return skill.behaviors.prefinal_repair
+        return default
+    behaviors = getattr(skill, "behaviors", None)
+    if behaviors is None:
+        return default
+    return getattr(behaviors, field_name, default)
+
+
+def _prefinal_repair_kind(skill: Any | None) -> PrefinalRepairKind:
+    return _skill_behavior_value(skill, "prefinal_repair", PrefinalRepairKind.NONE)
+
+
+def _exploration_profile(skill: Any | None) -> ExplorationProfile:
+    return _skill_behavior_value(skill, "exploration_profile", ExplorationProfile.DEFAULT)
+
+
+def _scheduler_kind(skill: Any | None) -> SchedulerKind:
+    return _skill_behavior_value(skill, "scheduler", SchedulerKind.NONE)
 
 
 @dataclass(frozen=True)
@@ -3842,11 +3864,12 @@ class IterativeVisualAgent:
 
     def _fallback_visual_tool_name_for_skill(self, planner_skill: SkillSpec | None) -> str | None:
         if planner_skill is not None:
-            if planner_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}:
+            profile = _exploration_profile(planner_skill)
+            if profile is ExplorationProfile.TIMELINE_FAMILY:
                 preferences = ["caption_segment", "vision_read", "qa_segment", "inspect_segment"]
-            elif planner_skill.name in {"mutex_fact_qa", "grounded_factual_qa"}:
+            elif profile is ExplorationProfile.GROUNDED_FACTUAL:
                 preferences = ["vision_read", "qa_segment", "caption_segment", "inspect_segment"]
-            elif planner_skill.name == "main_idea":
+            elif profile is ExplorationProfile.MAIN_IDEA:
                 preferences = ["vision_read", "caption_segment", "qa_segment", "inspect_segment"]
             else:
                 preferences = ["vision_read", "inspect_segment", "caption_segment", "qa_segment"]
@@ -5328,7 +5351,7 @@ def _local_fact_question(
         if extract_candidate_options(question)
         else "Report facts only."
     )
-    if planner_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}:
+    if _exploration_profile(planner_skill) is ExplorationProfile.TIMELINE_FAMILY:
         return _append_target_attention_block(
             "Openly describe this segment's actual visible artworks, objects, people, scene changes, onscreen text, "
             "and narrated events in presentation order. Include timestamps if possible. "
@@ -5336,14 +5359,14 @@ def _local_fact_question(
             target_entities=target_entities,
             timeline=True,
         )
-    if planner_skill.name == "mutex_fact_qa":
+    if _scheduler_kind(planner_skill) is SchedulerKind.FOLLOWUP_QUEUE:
         return (
             "Describe only relevant visible or narrated facts, including entities, attributes, background, "
             "class/status, life-stage changes, locations, and temporal order when visible or narrated. "
             f"{fact_only_instruction} Question: "
             + semantic
         )
-    if planner_skill.name == "main_idea":
+    if _exploration_profile(planner_skill) is ExplorationProfile.MAIN_IDEA:
         return (
             "Describe localized main-idea evidence in this segment. Focus on entities, events, and narrative stage. "
             f"{fact_only_instruction} Question: "

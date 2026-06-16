@@ -10,6 +10,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _blocked_planner_final_reason,
     _exhausted_one_shot_tools,
     _latest_asr_binding_candidates,
+    _local_fact_question,
     _planner_final_answer_with_option,
     _program_signature,
     _projection_evidence_from_table,
@@ -18,7 +19,12 @@ from visual_coding_agent_harness.agents.iterative_agent import (
 )
 from visual_coding_agent_harness.agents.answer_agent import AnswerAgentResult
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
-from visual_coding_agent_harness.agents.skills.specs import PrefinalRepairKind, SkillBehaviors
+from visual_coding_agent_harness.agents.skills.specs import (
+    ExplorationProfile,
+    PrefinalRepairKind,
+    SchedulerKind,
+    SkillBehaviors,
+)
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import ClaimRelation, ClaimModality, OptionSpec, TargetRegistry, TargetSpec
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
@@ -808,6 +814,110 @@ def test_planner_final_keeps_partial_temporal_free_text_unchanged():
     answer = "The clip mentions red and blue."
 
     assert _planner_final_answer_with_option(question=question, answer=answer) == answer
+
+
+def test_local_fact_question_uses_behavior_profiles_with_custom_skill_names():
+    timeline_skill = type(
+        "Skill",
+        (),
+        {
+            "name": "custom_timeline",
+            "behaviors": SkillBehaviors(exploration_profile=ExplorationProfile.TIMELINE_FAMILY),
+        },
+    )()
+    timeline_prompt = _local_fact_question(
+        question="Which artwork came first?",
+        planner_skill=timeline_skill,
+        target_entities=("Apollo and Daphne",),
+    )
+
+    assert "presentation order" in timeline_prompt
+    assert "Apollo and Daphne" in timeline_prompt
+
+    mutex_skill = type(
+        "Skill",
+        (),
+        {
+            "name": "custom_mutex",
+            "behaviors": SkillBehaviors(scheduler=SchedulerKind.FOLLOWUP_QUEUE),
+        },
+    )()
+    mutex_prompt = _local_fact_question(
+        question="A. farmer\nB. noble",
+        planner_skill=mutex_skill,
+    )
+
+    assert "class/status" in mutex_prompt
+    assert "Do not choose an option." in mutex_prompt
+
+    main_idea_skill = type(
+        "Skill",
+        (),
+        {
+            "name": "custom_main_idea",
+            "behaviors": SkillBehaviors(exploration_profile=ExplorationProfile.MAIN_IDEA),
+        },
+    )()
+    main_idea_prompt = _local_fact_question(
+        question="What is this video mainly about?",
+        planner_skill=main_idea_skill,
+    )
+
+    assert "localized main-idea evidence" in main_idea_prompt
+
+
+def test_fallback_visual_tool_preferences_use_exploration_profiles_with_custom_skill_names():
+    registry = build_segment_test_registry()
+
+    @tool(name="vision_read", description="Read focused visual evidence.")
+    def vision_read(
+        video_path: str,
+        segment_id: str,
+        start_sec: float,
+        end_sec: float,
+        ask_for: str,
+        event_label: str = "",
+        nframes: int = 8,
+    ):
+        return {
+            "claim": f"{segment_id} answers {ask_for}",
+            "confidence": 0.8,
+            "input_artifacts": [video_path],
+            "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec, "nframes": nframes}],
+        }
+
+    registry.register(vision_read)
+
+    allowed_actions = frozenset({"caption_segment", "vision_read", "qa_segment", "inspect_segment"})
+
+    def custom_skill(name: str, profile: ExplorationProfile):
+        return type(
+            "Skill",
+            (),
+            {
+                "name": name,
+                "allowed_actions": allowed_actions,
+                "behaviors": SkillBehaviors(exploration_profile=profile),
+            },
+        )()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        agent = IterativeVisualAgent(
+            backend=StaticTaskBackend({}),
+            registry=registry,
+            workspace=EvidenceWorkspace.create(Path(tmp), run_id="profile_fallback"),
+            scene_index=fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0),
+        )
+
+        assert agent._fallback_visual_tool_name_for_skill(
+            custom_skill("custom_timeline", ExplorationProfile.TIMELINE_FAMILY)
+        ) == "caption_segment"
+        assert agent._fallback_visual_tool_name_for_skill(
+            custom_skill("custom_grounded", ExplorationProfile.GROUNDED_FACTUAL)
+        ) == "vision_read"
+        assert agent._fallback_visual_tool_name_for_skill(
+            custom_skill("custom_main_idea", ExplorationProfile.MAIN_IDEA)
+        ) == "vision_read"
 
 
 def test_option_b_requires_complete_relation_chain():
