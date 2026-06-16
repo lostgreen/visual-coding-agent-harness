@@ -20,9 +20,12 @@ from visual_coding_agent_harness.agents.iterative_agent import (
 from visual_coding_agent_harness.agents.answer_agent import AnswerAgentResult
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
 from visual_coding_agent_harness.agents.skills.specs import (
+    EvidenceFollowupKind,
     ExplorationProfile,
+    FinalGateProfile,
     OptionEvaluationKind,
     PrefinalRepairKind,
+    RouteRepairPolicyKind,
     SchedulerKind,
     SkillBehaviors,
 )
@@ -958,6 +961,192 @@ def test_hard_skill_route_admits_custom_option_evaluation_behavior(monkeypatch):
 
     assert result is None
     assert checked_tools == ["ground_question"]
+
+
+def test_skill_route_repair_uses_behavior_profiles_with_custom_skill_names(monkeypatch):
+    registry = ToolRegistry()
+
+    @tool(name="global_gist", description="Read sparse whole-video gist.")
+    def global_gist(video_path: str, question: str, duration_sec: float, seed: int = 0):
+        return {"claim": "gist", "confidence": 0.8}
+
+    @tool(name="vision_read", description="Read focused visual evidence.")
+    def vision_read(segment_id: str = "", ask_for: str = "", **kwargs):
+        return {"claim": f"vision {segment_id} {ask_for}", "confidence": 0.8}
+
+    @tool(name="locate_targets_in_segment", description="Locate target entities.")
+    def locate_targets_in_segment(segment_id: str = "", targets: list | None = None, **kwargs):
+        return {"claim": f"located {segment_id}", "confidence": 0.6}
+
+    @tool(name="read_segment_detail", description="Read transcript detail.")
+    def read_segment_detail(segment_id: str = "", **kwargs):
+        return {"claim": f"detail {segment_id}", "confidence": 0.7}
+
+    @tool(name="verify_segment_anchors", description="Verify located anchors.")
+    def verify_segment_anchors(segment_id: str, anchors: list, targets: list | None = None, **kwargs):
+        return {"claim": f"verified {segment_id}: {targets}", "confidence": 0.8}
+
+    registry.register(global_gist)
+    registry.register(vision_read)
+    registry.register(locate_targets_in_segment)
+    registry.register(read_segment_detail)
+    registry.register(verify_segment_anchors)
+
+    def custom_skill(name: str, behaviors: SkillBehaviors):
+        return type("Skill", (), {"name": name, "behaviors": behaviors})()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="custom_route_repair")
+        workspace.write_observation(
+            tool_name="locate_targets_in_segment",
+            claim="ordered-list candidate found",
+            confidence=1.0,
+            raw_output={
+                "segment_id": "seg_0001",
+                "recommended_next_actions": [
+                    {
+                        "candidate_id": "ordered_list_custom_1",
+                        "route_kind": "focused_ordered_list_vision",
+                        "tool": "vision_read",
+                        "args": {
+                            "segment_id": "seg_0001",
+                            "ask_for": "Describe the visible artworks in timestamp order.",
+                        },
+                    }
+                ],
+            },
+        )
+        agent = IterativeVisualAgent(
+            backend=StaticTaskBackend({}),
+            registry=registry,
+            workspace=workspace,
+            scene_index=fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0),
+        )
+
+        gist_repair = agent._repair_skill_route_tool(
+            tool_name="vision_read",
+            args={"segment_id": "seg_0001"},
+            active_skill=custom_skill(
+                "custom_gist_repair",
+                SkillBehaviors(route_repair=RouteRepairPolicyKind.GIST_FAMILY),
+            ),
+            question="What is the main idea?",
+            video_path="/videos/demo.mp4",
+        )
+        assert gist_repair is not None
+        assert gist_repair[0] == "global_gist"
+        assert gist_repair[2] == "repair_main_idea_vision_read_to_global_gist"
+
+        workspace.write_observation(
+            tool_name="global_gist",
+            claim="seeded whole-video gist",
+            confidence=0.8,
+            raw_output={},
+        )
+        repeated_gist_repair = agent._repair_skill_route_tool(
+            tool_name="global_gist",
+            args={},
+            active_skill=custom_skill(
+                "custom_gist_repair",
+                SkillBehaviors(route_repair=RouteRepairPolicyKind.GIST_FAMILY),
+            ),
+            question="What is the main idea?",
+            video_path="/videos/demo.mp4",
+        )
+        assert repeated_gist_repair is not None
+        assert repeated_gist_repair[0] == "vision_read"
+        assert repeated_gist_repair[2] == "repair_repeated_main_idea_global_gist_to_vision_read"
+
+        focused_vision_repair = agent._repair_skill_route_tool(
+            tool_name="locate_targets_in_segment",
+            args={"segment_id": "seg_0001"},
+            active_skill=custom_skill(
+                "custom_visual_timeline",
+                SkillBehaviors(
+                    exploration_profile=ExplorationProfile.TIMELINE_FAMILY,
+                    final_gate=FinalGateProfile.TIMELINE_FAMILY_HINTS,
+                ),
+            ),
+            question="Which artwork appears first?",
+            video_path="/videos/demo.mp4",
+        )
+        assert focused_vision_repair is not None
+        assert focused_vision_repair[0] == "vision_read"
+        assert focused_vision_repair[2] == "repair_ordered_list_locator_to_focused_ordered_list_vision"
+
+        workspace.write_observation(
+            tool_name="locate_targets_in_segment",
+            claim="locator produced anchors for verification",
+            confidence=1.0,
+            raw_output={
+                "segment_id": "seg_0001",
+                "verify_call_args": {
+                    "segment_id": "seg_0001",
+                    "anchors": [{"anchor_id": "a1", "segment_id": "seg_0001"}],
+                    "targets": ["Apollo and Daphne"],
+                },
+            },
+        )
+        verify_repair = agent._repair_skill_route_tool(
+            tool_name="locate_targets_in_segment",
+            args={"segment_id": "seg_0001"},
+            active_skill=custom_skill(
+                "custom_plain_timeline",
+                SkillBehaviors(exploration_profile=ExplorationProfile.TIMELINE_FAMILY),
+            ),
+            question="Which artwork appears first?",
+            video_path="/videos/demo.mp4",
+        )
+        assert verify_repair is not None
+        assert verify_repair[0] == "verify_segment_anchors"
+        assert verify_repair[2] == "repair_repeated_locator_to_verify_segment_anchors"
+
+        monkeypatch.setattr(
+            agent,
+            "_narration_transcript_promotion_args",
+            lambda *, segment_id, original_args: {
+                "segment_id": segment_id,
+                "target_refs": list(original_args.get("target_refs") or []),
+                "promote_answer_evidence": True,
+            },
+        )
+        narration_repair = agent._repair_skill_route_tool(
+            tool_name="locate_targets_in_segment",
+            args={"segment_id": "seg_0001", "target_refs": ["T1"]},
+            active_skill=custom_skill(
+                "custom_narration_timeline",
+                SkillBehaviors(
+                    exploration_profile=ExplorationProfile.TIMELINE_FAMILY,
+                    evidence_followup=EvidenceFollowupKind.SEGMENT_DETAIL_AND_ASR,
+                ),
+            ),
+            question="How was his life journey according to the video?",
+            video_path="/videos/demo.mp4",
+        )
+        assert narration_repair is not None
+        assert narration_repair[0] == "read_segment_detail"
+        assert narration_repair[2] == "repair_narration_locator_to_transcript_promotion"
+
+        mutex_repair = agent._repair_skill_route_tool(
+            tool_name="inspect_segment",
+            args={"segment_id": "seg_0001", "question": "A or B?", "candidate_options": ["A", "B"]},
+            active_skill=custom_skill(
+                "custom_mutex",
+                SkillBehaviors(
+                    exploration_profile=ExplorationProfile.GROUNDED_FACTUAL,
+                    option_evaluation=OptionEvaluationKind.MUTEX_OR_GROUNDED,
+                    scheduler=SchedulerKind.FOLLOWUP_QUEUE,
+                ),
+            ),
+            question="A or B?",
+            video_path="/videos/demo.mp4",
+        )
+        assert mutex_repair is not None
+        assert mutex_repair[0] == "vision_read"
+        assert mutex_repair[1]["ask_for"] == "A or B?"
+        assert "candidate_options" not in mutex_repair[1]
+        assert "question" not in mutex_repair[1]
+        assert mutex_repair[2] == "repair_mutex_inspect_segment_to_vision_read"
 
 
 def test_option_b_requires_complete_relation_chain():

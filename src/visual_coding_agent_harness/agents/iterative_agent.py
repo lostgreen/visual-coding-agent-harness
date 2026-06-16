@@ -49,9 +49,12 @@ from .skills.predicates import (
     temporal_order_consistent,
 )
 from .skills.specs import (
+    EvidenceFollowupKind,
     ExplorationProfile,
+    FinalGateProfile,
     OptionEvaluationKind,
     PrefinalRepairKind,
+    RouteRepairPolicyKind,
     SchedulerKind,
     SkillSpec,
     builtin_skill_registry,
@@ -124,6 +127,18 @@ def _scheduler_kind(skill: Any | None) -> SchedulerKind:
 
 def _option_evaluation_kind(skill: Any | None) -> OptionEvaluationKind:
     return _skill_behavior_value(skill, "option_evaluation", OptionEvaluationKind.NONE)
+
+
+def _route_repair_policy(skill: Any | None) -> RouteRepairPolicyKind:
+    return _skill_behavior_value(skill, "route_repair", RouteRepairPolicyKind.DEFAULT)
+
+
+def _evidence_followup_kind(skill: Any | None) -> EvidenceFollowupKind:
+    return _skill_behavior_value(skill, "evidence_followup", EvidenceFollowupKind.NONE)
+
+
+def _final_gate_profile(skill: Any | None) -> FinalGateProfile:
+    return _skill_behavior_value(skill, "final_gate", FinalGateProfile.DEFAULT)
 
 
 @dataclass(frozen=True)
@@ -3339,7 +3354,10 @@ class IterativeVisualAgent:
         question: str,
         video_path: str,
     ) -> tuple[str, dict[str, Any], str] | None:
-        is_main_idea_route = active_skill is not None and active_skill.name == "main_idea"
+        active_profile = _exploration_profile(active_skill)
+        is_timeline_family = active_profile is ExplorationProfile.TIMELINE_FAMILY
+        is_grounded_family = active_profile is ExplorationProfile.GROUNDED_FACTUAL
+        is_main_idea_route = _route_repair_policy(active_skill) is RouteRepairPolicyKind.GIST_FAMILY
         if is_main_idea_route and _tool_is(tool_name, "vision_read") and self._has_tool("global_gist"):
             if self.workspace.observation_count(tool_name="global_gist") >= 1:
                 return None
@@ -3374,10 +3392,13 @@ class IterativeVisualAgent:
             )
         if (
             active_skill is not None
-            and active_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}
+            and is_timeline_family
             and _tool_is(tool_name, "locate_targets_in_segment")
         ):
-            if active_skill.name in {"timeline_ordering", "visual_timeline_qa"} and self._has_tool("vision_read"):
+            if (
+                _final_gate_profile(active_skill) is FinalGateProfile.TIMELINE_FAMILY_HINTS
+                and self._has_tool("vision_read")
+            ):
                 recommended_action = self._latest_locator_recommended_action(
                     segment_id=str(args.get("segment_id") or ""),
                     route_kind="focused_ordered_list_vision",
@@ -3401,7 +3422,10 @@ class IterativeVisualAgent:
                         recovery_args,
                         "repair_ordered_list_locator_to_focused_ordered_list_vision",
                     )
-            if active_skill.name == "narration_timeline_qa" and self._has_tool("read_segment_detail"):
+            if (
+                _evidence_followup_kind(active_skill) is EvidenceFollowupKind.SEGMENT_DETAIL_AND_ASR
+                and self._has_tool("read_segment_detail")
+            ):
                 promotion_args = self._narration_transcript_promotion_args(
                     segment_id=str(args.get("segment_id") or ""),
                     original_args=args,
@@ -3442,8 +3466,7 @@ class IterativeVisualAgent:
                 )
         if (
             active_skill is not None
-            and active_skill.name
-            in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa", "grounded_factual_qa", "mutex_fact_qa"}
+            and (is_timeline_family or is_grounded_family)
             and tool_name in {"zoom", "expand_window"}
             and self._has_tool("locate_targets_in_segment")
         ):
@@ -3454,8 +3477,7 @@ class IterativeVisualAgent:
             return "locate_targets_in_segment", repaired_args, f"repair_{tool_name}_to_locate_targets_in_segment"
         if (
             active_skill is not None
-            and active_skill.name
-            in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa", "grounded_factual_qa", "mutex_fact_qa"}
+            and (is_timeline_family or is_grounded_family)
             and _tool_is(tool_name, "read_segment")
             and self._has_tool("read_segment_detail")
         ):
@@ -3469,7 +3491,7 @@ class IterativeVisualAgent:
             return "read_segment_detail", repaired_args, "repair_read_segment_to_read_segment_detail"
         if (
             active_skill is not None
-            and active_skill.name == "mutex_fact_qa"
+            and _scheduler_kind(active_skill) is SchedulerKind.FOLLOWUP_QUEUE
             and _tool_is(tool_name, "inspect_segment")
             and self._has_tool("vision_read")
         ):
@@ -3482,7 +3504,7 @@ class IterativeVisualAgent:
             return "vision_read", repaired_args, "repair_mutex_inspect_segment_to_vision_read"
         if (
             active_skill is not None
-            and active_skill.name in {"timeline_ordering", "narration_timeline_qa", "visual_timeline_qa"}
+            and is_timeline_family
             and (
                 _tool_is(tool_name, "caption_segments")
                 or (_tool_is(tool_name, "caption_segment") and args.get("segment_ids") and not args.get("segment_id"))
