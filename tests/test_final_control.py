@@ -8,6 +8,7 @@ from visual_coding_agent_harness.agents.final_control import (
 def test_framework_owner_is_historical_only_symbol() -> None:
     assert FinalDecisionOwner.FRAMEWORK.value == "framework"
     assert FinalDecisionOwner.MODEL.value == "model"
+    assert FinalDecisionOwner.FORMAT_REPAIR.value == "format_repair"
 
 
 def test_model_final_parser_accepts_explicit_option_json() -> None:
@@ -52,3 +53,4 @@ def test_format_repair_requires_locked_answer_to_match() -> None:
     assert not changed.is_final
     assert changed.reason == "format_repair_answer_changed"
     assert same.is_final
+    assert same.owner is FinalDecisionOwner.FORMAT_REPAIR

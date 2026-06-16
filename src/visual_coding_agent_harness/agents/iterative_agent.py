@@ -736,6 +736,7 @@ class IterativeVisualAgent:
                     source=final_source,
                     owner=FinalDecisionOwner.MODEL,
                     diagnostics=diagnostics,
+                    evidence_sufficiency=model_decision.evidence_sufficiency,
                 )
                 return IterativeRunResult(
                     question=raw_question,
@@ -776,15 +777,14 @@ class IterativeVisualAgent:
                             observation_ids=[],
                         )
                     )
-                    partial_answer = _partial_answer_from_ledger(self._read_ledger())
                     return IterativeRunResult(
                         question=raw_question,
                         video_path=video_path,
-                        answer=partial_answer
-                        or "Stopped because the same route repair was requested three times without new supported evidence.",
+                        answer="",
                         status="route_repair_exhausted",
                         citations=citations,
                         rounds=rounds,
+                        final_decision_owner=FinalDecisionOwner.NONE.value,
                     )
                 invalid_failure_signature = _normalization_failure_signature(
                     planned_program=planned_program,
@@ -819,15 +819,14 @@ class IterativeVisualAgent:
                                 observation_ids=[],
                             )
                         )
-                        partial_answer = _partial_answer_from_ledger(self._read_ledger())
                         return IterativeRunResult(
                             question=raw_question,
                             video_path=video_path,
-                            answer=partial_answer
-                            or "Stopped because the same invalid tool protocol repeated three times.",
+                            answer="",
                             status="protocol_repair_exhausted",
                             citations=citations,
                             rounds=rounds,
+                            final_decision_owner=FinalDecisionOwner.NONE.value,
                         )
                     if repeat_count == 2:
                         self.workspace.write_trace_event(
@@ -1430,8 +1429,9 @@ class IterativeVisualAgent:
                 citations=final_citations,
                 evidence_ids=final_evidence_ids,
                 source="budget_exhausted_model_final",
-                owner=FinalDecisionOwner.MODEL,
+                owner=budget_decision.owner,
                 diagnostics=diagnostics,
+                evidence_sufficiency=budget_decision.evidence_sufficiency,
             )
             return IterativeRunResult(
                 question=raw_question,
@@ -1442,7 +1442,7 @@ class IterativeVisualAgent:
                 evidence_ids=final_evidence_ids,
                 confidence=budget_decision.confidence,
                 rounds=final_rounds,
-                final_decision_owner=FinalDecisionOwner.MODEL.value,
+                final_decision_owner=budget_decision.owner.value,
             )
         self.workspace.write_trace_event(
             "budget_final_model_declined_or_invalid",
@@ -1456,7 +1456,7 @@ class IterativeVisualAgent:
         return IterativeRunResult(
             question=raw_question,
             video_path=video_path,
-            answer="no_model_final",
+            answer="",
             status="no_model_final",
             citations=citations,
             rounds=rounds,
@@ -1537,7 +1537,7 @@ class IterativeVisualAgent:
         return IterativeRunResult(
             question=question,
             video_path=video_path,
-            answer="no_model_final",
+            answer="",
             status="no_model_final",
             citations=(),
             evidence_ids=(),
@@ -4051,6 +4051,7 @@ class IterativeVisualAgent:
         planner_answer: str = "",
         resolved_answer: str = "",
         conflict: bool | None = None,
+        evidence_sufficiency: str = "",
     ) -> None:
         payload: dict[str, Any] = {
             "round": round_number,
@@ -4058,6 +4059,8 @@ class IterativeVisualAgent:
             "citations": list(citations),
             "final_decision_owner": str(owner.value if isinstance(owner, FinalDecisionOwner) else owner),
         }
+        if evidence_sufficiency:
+            payload["evidence_sufficiency"] = str(evidence_sufficiency)
         if evidence_ids:
             payload["evidence_ids"] = list(evidence_ids)
         if source:
@@ -6667,11 +6670,12 @@ def _budget_final_decision_prompt(*, question: str, evidence_text: str) -> str:
     return (
         "The exploration budget is exhausted. You own the final decision.\n"
         "Use only the evidence below. Do not call tools and do not return a program.\n"
-        "Return only JSON using one of these schemas:\n"
+        "You must return a final answer for this case. If evidence is partial, choose the best evidence-based "
+        "answer and set evidence_sufficiency to partial with low confidence.\n"
+        "Return only JSON using this schema:\n"
         '{"status":"final","answer":"A","citations":["obs_0001"],"evidence_ids":[],"confidence":0.0,'
         '"evidence_sufficiency":"sufficient|partial","rationale":"brief evidence-only reason"}\n'
-        '{"status":"no_model_final","reason":"insufficient_evidence"}\n'
-        'Never return {"status":"continue"} here.\n'
+        'Never return {"status":"continue"} or {"status":"no_model_final"} here.\n'
         f"Question:\n{question}\n\n"
         f"Evidence:\n{evidence_text}\n"
     )

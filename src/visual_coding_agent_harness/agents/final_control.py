@@ -16,6 +16,7 @@ from typing import Any, Mapping, Sequence
 
 class FinalDecisionOwner(str, Enum):
     MODEL = "model"
+    FORMAT_REPAIR = "format_repair"
     NONE = "none"
     FRAMEWORK = "framework"
 
@@ -61,7 +62,10 @@ class ModelFinalDecision:
 
     @property
     def is_final(self) -> bool:
-        return self.status == "final" and self.owner is FinalDecisionOwner.MODEL
+        return self.status == "final" and self.owner in {
+            FinalDecisionOwner.MODEL,
+            FinalDecisionOwner.FORMAT_REPAIR,
+        }
 
 
 def parse_model_final_response(
@@ -116,7 +120,7 @@ def parse_model_final_payload(
         rationale=str(payload.get("rationale", "")),
         evidence_sufficiency=str(payload.get("evidence_sufficiency", "")),
         raw_text=raw_text,
-        owner=FinalDecisionOwner.MODEL,
+        owner=FinalDecisionOwner.FORMAT_REPAIR if locked_answer else FinalDecisionOwner.MODEL,
     )
 
 

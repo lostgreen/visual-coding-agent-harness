@@ -719,7 +719,7 @@ The prose says recovery_rules: this sentence must not define metadata.
             )
 
             self.assertEqual(result.status, "no_model_final")
-            self.assertEqual(result.answer, "no_model_final")
+            self.assertEqual(result.answer, "")
             self.assertEqual(
                 [step["tool"] for step in result.rounds[0].program],
                 ["ground_question", "vision_read"],

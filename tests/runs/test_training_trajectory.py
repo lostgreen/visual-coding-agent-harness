@@ -57,6 +57,10 @@ def test_from_workspace_collects_all_chains_and_trace_context(tmp_path):
     assert trajectory.planner_turns[0]["prompt_artifact"]["sha256"]
     assert trajectory.context_budget_reports[0]["overflow"] is False
     assert trajectory.followup_history[0]["type"] == "hard_skill_followup_handoff"
+    assert trajectory.framework_fallback_used is False
+    assert trajectory.no_model_final is False
+    assert trajectory.format_repair_count == 0
+    assert trajectory.final_diagnostics == {}
     assert Path(trajectory.trajectory_path).exists()
 
 
@@ -90,8 +94,34 @@ def test_training_trajectory_flags_disabled_framework_final_events(tmp_path):
     )
 
     assert trajectory.final_decision_owner == "framework"
+    assert trajectory.framework_fallback_used is True
     assert "active trace emitted disabled mcq_forced_fallback" in trajectory.diagnostic_errors
     assert "active trace emitted framework-owned final decision" in trajectory.diagnostic_errors
+
+
+def test_training_trajectory_exports_final_control_status_fields(tmp_path):
+    workspace = _workspace_with_chain(tmp_path)
+    workspace.write_trace_event("model_final_format_repair_result", {"status": "final"})
+    workspace.write_trace_event(
+        "structured_final_diagnostics",
+        {
+            "gate_status": "accepted",
+            "reason_code": "",
+            "advisory_only": True,
+        },
+    )
+    workspace.write_trace_event("no_model_final", {"reason": "budget_exhausted", "final_decision_owner": "none"})
+
+    trajectory = TrainingTrajectory.from_workspace(
+        workspace,
+        case_id="case_001",
+        question="Which object is visible?",
+        final_decision="no_model_final",
+    )
+
+    assert trajectory.no_model_final is True
+    assert trajectory.format_repair_count == 1
+    assert trajectory.final_diagnostics["gate_status"] == "accepted"
 
 
 def test_training_trajectory_redacts_reasoning_leaks_from_public_fields(tmp_path):

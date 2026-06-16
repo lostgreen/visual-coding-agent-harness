@@ -22,6 +22,11 @@ class TrainingTrajectory:
     final_decision: str
     final_decision_owner: str
     diagnostic_errors: list[str]
+    framework_fallback_used: bool
+    final_diagnostics: dict[str, Any]
+    model_evidence_sufficiency: str
+    format_repair_count: int
+    no_model_final: bool
     selected_option: str | None
     is_correct: bool | None
     evidence_chain_ids: list[list[str]]
@@ -65,6 +70,11 @@ class TrainingTrajectory:
             final_decision=str(final_decision),
             final_decision_owner=final_decision_owner,
             diagnostic_errors=_final_control_diagnostic_errors(trace_events),
+            framework_fallback_used=_framework_fallback_used(trace_events),
+            final_diagnostics=_final_diagnostics(trace_events),
+            model_evidence_sufficiency=_model_evidence_sufficiency(trace_events),
+            format_repair_count=_format_repair_count(trace_events),
+            no_model_final=_no_model_final(trace_events, final_decision=str(final_decision)),
             selected_option=str(selected_option) if selected_option else None,
             is_correct=is_correct,
             evidence_chain_ids=[
@@ -181,6 +191,54 @@ def _final_control_diagnostic_errors(trace_events: Sequence[Mapping[str, Any]]) 
         if owner == FinalDecisionOwner.FRAMEWORK.value:
             errors.append("active trace emitted framework-owned final decision")
     return sorted(set(errors))
+
+
+def _framework_fallback_used(trace_events: Sequence[Mapping[str, Any]]) -> bool:
+    for event in trace_events:
+        event_type = _event_type(event)
+        payload = _event_payload(event)
+        owner = str(payload.get("final_decision_owner", "")).strip()
+        if event_type in {"mcq_forced_fallback", "framework_selected_option"}:
+            return True
+        if owner == FinalDecisionOwner.FRAMEWORK.value:
+            return True
+    return False
+
+
+def _final_diagnostics(trace_events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    for event in reversed(trace_events):
+        payload = _event_payload(event)
+        diagnostics = payload.get("diagnostics")
+        if isinstance(diagnostics, Mapping):
+            return dict(diagnostics)
+        if _event_type(event) == "structured_final_diagnostics":
+            return dict(payload)
+    return {}
+
+
+def _model_evidence_sufficiency(trace_events: Sequence[Mapping[str, Any]]) -> str:
+    for event in reversed(trace_events):
+        if _event_type(event) != "iterative_final":
+            continue
+        value = str(_event_payload(event).get("evidence_sufficiency", "")).strip()
+        if value:
+            return value
+    return ""
+
+
+def _format_repair_count(trace_events: Sequence[Mapping[str, Any]]) -> int:
+    return sum(
+        1
+        for event in trace_events
+        if _event_type(event) == "model_final_format_repair_result"
+        and str(_event_payload(event).get("status", "")).strip().lower() == "final"
+    )
+
+
+def _no_model_final(trace_events: Sequence[Mapping[str, Any]], *, final_decision: str) -> bool:
+    if str(final_decision or "").strip() == "no_model_final":
+        return True
+    return any(_event_type(event) == "no_model_final" for event in trace_events)
 
 
 def _event_type(event: Mapping[str, Any]) -> str:
