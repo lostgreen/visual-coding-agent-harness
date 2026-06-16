@@ -330,11 +330,6 @@ class IterativeVisualAgent:
                     },
                 )
 
-        inspected_segment_ids: set[str] = {
-            str(segment_id)
-            for round_item in rounds
-            for segment_id in _segment_ids_from_program(round_item.program)
-        }
         run_state = RunState(
             question=raw_question,
             video_path=video_path,
@@ -342,7 +337,11 @@ class IterativeVisualAgent:
             raw_question=raw_question,
             vlm_safe_question=vlm_safe_question,
             effective_route=effective_route,
-            inspected_segment_ids=inspected_segment_ids,
+            inspected_segment_ids={
+                str(segment_id)
+                for round_item in rounds
+                for segment_id in _segment_ids_from_program(round_item.program)
+            },
             grounding_runtime=grounding_runtime,
             bootstrap_failure=grounding_bootstrap.failure,
         )
@@ -419,7 +418,7 @@ class IterativeVisualAgent:
                 round_number=round_number,
                 budget=self.budget,
                 allocator=self.context_allocator,
-                inspected_segment_ids=sorted(inspected_segment_ids),
+                inspected_segment_ids=sorted(run_state.inspected_segment_ids),
                 final_round_reserved=final_round_reserved,
                 answer_feedback=answer_feedback,
                 pending_inferences=pending_inferences,
@@ -504,7 +503,7 @@ class IterativeVisualAgent:
                         "rationale": "planner_json_parse_error",
                         "program": self._fallback_inspector_program(
                             question=exploration_question_text,
-                            inspected_segment_ids=inspected_segment_ids,
+                            inspected_segment_ids=run_state.inspected_segment_ids,
                         ),
                     }
             status = str(action.get("status", "continue"))
@@ -780,7 +779,7 @@ class IterativeVisualAgent:
                     if not final_round_reserved and not prefinal_evidence_repair_failed:
                         planned_program = self._fallback_inspector_program(
                             question=exploration_question_text,
-                            inspected_segment_ids=inspected_segment_ids,
+                            inspected_segment_ids=run_state.inspected_segment_ids,
                         )
                     status = "continue"
                     rationale = blocked_reason
@@ -818,7 +817,7 @@ class IterativeVisualAgent:
                     vlm_safe_question=vlm_safe_question,
                     raw_question=raw_question,
                     video_path=video_path,
-                    inspected_segment_ids=inspected_segment_ids,
+                    inspected_segment_ids=run_state.inspected_segment_ids,
                     final_round_reserved=final_round_reserved,
                     planner_skill=active_skill,
                     notes_out=normalization_notes,
@@ -933,7 +932,7 @@ class IterativeVisualAgent:
                     forced_program = [] if skip_reason else self._fallback_visual_evidence_program(
                         question=exploration_question_text,
                         video_path=video_path,
-                        inspected_segment_ids=inspected_segment_ids,
+                        inspected_segment_ids=run_state.inspected_segment_ids,
                         planner_skill=active_skill,
                     )
                     if skip_reason:
@@ -967,7 +966,7 @@ class IterativeVisualAgent:
                     program
                     and not final_round_reserved
                     and not _program_has_visual_evidence_tool(program)
-                    and _all_scene_segments_inspected(self.scene_index, inspected_segment_ids)
+                    and _all_scene_segments_inspected(self.scene_index, run_state.inspected_segment_ids)
                 ):
                     skip_reason = self._generic_forced_visual_skip_reason(
                         question=raw_question,
@@ -1022,7 +1021,7 @@ class IterativeVisualAgent:
                     forced_program = [] if skip_reason else self._fallback_visual_evidence_program(
                         question=exploration_question_text,
                         video_path=video_path,
-                        inspected_segment_ids=inspected_segment_ids,
+                        inspected_segment_ids=run_state.inspected_segment_ids,
                         planner_skill=active_skill,
                     )
                     if skip_reason:
@@ -1057,7 +1056,7 @@ class IterativeVisualAgent:
                     and not final_round_reserved
                     and not all_segments_answer_attempted
                     and citations
-                    and _all_scene_segments_inspected(self.scene_index, inspected_segment_ids)
+                    and _all_scene_segments_inspected(self.scene_index, run_state.inspected_segment_ids)
                     and not _program_has_visual_evidence_tool(program)
                 ):
                     all_segments_answer_attempted = True
@@ -1244,7 +1243,7 @@ class IterativeVisualAgent:
                 run_state=run_state,
             )
             citations.extend(observation_ids)
-            inspected_segment_ids.update(_segment_ids_from_program(program))
+            run_state.inspected_segment_ids.update(_segment_ids_from_program(program))
             if _program_has_inspect_with_candidate_options(program):
                 has_inspect_with_candidate_options = True
             timeline_decision = (
