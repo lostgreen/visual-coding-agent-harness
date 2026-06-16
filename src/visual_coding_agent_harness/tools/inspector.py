@@ -145,8 +145,14 @@ def build_segment_inspector_registry(
             result["ordered_visible_in_window"] = ordered_visible
             integrity = _ordered_visible_integrity(str(result.get("claim", "")), ordered_visible)
             result["observation_integrity"] = integrity
-            if integrity == "internally_inconsistent":
+            if integrity in {"internally_inconsistent", "unverifiable"}:
                 result["grounding_quality"] = "weak"
+                result["limitations"] = _append_limitation(
+                    result.get("limitations"),
+                    "ORDERED_VISIBLE lacks supporting visual description"
+                    if integrity == "unverifiable"
+                    else "ORDERED_VISIBLE conflicts with the supporting visual description",
+                )
                 for fact in result.get("facts", []):
                     if isinstance(fact, dict):
                         fact["grounding_quality"] = "weak"
@@ -550,7 +556,8 @@ def _vision_read_prompt(
     return (
         "You are a v4 VisionAgent reading one localized long-video window.\n"
         "Return typed visual facts only: fact, event label if present, polarity, timestamp, and limitation.\n"
-        "If multiple requested items are visibly confirmed in this window, add ORDERED_VISIBLE: item1 -> item2 -> item3 using first-visible order.\n"
+        "If multiple requested items are visibly confirmed in this window, first name or visually describe each confirmed item, then add ORDERED_VISIBLE: item1 -> item2 -> item3 using first-visible order.\n"
+        "Do not emit a bare ORDERED_VISIBLE line; omit ORDERED_VISIBLE when any listed item lacks supporting visual description.\n"
         "Do not choose an option. Do not emit supported_option, answer_option, or final_answer.\n"
         "Do not use outside video context or external knowledge.\n"
         f"Segment: {segment_id} [{start_sec:.3f}s, {end_sec:.3f}s]\n"
@@ -573,6 +580,7 @@ def _verify_segment_anchors_prompt(
         "Each confirmation should include target, relative_sec if possible, observed_at_sec if possible, and evidence.",
         "Each rejection should include target and reason.",
         "After JSON, add ORDERED_VISIBLE: item1 -> item2 -> item3 using only confirmed visible targets in first-visible order.",
+        "Do not emit a bare ORDERED_VISIBLE line; omit ORDERED_VISIBLE when confirmations do not contain evidence for every listed item.",
         "Use relative seconds within each anchor when possible; do not choose or compare multiple-choice options.",
         f"Segment: {segment_id}",
     ]
@@ -717,6 +725,16 @@ def _ordered_visible_integrity(text: str, ordered_visible: Sequence[str]) -> str
     if missing:
         return "internally_inconsistent"
     return "consistent"
+
+
+def _append_limitation(existing: object, note: str) -> str:
+    existing_text = str(existing or "").strip()
+    note_text = str(note or "").strip()
+    if not existing_text:
+        return note_text
+    if not note_text or note_text in existing_text:
+        return existing_text
+    return f"{existing_text}; {note_text}"
 
 
 def _ordered_visible_item_supported(*, item: str, body: str) -> bool:

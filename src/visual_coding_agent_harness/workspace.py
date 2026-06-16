@@ -494,6 +494,7 @@ class EvidenceWorkspace:
         changed = 0
         mapped_count = 0
         orphan_count = 0
+        rejected_count = 0
         for observation in rows:
             observation_id = str(observation.get("observation_id", ""))
             if observation_id not in target_ids:
@@ -510,6 +511,9 @@ class EvidenceWorkspace:
                 assigned_by=assigned_by,
             )
             if not scoped_relations:
+                continue
+            if _reject_answer_agent_relations_for_observation(raw_output=raw_output, relations=scoped_relations):
+                rejected_count += len(scoped_relations)
                 continue
             scoped_with_parents: list[tuple[dict[str, Any], EvidenceRecord]] = []
             for relation in scoped_relations:
@@ -577,6 +581,16 @@ class EvidenceWorkspace:
                     "assigned_by": assigned_by,
                     "mapped_evidence_count": 0,
                     "mapped_evidence_orphan_count": orphan_count,
+                },
+            )
+        if rejected_count:
+            self.write_trace_event(
+                "answer_agent_relations_rejected",
+                {
+                    "observation_ids": target_ids,
+                    "relation_count": rejected_count,
+                    "assigned_by": assigned_by,
+                    "reason": "unsafe_observation_integrity",
                 },
             )
         return changed
@@ -2434,6 +2448,7 @@ def _parse_ledger_entries(ledger_text: str) -> list[Mapping[str, Any]]:
         if not obs_match:
             continue
         tool_match = re.search(r"tool:\s*`?([A-Za-z0-9_]+)`?", line)
+        grounding_match = re.search(r"gq:\s*`?([^`|]+)`?", line)
         confidence_match = re.search(r"confidence:\s*([0-9.]+)", line)
         artifacts_match = re.search(r"artifacts:\s*(.*?)\s*\|\s*claim:", line)
         claim_match = re.search(r"claim:\s*(.*?)\s*\|\s*limitations:", line)
@@ -2442,6 +2457,7 @@ def _parse_ledger_entries(ledger_text: str) -> list[Mapping[str, Any]]:
             {
                 "observation_id": obs_match.group(1),
                 "tool": tool_match.group(1) if tool_match else "unknown",
+                "grounding_quality": grounding_match.group(1).strip() if grounding_match else "",
                 "confidence": confidence_match.group(1) if confidence_match else "",
                 "artifacts": artifacts_match.group(1).strip() if artifacts_match else "-",
                 "claim": claim_match.group(1).strip() if claim_match else "",
@@ -2811,6 +2827,26 @@ def _relations_for_observation(
         scoped_relation["assigned_by"] = str(scoped_relation.get("assigned_by") or assigned_by)
         scoped.append(scoped_relation)
     return scoped
+
+
+def _reject_answer_agent_relations_for_observation(
+    *,
+    raw_output: Mapping[str, Any],
+    relations: Sequence[Mapping[str, Any]],
+) -> bool:
+    if not any(_relation_assigned_by_answer_agent(relation) for relation in relations):
+        return False
+    integrity = str(raw_output.get("observation_integrity") or "").strip().lower()
+    if integrity in {"unverifiable", "internally_inconsistent"}:
+        return True
+    has_ordered_visible = bool(raw_output.get("ordered_visible_in_window") or raw_output.get("ordered_visible"))
+    grounding_quality = str(raw_output.get("grounding_quality") or "").strip().lower()
+    return has_ordered_visible and grounding_quality == "weak"
+
+
+def _relation_assigned_by_answer_agent(relation: Mapping[str, Any]) -> bool:
+    assigned_by = str(relation.get("assigned_by") or "").strip().lower()
+    return assigned_by == "answer_agent" or assigned_by.startswith("answer_agent_")
 
 
 def _merge_candidate_option_relations(
@@ -3360,9 +3396,20 @@ def _option_sort_key(option: str) -> tuple[int, str]:
 
 def _format_compact_entry(entry: Mapping[str, Any]) -> str:
     confidence = f" | confidence: {entry['confidence']}" if entry.get("confidence") else ""
+    grounding = f" | gq: {entry['grounding_quality']}" if entry.get("grounding_quality") else ""
     limitations = entry.get("limitations") or "-"
+    raw_output = entry.get("raw_output", {})
+    integrity = ""
+    support_note = ""
+    if isinstance(raw_output, Mapping):
+        integrity_value = str(raw_output.get("observation_integrity") or "").strip()
+        if integrity_value:
+            integrity = f" | integrity: {integrity_value}"
+        if integrity_value in {"unverifiable", "internally_inconsistent"}:
+            support_note = " | support: not answer-grade"
     return (
-        f"- `{entry['observation_id']}` | tool: `{entry.get('tool', 'unknown')}`{confidence} | "
+        f"- `{entry['observation_id']}` | tool: `{entry.get('tool', 'unknown')}`"
+        f"{grounding}{confidence}{integrity}{support_note} | "
         f"claim: {entry.get('claim', '')} | limitations: {limitations}"
     )
 

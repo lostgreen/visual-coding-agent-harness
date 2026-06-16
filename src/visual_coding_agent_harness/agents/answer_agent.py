@@ -229,6 +229,7 @@ def _answer_prompt(
         "- Every support relation must name the observation_id that directly supports it.\n"
         '- If evidence is insufficient, set answer to "need_more_evidence" and explain missing_evidence.\n'
         "- Do not cite navigation-only evidence as sole support.\n"
+        "- Do not create support relations from weak or unverifiable ORDERED_VISIBLE observations; treat 'not answer-grade', 'integrity: unverifiable', 'observation_integrity=unverifiable', or 'ORDERED_VISIBLE lacks supporting visual description' as insufficient evidence.\n"
         "- For non-select_present operators, do not override projection/final-gate rejection as a confident final.\n"
         f"{operator_context}"
         f"Question:\n{question}\n\n"

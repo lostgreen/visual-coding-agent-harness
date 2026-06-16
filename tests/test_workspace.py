@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
 
 
 def test_evidence_table_jsonl_roundtrip(tmp_path: Path):
@@ -97,6 +97,84 @@ def test_evidence_table_preserves_target_binding_provenance(tmp_path: Path):
     assert row["evidence_binding"]["target_id"] == "T2"
     assert row["evidence_binding"]["ordered_target_refs"] == ["T1", "T2"]
     assert row["evidence_binding"]["status"] == "supported"
+
+
+def test_unverifiable_ordered_visible_does_not_accept_answer_agent_relation(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "unverifiable_order_relation")
+    observation = workspace.write_observation(
+        tool_name="vision_read",
+        claim="ORDERED_VISIBLE: T1 -> T2 -> T3 -> T4",
+        confidence=0.74,
+        raw_output={
+            "segment_id": "seg_0001",
+            "start_sec": 0.0,
+            "end_sec": 30.0,
+            "grounding_quality": "weak",
+            "observation_integrity": "unverifiable",
+            "ordered_visible_in_window": ["T1", "T2", "T3", "T4"],
+        },
+    )
+    workspace.write_evidence(
+        EvidenceRecord(
+            evidence_id="ev_ledger_obs_0001",
+            stage="ledger",
+            parent_id=None,
+            tool="vision_read",
+            observation_id=observation.observation_id,
+            frame_set_id=None,
+            content={"claim": observation.claim},
+            grounding_quality="weak",
+            confidence=0.74,
+            created_at=0.0,
+        )
+    )
+
+    changed = workspace.annotate_candidate_option_relations(
+        observation_ids=[observation.observation_id],
+        relations=[
+            {
+                "option": "A",
+                "relation": "support",
+                "strength": 0.95,
+                "observation_id": observation.observation_id,
+                "rationale": "Bare ORDERED_VISIBLE line maps to option A.",
+            }
+        ],
+        assigned_by="answer_agent_verifier",
+    )
+
+    reloaded = workspace.get_observation(observation.observation_id)
+    assert changed == 0
+    assert reloaded is not None
+    assert "candidate_option_relations" not in reloaded.raw_output
+
+
+def test_compact_ledger_surfaces_unverifiable_order_integrity(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "unverifiable_order_ledger")
+    observation = workspace.write_observation(
+        tool_name="vision_read",
+        claim="ORDERED_VISIBLE: T1 -> T2 -> T3 -> T4",
+        confidence=0.74,
+        raw_output={
+            "grounding_quality": "weak",
+            "observation_integrity": "unverifiable",
+            "ordered_visible_in_window": ["T1", "T2", "T3", "T4"],
+        },
+    )
+    (workspace.root / "ledger.md").write_text(
+        "# Evidence Ledger\n\n"
+        f"- `{observation.observation_id}` | ev: `ev_ledger_1` | fs: `-` | gq: `weak` | "
+        "tool: `vision_read` | confidence: 0.74 | artifacts: - | "
+        "claim: ORDERED_VISIBLE: T1 -> T2 -> T3 -> T4 | "
+        "limitations: ORDERED_VISIBLE lacks supporting visual description\n",
+        encoding="utf-8",
+    )
+
+    compact = workspace.compact_ledger_text()
+
+    assert "gq: weak" in compact
+    assert "integrity: unverifiable" in compact
+    assert "not answer-grade" in compact
 
 
 def test_answer_evidence_table_prefers_jsonl_artifact(tmp_path: Path):

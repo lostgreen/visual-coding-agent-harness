@@ -512,6 +512,28 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(result["grounding_quality"], "weak")
         self.assertEqual(result["facts"][0]["grounding_quality"], "weak")
 
+    def test_ordered_visible_without_supporting_body_is_not_answer_grade(self):
+        backend = FixedTextBackend("ORDERED_VISIBLE: T1 -> T2 -> T3 -> T4")
+        registry = build_segment_inspector_registry(backend)
+
+        result = registry.execute(
+            "vision_read",
+            {
+                "video_path": "/videos/demo.mp4",
+                "segment_id": "seg_0002",
+                "start_sec": 530.0,
+                "end_sec": 542.0,
+                "ask_for": "visible order of artworks",
+                "additional_targets": ["T1", "T2", "T3", "T4"],
+                "nframes": 20,
+            },
+        )
+
+        self.assertEqual(result["ordered_visible_in_window"], ["T1", "T2", "T3", "T4"])
+        self.assertEqual(result["observation_integrity"], "unverifiable")
+        self.assertEqual(result["grounding_quality"], "weak")
+        self.assertEqual(result["facts"][0]["grounding_quality"], "weak")
+
     def test_verify_segment_anchors_parses_confirmations_into_evidence_and_timeline(self):
         backend = FixedTextBackend(
             json.dumps(
