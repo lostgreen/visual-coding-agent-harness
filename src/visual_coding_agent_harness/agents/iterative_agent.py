@@ -50,6 +50,7 @@ from .skills.predicates import (
 )
 from .skills.specs import (
     ExplorationProfile,
+    OptionEvaluationKind,
     PrefinalRepairKind,
     SchedulerKind,
     SkillSpec,
@@ -119,6 +120,10 @@ def _exploration_profile(skill: Any | None) -> ExplorationProfile:
 
 def _scheduler_kind(skill: Any | None) -> SchedulerKind:
     return _skill_behavior_value(skill, "scheduler", SchedulerKind.NONE)
+
+
+def _option_evaluation_kind(skill: Any | None) -> OptionEvaluationKind:
+    return _skill_behavior_value(skill, "option_evaluation", OptionEvaluationKind.NONE)
 
 
 @dataclass(frozen=True)
@@ -4645,9 +4650,7 @@ class IterativeVisualAgent:
             route=route or None,
             recommended_skill_id=recommended_skill_id,
         )
-        if skill.name in {"timeline_ordering", "visual_timeline_qa", "narration_timeline_qa"}:
-            return None
-        if skill.name not in {"grounded_factual_qa", "mutex_fact_qa"}:
+        if _option_evaluation_kind(skill) is not OptionEvaluationKind.MUTEX_OR_GROUNDED:
             return None
         if not self._has_tool("ground_question") or not self._has_tool("vision_read"):
             return None
@@ -4811,7 +4814,12 @@ class IterativeVisualAgent:
                 selected_option=selected_option,
                 citations=answer_result.citations,
             )
-            if answer_result.status == "final" and not gate_reason and skill.name == "mutex_fact_qa" and scheduler.queue:
+            if (
+                answer_result.status == "final"
+                and not gate_reason
+                and _scheduler_kind(skill) is SchedulerKind.FOLLOWUP_QUEUE
+                and scheduler.queue
+            ):
                 gate_reason = "mutex_pending_targets"
             if answer_result.status == "final" and not gate_reason:
                 self.workspace.write_trace_event(

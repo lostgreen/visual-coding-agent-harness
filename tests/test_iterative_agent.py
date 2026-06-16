@@ -21,6 +21,7 @@ from visual_coding_agent_harness.agents.answer_agent import AnswerAgentResult
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
 from visual_coding_agent_harness.agents.skills.specs import (
     ExplorationProfile,
+    OptionEvaluationKind,
     PrefinalRepairKind,
     SchedulerKind,
     SkillBehaviors,
@@ -918,6 +919,45 @@ def test_fallback_visual_tool_preferences_use_exploration_profiles_with_custom_s
         assert agent._fallback_visual_tool_name_for_skill(
             custom_skill("custom_main_idea", ExplorationProfile.MAIN_IDEA)
         ) == "vision_read"
+
+
+def test_hard_skill_route_admits_custom_option_evaluation_behavior(monkeypatch):
+    from visual_coding_agent_harness.agents import iterative_agent as iterative_agent_module
+
+    skill = type(
+        "Skill",
+        (),
+        {
+            "name": "custom_option_eval",
+            "version": 1,
+            "behaviors": SkillBehaviors(option_evaluation=OptionEvaluationKind.MUTEX_OR_GROUNDED),
+        },
+    )()
+    monkeypatch.setattr(iterative_agent_module, "_recommended_effective_skill", lambda *args, **kwargs: skill)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        agent = IterativeVisualAgent(
+            backend=StaticTaskBackend({}),
+            registry=ToolRegistry(),
+            workspace=EvidenceWorkspace.create(Path(tmp), run_id="custom_option_eval"),
+            scene_index=fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0),
+        )
+        checked_tools: list[str] = []
+
+        def has_tool(tool_name: str) -> bool:
+            checked_tools.append(tool_name)
+            return False
+
+        monkeypatch.setattr(agent, "_has_tool", has_tool)
+
+        result = agent._try_hard_skill_route(
+            question="Which visible fact is true?\nA. farmer\nB. noble",
+            exploration_question="Which visible fact is true?",
+            video_path="/videos/demo.mp4",
+        )
+
+    assert result is None
+    assert checked_tools == ["ground_question"]
 
 
 def test_option_b_requires_complete_relation_chain():
