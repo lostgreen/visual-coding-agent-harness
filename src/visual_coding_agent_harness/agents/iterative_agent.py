@@ -141,6 +141,14 @@ def _final_gate_profile(skill: Any | None) -> FinalGateProfile:
     return _skill_behavior_value(skill, "final_gate", FinalGateProfile.DEFAULT)
 
 
+def _route_repair_question_route(skill: Any | None) -> str:
+    if _evidence_followup_kind(skill) is EvidenceFollowupKind.SEGMENT_DETAIL_AND_ASR:
+        return "narration_timeline_qa"
+    if _scheduler_kind(skill) is SchedulerKind.SUBEVENT_TIMELINE:
+        return "timeline_ordering"
+    return ""
+
+
 @dataclass(frozen=True)
 class AgentBudget:
     max_rounds: int = 8
@@ -3777,7 +3785,7 @@ class IterativeVisualAgent:
         planner_skill: SkillSpec | None,
         run_state: RunState,
     ) -> str:
-        if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
+        if _evidence_followup_kind(planner_skill) is EvidenceFollowupKind.SEGMENT_DETAIL_AND_ASR:
             return "narration_transcript_route"
         if self._has_pending_candidate_specific_action(run_state=run_state):
             return "pending_candidate_specific_action"
@@ -4702,13 +4710,6 @@ class IterativeVisualAgent:
                 "target_facts": target_facts,
             },
         )
-        if skill.name == "timeline_ordering":
-            return self._try_timeline_ordering_route(
-                question=question,
-                video_path=video_path,
-                target_facts=target_facts,
-            )
-
         rounds: list[IterativeRound] = []
         all_observation_ids: list[str] = []
         target_budget_per_round = max(1, self.budget.max_tool_calls_per_round // 2)
@@ -7534,8 +7535,9 @@ def _route_repair_recovery_program(
             )
         elif original_args.get("targets"):
             recovery_args["targets"] = _route_repair_target_keys({"targets": original_args.get("targets")})
-        if active_skill is not None and active_skill.name in {"timeline_ordering", "narration_timeline_qa"}:
-            recovery_args.setdefault("question_route", active_skill.name)
+        question_route = _route_repair_question_route(active_skill)
+        if question_route:
+            recovery_args.setdefault("question_route", question_route)
         return [{"tool": "read_segment_detail", "args": recovery_args}]
     if repaired_tool_name:
         return [{"tool": repaired_tool_name, "args": dict(repaired_args)}]

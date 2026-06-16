@@ -14,11 +14,13 @@ from visual_coding_agent_harness.agents.iterative_agent import (
     _planner_final_answer_with_option,
     _program_signature,
     _projection_evidence_from_table,
+    _route_repair_recovery_program,
     _sanitize_option_blind_feedback,
     _supported_binding_no_growth_feedback,
 )
 from visual_coding_agent_harness.agents.answer_agent import AnswerAgentResult
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
+from visual_coding_agent_harness.agents.runtime.state import RunState
 from visual_coding_agent_harness.agents.skills.specs import (
     EvidenceFollowupKind,
     ExplorationProfile,
@@ -963,6 +965,34 @@ def test_hard_skill_route_admits_custom_option_evaluation_behavior(monkeypatch):
     assert checked_tools == ["ground_question"]
 
 
+def test_generic_forced_visual_skip_reason_uses_evidence_followup_behavior():
+    skill = type(
+        "Skill",
+        (),
+        {
+            "name": "custom_transcript_followup",
+            "behaviors": SkillBehaviors(evidence_followup=EvidenceFollowupKind.SEGMENT_DETAIL_AND_ASR),
+        },
+    )()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        agent = IterativeVisualAgent(
+            backend=StaticTaskBackend({}),
+            registry=ToolRegistry(),
+            workspace=EvidenceWorkspace.create(Path(tmp), run_id="custom_forced_skip"),
+            scene_index=fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0),
+        )
+
+        assert (
+            agent._generic_forced_visual_skip_reason(
+                question="How was his life journey according to the video?",
+                planner_skill=skill,
+                run_state=RunState(question="", video_path=""),
+            )
+            == "narration_transcript_route"
+        )
+
+
 def test_skill_route_repair_uses_behavior_profiles_with_custom_skill_names(monkeypatch):
     registry = ToolRegistry()
 
@@ -1147,6 +1177,35 @@ def test_skill_route_repair_uses_behavior_profiles_with_custom_skill_names(monke
         assert "candidate_options" not in mutex_repair[1]
         assert "question" not in mutex_repair[1]
         assert mutex_repair[2] == "repair_mutex_inspect_segment_to_vision_read"
+
+
+def test_route_repair_recovery_program_uses_behavior_route_hints_with_custom_skill_names():
+    def custom_skill(name: str, behaviors: SkillBehaviors):
+        return type("Skill", (), {"name": name, "behaviors": behaviors})()
+
+    timeline_program = _route_repair_recovery_program(
+        reason="repeated_route_repair",
+        original_args={"segment_id": "seg_0001", "targets": ["David"]},
+        repaired_tool_name="verify_segment_anchors",
+        repaired_args={"segment_id": "seg_0001"},
+        active_skill=custom_skill(
+            "custom_timeline_scheduler",
+            SkillBehaviors(scheduler=SchedulerKind.SUBEVENT_TIMELINE),
+        ),
+    )
+    assert timeline_program[0]["args"]["question_route"] == "timeline_ordering"
+
+    narration_program = _route_repair_recovery_program(
+        reason="repeated_route_repair",
+        original_args={"segment_id": "seg_0001", "target_refs": ["T1"]},
+        repaired_tool_name="read_segment_detail",
+        repaired_args={"segment_id": "seg_0001"},
+        active_skill=custom_skill(
+            "custom_narration_followup",
+            SkillBehaviors(evidence_followup=EvidenceFollowupKind.SEGMENT_DETAIL_AND_ASR),
+        ),
+    )
+    assert narration_program[0]["args"]["question_route"] == "narration_timeline_qa"
 
 
 def test_option_b_requires_complete_relation_chain():
