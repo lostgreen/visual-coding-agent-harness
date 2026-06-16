@@ -30,6 +30,7 @@ class ProgramNormalizer:
             args = step.get("args", {})
             if not isinstance(args, Mapping):
                 raise ValueError(f"Planner program step args must be an object for {tool_name}")
+            tool_name = self.registry.resolve_alias(tool_name)
             request = ToolRequest(tool=tool_name, arguments=dict(args), request_id=str(step.get("request_id", index)))
             try:
                 runtime_spec = self.registry.get_runtime_spec(tool_name)

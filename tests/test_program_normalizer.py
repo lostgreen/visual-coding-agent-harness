@@ -40,6 +40,33 @@ def test_program_normalizer_uses_tool_runtime_argument_normalizer() -> None:
     assert requests[0].arguments == {"value": "ok"}
 
 
+def test_pipeline_order_alias_before_normalizer() -> None:
+    @tool(name="verify_ledger_answer", description="Verify answer.")
+    def verify_ledger_answer(answer: str):
+        return {"claim": answer, "confidence": 1.0}
+
+    seen_tools: list[str] = []
+    registry = ToolRegistry()
+    registry.register(
+        ToolRuntimeSpec(
+            tool_spec=verify_ledger_answer,
+            aliases=("verify",),
+            argument_normalizer=lambda _ctx, request: (
+                seen_tools.append(request.tool) or {"answer": str(request.arguments["answer"]).strip()}
+            ),
+        )
+    )
+
+    requests = ProgramNormalizer(registry).normalize(
+        [{"tool": "verify", "args": {"answer": "  B  "}}],
+        ctx=_ctx(registry),
+    )
+
+    assert seen_tools == ["verify_ledger_answer"]
+    assert requests[0].tool == "verify_ledger_answer"
+    assert requests[0].arguments == {"answer": "B"}
+
+
 def test_program_normalizer_rejects_unknown_tools() -> None:
     registry = ToolRegistry()
 
