@@ -2757,6 +2757,8 @@ class IterativeVisualAgent:
                 normalized[field_name] = _append_additional_targets_to_text(
                     normalized.get(field_name),
                     normalized["additional_targets"],
+                    workspace=self.workspace,
+                    resolve_target_refs=True,
                 )
             normalized.pop("additional_targets", None)
         target_refs = _coerce_target_arg_list(normalized.get("target_refs")) if "target_refs" in normalized else []
@@ -2789,6 +2791,35 @@ class IterativeVisualAgent:
             resolved_refs.append(ref_text)
 
         if resolved_refs:
+            if _tool_target_refs_should_expand_into_visual_prompt(tool_name):
+                normalized.pop("target_refs", None)
+                normalized.pop("normalized_target_keys", None)
+                normalized = self._apply_additional_targets(
+                    tool_name=tool_name,
+                    normalized=normalized,
+                    original_args=original_args,
+                    additional_targets=resolved_refs,
+                    notes_out=notes_out,
+                )
+                if normalized is None:
+                    return None
+                self.workspace.write_trace_event(
+                    "exploration_policy_adjustment",
+                    {
+                        "reason": "expand_target_refs_for_visual_prompt",
+                        "tool": tool_name,
+                        "target_refs": resolved_refs,
+                    },
+                )
+                _append_normalization_note(
+                    notes_out,
+                    tool=tool_name,
+                    reason="expand_target_refs_for_visual_prompt",
+                    original={"tool": tool_name, "args": original_args},
+                    resolved={"tool": tool_name, "args": normalized},
+                    next_action="Visual prompt-only tools receive registry target names in ask_for/question text.",
+                )
+                return normalized
             normalized["target_refs"] = _unique_preserving_order(resolved_refs)
             normalized["normalized_target_keys"] = normalized["target_refs"]
             if legacy_targets:
@@ -2899,10 +2930,20 @@ class IterativeVisualAgent:
         if _tool_is(tool_name, "search_segments"):
             normalized["query"] = _append_additional_targets_to_text(normalized.get("query"), extras)
         elif _tool_is(tool_name, "vision_read"):
-            normalized["ask_for"] = _append_additional_targets_to_text(normalized.get("ask_for"), extras)
+            normalized["ask_for"] = _append_additional_targets_to_text(
+                normalized.get("ask_for"),
+                extras,
+                workspace=self.workspace,
+                resolve_target_refs=True,
+            )
         elif _tool_is(tool_name, "caption_segment"):
             source_field = "question" if "question" in normalized else "ask_for"
-            normalized["question"] = _append_additional_targets_to_text(normalized.get(source_field), extras)
+            normalized["question"] = _append_additional_targets_to_text(
+                normalized.get(source_field),
+                extras,
+                workspace=self.workspace,
+                resolve_target_refs=True,
+            )
         normalized.pop("targets", None)
         normalized.pop("additional_targets", None)
         return normalized
@@ -7894,13 +7935,46 @@ def _additional_targets_allowed(*, tool_name: str, args: Mapping[str, Any]) -> b
     return False
 
 
-def _append_additional_targets_to_text(value: Any, additional_targets: Sequence[str]) -> str:
+def _tool_target_refs_should_expand_into_visual_prompt(tool_name: str | None) -> bool:
+    return _tool_is(tool_name, "vision_read") or _tool_is(tool_name, "caption_segment")
+
+
+def _append_additional_targets_to_text(
+    value: Any,
+    additional_targets: Sequence[str],
+    *,
+    workspace: Any = None,
+    resolve_target_refs: bool = False,
+) -> str:
     base = str(value or "").strip()
-    extras = _unique_nonempty_strings(additional_targets)
+    extras = (
+        _resolve_additional_targets_for_visual_prompt(workspace, additional_targets)
+        if resolve_target_refs
+        else _unique_nonempty_strings(additional_targets)
+    )
     if not extras:
         return base
     suffix = "Additional targets: " + "; ".join(extras)
     return f"{base}\n{suffix}" if base else suffix
+
+
+def _resolve_additional_targets_for_visual_prompt(workspace: Any, additional_targets: Sequence[str]) -> list[str]:
+    registry = getattr(workspace, "target_registry", None)
+    resolved: list[str] = []
+    for target_text in _unique_nonempty_strings(additional_targets):
+        if _is_target_ref_key(target_text) and registry is not None:
+            resolve = getattr(registry, "resolve_target_ref", None) or getattr(registry, "resolve", None)
+            if callable(resolve):
+                try:
+                    target = resolve(target_text)
+                except (KeyError, TypeError):
+                    target = None
+                canonical = str(getattr(target, "canonical_text", "")).strip() if target is not None else ""
+                if canonical:
+                    resolved.append(f"{target_text} = {canonical}")
+                    continue
+        resolved.append(target_text)
+    return resolved
 
 
 def _exact_registry_ref_for_legacy_target(workspace: Any, target_text: str) -> str:

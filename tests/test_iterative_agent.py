@@ -1717,6 +1717,76 @@ def test_target_refs_take_precedence_over_legacy_targets_in_bound_tool_prompts(t
     assert "unrelated free text" not in detail["unmatched_targets"]
 
 
+def test_vision_read_additional_target_refs_are_expanded_for_vlm_prompt(tmp_path: Path):
+    class TargetRefPromptBackend(VisionLanguageBackend):
+        def __init__(self):
+            self.requests = []
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            if request.task == "replan":
+                return BackendResponse(
+                    text=json.dumps(
+                        {
+                            "status": "continue",
+                            "rationale": "Inspect ordered targets.",
+                            "program": [
+                                {
+                                    "tool": "vision_read",
+                                    "args": {
+                                        "segment_id": "seg_0001",
+                                        "ask_for": "Confirm the visible order.",
+                                        "additional_targets": ["T1", "T2", "T3", "T4"],
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                )
+            if request.task == "vision_read":
+                return BackendResponse(text="ORDERED_VISIBLE: T1 -> T2 -> T3 -> T4")
+            if request.task == "final_decision":
+                return BackendResponse(text='{"status":"no_model_final","reason":"test"}')
+            return BackendResponse(text="unexpected")
+
+    backend = TargetRefPromptBackend()
+    scene_index = SceneIndex(
+        video_path="/videos/bernini.mp4",
+        duration_sec=30.0,
+        segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=30.0)],
+    )
+    workspace = EvidenceWorkspace.create(tmp_path, "vision_read_target_ref_prompt")
+    workspace.target_registry = TargetRegistry.from_specs(
+        targets=[
+            TargetSpec("T1", "The rape of Persephone"),
+            TargetSpec("T2", "Apollo and Daphne"),
+            TargetSpec("T3", "David"),
+            TargetSpec("T4", "Aeneas Anchises and Ascanius fleeing Troy"),
+        ]
+    )
+    agent = IterativeVisualAgent(
+        backend=backend,
+        registry=build_video_exploration_registry(
+            video_map=VideoMap.from_scene_index(scene_index),
+            backend=backend,
+            workspace=workspace,
+        ),
+        workspace=workspace,
+        scene_index=scene_index,
+        budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
+    )
+
+    result = agent.run(question="Which order is shown?", video_path="/videos/bernini.mp4")
+
+    ask_for = result.rounds[0].program[0]["args"]["ask_for"]
+    vision_prompt = next(request.prompt for request in backend.requests if request.task == "vision_read")
+    assert "Additional targets: T1 = The rape of Persephone" in ask_for
+    assert "T4 = Aeneas Anchises and Ascanius fleeing Troy" in ask_for
+    assert "Additional targets: T1; T2; T3; T4" not in ask_for
+    assert "Additional targets: T1 = The rape of Persephone" in vision_prompt
+    assert "Additional targets: T1; T2; T3; T4" not in vision_prompt
+
+
 def test_planner_owned_grounding_controls_runtime_route_skill_and_target_hints(tmp_path: Path):
     class GroundingThenPlanBackend(VisionLanguageBackend):
         def __init__(self) -> None:

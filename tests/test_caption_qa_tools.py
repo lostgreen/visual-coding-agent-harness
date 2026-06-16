@@ -436,6 +436,34 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(result["grounding_quality"], "visually_confirmed")
         self.assertEqual(result["facts"][0]["event_label"], "red object")
 
+    def test_vision_read_expands_registry_target_refs_in_additional_targets(self):
+        backend = CaptionQARecordingBackend()
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="vision_read_target_refs")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "The rape of Persephone"),
+                    TargetSpec("T2", "Apollo and Daphne"),
+                ]
+            )
+            registry = build_segment_inspector_registry(backend, workspace=workspace)
+
+            registry.execute(
+                "vision_read",
+                {
+                    "video_path": "/videos/demo.mp4",
+                    "segment_id": "seg_0004",
+                    "start_sec": 30.0,
+                    "end_sec": 42.0,
+                    "ask_for": "visible order of the works",
+                    "additional_targets": ["T1", "T2"],
+                },
+            )
+
+        prompt = backend.requests[0].prompt
+        self.assertIn("Additional targets: T1 = The rape of Persephone; T2 = Apollo and Daphne", prompt)
+        self.assertNotIn("Additional targets: T1; T2", prompt)
+
     def test_vision_read_parses_ordered_visible_output(self):
         backend = FixedTextBackend("Visible targets are c, then a, then b.\nORDERED_VISIBLE: c -> a -> b")
         registry = build_segment_inspector_registry(backend)

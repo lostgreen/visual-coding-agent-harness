@@ -79,7 +79,11 @@ def build_segment_inspector_registry(
         mutex_option_y: str = "",
         mutex_option_y_text: str = "",
     ) -> Mapping[str, object]:
-        ask_for = _append_additional_targets_to_question(ask_for, additional_targets)
+        resolved_additional_targets = _resolve_additional_targets_for_visual_prompt(
+            workspace=workspace,
+            additional_targets=additional_targets,
+        )
+        ask_for = _append_additional_targets_to_question(ask_for, resolved_additional_targets)
         mutex_prompt = ""
         if mutex_option_x_text and mutex_option_y_text:
             mutex_prompt = _mutex_read_prompt(
@@ -328,6 +332,28 @@ def _resolve_target_ref_texts(
         canonical = str(getattr(target, "canonical_text", "")).strip()
         if canonical and canonical not in resolved:
             resolved.append(canonical)
+    return resolved
+
+
+def _resolve_additional_targets_for_visual_prompt(
+    *,
+    workspace: Optional[EvidenceWorkspace],
+    additional_targets: Sequence[str],
+) -> list[str]:
+    resolved: list[str] = []
+    registry = getattr(workspace, "target_registry", None) if workspace is not None else None
+    for target_text in _unique_nonempty_texts(additional_targets):
+        if re.fullmatch(r"T[1-9]\d*", target_text) and registry is not None:
+            try:
+                target = registry.resolve_target_ref(target_text)
+            except (AttributeError, KeyError, TypeError):
+                pass
+            else:
+                canonical = str(getattr(target, "canonical_text", "")).strip()
+                if canonical:
+                    resolved.append(f"{target_text} = {canonical}")
+                    continue
+        resolved.append(target_text)
     return resolved
 
 
