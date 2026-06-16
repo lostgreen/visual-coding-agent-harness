@@ -69,6 +69,7 @@ def test_default_runstate_has_empty_sets() -> None:
     assert run_state.raw_question == ""
     assert run_state.vlm_safe_question == ""
     assert run_state.effective_route == ""
+    assert run_state.planner_skill_snapshot == ""
     assert run_state.inspected_segment_ids == set()
     assert run_state.seen_tool_semantic_keys == set()
     assert run_state.zero_yield_tool_signatures == set()

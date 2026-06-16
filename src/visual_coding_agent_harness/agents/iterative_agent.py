@@ -377,7 +377,7 @@ class IterativeVisualAgent:
             if self.budget.hard_skill_runtime
             else None
         )
-        last_selected_skill_id: str | None = _runtime_skill_id(skill_runtime.effective_skill) if skill_runtime else None
+        run_state.planner_skill_snapshot = _runtime_skill_id(skill_runtime.effective_skill) if skill_runtime else ""
         if skill_runtime is not None:
             self.workspace.write_trace_event(
                 "skill_recommended",
@@ -428,7 +428,7 @@ class IterativeVisualAgent:
                 evidence_status_summary=evidence_status_summary,
                 recent_tool_outputs=self.workspace.recent_tool_outputs(limit=3),
                 exhausted_tools=exhausted_tools,
-                active_skill=last_selected_skill_id,
+                active_skill=run_state.planner_skill_snapshot or None,
                 route=effective_route,
                 target_hints=self._exploration_target_entities,
                 target_ref_descriptions=_registered_target_ref_descriptions(self.workspace),
@@ -544,7 +544,7 @@ class IterativeVisualAgent:
                     if switch_record is not None:
                         run_state.skill_switch_history.append(switch_record)
                 else:
-                    last_selected_skill_id = f"{planner_skill.name}@v{planner_skill.version}"
+                    run_state.planner_skill_snapshot = f"{planner_skill.name}@v{planner_skill.version}"
             elif skill_status["status"] == "missing":
                 payload = {"round": round_number}
                 if skill_runtime is not None:
@@ -563,7 +563,7 @@ class IterativeVisualAgent:
                 self.workspace.write_trace_event("planner_skill_invalid", payload)
             active_skill = skill_runtime.effective_skill if skill_runtime is not None else planner_skill
             if skill_runtime is not None or planner_skill is not None:
-                last_selected_skill_id = _runtime_skill_id(active_skill)
+                run_state.planner_skill_snapshot = _runtime_skill_id(active_skill)
             round_ctx.skill_runtime = skill_runtime
             round_ctx.evidence_policy = skill_runtime.effective_policy if skill_runtime is not None else None
 
