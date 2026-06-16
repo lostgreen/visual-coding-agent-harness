@@ -7,6 +7,14 @@ from typing import Any, Mapping
 
 
 @dataclass
+class AnswerSuggestionState:
+    option: str = ""
+    citations: tuple[str, ...] = ()
+    confidence: float = 0.0
+    count: int = 0
+
+
+@dataclass
 class RunState:
     question: str
     video_path: str
@@ -25,7 +33,7 @@ class RunState:
     route_repair_exhausted: Mapping[str, Any] | None = None
     exhausted_one_shot_tools: set[str] = field(default_factory=set)
     skill_switch_history: list[Any] = field(default_factory=list)
-    answer_suggestion_state: Any | None = None
+    answer_suggestion_state: AnswerSuggestionState = field(default_factory=AnswerSuggestionState)
     no_progress_warning_emitted: bool = False
     grounding_runtime: Any | None = None
     bootstrap_failure: str | None = None

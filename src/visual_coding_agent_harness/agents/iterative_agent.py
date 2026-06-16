@@ -40,7 +40,7 @@ from .question_policy import (
 )
 from .runtime.host import ToolRuntimeHost
 from .runtime.lifecycle import RunContext
-from .runtime.state import RoundState, RunState
+from .runtime.state import AnswerSuggestionState, RoundState, RunState
 from .skills.predicates import (
     grounding_quality_floor,
     no_decisive_weak_grounding,
@@ -177,14 +177,6 @@ class FailureSignature:
     affected_tools: tuple[str, ...] = ()
 
 
-@dataclass
-class AnswerSuggestionState:
-    option: str = ""
-    citations: tuple[str, ...] = ()
-    confidence: float = 0.0
-    count: int = 0
-
-
 @dataclass(frozen=True)
 class FinalEvidenceBridgeResult:
     citations: list[str]
@@ -218,8 +210,6 @@ class IterativeVisualAgent:
         self.scene_index = scene_index
         self.budget = budget or AgentBudget()
         self._exploration_target_entities: tuple[str, ...] = ()
-        self._answer_suggestion_state = AnswerSuggestionState()
-        self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure: Mapping[str, Any] | None = None
         self.runtime_host = ToolRuntimeHost(registry=self.registry, workspace=self.workspace)
         self.context_allocator = default_context_budget_allocator(
@@ -228,8 +218,6 @@ class IterativeVisualAgent:
         )
 
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
-        self._answer_suggestion_state = AnswerSuggestionState()
-        self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure = None
         question_context = build_question_context(question)
         raw_question = question_context.raw_question
@@ -1021,6 +1009,7 @@ class IterativeVisualAgent:
                         round_number=round_number,
                         source="all_segments_inspected",
                         has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                        run_state=run_state,
                         program=program,
                         observation_ids=[],
                         pending_inferences_out=pending_inferences,
@@ -1139,6 +1128,7 @@ class IterativeVisualAgent:
                     round_number=round_number,
                     source="repeated_program_guard",
                     has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                    run_state=run_state,
                     program=program,
                     observation_ids=[],
                     pending_inferences_out=pending_inferences,
@@ -1255,8 +1245,8 @@ class IterativeVisualAgent:
                         program=program,
                         observation_ids=observation_ids,
                     )
-            if supported_binding_no_growth_rounds >= 3 and not self._no_progress_warning_emitted:
-                self._no_progress_warning_emitted = True
+            if supported_binding_no_growth_rounds >= 3 and not run_state.no_progress_warning_emitted:
+                run_state.no_progress_warning_emitted = True
                 promotion_candidates = _latest_asr_binding_candidates(
                     workspace=self.workspace,
                     target_refs=(),
@@ -1389,6 +1379,7 @@ class IterativeVisualAgent:
                         round_number=round_number,
                         source="prefinal_probe",
                         has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                        run_state=run_state,
                         program=program,
                         observation_ids=observation_ids,
                     )
@@ -1448,6 +1439,7 @@ class IterativeVisualAgent:
                 round_number=self.budget.max_rounds,
                 source="budget_exhausted",
                 has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                run_state=run_state,
             )
             if budget_final is not None:
                 return budget_final
@@ -1992,6 +1984,7 @@ class IterativeVisualAgent:
         round_number: int,
         source: str,
         has_inspect_with_candidate_options: bool,
+        run_state: RunState,
         program: Sequence[Mapping[str, Any]] = (),
         observation_ids: Sequence[str] = (),
         pending_inferences_out: list[str] | None = None,
@@ -2046,6 +2039,7 @@ class IterativeVisualAgent:
                 round_number=round_number,
                 source=source,
                 has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                run_state=run_state,
                 program=program,
                 observation_ids=observation_ids,
             )
@@ -2087,17 +2081,18 @@ class IterativeVisualAgent:
         round_number: int,
         source: str,
         has_inspect_with_candidate_options: bool,
+        run_state: RunState,
         program: Sequence[Mapping[str, Any]] = (),
         observation_ids: Sequence[str] = (),
     ) -> IterativeRunResult | None:
         option = _answer_option_letter(answer_result.answer)
         citations = tuple(str(citation) for citation in answer_result.citations if str(citation))
         if answer_result.status != "final" or not option or not citations or answer_result.confidence < 0.9:
-            self._answer_suggestion_state = AnswerSuggestionState()
+            run_state.answer_suggestion_state = AnswerSuggestionState()
             return None
-        previous = self._answer_suggestion_state
+        previous = run_state.answer_suggestion_state
         count = previous.count + 1 if previous.option == option and previous.citations == citations else 1
-        self._answer_suggestion_state = AnswerSuggestionState(
+        run_state.answer_suggestion_state = AnswerSuggestionState(
             option=option,
             citations=citations,
             confidence=answer_result.confidence,

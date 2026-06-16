@@ -8,7 +8,12 @@ from visual_coding_agent_harness.agents.skill_runtime import (
     update_effective_skill_runtime,
 )
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
-from visual_coding_agent_harness.agents.runtime.state import FinalizationContext, RoundState, RunState
+from visual_coding_agent_harness.agents.runtime.state import (
+    AnswerSuggestionState,
+    FinalizationContext,
+    RoundState,
+    RunState,
+)
 from visual_coding_agent_harness.registry import ToolRegistry
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -72,6 +77,8 @@ def test_default_runstate_has_empty_sets() -> None:
     assert run_state.route_repair_counts == {}
     assert run_state.exhausted_one_shot_tools == set()
     assert run_state.skill_switch_history == []
+    assert run_state.answer_suggestion_state == AnswerSuggestionState()
+    assert run_state.no_progress_warning_emitted is False
 
 
 def test_roundstate_owns_round_scoped_budget_counter() -> None:
