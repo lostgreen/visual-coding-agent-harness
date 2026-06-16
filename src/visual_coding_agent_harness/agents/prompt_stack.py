@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from ..video_index import SceneIndex
 from .context_budget import ContextBudgetAllocator, ContextBudgetReport, SlotName
+from .prompt_frames import PromptFrame, PromptFrameLedger
 from .question_policy import QuestionPlaybook, extract_candidate_options, select_question_playbook
 from .skills.specs import (
     allowed_actions_for_skill,
@@ -116,8 +118,9 @@ def build_replanning_prompt(
     target_ref_descriptions: Sequence[str] = (),
     projection_status: Mapping[str, Any] | None = None,
     diagnostic_repair_hint: str | None = None,
+    requested_tool_names: Sequence[str] = (),
 ) -> tuple[str, ContextBudgetReport]:
-    slots = compose_replanning_prompt_slots(
+    blocks = compose_replanning_prompt_blocks(
         question=question,
         scene_index=scene_index,
         ledger_text=ledger_text,
@@ -139,7 +142,9 @@ def build_replanning_prompt(
         target_ref_descriptions=target_ref_descriptions,
         projection_status=projection_status,
         diagnostic_repair_hint=diagnostic_repair_hint,
+        requested_tool_names=requested_tool_names,
     )
+    slots = _blocks_to_slots(blocks)
     allocated, report = allocator.allocate(
         slots,
         ctx={
@@ -176,6 +181,8 @@ def compose_planner_prompts(
     target_ref_descriptions: Sequence[str] = (),
     projection_status: Mapping[str, Any] | None = None,
     diagnostic_repair_hint: str | None = None,
+    prompt_frame_ledger: PromptFrameLedger | None = None,
+    requested_tool_names: Sequence[str] = (),
 ) -> PromptPair:
     if not prompt_role_split_enabled:
         prompt, report = build_replanning_prompt(
@@ -200,11 +207,12 @@ def compose_planner_prompts(
             route=route,
             target_hints=target_hints,
             target_ref_descriptions=target_ref_descriptions,
-            projection_status=projection_status,
-            diagnostic_repair_hint=diagnostic_repair_hint,
-        )
+                projection_status=projection_status,
+                diagnostic_repair_hint=diagnostic_repair_hint,
+                requested_tool_names=requested_tool_names,
+            )
         return PromptPair(system_prompt="", user_prompt=prompt, context_report=report)
-    slots = compose_replanning_prompt_slots(
+    blocks = compose_replanning_prompt_blocks(
         question=question,
         scene_index=scene_index,
         ledger_text=ledger_text,
@@ -227,7 +235,11 @@ def compose_planner_prompts(
         target_ref_descriptions=target_ref_descriptions,
         projection_status=projection_status,
         diagnostic_repair_hint=diagnostic_repair_hint,
+        requested_tool_names=requested_tool_names,
     )
+    slots = _blocks_to_slots(blocks)
+    if prompt_frame_ledger is not None:
+        slots = _apply_prompt_frame_ledger(slots, blocks, prompt_frame_ledger)
     allocated, report = allocator.allocate(
         slots,
         ctx={
@@ -241,6 +253,73 @@ def compose_planner_prompts(
         return PromptPair(system_prompt=legacy_prompt, user_prompt="", context_report=report)
     system_prompt, user_tail = legacy_prompt.split(split_marker, 1)
     return PromptPair(system_prompt=system_prompt, user_prompt=f"## Trajectory\n{user_tail}", context_report=report)
+
+
+def _apply_prompt_frame_ledger(
+    slots: Mapping[SlotName, str],
+    blocks: Sequence[PromptBlock],
+    ledger: PromptFrameLedger,
+) -> dict[SlotName, str]:
+    framed_blocks = {_frame.frame_id: _frame for _frame in _prompt_frames_for_blocks(blocks)}
+    if not framed_blocks:
+        return dict(slots)
+    rendered: dict[SlotName, str] = dict(slots)
+    for slot, text in slots.items():
+        updated = str(text)
+        for frame_id, frame in framed_blocks.items():
+            rendered_body = f"# {frame.title}\n{frame.body.strip()}"
+            if rendered_body in updated:
+                updated = updated.replace(rendered_body, ledger.take(frame).strip(), 1)
+        rendered[slot] = updated
+    return rendered
+
+
+def _prompt_frames_for_blocks(blocks: Sequence[PromptBlock]) -> tuple[PromptFrame, ...]:
+    frames: list[PromptFrame] = []
+    for block in blocks:
+        if block.name == "skill_catalog":
+            frames.append(
+                PromptFrame(
+                    frame_id="skill_catalog",
+                    title=block.title,
+                    body=block.body,
+                    version="v1",
+                )
+            )
+        elif block.name == "tool_schema":
+            frames.append(
+                PromptFrame(
+                    frame_id="tool_schema",
+                    title=block.title,
+                    body=block.body,
+                    version="v1",
+                )
+            )
+        elif block.name == "route_playbook" and len(block.body) > 1200:
+            frames.append(
+                PromptFrame(
+                    frame_id="route_playbook",
+                    title=block.title,
+                    body=block.body,
+                    version="v1",
+                )
+            )
+    return tuple(frames)
+
+
+_REQUEST_TOOL_RE = re.compile(r"\brequest_tool\s*:\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def requested_tool_names_from_rationale(rationale: str) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for match in _REQUEST_TOOL_RE.finditer(str(rationale or "")):
+        name = match.group(1)
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
 
 
 def compose_replanning_prompt_slots(
@@ -267,6 +346,7 @@ def compose_replanning_prompt_slots(
     target_ref_descriptions: Sequence[str] = (),
     projection_status: Mapping[str, Any] | None = None,
     diagnostic_repair_hint: str | None = None,
+    requested_tool_names: Sequence[str] = (),
 ) -> dict[SlotName, str]:
     blocks = compose_replanning_prompt_blocks(
         question=question,
@@ -291,6 +371,7 @@ def compose_replanning_prompt_slots(
         target_ref_descriptions=target_ref_descriptions,
         projection_status=projection_status,
         diagnostic_repair_hint=diagnostic_repair_hint,
+        requested_tool_names=requested_tool_names,
     )
     return _blocks_to_slots(blocks)
 
@@ -319,6 +400,7 @@ def compose_replanning_prompt_blocks(
     target_ref_descriptions: Sequence[str] = (),
     projection_status: Mapping[str, Any] | None = None,
     diagnostic_repair_hint: str | None = None,
+    requested_tool_names: Sequence[str] = (),
 ) -> list[PromptBlock]:
     playbook = select_question_playbook(question)
     resolved_route = route or playbook.route
@@ -453,6 +535,7 @@ def compose_replanning_prompt_blocks(
                 active_skill=active_skill,
                 exhausted=exhausted_tools or frozenset(),
                 target_ref_descriptions=target_ref_descriptions,
+                requested_tool_names=requested_tool_names,
             ),
         ),
             PromptBlock(
@@ -487,12 +570,27 @@ def _tool_schema_block(
     active_skill: str | None = None,
     exhausted: frozenset[str] = frozenset(),
     target_ref_descriptions: Sequence[str] = (),
+    requested_tool_names: Sequence[str] = (),
 ) -> str:
     has_registered_refs = bool([item for item in target_ref_descriptions if str(item).strip()])
-    signatures = list(_tool_schema_signatures(option_blind=option_blind, include_target_refs=has_registered_refs))
+    all_signatures = list(_tool_schema_signatures(option_blind=option_blind, include_target_refs=has_registered_refs))
+    signatures = list(all_signatures)
     allowed = allowed_actions_for_skill(active_skill or "") if active_skill else frozenset()
-    if allowed and not skill_has_playbook(active_skill or ""):
-        signatures = [signature for signature in signatures if _tool_name_from_signature(signature) in allowed]
+    if allowed:
+        signatures = [
+            signature
+            for signature in signatures
+            if _tool_name_from_signature(signature) in allowed
+            or _tool_name_from_signature(signature) in _GLOBAL_PROMPT_TOOL_NAMES
+        ]
+    requested = _requested_tool_signatures(
+        all_signatures=all_signatures,
+        existing_signatures=signatures,
+        requested_tool_names=requested_tool_names,
+        exhausted=exhausted,
+    )
+    if requested:
+        signatures.extend(requested)
     rendered = [_maybe_mark_exhausted(signature, exhausted) for signature in signatures]
     lines = [
         _target_registry_contract_block(target_ref_descriptions),
@@ -503,7 +601,40 @@ def _tool_schema_block(
             "Use bind_asr_claim to promote indexed ASR cue_ids into supported evidence for registered target_refs."
         )
     lines.extend(f"- {signature}" for signature in rendered)
+    if requested:
+        lines.append("temporarily widened tools:")
+        lines.extend(f"- {signature}" for signature in requested)
+    lines.append("<more tools available; request exact tool name in rationale as `request_tool: <tool_name>` to widen>")
     return "\n".join(lines)
+
+
+_GLOBAL_PROMPT_TOOL_NAMES = frozenset(
+    {
+        "view_observation",
+        "read_observation_detail",
+        "grep_evidence",
+        "read_timeline_sorted",
+    }
+)
+
+
+def _requested_tool_signatures(
+    *,
+    all_signatures: Sequence[str],
+    existing_signatures: Sequence[str],
+    requested_tool_names: Sequence[str],
+    exhausted: frozenset[str],
+) -> list[str]:
+    existing_names = {_tool_name_from_signature(signature) for signature in existing_signatures}
+    requested_names = [str(name).strip() for name in requested_tool_names if str(name).strip()]
+    selected: list[str] = []
+    for signature in all_signatures:
+        tool_name = _tool_name_from_signature(signature)
+        if tool_name in existing_names or tool_name in exhausted or tool_name not in requested_names:
+            continue
+        selected.append(signature)
+        existing_names.add(tool_name)
+    return selected
 
 
 def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: bool = False) -> tuple[str, ...]:

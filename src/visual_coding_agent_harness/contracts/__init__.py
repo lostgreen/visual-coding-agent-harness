@@ -8,6 +8,7 @@ from .targets import (
     RelationBinding,
     TargetRegistry,
     TargetSpec,
+    TargetTextHit,
 )
 from .ordered_sequence import (
     OrderedTranscriptItem,
@@ -26,6 +27,7 @@ __all__ = [
     "RelationBinding",
     "TargetRegistry",
     "TargetSpec",
+    "TargetTextHit",
     "build_ordered_transcript_sequence",
     "ordered_sequence_exact_option",
 ]

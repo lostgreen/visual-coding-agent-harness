@@ -1,0 +1,52 @@
+{
+  "case_id": "605-1",
+  "ground_truth": "D",
+  "question": "What is the video mainly about?",
+  "options": [
+    {"id": "A", "text": "A cooking contest"},
+    {"id": "B", "text": "A city traffic update"},
+    {"id": "C", "text": "A sports highlight reel"},
+    {"id": "D", "text": "The rise and fall of an ancient empire"}
+  ],
+  "prior_result": {
+    "selected_option": "B",
+    "confidence": 0.31,
+    "reason": "Sparse visual pass over-weighted modern traffic footage."
+  },
+  "segments": [
+    {
+      "segment_id": "seg_0001",
+      "start_sec": 0.0,
+      "end_sec": 45.0,
+      "asr_sentences": [
+        {
+          "cue_id": "cue_0001",
+          "start_sec": 4.0,
+          "end_sec": 14.0,
+          "text": "The narration introduces the rise of an ancient empire through rulers, monuments, and early victories."
+        }
+      ]
+    },
+    {
+      "segment_id": "seg_0002",
+      "start_sec": 45.0,
+      "end_sec": 90.0,
+      "asr_sentences": [
+        {
+          "cue_id": "cue_0002",
+          "start_sec": 52.0,
+          "end_sec": 65.0,
+          "text": "The segment describes battles, succession crises, and the fall of the empire into ruins."
+        }
+      ]
+    }
+  ],
+  "expected_trace_events": [
+    {
+      "type": "evidence_growth",
+      "source": "read_segment_detail",
+      "segment_id": "seg_0002",
+      "supports_option": "D"
+    }
+  ]
+}

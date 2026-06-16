@@ -26,6 +26,9 @@ class _NormalizedEvidence:
     modality: str
     source: str
     grounding_quality: str
+    evidence_type: str
+    evidence_grade: str
+    discriminator_hits: tuple[str, ...]
     timestamp_start: float | None
     timestamp_end: float | None
     support_status: str
@@ -74,6 +77,15 @@ def evaluate_final_candidate(
     )
     if conflicting_ids:
         return _reject(option_id, "conflicting_evidence", supporting_evidence_ids=conflicting_ids)
+
+    ordered_list_support = _ordered_list_support(selected_evidence, skill_policy)
+    if ordered_list_support:
+        return _accept(
+            option_id,
+            supporting_evidence_ids=tuple(binding.evidence_id for binding in ordered_list_support),
+        )
+    if _option_kind(option) == "sequence" and not target_refs and skill_policy.allow_ordered_list_evidence:
+        return _reject(option_id, "order_position_ambiguous")
 
     if operator == "select_absent":
         return _evaluate_select_absent_operator(
@@ -235,11 +247,17 @@ def _evaluate_main_idea(
     )
     coverage_breadth = _int_field(option_evaluation, "coverage_breadth", default=len({b.target_ref for b in supported}))
     distinct_segment_count = len({_segment_key(binding) for binding in supported})
+    min_distinct_segments = _effective_min_distinct_segments_for_main_idea(
+        registry=registry,
+        target_refs=target_refs,
+        supported=supported,
+        policy=policy,
+    )
 
     if (
         len(supported) < policy.min_bindings
         or coverage_breadth < policy.min_bindings
-        or distinct_segment_count < policy.min_distinct_segments
+        or distinct_segment_count < min_distinct_segments
     ):
         return _reject(
             option_id,
@@ -514,7 +532,7 @@ def _target_support(
         allowed = tuple(
             binding
             for binding in target_evidence
-            if _modality_allowed(binding.modality, policy) and (not require_timestamp or _has_timestamp(binding))
+            if _binding_allowed_as_final_support(binding, policy, require_timestamp=require_timestamp)
         )
         if allowed:
             supporting_evidence_ids.extend(binding.evidence_id for binding in allowed)
@@ -646,10 +664,13 @@ def _normalize_evidence(binding: Any) -> _NormalizedEvidence:
         evidence_id=str(_field(binding, "evidence_id", "binding_id", default="")),
         target_ref=_string_or_none(_field(binding, "target_ref", "target_id")),
         relation_ref=_string_or_none(_field(binding, "relation_ref", "relation_id")),
-        option_id=_string_or_none(_field(binding, "option_id")),
+        option_id=_string_or_none(_field(binding, "option_id", "supported_option")),
         modality=_normalize_modality(_field(binding, "modality", "claim_modality", "source")),
         source=str(_field(binding, "source", "tool", "obs_id", default="") or "").strip(),
         grounding_quality=_normalize_modality(_field(binding, "grounding_quality", default="")),
+        evidence_type=_normalize_text(_field(binding, "evidence_type", default="")),
+        evidence_grade=_normalize_text(_field(binding, "evidence_grade", default="")),
+        discriminator_hits=_text_tuple_field(binding, "discriminator_hits"),
         timestamp_start=timestamp,
         timestamp_end=_float_or_none(_field(binding, "timestamp_end", default=timestamp)),
         support_status=_normalize_status(_field(binding, "support_status", "status")),
@@ -699,6 +720,85 @@ def _applies_to_option(binding: _NormalizedEvidence, option_id: str) -> bool:
 
 def _modality_allowed(binding_modality: str | None, policy: SkillPolicy) -> bool:
     return str(binding_modality or "").strip().lower() in policy.allowed_modalities
+
+
+def _binding_allowed_as_final_support(
+    binding: _NormalizedEvidence,
+    policy: SkillPolicy,
+    *,
+    require_timestamp: bool,
+) -> bool:
+    if not _modality_allowed(binding.modality, policy):
+        return False
+    if require_timestamp and not _has_timestamp(binding):
+        return False
+    if _is_text_only_locator(binding) and not policy.allow_text_only_locator_as_final_support:
+        return False
+    return True
+
+
+def _ordered_list_support(
+    evidence: Sequence[_NormalizedEvidence],
+    policy: SkillPolicy,
+) -> tuple[_NormalizedEvidence, ...]:
+    return tuple(binding for binding in evidence if _is_ordered_list_answer_grade(binding, policy))
+
+
+def _is_ordered_list_answer_grade(binding: _NormalizedEvidence, policy: SkillPolicy) -> bool:
+    if not policy.allow_ordered_list_evidence:
+        return False
+    if binding.evidence_type != "ordered_list" or binding.evidence_grade != "answer_grade":
+        return False
+    if binding.support_status != "supported":
+        return False
+    if _modality_allowed(binding.modality, policy):
+        return True
+    source = _normalize_text(binding.source)
+    return bool(
+        policy.allow_indexed_asr_evidence
+        and (binding.modality in TRANSCRIPT_MODALITIES or source in TRANSCRIPT_MODALITIES or source == "indexed_asr")
+    )
+
+
+def _is_text_only_locator(binding: _NormalizedEvidence) -> bool:
+    markers = {
+        _normalize_text(binding.source),
+        _normalize_text(binding.grounding_quality),
+        _normalize_text(binding.evidence_type),
+    }
+    return bool(markers & {"locate_targets_in_segment", "text_only_locator"})
+
+
+def _effective_min_distinct_segments_for_main_idea(
+    *,
+    registry: Any,
+    target_refs: tuple[str, ...],
+    supported: Sequence[_NormalizedEvidence],
+    policy: SkillPolicy,
+) -> int:
+    floor = policy.discriminator_coverage_floor
+    if floor is None:
+        return policy.min_distinct_segments
+    expected = _target_discriminators(registry, target_refs)
+    if not expected:
+        return policy.min_distinct_segments
+    observed = {
+        hit
+        for binding in supported
+        for hit in binding.discriminator_hits
+        if hit in expected
+    }
+    if len(observed) / len(expected) >= floor:
+        return policy.min_distinct_segments_when_discriminator_floor_holds
+    return policy.min_distinct_segments
+
+
+def _target_discriminators(registry: Any, target_refs: tuple[str, ...]) -> frozenset[str]:
+    discriminators: set[str] = set()
+    for target_ref in target_refs:
+        target = _registry_target(registry, target_ref)
+        discriminators.update(_normalize_text(value) for value in _tuple_field(target, "discriminators"))
+    return frozenset(value for value in discriminators if value)
 
 
 def _is_answer_grade_main_idea_evidence(binding: _NormalizedEvidence) -> bool:
@@ -867,6 +967,24 @@ def _tuple_field(obj: Any, *names: str) -> tuple[str, ...]:
     if isinstance(value, (str, bytes)):
         return (str(value),)
     return tuple(str(item) for item in value)
+
+
+def _text_tuple_field(obj: Any, *names: str) -> tuple[str, ...]:
+    value = _field(obj, *names, default=())
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        values = (value,)
+    else:
+        values = tuple(value)
+    normalized: list[str] = []
+    for item in values:
+        if isinstance(item, dict):
+            item = _field(item, "phrase", "text", "value", "canonical_text", default="")
+        text = _normalize_text(item)
+        if text:
+            normalized.append(text)
+    return tuple(normalized)
 
 
 def _int_field(obj: Any, *names: str, default: int = 0) -> int:

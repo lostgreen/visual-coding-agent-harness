@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
 from .operators import ALLOWED_ANSWER_OPERATORS, normalize_answer_operator
+from .order_hypotheses import OrderedSetSpec
 
 ClaimKind = Literal[
     "entity",
@@ -74,6 +75,7 @@ class GroundingTarget:
     claim_modality: GroundingModality = "unknown"
     aliases: Sequence[str] = field(default_factory=tuple)
     search_queries: Sequence[str] = field(default_factory=tuple)
+    discriminators: Sequence[str] = field(default_factory=tuple)
     polarity: GroundingPolarity = "unknown"
 
     def __post_init__(self) -> None:
@@ -85,6 +87,11 @@ class GroundingTarget:
             "search_queries",
             tuple(str(query) for query in self.search_queries if str(query).strip()),
         )
+        object.__setattr__(
+            self,
+            "discriminators",
+            tuple(str(discriminator) for discriminator in self.discriminators if str(discriminator).strip()),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +102,7 @@ class GroundingTarget:
             "claim_modality": self.claim_modality,
             "aliases": list(self.aliases),
             "search_queries": list(self.search_queries),
+            "discriminators": list(self.discriminators),
             "polarity": self.polarity,
         }
 
@@ -111,6 +119,7 @@ class GroundingTarget:
             claim_modality=claim_modality,
             aliases=_string_tuple(payload.get("aliases", ())),
             search_queries=_string_tuple(payload.get("search_queries", ())),
+            discriminators=_string_tuple(payload.get("discriminators", ())),
             polarity=polarity,
         )
 
@@ -189,6 +198,7 @@ class GroundingPlan:
     targets: Sequence[GroundingTarget] = field(default_factory=tuple)
     relations: Sequence[GroundingRelation] = field(default_factory=tuple)
     options: Sequence[GroundingOption] = field(default_factory=tuple)
+    ordered_sets: Sequence[OrderedSetSpec] = field(default_factory=tuple)
     acceptable_evidence_sources: Sequence[str] = field(default_factory=tuple)
     confidence: float = 0.0
     unresolved_ambiguities: Sequence[str] = field(default_factory=tuple)
@@ -204,6 +214,7 @@ class GroundingPlan:
         object.__setattr__(self, "targets", tuple(self.targets))
         object.__setattr__(self, "relations", tuple(self.relations))
         object.__setattr__(self, "options", tuple(self.options))
+        object.__setattr__(self, "ordered_sets", tuple(self.ordered_sets))
         object.__setattr__(self, "acceptable_evidence_sources", _string_tuple(self.acceptable_evidence_sources))
         object.__setattr__(self, "unresolved_ambiguities", _string_tuple(self.unresolved_ambiguities))
         object.__setattr__(self, "confidence", float(self.confidence or 0.0))
@@ -218,6 +229,7 @@ class GroundingPlan:
             "targets": [target.to_dict() for target in self.targets],
             "relations": [relation.to_dict() for relation in self.relations],
             "options": [option.to_dict() for option in self.options],
+            "ordered_sets": [ordered_set.to_dict() for ordered_set in self.ordered_sets],
             "acceptable_evidence_sources": list(self.acceptable_evidence_sources),
             "confidence": self.confidence,
             "unresolved_ambiguities": list(self.unresolved_ambiguities),
@@ -245,6 +257,10 @@ class GroundingPlan:
             options=tuple(
                 GroundingOption.from_mapping(item)
                 for item in _mapping_sequence(payload.get("options", ()))
+            ),
+            ordered_sets=tuple(
+                OrderedSetSpec.from_mapping(item)
+                for item in _mapping_sequence(payload.get("ordered_sets", ()))
             ),
             acceptable_evidence_sources=_string_tuple(payload.get("acceptable_evidence_sources", ())),
             confidence=_float_value(payload.get("confidence", 0.0)),

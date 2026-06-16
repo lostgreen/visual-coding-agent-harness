@@ -3375,9 +3375,11 @@ class IterativeAgentTest(unittest.TestCase):
         )
         backend = ScriptedPlannerBackend([repeated_program] * 6)
         registry = ToolRegistry()
+        calls = {"video_ls": 0}
 
         @tool(name="video_ls", description="Return the same map.")
         def video_ls(query: str = ""):
+            calls["video_ls"] += 1
             return {"claim": f"same candidate for {query}", "confidence": 1.0}
 
         registry.register(video_ls)
@@ -3405,9 +3407,11 @@ class IterativeAgentTest(unittest.TestCase):
 
             self.assertEqual(result.status, "max_rounds_reached")
             self.assertEqual(len(result.rounds), 2)
+            self.assertEqual(calls["video_ls"], 2)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_no_progress_guard", trace)
             self.assertIn("repeated_program", trace)
+            self.assertIn("repeated_program_blocked", trace)
 
     def test_route_repair_second_repeat_proposes_recovery_without_executing(self):
         repeated_locator = (
@@ -6624,7 +6628,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "final")
             self.assertTrue(result.answer.startswith("D"))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("source\": \"repeated_program_guard", trace)
+            self.assertIn("source\": \"evidence_table_no_growth", trace)
             self.assertIn("iterative_finalization_ready", trace)
 
     def test_no_growth_guard_finalizes_from_answer_verifier_before_budget(self):

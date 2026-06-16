@@ -116,15 +116,20 @@ def build_video_navigation_registry(
                 current=current,
                 target=coverage_target["target"],
                 aliases=coverage_target.get("aliases", ()),
+                phrase_specs=coverage_target.get("phrase_specs", ()),
                 top_k=top_k,
                 modalities=modalities,
             )
+            hits = _coverage_hits(candidates)
             status = "candidate" if candidates else "missing"
             row = {
                 "target_id": display_id,
                 "target": coverage_target["target"],
                 "status": status,
                 "candidates": candidates,
+                "hits": hits,
+                "discriminator_hits": [hit for hit in hits if hit.get("match_source") == "discriminator"],
+                "hit_sources": _unique_nonempty_texts([str(hit.get("match_source", "")) for hit in hits]),
                 "missing_confirmation": not bool(candidates),
                 "source": "target_registry" if target_ref else "free_text_query",
             }
@@ -813,20 +818,37 @@ def _coverage_candidates_for_target(
     current: VideoMap,
     target: object,
     aliases: object,
+    phrase_specs: object = (),
     top_k: int,
     modalities: Sequence[str],
 ) -> list[Mapping[str, object]]:
-    queries = _unique_nonempty_texts([str(target), *_coerce_text_sequence(aliases)])
+    resolved_phrase_specs = _coerce_phrase_specs(phrase_specs)
+    if not resolved_phrase_specs:
+        resolved_phrase_specs = [
+            {"phrase": phrase, "match_source": "canonical" if index == 0 else "alias"}
+            for index, phrase in enumerate(_unique_nonempty_texts([str(target), *_coerce_text_sequence(aliases)]))
+        ]
     candidates: list[Mapping[str, object]] = []
-    seen: set[tuple[str, str]] = set()
-    for query in queries:
+    seen: set[tuple[str, str, str, str]] = set()
+    for phrase_spec in resolved_phrase_specs:
+        query = str(phrase_spec.get("phrase") or "").strip()
+        if not query:
+            continue
+        match_source = str(phrase_spec.get("match_source") or "canonical").strip()
         for result in current.search(query=query, top_k=top_k, modalities=modalities):
             candidate = dict(_coverage_candidate(result))
-            key = (str(candidate.get("segment_id", "")), str(candidate.get("source", "")))
+            key = (
+                str(candidate.get("segment_id", "")),
+                str(candidate.get("source", "")),
+                match_source,
+                query.lower(),
+            )
             if key in seen:
                 continue
             seen.add(key)
             candidate["query"] = query
+            candidate["phrase"] = query
+            candidate["match_source"] = match_source
             candidates.append(candidate)
             if len(candidates) >= max(1, int(top_k or 1)):
                 return candidates
@@ -851,11 +873,47 @@ def _coverage_target_specs(
                 "target_ref": target.target_id,
                 "target": target.canonical_text,
                 "aliases": tuple(str(alias) for alias in target.aliases),
+                "phrase_specs": _target_phrase_specs(target),
             }
         )
     for target in _unique_nonempty_texts(targets):
-        rows.append({"target": target, "aliases": ()})
+        rows.append({"target": target, "aliases": (), "phrase_specs": ({"phrase": target, "match_source": "canonical"},)})
     return rows
+
+
+def _target_phrase_specs(target: TargetSpec) -> tuple[dict[str, str], ...]:
+    specs: list[dict[str, str]] = []
+    for source, phrases in (
+        ("canonical", (target.canonical_text,)),
+        ("alias", tuple(target.aliases)),
+        ("search_query", tuple(target.search_queries)),
+        ("discriminator", tuple(target.discriminators)),
+    ):
+        for phrase in _unique_nonempty_texts([str(item) for item in phrases]):
+            specs.append({"phrase": phrase, "match_source": source})
+    return tuple(specs)
+
+
+def _coerce_phrase_specs(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+
+
+def _coverage_hits(candidates: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    hits: list[dict[str, object]] = []
+    for candidate in candidates:
+        hits.append(
+            {
+                "segment_id": candidate.get("segment_id", ""),
+                "phrase": candidate.get("phrase") or candidate.get("query") or "",
+                "match_source": candidate.get("match_source", ""),
+                "source": candidate.get("source", ""),
+                "snippet": candidate.get("snippet", ""),
+                "score": candidate.get("score", 0.0),
+            }
+        )
+    return hits
 
 
 def _option_coverage_rows(*, rows: Sequence[Mapping[str, object]], workspace: EvidenceWorkspace | None) -> list[dict[str, object]]:

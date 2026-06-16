@@ -9,6 +9,7 @@ from .contracts import (
     GroundingTarget,
 )
 from .operators import ALLOWED_ANSWER_OPERATORS, AnswerOperator, derive_answer_operator
+from .order_hypotheses import OrderedEntity, OrderedSetSpec, OptionOrderHypothesis
 from .planner import GroundingPlannerResult, ground_question_with_model
 from .validator import GroundingValidationFinding, GroundingValidationResult, validate_grounding_plan
 
@@ -24,6 +25,9 @@ __all__ = [
     "GroundingTarget",
     "GroundingValidationFinding",
     "GroundingValidationResult",
+    "OrderedEntity",
+    "OrderedSetSpec",
+    "OptionOrderHypothesis",
     "compile_fallback_plan",
     "compile_grounding_plan",
     "derive_answer_operator",

@@ -19,5 +19,8 @@ vh-trajectory-markdown = "visual_coding_agent_harness.cli.trajectory_markdown:ma
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.setuptools.packages.find]
 where = ["src"]

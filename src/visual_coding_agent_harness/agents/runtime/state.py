@@ -27,6 +27,8 @@ class RunState:
     planner_skill_snapshot: str = ""
     seen_tool_semantic_keys: set[str] = field(default_factory=set)
     zero_yield_tool_signatures: set[str] = field(default_factory=set)
+    program_key_counts: dict[str, int] = field(default_factory=dict)
+    banned_program_keys: set[str] = field(default_factory=set)
     executed_recommended_action_ids: set[str] = field(default_factory=set)
     auto_evidence_promotion_attempted_keys: set[Any] = field(default_factory=set)
     route_repair_counts: dict[Any, int] = field(default_factory=dict)
@@ -36,6 +38,7 @@ class RunState:
     answer_suggestion_state: AnswerSuggestionState = field(default_factory=AnswerSuggestionState)
     answer_feedback: list[str] = field(default_factory=list)
     pending_inferences: list[str] = field(default_factory=list)
+    requested_prompt_tool_names: set[str] = field(default_factory=set)
     last_normalization_notes: list[Any] = field(default_factory=list)
     no_progress_warning_emitted: bool = False
     grounding_runtime: Any | None = None

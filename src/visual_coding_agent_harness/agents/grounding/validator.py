@@ -145,6 +145,40 @@ def validate_grounding_plan(
             )
         if target.target_key.upper() in {"A", "B", "C", "D", "E", "F", "G", "H"}:
             findings.append(GroundingValidationFinding(f"{path}.target_key", "option letter cannot be a target key"))
+        for discriminator in target.discriminators:
+            if _generic_discriminator(discriminator):
+                findings.append(
+                    GroundingValidationFinding(
+                        f"{path}.discriminators",
+                        f"generic discriminator: {discriminator}",
+                        "warning",
+                    )
+                )
+
+    if plan.targets and all(not tuple(target.discriminators) for target in plan.targets):
+        findings.append(
+            GroundingValidationFinding(
+                "targets.discriminators",
+                "all targets have zero discriminators; add short option-unique phrases when available",
+                "warning",
+            )
+        )
+    discriminator_owner: dict[str, str] = {}
+    for index, target in enumerate(plan.targets):
+        for discriminator in target.discriminators:
+            normalized = _normalized_discriminator(discriminator)
+            if not normalized:
+                continue
+            prior = discriminator_owner.get(normalized)
+            if prior is not None and prior != target.target_key:
+                findings.append(
+                    GroundingValidationFinding(
+                        f"targets[{index}].discriminators",
+                        f"overlapping discriminator shared with {prior}: {discriminator}",
+                        "warning",
+                    )
+                )
+            discriminator_owner.setdefault(normalized, target.target_key)
 
     target_subject_surfaces: list[str] = []
     for target in plan.targets:
@@ -315,3 +349,15 @@ def _predecides_answer(value: object) -> bool:
 
 def _skill_name(value: object) -> str:
     return _normalize_space(value).split("@", 1)[0].strip()
+
+
+def _normalized_discriminator(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", _normalized_value(value)).strip()
+
+
+def _generic_discriminator(value: object) -> bool:
+    tokens = _normalized_discriminator(value).split()
+    if not tokens:
+        return False
+    generic_terms = {"video", "shown", "scene", "thing", "event", "object", "generic", "option"}
+    return all(token in generic_terms for token in tokens)

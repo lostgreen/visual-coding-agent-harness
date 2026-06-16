@@ -6,18 +6,20 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Mapping, Sequence
 
-from ..contracts import ClaimRelation, EvidenceBinding, RelationBinding, TargetSpec
+from ..contracts import ClaimRelation, EvidenceBinding, RelationBinding, TargetSpec, TargetTextHit
 
 
 @dataclass(frozen=True)
 class TranscriptBindingResult:
     evidence_bindings: Sequence[EvidenceBinding] = field(default_factory=tuple)
     relation_bindings: Sequence[RelationBinding] = field(default_factory=tuple)
+    target_text_hits: Sequence[TargetTextHit] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "evidence_bindings": [_binding_dict(binding) for binding in self.evidence_bindings],
             "relation_bindings": [asdict(binding) for binding in self.relation_bindings],
+            "target_text_hits": [asdict(hit) for hit in self.target_text_hits],
         }
 
 
@@ -36,7 +38,7 @@ class TranscriptEvidenceBinder:
         source: str = "asr",
     ) -> TranscriptBindingResult:
         snippet = _compact_text(text)
-        target_matches = {target.target_id: _first_target_match(snippet, target) for target in targets}
+        target_matches = {target.target_id: _first_target_hit(snippet, target) for target in targets}
         evidence_bindings = tuple(
             self._bind_target(
                 snippet=snippet,
@@ -65,6 +67,7 @@ class TranscriptEvidenceBinder:
         return TranscriptBindingResult(
             evidence_bindings=evidence_bindings,
             relation_bindings=relation_bindings,
+            target_text_hits=tuple(hit for hit in target_matches.values() if hit is not None),
         )
 
     def _bind_target(
@@ -72,15 +75,16 @@ class TranscriptEvidenceBinder:
         *,
         snippet: str,
         target: TargetSpec,
-        match: re.Match[str] | None,
+        match: TargetTextHit | None,
         obs_id: str,
         segment_id: str,
         start_sec: float | None,
         source: str,
     ) -> EvidenceBinding:
         subject_supported = _subject_supported(snippet, target.subject)
-        status = "supported" if match is not None and subject_supported and not _is_negated(snippet, match.start()) else "rejected"
-        if match is not None and _is_artwork_subject_context(snippet, target=target, match_start=match.start()):
+        match_start = match.start_char if match is not None else None
+        status = "supported" if match_start is not None and subject_supported and not _is_negated(snippet, match_start) else "rejected"
+        if match_start is not None and _is_artwork_subject_context(snippet, target=target, match_start=match_start):
             status = "ambiguous"
         if match is not None and target.subject and not subject_supported:
             status = "ambiguous"
@@ -105,7 +109,7 @@ class TranscriptEvidenceBinder:
         snippet: str,
         relation: ClaimRelation,
         bindings_by_target: Mapping[str, EvidenceBinding],
-        target_matches: Mapping[str, re.Match[str] | None],
+        target_matches: Mapping[str, TargetTextHit | None],
         obs_id: str,
         start_sec: float | None,
         source: str,
@@ -121,16 +125,16 @@ class TranscriptEvidenceBinder:
         ):
             source_match = target_matches.get(source_binding.target_id)
             destination_match = target_matches.get(destination_binding.target_id)
-            source_pos = source_match.start() if source_match is not None else None
-            destination_pos = destination_match.start() if destination_match is not None else None
+            source_pos = source_match.start_char if source_match is not None else None
+            destination_pos = destination_match.start_char if destination_match is not None else None
             if source_pos is not None and destination_pos is not None:
                 if str(relation.kind).strip().lower() in {"before", "precedes", "then"}:
                     status = _before_relation_status(
                         snippet=snippet,
                         source_pos=source_pos,
-                        source_end=source_match.end(),
+                        source_end=int(source_match.end_char or source_pos),
                         destination_pos=destination_pos,
-                        destination_end=destination_match.end(),
+                        destination_end=int(destination_match.end_char or destination_pos),
                     )
                 else:
                     status = "supported"
@@ -155,17 +159,38 @@ def _compact_text(text: str) -> str:
     return " ".join(str(text or "").split()).strip()
 
 
-def _first_target_match(snippet: str, target: TargetSpec) -> re.Match[str] | None:
-    for alias in _target_aliases(target):
+def _first_target_hit(snippet: str, target: TargetSpec) -> TargetTextHit | None:
+    for match_source, alias in _target_phrases(target):
         match = re.search(_phrase_pattern(alias), snippet, flags=re.IGNORECASE)
         if match:
-            return match
+            return TargetTextHit(
+                target_ref=target.target_id,
+                phrase=alias,
+                match_source=match_source,
+                start_char=match.start(),
+                end_char=match.end(),
+            )
     return None
 
 
-def _target_aliases(target: TargetSpec) -> list[str]:
-    aliases = [target.canonical_text, *list(target.aliases)]
-    return _unique_nonempty(aliases)
+def _target_phrases(target: TargetSpec) -> list[tuple[str, str]]:
+    pools = (
+        ("canonical", (target.canonical_text,)),
+        ("alias", tuple(target.aliases)),
+        ("search_query", tuple(target.search_queries)),
+        ("discriminator", tuple(target.discriminators)),
+    )
+    seen = set()
+    result: list[tuple[str, str]] = []
+    for source, values in pools:
+        for value in values:
+            text = str(value or "").strip()
+            key = text.lower()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            result.append((source, text))
+    return result
 
 
 def _phrase_pattern(phrase: str) -> str:

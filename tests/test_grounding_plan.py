@@ -90,7 +90,7 @@ def test_validate_grounding_plan_accepts_structural_plan() -> None:
     result = validate_grounding_plan(_valid_plan(), option_ids=("A", "B"))
 
     assert result.is_valid
-    assert result.findings == ()
+    assert all(finding.severity == "warning" for finding in result.findings)
 
 
 def test_grounding_plan_carries_answer_operator_through_compile() -> None:
@@ -101,6 +101,39 @@ def test_grounding_plan_carries_answer_operator_through_compile() -> None:
     assert plan.to_dict()["answer_operator"] == "ordered_projection"
     assert GroundingPlan.from_mapping(plan.to_dict()).answer_operator == "ordered_projection"
     assert compiled.answer_operator == "ordered_projection"
+
+
+def test_grounding_plan_preserves_discriminator_source_separate_from_aliases() -> None:
+    plan = replace(
+        _valid_plan(),
+        targets=(
+            replace(
+                _valid_plan().targets[0],
+                aliases=("ancient empire",),
+                search_queries=("empire documentary",),
+                discriminators=("rise of an ancient empire", "fall into ruins"),
+            ),
+        ),
+        options=(
+            GroundingOption(
+                option_id="A",
+                required_target_keys=("event_alpha",),
+                raw_option_text="The rise and fall of an ancient empire",
+                option_kind="topic_focus",
+            ),
+        ),
+        relations=(),
+    )
+
+    compiled = compile_grounding_plan(plan, raw_options={"A": "The rise and fall of an ancient empire"})
+    target = compiled.registry.targets_by_id["T1"]
+    restored = GroundingPlan.from_mapping(plan.to_dict()).targets[0]
+
+    assert restored.discriminators == ("rise of an ancient empire", "fall into ruins")
+    assert target.discriminators == ("rise of an ancient empire", "fall into ruins")
+    assert target.search_queries == ("empire documentary",)
+    assert "rise of an ancient empire" not in target.aliases
+    assert "empire documentary" not in target.aliases
 
 
 def test_validate_grounding_plan_rejects_unknown_target_ref() -> None:
@@ -300,13 +333,38 @@ def test_validate_grounding_plan_warns_on_predecided_canonical_claim() -> None:
     )
 
 
+def test_validate_grounding_plan_warns_on_discriminator_quality_without_invalidating() -> None:
+    plan = replace(
+        _valid_plan(),
+        targets=(
+            replace(_valid_plan().targets[0], discriminators=("generic video", "shared clue")),
+            replace(_valid_plan().targets[1], discriminators=("shared clue",)),
+        ),
+    )
+
+    result = validate_grounding_plan(plan, option_ids=("A", "B"))
+
+    assert result.is_valid
+    messages = "\n".join(f"{finding.path}: {finding.message}" for finding in result.findings)
+    assert "overlapping discriminator" in messages
+    assert "generic discriminator" in messages
+
+
+def test_validate_grounding_plan_hints_when_all_discriminators_missing() -> None:
+    result = validate_grounding_plan(_valid_plan(), option_ids=("A", "B"))
+
+    assert result.is_valid
+    assert any("all targets have zero discriminators" in finding.message for finding in result.findings)
+
+
 def test_compile_grounding_plan_assigns_stable_registry_ids_and_hash() -> None:
     compiled = compile_grounding_plan(_valid_plan())
 
     assert compiled.target_key_to_id == {"event_alpha": "T1", "event_beta": "T2"}
     assert compiled.relation_key_to_id == {"alpha_before_beta": "R1"}
     assert compiled.registry.resolve_target_ref("T1").canonical_text == "Event Alpha occurs"
-    assert compiled.registry.resolve_target_ref("T1").aliases == ("Alpha event", "Subject X", "Event Alpha")
+    assert compiled.registry.resolve_target_ref("T1").aliases == ("Alpha event", "Subject X")
+    assert compiled.registry.resolve_target_ref("T1").search_queries == ("Event Alpha",)
     assert compiled.registry.resolve_target_ref("T1").modality_hint == ClaimModality.VISUAL_FACT
     assert compiled.registry.option_for("A").target_sequence == ("T1", "T2")
     assert compiled.registry.option_for("A").required_relations == ("R1",)
@@ -392,6 +450,8 @@ def test_grounding_prompt_keeps_task_specific_claim_text_and_neutral_keys() -> N
     assert "subjects must be objects" in prompt
     assert '"subject_key"' in prompt
     assert "Use task-specific, option-faithful canonical claims" in prompt
+    assert "Each target should include discriminators" in prompt
+    assert "1-3 short phrases unique to that option" in prompt
     assert "directly checkable fact probe" in prompt
     assert "Do not make a target canonical_claim that pre-decides an option" in prompt
     assert "Use domain-neutral temporary keys only" in prompt

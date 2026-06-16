@@ -19,6 +19,7 @@ from .contracts import (
     TargetSpec,
     build_ordered_transcript_sequence,
 )
+from .evidence.order_extraction import extract_observed_order_from_text, match_observed_order_to_hypotheses
 from .schemas import EvidenceRowV2
 
 
@@ -203,6 +204,7 @@ class EvidenceWorkspace:
         "qa_region",
         "inspect_region",
         "asr_cue_detail",
+        "ordered_list_evidence",
         "ordered_transcript_sequence",
         "timeline_asr_summary",
         "transcript_evidence_binder",
@@ -336,6 +338,16 @@ class EvidenceWorkspace:
                     "row_count": written,
                 },
             )
+            ordered_written = sum(1 for row in generated_rows if str(row.get("evidence_type", "")) == "ordered_list")
+            if ordered_written:
+                self.write_trace_event(
+                    "post_observation_ordered_list_promoted",
+                    {
+                        "tool": promoted.tool,
+                        "observation_id": promoted.observation_id,
+                        "row_count": ordered_written,
+                    },
+                )
         return promoted
 
     def _promoted_textual_answer_evidence(
@@ -349,11 +361,28 @@ class EvidenceWorkspace:
             return dict(raw_output), []
 
         targets = _workspace_registry_targets(self)
-        if not targets:
+        ordered_sets = _workspace_ordered_sets(self)
+        self.write_trace_event(
+            "post_observation_textual_evidence_considered",
+            {
+                "tool": tool_name,
+                "observation_id": observation_id,
+                "segment_id": str(raw_output.get("segment_id", "")),
+            },
+        )
+        if not targets and not ordered_sets:
+            self.write_trace_event(
+                "post_observation_textual_evidence_rejected",
+                {"tool": tool_name, "observation_id": observation_id, "reason": "no_target_registry"},
+            )
             return dict(raw_output), []
 
         text_sources = _promotion_text_sources(raw_output)
         if not text_sources:
+            self.write_trace_event(
+                "post_observation_textual_evidence_rejected",
+                {"tool": tool_name, "observation_id": observation_id, "reason": "no_textual_source"},
+            )
             return dict(raw_output), []
 
         relations = _workspace_registry_relations(self, targets=targets)
@@ -398,6 +427,14 @@ class EvidenceWorkspace:
                     source=source,
                 )
             )
+            answer_rows.extend(
+                _ordered_list_answer_rows_from_source(
+                    raw_output=raw_output,
+                    source=source,
+                    ordered_sets=ordered_sets,
+                    observation_id=observation_id,
+                )
+            )
 
         promoted = dict(raw_output)
         existing_evidence = _mapping_list(raw_output.get("evidence_bindings"))
@@ -415,7 +452,17 @@ class EvidenceWorkspace:
             row
             for row in merged_rows
             if _mapping_key(row, keys=("evidence_id", "tool", "event_label")) not in existing_row_keys
+            or (
+                bool(row.get("_workspace_promoted"))
+                and observation_id
+                and str(row.get("source_observation_id", "")) == observation_id
+            )
         ]
+        if not generated_rows:
+            self.write_trace_event(
+                "post_observation_textual_evidence_rejected",
+                {"tool": tool_name, "observation_id": observation_id, "reason": "no_match"},
+            )
         return promoted, generated_rows
 
     def annotate_candidate_option_relations(
@@ -1842,6 +1889,97 @@ def _workspace_registry_options(workspace: EvidenceWorkspace) -> list[Any]:
     return list(values)
 
 
+def _workspace_ordered_sets(workspace: EvidenceWorkspace) -> list[Any]:
+    ordered_sets = getattr(workspace, "ordered_sets", ())
+    if not isinstance(ordered_sets, Sequence) or isinstance(ordered_sets, (str, bytes)):
+        return []
+    return [ordered_set for ordered_set in ordered_sets if hasattr(ordered_set, "hypotheses")]
+
+
+def _ordered_list_answer_rows_from_source(
+    *,
+    raw_output: Mapping[str, Any],
+    source: Mapping[str, Any],
+    ordered_sets: Sequence[Any],
+    observation_id: str,
+) -> list[Mapping[str, Any]]:
+    rows: list[Mapping[str, Any]] = []
+    text = str(source.get("text") or "")
+    if not text.strip():
+        return rows
+    for ordered_set in ordered_sets:
+        observed = extract_observed_order_from_text(
+            text,
+            ordered_set,
+            source=_observed_order_source(source),
+            cue_ids=tuple(str(cue_id) for cue_id in source.get("cue_ids", ()) if str(cue_id).strip())
+            if isinstance(source.get("cue_ids", ()), Sequence)
+            else (),
+        )
+        if observed is None:
+            continue
+        match = match_observed_order_to_hypotheses(observed, ordered_set.hypotheses)
+        if match.status != "full_match" or not match.option_id:
+            continue
+        rows.append(
+            {
+                "tool": "ordered_list_evidence",
+                "segment_id": str(raw_output.get("segment_id", "")),
+                "time_range": [float(raw_output.get("start_sec", 0.0) or 0.0), float(raw_output.get("end_sec", 0.0) or 0.0)],
+                "event_label": "ordered_list",
+                "claim": (
+                    f"Indexed text gives ordered set {observed.ordered_set_id} as "
+                    + " -> ".join(observed.entity_order)
+                    + f", matching option {match.option_id}."
+                ),
+                "confidence": match.confidence,
+                "grounding_quality": "indexed_transcript" if observed.source == "indexed_asr" else observed.source,
+                "confidence_signal": "ordered_list_answer_grade",
+                "limitations": "Order is derived from indexed text mention order; visual corroboration depends on route policy.",
+                "source": observed.source,
+                "snippet": observed.support_span,
+                "evidence_type": "ordered_list",
+                "evidence_grade": "answer_grade",
+                "support_status": "supported",
+                "supported_option": match.option_id,
+                "source_observation_id": observation_id,
+                "candidate_option_relations": [
+                    {
+                        "option": match.option_id,
+                        "relation": "support",
+                        "strength": match.confidence,
+                        "observation_id": observation_id,
+                    }
+                ],
+                "metadata": {
+                    "ordered_set_id": observed.ordered_set_id,
+                    "observed_order": list(observed.entity_order),
+                    "matched_hypothesis": match.option_id,
+                    "source": observed.source,
+                    "cue_ids": list(observed.cue_ids),
+                },
+                "evidence_binding": {
+                    "status": "supported",
+                    "target_id": "ordered_list",
+                    "supported_option": match.option_id,
+                    "ordered_set_id": observed.ordered_set_id,
+                    "observed_order": list(observed.entity_order),
+                },
+                "_workspace_promoted": True,
+            }
+        )
+    return rows
+
+
+def _observed_order_source(source: Mapping[str, Any]) -> str:
+    modality = str(source.get("modality") or "")
+    if modality == "ocr":
+        return "ocr"
+    if modality == "caption":
+        return "caption"
+    return "indexed_asr"
+
+
 def _promotion_text_sources(raw_output: Mapping[str, Any]) -> list[dict[str, Any]]:
     segment_id = str(raw_output.get("segment_id", ""))
     start_sec = _optional_float(raw_output.get("start_sec"))
@@ -2750,6 +2888,13 @@ def _normalize_evidence_row(row: Mapping[str, Any], *, evidence_id: str | None =
     ).to_dict()
     if payload["time_range"] is None and payload["t_start"] is not None and payload["t_end"] is not None:
         payload["time_range"] = [payload["t_start"], payload["t_end"]]
+    for field in ("evidence_type", "evidence_grade", "support_status", "source_observation_id"):
+        value = row.get(field)
+        if value not in (None, ""):
+            payload[field] = str(value)
+    metadata = row.get("metadata")
+    if isinstance(metadata, Mapping):
+        payload["metadata"] = dict(metadata)
     return payload
 
 

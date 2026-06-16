@@ -1,0 +1,54 @@
+{
+  "case_id": "611-2",
+  "ground_truth": "D",
+  "question": "Which order are the artworks presented in?",
+  "prior_result": {
+    "selected_option": "A",
+    "confidence": 0.42,
+    "reason": "The prior run treated a raw option order as a target instead of extracting observed order."
+  },
+  "options": [
+    {
+      "id": "A",
+      "text": "\"The rape of Persephone\", \"Apollo and Daphne\", \"David\", \"Aeneas\"",
+      "ordered_entities": ["The rape of Persephone", "Apollo and Daphne", "David", "Aeneas"]
+    },
+    {
+      "id": "B",
+      "text": "\"David\", \"Aeneas\", \"Apollo and Daphne\", \"The rape of Persephone\"",
+      "ordered_entities": ["David", "Aeneas", "Apollo and Daphne", "The rape of Persephone"]
+    },
+    {
+      "id": "C",
+      "text": "\"Apollo and Daphne\", \"The rape of Persephone\", \"Aeneas\", \"David\"",
+      "ordered_entities": ["Apollo and Daphne", "The rape of Persephone", "Aeneas", "David"]
+    },
+    {
+      "id": "D",
+      "text": "\"Aeneas\", \"David\", \"The rape of Persephone\", \"Apollo and Daphne\"",
+      "ordered_entities": ["Aeneas", "David", "The rape of Persephone", "Apollo and Daphne"]
+    }
+  ],
+  "segments": [
+    {
+      "segment_id": "seg_0001",
+      "start_sec": 0.0,
+      "end_sec": 20.0,
+      "asr_sentences": []
+    },
+    {
+      "segment_id": "seg_0002",
+      "start_sec": 20.0,
+      "end_sec": 40.0,
+      "ordered_asr_sequence": ["Aeneas", "David", "The rape of Persephone", "Apollo and Daphne"],
+      "asr_sentences": [
+        {
+          "cue_id": "cue_0007",
+          "start_sec": 23.0,
+          "end_sec": 34.0,
+          "text": "The narration presents the Bernini works in this order: Aeneas -> David -> The rape of Persephone -> Apollo and Daphne"
+        }
+      ]
+    }
+  ]
+}

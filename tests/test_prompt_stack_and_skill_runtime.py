@@ -19,6 +19,7 @@ from visual_coding_agent_harness.agents.prompt_stack import (
     build_replanning_prompt,
     compose_replanning_prompt_slots,
     compose_replanning_prompt_blocks,
+    requested_tool_names_from_rationale,
     render_prompt_blocks,
 )
 from visual_coding_agent_harness.agents.context_budget import default_context_budget_allocator
@@ -287,14 +288,14 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("locate_targets_in_segment(", rendered)
         self.assertIn("verify_segment_anchors(", rendered)
         self.assertIn("read_timeline_sorted(", rendered)
+        self.assertIn("grep_evidence(", rendered)
         self.assertNotIn("commit_map_proposals(", rendered)
         self.assertNotIn("update_hypothesis_slot(", rendered)
-        self.assertNotIn("grep_evidence(", rendered)
         self.assertNotIn("zoom(", rendered)
         self.assertNotIn("expand_window(", rendered)
         self.assertNotIn("read_segment(", rendered)
 
-    def test_tool_schema_does_not_filter_playbook_skill_to_suggested_actions(self):
+    def test_tool_schema_filters_playbook_skill_to_allowed_actions_plus_global_read_tools(self):
         rendered = _tool_schema_block(
             option_blind=True,
             active_skill="main_idea@v1",
@@ -302,8 +303,40 @@ The prose says recovery_rules: this sentence must not define metadata.
         )
 
         self.assertIn("global_gist(", rendered)
-        self.assertIn("inspect_segment(", rendered)
         self.assertIn("grep_evidence(", rendered)
+        self.assertIn("view_observation(", rendered)
+        self.assertIn("read_observation_detail(", rendered)
+        self.assertIn("read_timeline_sorted(", rendered)
+        self.assertNotIn("inspect_segment(", rendered)
+        self.assertIn("request_tool: <tool_name>", rendered)
+
+    def test_tool_schema_temporarily_widens_for_requested_existing_tool(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="main_idea@v1",
+            exhausted=frozenset(),
+            requested_tool_names=("inspect_segment",),
+        )
+
+        self.assertIn("inspect_segment(", rendered)
+        self.assertIn("temporarily widened", rendered)
+
+    def test_tool_schema_does_not_widen_for_unknown_tool(self):
+        rendered = _tool_schema_block(
+            option_blind=True,
+            active_skill="main_idea@v1",
+            exhausted=frozenset(),
+            requested_tool_names=("made_up_tool",),
+        )
+
+        self.assertNotIn("made_up_tool(", rendered)
+
+    def test_requested_tool_names_parse_escape_lines_from_rationale(self):
+        names = requested_tool_names_from_rationale(
+            "Need a focused crop; request_tool: inspect_segment. If weak, request_tool: qa_segment"
+        )
+
+        self.assertEqual(names, ("inspect_segment", "qa_segment"))
 
     def test_search_segments_schema_lists_search_modalities(self):
         rendered = _tool_schema_block(

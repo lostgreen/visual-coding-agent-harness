@@ -2,12 +2,83 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ...protocol import ToolRequest
 from ...registry import ToolError, ToolRegistry
 from .lifecycle import RunContext
+
+_PROGRAM_KEY_IGNORED_STEP_FIELDS = frozenset({"assign", "trace_id", "observation_id", "request_id", "caller"})
+_PROGRAM_KEY_IGNORED_ARG_FIELDS = frozenset(
+    {
+        "video_path",
+        "media_path",
+        "image_path",
+        "question",
+        "raw_question",
+        "vlm_safe_question",
+        "prompt",
+        "nframes",
+        "fps",
+        "temperature",
+    }
+)
+_PROGRAM_KEY_ORDER_INSENSITIVE_FIELDS = frozenset(
+    {"targets", "target_refs", "target_ids", "aliases", "candidate_options", "evidence_ids"}
+)
+
+
+@dataclass(frozen=True)
+class ProgramKey:
+    """Stable semantic key for detecting repeated planner actions."""
+
+    value: tuple[Mapping[str, Any], ...]
+
+    @classmethod
+    def from_program(cls, program: Sequence[Mapping[str, Any]]) -> "ProgramKey":
+        return cls(tuple(_program_step_key(step) for step in program if isinstance(step, Mapping)))
+
+    @property
+    def fingerprint(self) -> str:
+        return json.dumps(self.value, ensure_ascii=True, sort_keys=True, default=str)
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return tuple(str(step.get("tool", "")) for step in self.value if step.get("tool"))
+
+
+def program_key_fingerprint(program: Sequence[Mapping[str, Any]]) -> str:
+    return ProgramKey.from_program(program).fingerprint
+
+
+def _program_step_key(step: Mapping[str, Any]) -> Mapping[str, Any]:
+    tool_name = str(step.get("tool") or step.get("op") or "").strip()
+    args = step.get("args", {})
+    return {
+        "tool": tool_name,
+        "args": _program_key_value(args, parent_key="args") if isinstance(args, Mapping) else {},
+    }
+
+
+def _program_key_value(value: Any, *, parent_key: str = "") -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _program_key_value(item, parent_key=str(key))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            if str(key) not in _PROGRAM_KEY_IGNORED_STEP_FIELDS
+            and str(key) not in _PROGRAM_KEY_IGNORED_ARG_FIELDS
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        normalized = [_program_key_value(item, parent_key=parent_key) for item in value]
+        if parent_key in _PROGRAM_KEY_ORDER_INSENSITIVE_FIELDS:
+            return sorted(normalized, key=lambda item: json.dumps(item, ensure_ascii=True, sort_keys=True, default=str))
+        return normalized
+    if isinstance(value, str):
+        return " ".join(value.split())
+    return value
 
 
 class ProgramNormalizer:

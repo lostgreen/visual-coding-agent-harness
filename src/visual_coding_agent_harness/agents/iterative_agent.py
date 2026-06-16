@@ -29,6 +29,7 @@ from .prompt_stack import (
     compose_planner_prompts,
     compose_replanning_prompt_blocks,
     render_prompt_blocks,
+    requested_tool_names_from_rationale,
 )
 from .question_policy import (
     classify_narration_subroute,
@@ -40,6 +41,7 @@ from .question_policy import (
 )
 from .runtime.host import ToolRuntimeHost
 from .runtime.lifecycle import RunContext
+from .runtime.program_normalizer import program_key_fingerprint
 from .runtime.state import AnswerSuggestionState, RoundState, RunState
 from .skills.predicates import (
     grounding_quality_floor,
@@ -162,7 +164,7 @@ class AgentBudget:
     planner_io_max_chars: int = 200_000
     context_budget_tokens: int = 12000
     context_budget_ratios: Mapping[str, float] | None = None
-    max_repeated_programs: int = 3
+    max_repeated_programs: int = 2
     max_repeated_invalid_programs: int = 3
     hard_skill_runtime: bool = False
     planner_owned_grounding: bool = False
@@ -432,6 +434,7 @@ class IterativeVisualAgent:
                 target_ref_descriptions=_registered_target_ref_descriptions(self.workspace),
                 projection_status=last_projection_status,
                 diagnostic_repair_hint=last_diagnostic_repair_hint,
+                requested_tool_names=tuple(sorted(run_state.requested_prompt_tool_names)),
             )
             planner_prompt = prompt_pair.user_prompt
             system_prompt = prompt_pair.system_prompt
@@ -506,6 +509,7 @@ class IterativeVisualAgent:
                     }
             status = str(action.get("status", "continue"))
             rationale = str(action.get("rationale", ""))
+            run_state.requested_prompt_tool_names = set(requested_tool_names_from_rationale(rationale))
             planned_program: Any = action.get("program", [])
             planner_skill, skill_status = _select_planner_skill(action)
             if skill_status["status"] == "selected":
@@ -1157,63 +1161,83 @@ class IterativeVisualAgent:
                 )
                 if low_confidence_result is not None:
                     return low_confidence_result
-            program_key = _program_signature(program)
-            if program_key == repeated_program_key:
-                repeated_program_count += 1
-            else:
-                repeated_program_key = program_key
-                repeated_program_count = 1
+            program_key = _program_signature(program) if program else ""
+            semantic_repeat_count = 0
+            if program:
+                if program_key == repeated_program_key:
+                    repeated_program_count += 1
+                else:
+                    repeated_program_key = program_key
+                    repeated_program_count = 1
+                semantic_repeat_count = run_state.program_key_counts.get(program_key, 0) + 1
+                run_state.program_key_counts[program_key] = semantic_repeat_count
             if (
-                self.budget.max_repeated_programs > 0
-                and repeated_program_count > self.budget.max_repeated_programs
+                program
+                and self.budget.max_repeated_programs > 0
+                and (
+                    program_key in run_state.banned_program_keys
+                    or semantic_repeat_count > self.budget.max_repeated_programs
+                )
             ):
+                run_state.banned_program_keys.add(program_key)
+                repeat_feedback = _repeated_program_feedback(program=program)
+                run_state.answer_feedback = [repeat_feedback]
                 self.workspace.write_trace_event(
                     "iterative_no_progress_guard",
                     {
                         "round": round_number,
                         "reason": "repeated_program",
                         "repeat_count": repeated_program_count,
+                        "semantic_repeat_count": semantic_repeat_count,
                         "max_repeated_programs": self.budget.max_repeated_programs,
                         "program_signature": program_key,
+                        "banned_program_keys": len(run_state.banned_program_keys),
                     },
                 )
-                guard_final = self._try_answer_agent_final(
-                    question=raw_question,
-                    video_path=video_path,
-                    rounds=rounds,
-                    round_number=round_number,
-                    source="repeated_program_guard",
-                    has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                    run_state=run_state,
-                    program=program,
-                    observation_ids=[],
-                    pending_inferences_out=run_state.pending_inferences,
+                fallback_planned_program = self._fallback_inspector_program(
+                    question=exploration_question_text,
+                    inspected_segment_ids=run_state.inspected_segment_ids,
                 )
-                if guard_final is not None:
-                    return guard_final
-                guard_fallback = self._forced_mcq_fallback_result(
-                    question=raw_question,
-                    video_path=video_path,
-                    rounds=rounds,
-                    round_number=round_number,
-                    citations=citations,
-                    source="repeated_program_guard",
-                    candidate_answer=_partial_answer_from_ledger(self._read_ledger()),
-                    reason="repeated_program_guard",
-                )
-                if guard_fallback is not None:
-                    return guard_fallback
-                plural = "round" if len(rounds) == 1 else "rounds"
-                partial_answer = _partial_answer_from_ledger(self._read_ledger())
-                return IterativeRunResult(
-                    question=raw_question,
-                    video_path=video_path,
-                    answer=partial_answer
-                    or f"Stopped after {len(rounds)} exploration {plural} because the planner repeated the same program.",
-                    status="max_rounds_reached",
-                    citations=citations,
-                    rounds=rounds,
-                )
+                fallback_program: Sequence[Mapping[str, Any]] = []
+                if fallback_planned_program:
+                    fallback_normalization_notes: list[NormalizationNote] = []
+                    try:
+                        fallback_program = self._normalize_program(
+                            fallback_planned_program,
+                            question=exploration_question_text,
+                            vlm_safe_question=vlm_safe_question,
+                            raw_question=raw_question,
+                            video_path=video_path,
+                            inspected_segment_ids=run_state.inspected_segment_ids,
+                            final_round_reserved=final_round_reserved,
+                            planner_skill=active_skill,
+                            notes_out=fallback_normalization_notes,
+                            run_state=run_state,
+                        )
+                        normalization_notes.extend(fallback_normalization_notes)
+                    except ValueError:
+                        fallback_program = []
+                if fallback_program and _program_signature(fallback_program) not in run_state.banned_program_keys:
+                    self.workspace.write_trace_event(
+                        "repeated_program_fallback_selected",
+                        {
+                            "round": round_number,
+                            "fallback_program": fallback_program,
+                        },
+                    )
+                    program = fallback_program
+                    program_key = _program_signature(program)
+                    run_state.program_key_counts[program_key] = run_state.program_key_counts.get(program_key, 0) + 1
+                else:
+                    self.workspace.write_trace_event(
+                        "repeated_program_blocked",
+                        {
+                            "round": round_number,
+                            "program_signature": program_key,
+                            "feedback": repeat_feedback,
+                        },
+                    )
+                    continue
             self.workspace.write_trace_event(
                 "iterative_plan",
                 {"round": round_number, "rationale": rationale, "program": program},
@@ -1276,6 +1300,8 @@ class IterativeVisualAgent:
             else:
                 supported_binding_no_growth_rounds = 0
                 self._reset_route_repair_counts_for_supported_bindings(run_state=run_state)
+                run_state.program_key_counts.clear()
+                run_state.banned_program_keys.clear()
             last_supported_binding_count = current_supported_binding_count
             if (
                 prefinal_evidence_repair_failed
@@ -7137,7 +7163,32 @@ def _append_candidate_options_to_tool_question(question: str, *, candidate_optio
 
 
 def _program_signature(program: Sequence[Mapping[str, Any]]) -> str:
-    return json.dumps(_signature_value(list(program)), ensure_ascii=True, sort_keys=True, default=str)
+    return program_key_fingerprint(program)
+
+
+def _repeated_program_feedback(*, program: Sequence[Mapping[str, Any]]) -> str:
+    tool_names = _unique_preserve_order(
+        str(step.get("tool") or step.get("op") or "").strip()
+        for step in program
+        if isinstance(step, Mapping)
+    )
+    tools = ", ".join(tool_names) if tool_names else "the previous tool program"
+    return (
+        "Repeated planner action blocked. Do not repeat this same semantic program again: "
+        f"{tools}. Use a different tool, segment_id/time window, target_refs/targets, or evidence source."
+    )
+
+
+def _unique_preserve_order(values: Sequence[str] | Any) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return tuple(result)
 
 
 def _tool_call_signature(*, tool_name: str, args: Mapping[str, Any]) -> str:

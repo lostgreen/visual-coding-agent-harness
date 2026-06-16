@@ -7,7 +7,13 @@ P0 borrows the useful shape of VisProg: a text planner emits a visual program, a
 ## Run Tests
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover tests
+PYTHONPATH=src:. pytest
+```
+
+The legacy unittest discovery command remains supported for compatibility:
+
+```bash
+PYTHONPATH=src:. python3 -m unittest discover tests
 ```
 
 ## Run Demo

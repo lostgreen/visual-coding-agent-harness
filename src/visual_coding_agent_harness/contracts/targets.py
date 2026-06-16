@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import re
 from types import MappingProxyType
-from typing import Dict, Iterable, Mapping, Sequence, Tuple
+from typing import Dict, Iterable, Literal, Mapping, Sequence, Tuple
 
 _TARGET_REF_RE = re.compile(r"^T[1-9]\d*$")
 
@@ -24,6 +24,8 @@ class TargetSpec:
     target_id: str
     canonical_text: str
     aliases: Sequence[str] = field(default_factory=tuple)
+    search_queries: Sequence[str] = field(default_factory=tuple)
+    discriminators: Sequence[str] = field(default_factory=tuple)
     subject: str | None = None
     relation: str | None = None
     modality_hint: ClaimModality = ClaimModality.UNKNOWN
@@ -34,6 +36,8 @@ class TargetSpec:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "aliases", tuple(self.aliases))
+        object.__setattr__(self, "search_queries", tuple(self.search_queries))
+        object.__setattr__(self, "discriminators", tuple(self.discriminators))
         object.__setattr__(self, "acceptable_evidence_sources", tuple(self.acceptable_evidence_sources))
         if not isinstance(self.modality_hint, ClaimModality):
             object.__setattr__(self, "modality_hint", ClaimModality(self.modality_hint))
@@ -92,6 +96,15 @@ class RelationBinding:
     source: str
     snippet: str
     mention_timestamp_sec: float | None
+
+
+@dataclass(frozen=True)
+class TargetTextHit:
+    target_ref: str
+    phrase: str
+    match_source: Literal["canonical", "alias", "search_query", "discriminator"]
+    start_char: int | None = None
+    end_char: int | None = None
 
 
 @dataclass(frozen=True)

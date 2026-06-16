@@ -37,6 +37,11 @@ class SkillPolicy:
     requires_option_kind: frozenset[str] = field(default_factory=frozenset)
     requires_central_subject_overlap: bool = False
     overlap_window_seconds: float | None = None
+    allow_indexed_asr_evidence: bool = False
+    allow_ordered_list_evidence: bool = False
+    discriminator_coverage_floor: float | None = None
+    min_distinct_segments_when_discriminator_floor_holds: int = 1
+    allow_text_only_locator_as_final_support: bool = False
 
 
 SKILL_POLICIES: Mapping[str, SkillPolicy] = MappingProxyType(
@@ -52,6 +57,9 @@ SKILL_POLICIES: Mapping[str, SkillPolicy] = MappingProxyType(
             requires_per_option_coverage=True,
             requires_option_kind=MAIN_IDEA_ALLOWED_OPTION_KINDS,
             requires_central_subject_overlap=True,
+            allow_indexed_asr_evidence=True,
+            discriminator_coverage_floor=0.6,
+            min_distinct_segments_when_discriminator_floor_holds=1,
         ),
         "narration_timeline_qa": SkillPolicy(
             skill_name="narration_timeline_qa",
@@ -61,6 +69,8 @@ SKILL_POLICIES: Mapping[str, SkillPolicy] = MappingProxyType(
             relation_required=True,
             visual_verification_mandatory=False,
             transcript_answer_grade="allowed",
+            allow_indexed_asr_evidence=True,
+            allow_ordered_list_evidence=True,
         ),
         "visual_timeline_qa": SkillPolicy(
             skill_name="visual_timeline_qa",
@@ -70,6 +80,7 @@ SKILL_POLICIES: Mapping[str, SkillPolicy] = MappingProxyType(
             relation_required=True,
             visual_verification_mandatory=True,
             transcript_answer_grade="not_allowed",
+            allow_ordered_list_evidence=True,
         ),
         "mixed_asr_visual_qa": SkillPolicy(
             skill_name="mixed_asr_visual_qa",

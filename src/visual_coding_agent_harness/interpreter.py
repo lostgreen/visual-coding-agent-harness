@@ -237,6 +237,8 @@ class ProgramInterpreter:
         for index, row in enumerate(rows, start=1):
             if not isinstance(row, Mapping):
                 continue
+            if row.get("_workspace_promoted"):
+                continue
             payload = dict(row)
             payload.setdefault("obs_id", observation.observation_id)
             payload.setdefault("observation_id", observation.observation_id)

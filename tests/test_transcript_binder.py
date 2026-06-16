@@ -111,6 +111,31 @@ def test_supports_explicit_goya_life_targets_and_order_relation():
     assert result.evidence_bindings[0].mention_timestamp_sec == 10.0
 
 
+def test_grounding_plan_preserves_discriminator_source():
+    binder = TranscriptEvidenceBinder()
+    target = TargetSpec(
+        target_id="T1",
+        canonical_text="ancient empire lifecycle",
+        aliases=("empire documentary",),
+        discriminators=("rise of an ancient empire", "fall into ruins"),
+        subject="",
+        relation="present",
+        source="unit_test",
+    )
+
+    result = binder.bind(
+        text="The narration describes the rise of an ancient empire and its later collapse.",
+        targets=[target],
+        obs_id="obs_discriminator",
+        segment_id="seg_0001",
+    )
+
+    assert result.evidence_bindings[0].status == "supported"
+    assert result.target_text_hits[0].target_ref == "T1"
+    assert result.target_text_hits[0].phrase == "rise of an ancient empire"
+    assert result.target_text_hits[0].match_source == "discriminator"
+
+
 def test_temporal_relation_contradiction_is_explicit():
     binder = TranscriptEvidenceBinder()
     humble = _target("T1", "humble background", subject="Goya")

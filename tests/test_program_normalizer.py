@@ -4,7 +4,7 @@ import pytest
 
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget
 from visual_coding_agent_harness.agents.runtime.lifecycle import RunContext
-from visual_coding_agent_harness.agents.runtime.program_normalizer import ProgramNormalizer
+from visual_coding_agent_harness.agents.runtime.program_normalizer import ProgramKey, ProgramNormalizer
 from visual_coding_agent_harness.agents.runtime.state import RoundState, RunState
 from visual_coding_agent_harness.registry import ToolRegistry, ToolRuntimeSpec, tool
 
@@ -72,3 +72,49 @@ def test_program_normalizer_rejects_unknown_tools() -> None:
 
     with pytest.raises(ValueError, match="Unknown tool: missing"):
         ProgramNormalizer(registry).normalize([{"tool": "missing", "args": {}}], ctx=_ctx(registry))
+
+
+def test_program_key_ignores_prompt_and_generated_fields_for_same_action() -> None:
+    first = ProgramKey.from_program(
+        [
+            {
+                "tool": "read_segment_detail",
+                "args": {
+                    "segment_id": "seg_0001",
+                    "targets": ["fall arc", "rise arc"],
+                    "question": "Which option is correct?",
+                    "nframes": 64,
+                },
+                "assign": "obs_001",
+                "trace_id": "trace-a",
+            }
+        ]
+    )
+    second = ProgramKey.from_program(
+        [
+            {
+                "tool": "read_segment_detail",
+                "args": {
+                    "targets": ["rise arc", "fall arc"],
+                    "segment_id": "seg_0001",
+                    "question": "Restated prompt",
+                    "nframes": 128,
+                },
+                "assign": "obs_002",
+                "trace_id": "trace-b",
+            }
+        ]
+    )
+
+    assert first.fingerprint == second.fingerprint
+
+
+def test_program_key_preserves_semantic_segment_changes() -> None:
+    first = ProgramKey.from_program(
+        [{"tool": "read_segment_detail", "args": {"segment_id": "seg_0001", "targets": ["rise arc"]}}]
+    )
+    second = ProgramKey.from_program(
+        [{"tool": "read_segment_detail", "args": {"segment_id": "seg_0002", "targets": ["rise arc"]}}]
+    )
+
+    assert first.fingerprint != second.fingerprint

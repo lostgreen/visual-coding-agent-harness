@@ -177,6 +177,41 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(coverage["option_coverage"][1]["option"], "C")
         self.assertEqual(coverage["option_coverage"][1]["target_refs"], ["T2", "T1"])
 
+    def test_target_coverage_reports_discriminator_hit_sources(self):
+        video_map = VideoMap(
+            video_path="/videos/empire.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=60.0,
+                    asr_text="The narration describes the rise of an ancient empire before its collapse.",
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="coverage_discriminator_sources")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec(
+                        "T1",
+                        "ancient empire lifecycle",
+                        discriminators=("rise of an ancient empire", "fall into ruins"),
+                        modality_hint=ClaimModality.NARRATED_FACT,
+                    )
+                ],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            coverage = registry.execute("target_coverage", {"target_refs": ["T1"], "top_k": 2})
+
+        row = coverage["coverage"][0]
+        self.assertEqual(row["target_ref"], "T1")
+        self.assertIn("discriminator", row["hit_sources"])
+        self.assertEqual(row["discriminator_hits"][0]["phrase"], "rise of an ancient empire")
+        self.assertEqual(row["discriminator_hits"][0]["match_source"], "discriminator")
+
     def test_navigation_segment_tools_return_graceful_invalid_segment_error(self):
         registry = build_video_navigation_registry(demo_video_map())
 

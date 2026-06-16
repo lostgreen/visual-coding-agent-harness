@@ -29,18 +29,29 @@ def _evidence(
     target_ref: str,
     *,
     modality: str = "visual",
+    source: str | None = None,
+    grounding_quality: str | None = None,
     status: str = "supported",
     start: float | None = 1.0,
     end: float | None = 2.0,
     option_id: str | None = None,
+    supported_option: str | None = None,
+    evidence_type: str = "",
+    evidence_grade: str = "",
+    discriminator_hits: tuple[str, ...] = (),
 ) -> SimpleNamespace:
     return SimpleNamespace(
         evidence_id=evidence_id,
         target_ref=target_ref,
         relation_ref=None,
         option_id=option_id,
+        supported_option=supported_option,
         modality=modality,
-        source=modality,
+        source=source or modality,
+        grounding_quality=grounding_quality or modality,
+        evidence_type=evidence_type,
+        evidence_grade=evidence_grade,
+        discriminator_hits=discriminator_hits,
         timestamp_start=start,
         timestamp_end=end,
         support_status=status,
@@ -224,6 +235,154 @@ def test_main_idea_rejects_insufficient_breadth_with_closed_reason() -> None:
     assert not decision.accepted
     assert decision.reason_code == "insufficient_breadth"
     assert decision.missing_target_refs == ("T2",)
+
+
+def test_main_idea_discriminator_floor_relaxes_distinct_segment_requirement() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[
+            TargetSpec("T1", "rise arc", discriminators=("rise", "empire"), subject="Subject X"),
+            TargetSpec("T2", "fall arc", discriminators=("fall", "ruins"), subject="Subject X"),
+        ],
+        options=[OptionSpec("D", target_sequence=("T1", "T2"), option_kind="topic_arc")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="D",
+        registry=registry,
+        evidence_bindings=[
+            _evidence("E1", "T1", modality="asr", source="seg_0001", discriminator_hits=("rise", "empire")),
+            _evidence("E2", "T2", modality="asr", source="seg_0001", discriminator_hits=("fall",)),
+        ],
+        relation_bindings=[],
+        skill_name="main_idea",
+        option_evaluations=[
+            OptionEvaluation(
+                option_id="D",
+                binding_status="supported",
+                rejection_reason=None,
+                coverage_breadth=2,
+                supporting_evidence_ids=("E1", "E2"),
+            )
+        ],
+        central_subjects=("Subject X",),
+    )
+
+    assert decision.accepted
+
+
+def test_main_idea_without_discriminators_uses_original_distinct_segment_floor() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[
+            TargetSpec("T1", "rise arc", subject="Subject X"),
+            TargetSpec("T2", "fall arc", subject="Subject X"),
+        ],
+        options=[OptionSpec("D", target_sequence=("T1", "T2"), option_kind="topic_arc")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="D",
+        registry=registry,
+        evidence_bindings=[
+            _evidence("E1", "T1", modality="asr", source="seg_0001"),
+            _evidence("E2", "T2", modality="asr", source="seg_0001"),
+        ],
+        relation_bindings=[],
+        skill_name="main_idea",
+        option_evaluations=[
+            OptionEvaluation(
+                option_id="D",
+                binding_status="supported",
+                rejection_reason=None,
+                coverage_breadth=2,
+                supporting_evidence_ids=("E1", "E2"),
+            )
+        ],
+        central_subjects=("Subject X",),
+    )
+
+    assert not decision.accepted
+    assert decision.reason_code == "insufficient_breadth"
+
+
+def test_ordered_list_exact_match_satisfies_timeline_gate() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[],
+        options=[OptionSpec("D", target_sequence=(), option_kind="sequence")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="D",
+        registry=registry,
+        evidence_bindings=[
+            _evidence(
+                "E_order",
+                "ordered_list",
+                modality="indexed_transcript",
+                supported_option="D",
+                evidence_type="ordered_list",
+                evidence_grade="answer_grade",
+            )
+        ],
+        relation_bindings=[],
+        skill_name="narration_timeline_qa",
+    )
+
+    assert decision.accepted
+    assert decision.supporting_evidence_ids == ("E_order",)
+
+
+def test_ordered_list_ambiguous_match_does_not_satisfy_timeline_gate() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[],
+        options=[OptionSpec("D", target_sequence=(), option_kind="sequence")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="D",
+        registry=registry,
+        evidence_bindings=[
+            _evidence(
+                "E_order",
+                "ordered_list",
+                modality="indexed_transcript",
+                supported_option="D",
+                status="ambiguous",
+                evidence_type="ordered_list",
+                evidence_grade="answer_grade",
+            )
+        ],
+        relation_bindings=[],
+        skill_name="narration_timeline_qa",
+    )
+
+    assert not decision.accepted
+
+
+def test_text_only_locator_without_anchor_is_not_primary_final_support() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[TargetSpec("T1", "visible target", subject="Subject X")],
+        options=[OptionSpec("A", target_sequence=("T1",))],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="A",
+        registry=registry,
+        evidence_bindings=[
+            _evidence(
+                "E_loc",
+                "T1",
+                modality="visual",
+                source="locate_targets_in_segment",
+                grounding_quality="text_only_locator",
+                start=None,
+                end=None,
+            )
+        ],
+        relation_bindings=[],
+        skill_name="grounded_factual_qa",
+    )
+
+    assert not decision.accepted
 
 
 def test_absent_operator_rejects_selected_present_option() -> None:

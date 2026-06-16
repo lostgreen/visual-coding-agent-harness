@@ -16,6 +16,8 @@ from ..question_policy import (
     extract_option_target_atoms_for_option,
 )
 from .contracts import ALLOWED_GROUNDING_ROUTES, GroundingOption, GroundingPlan, GroundingSubject, GroundingTarget
+from .discriminators import derive_discriminators_lexical
+from .order_hypotheses import OrderedEntity, OrderedSetSpec, OptionOrderHypothesis
 from .operators import derive_answer_operator
 from .validator import validate_grounding_plan
 
@@ -33,6 +35,7 @@ class CompiledGroundingPlan:
     acceptable_evidence_sources: tuple[str, ...]
     unresolved_ambiguities: tuple[str, ...]
     raw_options: dict[str, str]
+    ordered_sets: tuple[OrderedSetSpec, ...] = ()
 
 
 def compile_grounding_plan(
@@ -56,12 +59,14 @@ def compile_grounding_plan(
     targets = []
     for target in plan.targets:
         subject = subjects_by_key.get(str(target.subject_key or ""))
-        aliases = _unique_strings([*target.aliases, *target.search_queries])
+        aliases = _unique_strings(tuple(target.aliases))
         targets.append(
             TargetSpec(
                 target_id=target_key_to_id[target.target_key],
                 canonical_text=target.canonical_claim,
                 aliases=aliases,
+                search_queries=_unique_strings(tuple(target.search_queries)),
+                discriminators=_unique_strings(tuple(target.discriminators)),
                 subject=subject.canonical_name if subject is not None else None,
                 relation=None,
                 modality_hint=_claim_modality(target.claim_modality),
@@ -113,6 +118,7 @@ def compile_grounding_plan(
         acceptable_evidence_sources=acceptable_evidence_sources,
         unresolved_ambiguities=tuple(plan.unresolved_ambiguities),
         raw_options=normalized_raw_options,
+        ordered_sets=tuple(plan.ordered_sets),
     )
 
 
@@ -137,7 +143,7 @@ def compile_fallback_plan(
         route=route,
     )
     if sequence_plan is not None:
-        targets, grounding_options = sequence_plan
+        targets, grounding_options, ordered_sets = sequence_plan
         return GroundingPlan(
             route=route,
             recommended_skill=_fallback_recommended_skill(question, route),
@@ -147,11 +153,13 @@ def compile_fallback_plan(
             targets=tuple(targets),
             relations=(),
             options=tuple(grounding_options),
+            ordered_sets=tuple(ordered_sets),
             acceptable_evidence_sources=_fallback_evidence_sources(route),
             confidence=0.0,
             unresolved_ambiguities=("grounding_model_unavailable_or_invalid",),
         )
     for option_id, option_text in option_items:
+        fallback_discriminators = derive_discriminators_lexical(dict(option_items))
         target_key = f"OPT_{option_id}_claim"
         aliases = tuple(
             atom
@@ -167,6 +175,7 @@ def compile_fallback_plan(
                 claim_modality=_fallback_claim_modality(route),
                 aliases=aliases,
                 search_queries=aliases[:3],
+                discriminators=fallback_discriminators.get(option_id, ()),
                 polarity="unknown",
             )
         )
@@ -201,7 +210,7 @@ def _fallback_ordered_sequence_plan(
     option_items: Sequence[tuple[str, str]],
     subject_key: str,
     route: str,
-) -> tuple[list[GroundingTarget], list[GroundingOption]] | None:
+) -> tuple[list[GroundingTarget], list[GroundingOption], list[OrderedSetSpec]] | None:
     if route != "temporal_order" or len(option_items) < 2:
         return None
     sequence_specs = extract_option_sequence_specs([f"{option_id}. {option_text}" for option_id, option_text in option_items])
@@ -215,6 +224,7 @@ def _fallback_ordered_sequence_plan(
             canonical_by_ref.setdefault(str(ref), item)
     if len(canonical_by_ref) < 2:
         return None
+    ordered_set = _ordered_set_from_sequence_specs(canonical_by_ref=canonical_by_ref, sequence_specs=sequence_specs)
 
     targets: list[GroundingTarget] = []
     for index, ref in enumerate(sorted(canonical_by_ref, key=_target_ref_sort_key), start=1):
@@ -254,7 +264,36 @@ def _fallback_ordered_sequence_plan(
                 option_kind=_fallback_option_kind(route),
             )
         )
-    return targets, grounding_options
+    ordered_sets = [ordered_set] if ordered_set is not None else []
+    return targets, grounding_options, ordered_sets
+
+
+def _ordered_set_from_sequence_specs(
+    *,
+    canonical_by_ref: Mapping[str, str],
+    sequence_specs: Mapping[str, Any],
+) -> OrderedSetSpec | None:
+    canonical_refs = tuple(sorted(canonical_by_ref, key=_target_ref_sort_key))
+    canonical_ref_set = set(canonical_refs)
+    if not canonical_refs:
+        return None
+    if not all(set(spec.ordered_target_refs) == canonical_ref_set for spec in sequence_specs.values()):
+        return None
+    entity_id_by_ref = {ref: f"E{index}" for index, ref in enumerate(canonical_refs, start=1)}
+    return OrderedSetSpec(
+        set_id="OS1",
+        entities=tuple(
+            OrderedEntity(entity_id=entity_id_by_ref[ref], canonical_name=canonical_by_ref[ref])
+            for ref in canonical_refs
+        ),
+        hypotheses=tuple(
+            OptionOrderHypothesis(
+                option_id=option_id,
+                ordered_entity_ids=tuple(entity_id_by_ref[ref] for ref in spec.ordered_target_refs),
+            )
+            for option_id, spec in sorted(sequence_specs.items())
+        ),
+    )
 
 
 def _target_ref_sort_key(ref: str) -> tuple[int, str]:
