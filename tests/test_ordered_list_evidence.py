@@ -85,10 +85,15 @@ def test_read_segment_detail_promotes_ordered_list_evidence_for_option_d() -> No
 
     ordered_rows = [row for row in table["rows"] if row.get("evidence_type") == "ordered_list"]
     assert ordered_rows
-    assert ordered_rows[0]["supported_option"] == "D"
-    assert ordered_rows[0]["source_observation_id"] == observation.observation_id
+    assert {row["supported_option"] for row in ordered_rows} == {"D"}
+    assert all(row["source_observation_id"] == observation.observation_id for row in ordered_rows)
+    transcript_sequence_rows = [row for row in ordered_rows if row.get("tool") == "ordered_transcript_sequence"]
+    assert transcript_sequence_rows
+    assert transcript_sequence_rows[0]["evidence_id"] == "seq_seg_0002"
     ordered_raw_rows = [
-        row for row in observation.raw_output["answer_evidence_rows"] if row.get("evidence_type") == "ordered_list"
+        row
+        for row in observation.raw_output["answer_evidence_rows"]
+        if row.get("evidence_type") == "ordered_list" and row.get("tool") == "ordered_list_evidence"
     ]
     assert ordered_raw_rows
     assert all("evidence_id" not in row for row in ordered_raw_rows)

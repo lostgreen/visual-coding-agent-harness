@@ -118,3 +118,25 @@ def test_program_key_preserves_semantic_segment_changes() -> None:
     )
 
     assert first.fingerprint != second.fingerprint
+
+
+def test_program_key_normalizes_query_case_and_spacing() -> None:
+    first = ProgramKey.from_program([{"tool": "search_segments", "args": {"query": "Rise   Fall"}}])
+    second = ProgramKey.from_program([{"tool": "search_segments", "args": {"query": "rise fall"}}])
+
+    assert first.fingerprint == second.fingerprint
+
+
+def test_program_key_preserves_time_window_and_ordered_set_changes() -> None:
+    early = ProgramKey.from_program(
+        [{"tool": "ordered_list_evidence", "args": {"ordered_set_id": "OS1", "start_sec": 0.0, "end_sec": 10.0}}]
+    )
+    late = ProgramKey.from_program(
+        [{"tool": "ordered_list_evidence", "args": {"ordered_set_id": "OS1", "start_sec": 10.0, "end_sec": 20.0}}]
+    )
+    other_ordered_set = ProgramKey.from_program(
+        [{"tool": "ordered_list_evidence", "args": {"ordered_set_id": "OS2", "start_sec": 0.0, "end_sec": 10.0}}]
+    )
+
+    assert early.fingerprint != late.fingerprint
+    assert early.fingerprint != other_ordered_set.fingerprint

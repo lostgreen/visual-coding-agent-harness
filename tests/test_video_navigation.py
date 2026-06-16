@@ -308,6 +308,51 @@ class VideoNavigationTest(unittest.TestCase):
             any(action.get("route_kind") == "focused_ordered_list_vision" for action in located["recommended_next_actions"])
         )
 
+    def test_no_anchor_locator_ordered_row_keeps_text_only_provenance(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=240.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=180.0,
+                    end_sec=205.0,
+                    asr_text=(
+                        'Bernini presents "Aeneas", "David", "The rape of Persephone", '
+                        'and "Apollo and Daphne" in this passage.'
+                    ),
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="locator_no_anchor_sequence")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "Aeneas"),
+                    TargetSpec("T2", "David"),
+                    TargetSpec("T3", "The rape of Persephone"),
+                    TargetSpec("T4", "Apollo and Daphne"),
+                ],
+                options=[OptionSpec("D", target_sequence=("T1", "T2", "T3", "T4"))],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+
+            located = registry.execute(
+                "locate_targets_in_segment",
+                {
+                    "segment_id": "seg_0002",
+                    "target_refs": ["T1", "T2", "T3", "T4"],
+                    "top_k_per_target": 0,
+                },
+            )
+
+        row = located["answer_evidence_rows"][0]
+        self.assertEqual(row["tool"], "ordered_transcript_sequence")
+        self.assertEqual(row["source_tool"], "locate_targets_in_segment")
+        self.assertEqual(row["anchors_for_vlm"], [])
+        self.assertEqual(row["grounding_quality"], "text_only_locator")
+        self.assertTrue(row["requires_visual_verification"])
+
     def test_partial_asr_order_falls_back_to_focused_vision(self):
         video_map = VideoMap(
             video_path="/videos/bernini.mp4",

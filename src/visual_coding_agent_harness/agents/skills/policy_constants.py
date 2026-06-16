@@ -80,6 +80,7 @@ SKILL_POLICIES: Mapping[str, SkillPolicy] = MappingProxyType(
             relation_required=True,
             visual_verification_mandatory=True,
             transcript_answer_grade="not_allowed",
+            allow_indexed_asr_evidence=True,
             allow_ordered_list_evidence=True,
         ),
         "mixed_asr_visual_qa": SkillPolicy(

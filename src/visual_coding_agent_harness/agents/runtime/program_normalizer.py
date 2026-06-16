@@ -77,7 +77,7 @@ def _program_key_value(value: Any, *, parent_key: str = "") -> Any:
             return sorted(normalized, key=lambda item: json.dumps(item, ensure_ascii=True, sort_keys=True, default=str))
         return normalized
     if isinstance(value, str):
-        return " ".join(value.split())
+        return " ".join(value.split()).casefold()
     return value
 
 

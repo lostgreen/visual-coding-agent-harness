@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
+from ..backends.capabilities import BACKEND_CAPABILITIES
 from ..contracts import ClaimModality, ClaimRelation, OptionSpec, TargetRegistry, TargetSpec
 from ..evidence.projection import ProjectionEvidence, ProjectionResult, project_option_support
 from ..registry import ToolError, ToolRegistry
@@ -24,6 +25,7 @@ from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, Followup
 from .grounding import CompiledGroundingPlan, compile_fallback_plan, compile_grounding_plan, ground_question_with_model
 from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
 from .output_quality import is_unsupported_claim
+from .prompt_frames import PromptFrameLedger
 from .prompt_stack import (
     build_replanning_prompt,
     compose_planner_prompts,
@@ -31,6 +33,7 @@ from .prompt_stack import (
     render_prompt_blocks,
     requested_tool_names_from_rationale,
 )
+from .runtime_capabilities import PlannerRuntimeCapabilities, planner_prompt_retention_mode
 from .question_policy import (
     classify_narration_subroute,
     classify_question_route,
@@ -256,6 +259,50 @@ class GroundingBootstrapState:
     failure: Mapping[str, Any] | None = None
 
 
+def _planner_runtime_capabilities_for_backend(backend: Any) -> PlannerRuntimeCapabilities:
+    planner_backend = getattr(backend, "text_backend", None) or backend
+    explicit = (
+        getattr(planner_backend, "planner_runtime_capabilities", None)
+        or getattr(planner_backend, "runtime_capabilities", None)
+        or getattr(planner_backend, "capabilities", None)
+        or getattr(planner_backend, "backend_capabilities", None)
+    )
+    if isinstance(explicit, PlannerRuntimeCapabilities):
+        return explicit
+    if explicit is not None:
+        return PlannerRuntimeCapabilities(
+            prefix_cache=bool(_capability_field(explicit, "prefix_cache", default=False)),
+            persistent_conversation=bool(_capability_field(explicit, "persistent_conversation", default=False)),
+        )
+    capability_name = _backend_capability_name(planner_backend)
+    caps = BACKEND_CAPABILITIES.get(capability_name)
+    if caps is None:
+        return PlannerRuntimeCapabilities()
+    return PlannerRuntimeCapabilities(
+        prefix_cache=bool(caps.prefix_cache),
+        persistent_conversation=bool(getattr(caps, "persistent_conversation", False)),
+    )
+
+
+def _capability_field(source: Any, name: str, *, default: Any) -> Any:
+    if isinstance(source, Mapping):
+        return source.get(name, default)
+    return getattr(source, name, default)
+
+
+def _backend_capability_name(backend: Any) -> str:
+    explicit_name = str(getattr(backend, "backend_name", "") or getattr(backend, "capability_name", "") or "").strip()
+    if explicit_name:
+        return explicit_name
+    class_name = backend.__class__.__name__
+    mapping = {
+        "OpenAIChatTextBackend": "openai_chat",
+        "QwenTextBackend": "qwen_text",
+        "QwenVLBackend": "qwen_vl",
+    }
+    return mapping.get(class_name, "")
+
+
 class IterativeVisualAgent:
     """Let a VLM repeatedly plan tools, inspect evidence, and decide when to stop."""
 
@@ -274,6 +321,9 @@ class IterativeVisualAgent:
         self.scene_index = scene_index
         self.budget = budget or AgentBudget()
         self._exploration_target_entities: tuple[str, ...] = ()
+        self._planner_runtime_capabilities = _planner_runtime_capabilities_for_backend(self.backend)
+        self._prompt_retention_mode = planner_prompt_retention_mode(self._planner_runtime_capabilities)
+        self._prompt_frame_ledger = PromptFrameLedger(mode=self._prompt_retention_mode)
         self.runtime_host = ToolRuntimeHost(registry=self.registry, workspace=self.workspace)
         self.context_allocator = default_context_budget_allocator(
             total_budget_tokens=self.budget.context_budget_tokens,
@@ -287,6 +337,7 @@ class IterativeVisualAgent:
         self.workspace.ensure_hypothesis(raw_question)
         grounding_bootstrap = self._initialize_planner_owned_grounding(question_context)
         grounding_runtime = grounding_bootstrap.runtime
+        self._prompt_frame_ledger = PromptFrameLedger(mode=self._prompt_retention_mode)
         if grounding_bootstrap.failure is not None:
             return self._grounding_bootstrap_failed_result(
                 question=raw_question,
@@ -378,6 +429,14 @@ class IterativeVisualAgent:
             else None
         )
         run_state.planner_skill_snapshot = _runtime_skill_id(skill_runtime.effective_skill) if skill_runtime else ""
+        self.workspace.write_trace_event(
+            "planner_prompt_retention",
+            {
+                "mode": self._prompt_retention_mode.value,
+                "prefix_cache": self._planner_runtime_capabilities.prefix_cache,
+                "persistent_conversation": self._planner_runtime_capabilities.persistent_conversation,
+            },
+        )
         if skill_runtime is not None:
             self.workspace.write_trace_event(
                 "skill_recommended",
@@ -435,6 +494,7 @@ class IterativeVisualAgent:
                 projection_status=last_projection_status,
                 diagnostic_repair_hint=last_diagnostic_repair_hint,
                 requested_tool_names=tuple(sorted(run_state.requested_prompt_tool_names)),
+                prompt_frame_ledger=self._prompt_frame_ledger,
             )
             planner_prompt = prompt_pair.user_prompt
             system_prompt = prompt_pair.system_prompt
@@ -5691,7 +5751,9 @@ def _final_gate_rows_for_option(
     refs = {str(ref).strip() for ref in final_refs if str(ref).strip()}
     rows = table.get("rows", [])
     if refs and isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
-        return [row for row in rows if isinstance(row, Mapping) and _evidence_row_matches_any_ref(row, refs)]
+        matched = [row for row in rows if isinstance(row, Mapping) and _evidence_row_matches_any_ref(row, refs)]
+        if matched:
+            return matched
     groups = table.get("groups", {})
     if isinstance(groups, Mapping):
         grouped = groups.get(selected_option, [])
@@ -5709,25 +5771,71 @@ def _final_gate_evidence_bindings(
     for row in rows:
         binding = row.get("evidence_binding")
         if not isinstance(binding, Mapping):
-            continue
-        evidence_id = str(row.get("evidence_id", "") or binding.get("evidence_id", "") or row.get("obs_id", "")).strip()
+            binding = {}
+        provenance = row.get("citation_provenance")
+        if not isinstance(provenance, Mapping):
+            provenance = {}
+        evidence_id = str(
+            row.get("evidence_id", "")
+            or binding.get("evidence_id", "")
+            or provenance.get("evidence_id", "")
+            or row.get("obs_id", "")
+        ).strip()
         start, end = _row_time_bounds(row=row, binding=binding)
+        option_relations = _mapping_sequence(row.get("candidate_option_relations"))
+        target_ref = (
+            binding.get("target_ref")
+            or binding.get("target_id")
+            or row.get("target_ref")
+            or row.get("target_id")
+            or _target_ref_from_option_relations(option_relations, evidence_id=evidence_id)
+            or (_target_ref_from_row_label(row) or None)
+        )
         bindings.append(
             {
                 "evidence_id": evidence_id,
-                "target_ref": binding.get("target_ref") or binding.get("target_id"),
+                "target_ref": target_ref,
                 "relation_ref": binding.get("relation_ref") or binding.get("relation_id"),
                 "option_id": row.get("supported_option") or binding.get("option_id") or selected_option,
+                "supported_option": row.get("supported_option") or binding.get("supported_option") or selected_option,
                 "modality": binding.get("modality") or binding.get("claim_modality") or row.get("grounding_quality") or row.get("tool"),
                 "source": binding.get("source") or row.get("source") or row.get("tool"),
+                "segment_id": binding.get("segment_id") or row.get("segment_id") or row.get("source_segment_id"),
+                "source_tool": row.get("source_tool") or row.get("tool"),
+                "grounding_quality": row.get("grounding_quality") or binding.get("grounding_quality") or "",
+                "evidence_type": row.get("evidence_type") or binding.get("evidence_type") or "",
+                "evidence_grade": row.get("evidence_grade") or binding.get("evidence_grade") or "",
+                "discriminator_hits": row.get("discriminator_hits") or binding.get("discriminator_hits") or (),
+                "anchors_for_vlm": row.get("anchors_for_vlm") or (),
                 "timestamp_start": start,
                 "timestamp_end": end,
-                "support_status": binding.get("support_status") or binding.get("status"),
+                "support_status": binding.get("support_status") or binding.get("status") or row.get("support_status") or "supported",
                 "confidence": row.get("confidence"),
                 "rationale": row.get("claim", ""),
             }
         )
     return bindings
+
+
+def _target_ref_from_option_relations(relations: Sequence[Mapping[str, Any]], *, evidence_id: str) -> str:
+    fallback = ""
+    for relation in relations:
+        target_ref = str(relation.get("target_ref") or relation.get("target_id") or "").strip()
+        if not target_ref:
+            continue
+        if not fallback:
+            fallback = target_ref
+        if evidence_id and str(relation.get("evidence_id") or "").strip() == evidence_id:
+            return target_ref
+    return fallback
+
+
+def _target_ref_from_row_label(row: Mapping[str, Any]) -> str:
+    for field in ("event_label", "entity"):
+        text = str(row.get(field) or "").strip()
+        if _TARGET_REF_RE.fullmatch(text):
+            return text
+    return ""
 
 
 def _final_gate_relation_bindings(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -5773,16 +5881,35 @@ def _final_gate_option_evaluations(table: Mapping[str, Any]) -> list[OptionEvalu
                 continue
             binding = row.get("evidence_binding")
             if not isinstance(binding, Mapping):
-                continue
+                binding = {}
             status = str(binding.get("support_status") or binding.get("status") or "").strip().lower()
+            if not status:
+                status = str(row.get("support_status") or "").strip().lower() or "supported"
             if status == "conflicting":
                 conflict = True
             if status != "supported":
                 continue
-            evidence_id = str(row.get("evidence_id", "") or binding.get("evidence_id", "") or row.get("obs_id", "")).strip()
+            provenance = row.get("citation_provenance")
+            if not isinstance(provenance, Mapping):
+                provenance = {}
+            evidence_id = str(
+                row.get("evidence_id", "")
+                or binding.get("evidence_id", "")
+                or provenance.get("evidence_id", "")
+                or row.get("obs_id", "")
+            ).strip()
             if evidence_id:
                 supporting_ids.append(evidence_id)
-            target_ref = str(binding.get("target_ref") or binding.get("target_id") or "").strip()
+            option_relations = _mapping_sequence(row.get("candidate_option_relations"))
+            target_ref = str(
+                binding.get("target_ref")
+                or binding.get("target_id")
+                or row.get("target_ref")
+                or row.get("target_id")
+                or _target_ref_from_option_relations(option_relations, evidence_id=evidence_id)
+                or _target_ref_from_row_label(row)
+                or ""
+            ).strip()
             if target_ref:
                 target_refs.add(target_ref)
         binding_status = "conflicting" if conflict else ("supported" if supporting_ids else ("partial" if rows else "unsupported"))
@@ -5975,13 +6102,29 @@ def _evidence_row_matches_any_ref(row: Mapping[str, Any], refs: set[str]) -> boo
     binding_id = ""
     if isinstance(binding, Mapping):
         binding_id = str(binding.get("evidence_id", "")).strip()
+    provenance = row.get("citation_provenance")
+    provenance_id = ""
+    if isinstance(provenance, Mapping):
+        provenance_id = str(provenance.get("evidence_id", "")).strip()
+    relation_ids = {
+        str(relation.get("evidence_id", "")).strip()
+        for relation in _mapping_sequence(row.get("candidate_option_relations"))
+    }
     row_refs = {
         str(row.get("obs_id", "")).strip(),
         str(row.get("observation_id", "")).strip(),
         str(row.get("evidence_id", "")).strip(),
         binding_id,
+        provenance_id,
+        *relation_ids,
     }
     return bool(refs.intersection(ref for ref in row_refs if ref))
+
+
+def _mapping_sequence(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    return tuple(item for item in value if isinstance(item, Mapping))
 
 
 def _main_idea_indexed_coverage_supports_answer(

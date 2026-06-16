@@ -5784,6 +5784,181 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
             self.assertIn("mcq_forced_fallback", trace)
 
+    def test_case_611_2_read_segment_detail_ordered_asr_replay_final_selects_d(self):
+        video_map = VideoMap(
+            video_path="/videos/bernini.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(segment_id="seg_0001", start_sec=0.0, end_sec=20.0),
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=20.0,
+                    end_sec=40.0,
+                    asr_text=(
+                        'The narration presents the Bernini works in this order: "Aeneas", '
+                        '"David", "The rape of Persephone", and "Apollo and Daphne".'
+                    ),
+                ),
+            ],
+        )
+        question = (
+            "Which order are the artworks presented in?\n"
+            'A. "The rape of Persephone", "Apollo and Daphne", "David", "Aeneas"\n'
+            'B. "David", "Aeneas", "Apollo and Daphne", "The rape of Persephone"\n'
+            'C. "Apollo and Daphne", "The rape of Persephone", "Aeneas", "David"\n'
+            'D. "Aeneas", "David", "The rape of Persephone", "Apollo and Daphne"'
+        )
+
+        class ReadThenFinalBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.replan_count = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    self.replan_count += 1
+                    if self.replan_count == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status":"continue","skill":"visual_timeline_qa@v1",'
+                                '"program":[{"tool":"read_segment_detail","args":{"segment_id":"seg_0002",'
+                                '"target_refs":["T1","T2","T3","T4"],"promote_answer_evidence":true}}]}'
+                            )
+                        )
+                    return BackendResponse(
+                        text=(
+                            '{"status":"final","skill":"visual_timeline_qa@v1","answer":"D",'
+                            '"evidence_ids":["seq_seg_0002"],"citations":[],"confidence":0.94}'
+                        )
+                    )
+                return BackendResponse(text='{"answer":"D","citations":["ev_answer_obs_0001_01"],"confidence":0.94}')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="case_611_2_ordered_asr_replay")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "Aeneas"),
+                    TargetSpec("T2", "David"),
+                    TargetSpec("T3", "The rape of Persephone"),
+                    TargetSpec("T4", "Apollo and Daphne"),
+                ],
+                options=[
+                    OptionSpec("A", target_sequence=("T3", "T4", "T2", "T1"), option_kind="sequence"),
+                    OptionSpec("B", target_sequence=("T2", "T1", "T4", "T3"), option_kind="sequence"),
+                    OptionSpec("C", target_sequence=("T4", "T3", "T1", "T2"), option_kind="sequence"),
+                    OptionSpec("D", target_sequence=("T1", "T2", "T3", "T4"), option_kind="sequence"),
+                ],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+            agent = IterativeVisualAgent(
+                backend=ReadThenFinalBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=SceneIndex(
+                    video_path="/videos/bernini.mp4",
+                    duration_sec=60.0,
+                    segments=[
+                        VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=20.0),
+                        VideoSegment(segment_id="seg_0002", start_sec=20.0, end_sec=40.0),
+                    ],
+                ),
+                budget=AgentBudget(max_rounds=2, max_tool_calls_per_round=1, reserve_final_round=False),
+            )
+
+            result = agent.run(question=question, video_path="/videos/bernini.mp4")
+
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("D"))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"gate_status": "accepted"', trace)
+            self.assertIn("structured_final_gate", trace)
+            self.assertIn("seq_seg_0002", trace)
+
+    def test_case_605_1_two_segment_main_idea_replay_final_selects_d(self):
+        video_map = VideoMap(
+            video_path="/videos/empire.mp4",
+            duration_sec=90.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=45.0,
+                    asr_text="The narration introduces the rise of an ancient empire through rulers and monuments.",
+                ),
+                VideoMapSegment(
+                    segment_id="seg_0002",
+                    start_sec=45.0,
+                    end_sec=90.0,
+                    asr_text="The segment describes battles, succession crises, and the fall of the empire into ruins.",
+                ),
+            ],
+        )
+        question = (
+            "What is the video mainly about?\n"
+            "A. A cooking contest\n"
+            "B. A city traffic update\n"
+            "C. A sports highlight reel\n"
+            "D. The rise and fall of an ancient empire"
+        )
+
+        class ReadBothThenFinalBackend(VisionLanguageBackend):
+            def __init__(self):
+                self.replan_count = 0
+
+            def generate(self, request: BackendRequest) -> BackendResponse:
+                if request.task == "replan":
+                    self.replan_count += 1
+                    if self.replan_count == 1:
+                        return BackendResponse(
+                            text=(
+                                '{"status":"continue","skill":"main_idea@v1","program":['
+                                '{"tool":"read_segment_detail","args":{"segment_id":"seg_0001",'
+                                '"target_refs":["T1"],"promote_answer_evidence":true}},'
+                                '{"tool":"read_segment_detail","args":{"segment_id":"seg_0002",'
+                                '"target_refs":["T2"],"promote_answer_evidence":true}}]}'
+                            )
+                        )
+                    return BackendResponse(
+                        text=(
+                            '{"status":"final","skill":"main_idea@v1","answer":"D",'
+                            '"evidence_ids":["ev_bind_seg_0001_T1","ev_bind_seg_0002_T2"],'
+                            '"citations":[],"confidence":0.92}'
+                        )
+                    )
+                return BackendResponse(text='{"answer":"D","citations":["obs_0001","obs_0002"],"confidence":0.92}')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), run_id="case_605_1_main_idea_replay")
+            workspace.target_registry = TargetRegistry.from_specs(
+                targets=[
+                    TargetSpec("T1", "rise of an ancient empire"),
+                    TargetSpec("T2", "fall of the empire"),
+                ],
+                options=[OptionSpec("D", target_sequence=("T1", "T2"), option_kind="topic_arc")],
+            )
+            registry = build_video_navigation_registry(video_map, workspace=workspace)
+            agent = IterativeVisualAgent(
+                backend=ReadBothThenFinalBackend(),
+                registry=registry,
+                workspace=workspace,
+                scene_index=SceneIndex(
+                    video_path="/videos/empire.mp4",
+                    duration_sec=90.0,
+                    segments=[
+                        VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=45.0),
+                        VideoSegment(segment_id="seg_0002", start_sec=45.0, end_sec=90.0),
+                    ],
+                ),
+                budget=AgentBudget(max_rounds=2, max_tool_calls_per_round=2, reserve_final_round=False),
+            )
+
+            result = agent.run(question=question, video_path="/videos/empire.mp4")
+
+            self.assertEqual(result.status, "final")
+            self.assertTrue(result.answer.startswith("D"))
+            trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"gate_status": "accepted"', trace)
+            self.assertIn("structured_final_gate", trace)
+
     def test_confirmed_timeline_inference_is_prompt_hint_not_auto_final(self):
         registry = ToolRegistry()
 

@@ -604,7 +604,7 @@ def _tool_schema_block(
     if requested:
         lines.append("temporarily widened tools:")
         lines.extend(f"- {signature}" for signature in requested)
-    lines.append("<more tools available; request exact tool name in rationale as `request_tool: <tool_name>` to widen>")
+    lines.append("<more tools available; request_tool: <exact_tool_name> in rationale to widen>")
     return "\n".join(lines)
 
 

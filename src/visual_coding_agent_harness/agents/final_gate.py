@@ -25,10 +25,13 @@ class _NormalizedEvidence:
     option_id: str | None
     modality: str
     source: str
+    segment_id: str
+    source_tool: str
     grounding_quality: str
     evidence_type: str
     evidence_grade: str
     discriminator_hits: tuple[str, ...]
+    anchors_for_vlm_count: int
     timestamp_start: float | None
     timestamp_end: float | None
     support_status: str
@@ -665,12 +668,21 @@ def _normalize_evidence(binding: Any) -> _NormalizedEvidence:
         target_ref=_string_or_none(_field(binding, "target_ref", "target_id")),
         relation_ref=_string_or_none(_field(binding, "relation_ref", "relation_id")),
         option_id=_string_or_none(_field(binding, "option_id", "supported_option")),
-        modality=_normalize_modality(_field(binding, "modality", "claim_modality", "source")),
+        modality=_preferred_modality(
+            _field(binding, "modality"),
+            _field(binding, "claim_modality"),
+            _field(binding, "source"),
+            _field(binding, "grounding_quality"),
+            _field(binding, "tool"),
+        ),
         source=str(_field(binding, "source", "tool", "obs_id", default="") or "").strip(),
+        segment_id=str(_field(binding, "segment_id", "source_segment_id", default="") or "").strip(),
+        source_tool=_normalize_text(_field(binding, "source_tool", "tool", default="")),
         grounding_quality=_normalize_modality(_field(binding, "grounding_quality", default="")),
         evidence_type=_normalize_text(_field(binding, "evidence_type", default="")),
         evidence_grade=_normalize_text(_field(binding, "evidence_grade", default="")),
         discriminator_hits=_text_tuple_field(binding, "discriminator_hits"),
+        anchors_for_vlm_count=_anchor_count(_field(binding, "anchors_for_vlm", default=())),
         timestamp_start=timestamp,
         timestamp_end=_float_or_none(_field(binding, "timestamp_end", default=timestamp)),
         support_status=_normalize_status(_field(binding, "support_status", "status")),
@@ -751,6 +763,8 @@ def _is_ordered_list_answer_grade(binding: _NormalizedEvidence, policy: SkillPol
         return False
     if binding.support_status != "supported":
         return False
+    if _is_text_only_locator(binding):
+        return False
     if _modality_allowed(binding.modality, policy):
         return True
     source = _normalize_text(binding.source)
@@ -763,10 +777,13 @@ def _is_ordered_list_answer_grade(binding: _NormalizedEvidence, policy: SkillPol
 def _is_text_only_locator(binding: _NormalizedEvidence) -> bool:
     markers = {
         _normalize_text(binding.source),
+        _normalize_text(binding.source_tool),
         _normalize_text(binding.grounding_quality),
         _normalize_text(binding.evidence_type),
     }
-    return bool(markers & {"locate_targets_in_segment", "text_only_locator"})
+    if "text_only_locator" in markers:
+        return True
+    return "locate_targets_in_segment" in markers and binding.anchors_for_vlm_count <= 0
 
 
 def _effective_min_distinct_segments_for_main_idea(
@@ -865,6 +882,17 @@ def _normalize_modality(value: Any) -> str:
     return aliases.get(text, text)
 
 
+def _preferred_modality(*values: Any) -> str:
+    fallback = ""
+    for value in values:
+        normalized = _normalize_modality(value)
+        if not fallback and normalized:
+            fallback = normalized
+        if normalized and normalized != "unknown":
+            return normalized
+    return fallback
+
+
 def _normalize_status(value: Any) -> str:
     return str(getattr(value, "value", value) or "").strip().lower()
 
@@ -919,6 +947,8 @@ def _is_global_hint(binding: _NormalizedEvidence) -> bool:
 
 
 def _segment_key(binding: _NormalizedEvidence) -> tuple[Any, ...]:
+    if binding.segment_id:
+        return (binding.segment_id,)
     if binding.source:
         return (binding.source,)
     if binding.timestamp_start is not None or binding.timestamp_end is not None:
@@ -1007,6 +1037,16 @@ def _float_or_none(value: Any) -> float | None:
 def _string_or_none(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _anchor_count(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, (str, bytes)):
+        return 1 if str(value).strip() else 0
+    if isinstance(value, Sequence):
+        return len(value)
+    return 1
 
 
 def _normalize_text(value: Any) -> str:

@@ -308,7 +308,7 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("read_observation_detail(", rendered)
         self.assertIn("read_timeline_sorted(", rendered)
         self.assertNotIn("inspect_segment(", rendered)
-        self.assertIn("request_tool: <tool_name>", rendered)
+        self.assertIn("<more tools available; request_tool: <exact_tool_name> in rationale to widen>", rendered)
 
     def test_tool_schema_temporarily_widens_for_requested_existing_tool(self):
         rendered = _tool_schema_block(

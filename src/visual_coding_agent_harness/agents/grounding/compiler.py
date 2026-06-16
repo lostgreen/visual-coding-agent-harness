@@ -158,8 +158,8 @@ def compile_fallback_plan(
             confidence=0.0,
             unresolved_ambiguities=("grounding_model_unavailable_or_invalid",),
         )
+    fallback_discriminators = derive_discriminators_lexical(dict(option_items))
     for option_id, option_text in option_items:
-        fallback_discriminators = derive_discriminators_lexical(dict(option_items))
         target_key = f"OPT_{option_id}_claim"
         aliases = tuple(
             atom

@@ -290,6 +290,7 @@ def build_video_navigation_registry(
                     segment=segment,
                     targets=binding_targets,
                     workspace=workspace,
+                    source_tool="read_segment_detail",
                 ),
                 *_answer_evidence_rows_from_bound_targets(
                     segment=segment,
@@ -369,6 +370,8 @@ def build_video_navigation_registry(
             segment=segment,
             targets=binding_targets,
             workspace=workspace,
+            source_tool="locate_targets_in_segment",
+            anchors_for_vlm=anchors,
         )
         focused_vision_call_args = _focused_vision_call_args_for_ordered_candidate(
             segment=segment,
@@ -1236,6 +1239,8 @@ def _ordered_transcript_answer_evidence_rows(
     segment: VideoMapSegment,
     targets: Sequence[TargetSpec],
     workspace: EvidenceWorkspace | None,
+    source_tool: str = "read_segment_detail",
+    anchors_for_vlm: Sequence[Mapping[str, object]] = (),
 ) -> list[Mapping[str, object]]:
     if not targets:
         return []
@@ -1253,9 +1258,12 @@ def _ordered_transcript_answer_evidence_rows(
     sequence_payload = sequence.to_dict()
     target_refs = list(sequence.ordered_target_refs)
     evidence_id = str(sequence_payload.get("evidence_id") or f"seq_{segment.segment_id}")
+    anchor_rows = [dict(anchor) for anchor in anchors_for_vlm if isinstance(anchor, Mapping)]
+    locator_without_anchors = source_tool == "locate_targets_in_segment" and not anchor_rows
     row = {
         "evidence_id": evidence_id,
         "tool": "ordered_transcript_sequence",
+        "source_tool": source_tool,
         "segment_id": segment.segment_id,
         "time_range": [float(segment.start_sec), float(segment.end_sec)],
         "event_label": "ordered_transcript_sequence",
@@ -1264,9 +1272,14 @@ def _ordered_transcript_answer_evidence_rows(
             "over target refs: " + " -> ".join(target_refs)
         ),
         "confidence": sequence.confidence,
-        "grounding_quality": "indexed_transcript",
+        "grounding_quality": "text_only_locator" if locator_without_anchors else "indexed_transcript",
         "confidence_signal": "complete contiguous transcript ordered list",
         "limitations": "Order is derived from ASR text position in one contiguous enumeration; visual corroboration is optional unless explicitly required.",
+        "evidence_type": "ordered_list",
+        "evidence_grade": "answer_grade",
+        "support_status": "supported",
+        "requires_visual_verification": bool(source_tool == "locate_targets_in_segment"),
+        "anchors_for_vlm": anchor_rows,
         "source": sequence.source,
         "snippet": sequence.snippet,
         "ordered_target_refs": target_refs,
@@ -1508,8 +1521,10 @@ def _locate_target_candidates(
 ) -> list[Mapping[str, object]]:
     candidates: list[Mapping[str, object]] = []
     sources = _locate_text_sources(segment)
-    per_target_limit = max(1, int(top_k_per_target or 1))
+    per_target_limit = max(0, int(top_k_per_target if top_k_per_target is not None else 3))
     for target_index, target in enumerate([str(item).strip() for item in targets if str(item).strip()], start=1):
+        if per_target_limit <= 0:
+            continue
         matches = _find_target_text_matches(target=target, sources=sources, top_k=per_target_limit)
         for match_index, match in enumerate(matches, start=1):
             candidate_id = _locate_candidate_id(
@@ -1726,7 +1741,7 @@ def _find_target_text_matches(
             float(item.get("start_sec", 0.0) or 0.0),
         ),
     )
-    return ranked[: max(1, int(top_k or 1))]
+    return ranked[: max(0, int(top_k if top_k is not None else 3))]
 
 
 def _find_stemmed_target_text_matches(
@@ -2682,7 +2697,12 @@ def _merge_locate_candidates(
     merge_gap_sec: float = 15.0,
     padding_sec: float = 5.0,
 ) -> list[Mapping[str, object]]:
-    sorted_candidates = sorted(candidates, key=lambda item: (float(item.get("start_sec", 0.0)), str(item.get("target_id", ""))))
+    anchor_candidates = [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("match_type", "")) != "ordered_list_mention"
+    ]
+    sorted_candidates = sorted(anchor_candidates, key=lambda item: (float(item.get("start_sec", 0.0)), str(item.get("target_id", ""))))
     anchors: list[dict[str, object]] = []
     current: dict[str, object] | None = None
     for candidate in sorted_candidates:

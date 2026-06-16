@@ -30,6 +30,7 @@ def _evidence(
     *,
     modality: str = "visual",
     source: str | None = None,
+    source_tool: str | None = None,
     grounding_quality: str | None = None,
     status: str = "supported",
     start: float | None = 1.0,
@@ -39,6 +40,7 @@ def _evidence(
     evidence_type: str = "",
     evidence_grade: str = "",
     discriminator_hits: tuple[str, ...] = (),
+    anchors_for_vlm: tuple[object, ...] = (),
 ) -> SimpleNamespace:
     return SimpleNamespace(
         evidence_id=evidence_id,
@@ -48,10 +50,12 @@ def _evidence(
         supported_option=supported_option,
         modality=modality,
         source=source or modality,
+        source_tool=source_tool or "",
         grounding_quality=grounding_quality or modality,
         evidence_type=evidence_type,
         evidence_grade=evidence_grade,
         discriminator_hits=discriminator_hits,
+        anchors_for_vlm=anchors_for_vlm,
         timestamp_start=start,
         timestamp_end=end,
         support_status=status,
@@ -270,6 +274,54 @@ def test_main_idea_discriminator_floor_relaxes_distinct_segment_requirement() ->
     assert decision.accepted
 
 
+def test_main_idea_unknown_claim_modality_uses_indexed_source_modality() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[
+            TargetSpec("T1", "rise arc", discriminators=("rise", "empire"), subject="Subject X"),
+            TargetSpec("T2", "fall arc", discriminators=("fall", "ruins"), subject="Subject X"),
+        ],
+        options=[OptionSpec("D", target_sequence=("T1", "T2"), option_kind="topic_arc")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="D",
+        registry=registry,
+        evidence_bindings=[
+            {
+                "evidence_id": "E1",
+                "target_ref": "T1",
+                "claim_modality": "unknown",
+                "source": "indexed_transcript",
+                "status": "supported",
+                "discriminator_hits": ("rise", "empire"),
+            },
+            {
+                "evidence_id": "E2",
+                "target_ref": "T2",
+                "claim_modality": "unknown",
+                "source": "indexed_transcript",
+                "status": "supported",
+                "discriminator_hits": ("fall",),
+            },
+        ],
+        relation_bindings=[],
+        skill_name="main_idea",
+        option_evaluations=[
+            OptionEvaluation(
+                option_id="D",
+                binding_status="supported",
+                rejection_reason=None,
+                coverage_breadth=2,
+                supporting_evidence_ids=("E1", "E2"),
+            )
+        ],
+        central_subjects=("Subject X",),
+    )
+
+    assert decision.accepted
+    assert decision.supporting_evidence_ids == ("E1", "E2")
+
+
 def test_main_idea_without_discriminators_uses_original_distinct_segment_floor() -> None:
     registry = TargetRegistry.from_specs(
         targets=[
@@ -331,6 +383,33 @@ def test_ordered_list_exact_match_satisfies_timeline_gate() -> None:
     assert decision.supporting_evidence_ids == ("E_order",)
 
 
+def test_visual_timeline_accepts_indexed_asr_ordered_list_evidence() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[],
+        options=[OptionSpec("D", target_sequence=(), option_kind="sequence")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="D",
+        registry=registry,
+        evidence_bindings=[
+            _evidence(
+                "E_order",
+                "ordered_list",
+                modality="indexed_transcript",
+                supported_option="D",
+                evidence_type="ordered_list",
+                evidence_grade="answer_grade",
+            )
+        ],
+        relation_bindings=[],
+        skill_name="visual_timeline_qa",
+    )
+
+    assert decision.accepted
+    assert decision.supporting_evidence_ids == ("E_order",)
+
+
 def test_ordered_list_ambiguous_match_does_not_satisfy_timeline_gate() -> None:
     registry = TargetRegistry.from_specs(
         targets=[],
@@ -383,6 +462,37 @@ def test_text_only_locator_without_anchor_is_not_primary_final_support() -> None
     )
 
     assert not decision.accepted
+
+
+def test_no_anchor_locator_ordered_list_row_is_not_primary_final_support() -> None:
+    registry = TargetRegistry.from_specs(
+        targets=[],
+        options=[OptionSpec("D", target_sequence=(), option_kind="sequence")],
+    )
+
+    decision = evaluate_final_candidate(
+        selected_option="D",
+        registry=registry,
+        evidence_bindings=[
+            _evidence(
+                "E_loc_order",
+                "ordered_list",
+                modality="indexed_transcript",
+                source="indexed_asr",
+                source_tool="locate_targets_in_segment",
+                grounding_quality="text_only_locator",
+                supported_option="D",
+                evidence_type="ordered_list",
+                evidence_grade="answer_grade",
+                anchors_for_vlm=(),
+            )
+        ],
+        relation_bindings=[],
+        skill_name="visual_timeline_qa",
+    )
+
+    assert not decision.accepted
+    assert decision.reason_code == "order_position_ambiguous"
 
 
 def test_absent_operator_rejects_selected_present_option() -> None:

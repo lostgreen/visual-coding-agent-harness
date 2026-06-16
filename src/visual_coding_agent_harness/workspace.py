@@ -384,6 +384,14 @@ class EvidenceWorkspace:
                 {"tool": tool_name, "observation_id": observation_id, "reason": "no_textual_source"},
             )
             return dict(raw_output), []
+        text_sources = [
+            {
+                **source,
+                "source_tool": tool_name,
+                "anchors_for_vlm": raw_output.get("anchors_for_vlm", ()),
+            }
+            for source in text_sources
+        ]
 
         relations = _workspace_registry_relations(self, targets=targets)
         options = _workspace_registry_options(self)
@@ -1921,9 +1929,14 @@ def _ordered_list_answer_rows_from_source(
         match = match_observed_order_to_hypotheses(observed, ordered_set.hypotheses)
         if match.status != "full_match" or not match.option_id:
             continue
+        source_tool = str(source.get("source_tool", ""))
+        anchors = source.get("anchors_for_vlm", ())
+        anchor_rows = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)] if isinstance(anchors, Sequence) and not isinstance(anchors, (str, bytes)) else []
+        locator_without_anchors = source_tool == "locate_targets_in_segment" and not anchor_rows
         rows.append(
             {
                 "tool": "ordered_list_evidence",
+                "source_tool": source_tool,
                 "segment_id": str(raw_output.get("segment_id", "")),
                 "time_range": [float(raw_output.get("start_sec", 0.0) or 0.0), float(raw_output.get("end_sec", 0.0) or 0.0)],
                 "event_label": "ordered_list",
@@ -1933,9 +1946,13 @@ def _ordered_list_answer_rows_from_source(
                     + f", matching option {match.option_id}."
                 ),
                 "confidence": match.confidence,
-                "grounding_quality": "indexed_transcript" if observed.source == "indexed_asr" else observed.source,
+                "grounding_quality": "text_only_locator"
+                if locator_without_anchors
+                else ("indexed_transcript" if observed.source == "indexed_asr" else observed.source),
                 "confidence_signal": "ordered_list_answer_grade",
                 "limitations": "Order is derived from indexed text mention order; visual corroboration depends on route policy.",
+                "requires_visual_verification": bool(source_tool == "locate_targets_in_segment"),
+                "anchors_for_vlm": anchor_rows,
                 "source": observed.source,
                 "snippet": observed.support_span,
                 "evidence_type": "ordered_list",
@@ -2888,10 +2905,21 @@ def _normalize_evidence_row(row: Mapping[str, Any], *, evidence_id: str | None =
     ).to_dict()
     if payload["time_range"] is None and payload["t_start"] is not None and payload["t_end"] is not None:
         payload["time_range"] = [payload["t_start"], payload["t_end"]]
-    for field in ("evidence_type", "evidence_grade", "support_status", "source_observation_id"):
+    for field in (
+        "evidence_type",
+        "evidence_grade",
+        "support_status",
+        "source_observation_id",
+        "source_tool",
+    ):
         value = row.get(field)
         if value not in (None, ""):
             payload[field] = str(value)
+    if row.get("requires_visual_verification") is not None:
+        payload["requires_visual_verification"] = bool(row.get("requires_visual_verification"))
+    anchors = row.get("anchors_for_vlm")
+    if isinstance(anchors, Sequence) and not isinstance(anchors, (str, bytes)):
+        payload["anchors_for_vlm"] = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)]
     metadata = row.get("metadata")
     if isinstance(metadata, Mapping):
         payload["metadata"] = dict(metadata)

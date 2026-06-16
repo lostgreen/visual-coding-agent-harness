@@ -17,6 +17,7 @@ class BackendCapabilities:
     system_message: SystemMessageSupport
     prefix_cache: bool
     max_context_tokens: int
+    persistent_conversation: bool = False
 
 
 BACKEND_CAPABILITIES: dict[str, BackendCapabilities] = {

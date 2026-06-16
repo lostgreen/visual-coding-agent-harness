@@ -242,6 +242,7 @@ class ProgramInterpreter:
             payload = dict(row)
             payload.setdefault("obs_id", observation.observation_id)
             payload.setdefault("observation_id", observation.observation_id)
+            payload.setdefault("source_observation_id", observation.observation_id)
             payload.setdefault("evidence_id", f"ev_answer_{observation.observation_id}_{index:02d}")
             relations = payload.get("candidate_option_relations", [])
             if isinstance(relations, Sequence) and not isinstance(relations, (str, bytes)):
