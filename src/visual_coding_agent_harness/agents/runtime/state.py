@@ -34,6 +34,7 @@ class RunState:
     exhausted_one_shot_tools: set[str] = field(default_factory=set)
     skill_switch_history: list[Any] = field(default_factory=list)
     answer_suggestion_state: AnswerSuggestionState = field(default_factory=AnswerSuggestionState)
+    last_normalization_notes: list[Any] = field(default_factory=list)
     no_progress_warning_emitted: bool = False
     grounding_runtime: Any | None = None
     bootstrap_failure: Mapping[str, Any] | None = None

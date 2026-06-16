@@ -78,6 +78,7 @@ def test_default_runstate_has_empty_sets() -> None:
     assert run_state.exhausted_one_shot_tools == set()
     assert run_state.skill_switch_history == []
     assert run_state.answer_suggestion_state == AnswerSuggestionState()
+    assert run_state.last_normalization_notes == []
     assert run_state.no_progress_warning_emitted is False
 
 

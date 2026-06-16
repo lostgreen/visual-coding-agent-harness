@@ -351,7 +351,6 @@ class IterativeVisualAgent:
         )
         answer_feedback: list[str] = []
         pending_inferences: list[str] = []
-        last_round_normalization_notes: list[NormalizationNote] = []
         repeated_program_key = ""
         repeated_program_count = 0
         invalid_failure_counts: dict[FailureSignature, int] = {}
@@ -424,7 +423,7 @@ class IterativeVisualAgent:
                 final_round_reserved=final_round_reserved,
                 answer_feedback=answer_feedback,
                 pending_inferences=pending_inferences,
-                normalization_notes=last_round_normalization_notes,
+                normalization_notes=run_state.last_normalization_notes,
                 hypothesis_text=self.workspace.read_hypothesis_text(),
                 reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
                 evidence_status_summary=evidence_status_summary,
@@ -825,7 +824,7 @@ class IterativeVisualAgent:
                     notes_out=normalization_notes,
                     run_state=run_state,
                 )
-                last_round_normalization_notes = normalization_notes
+                run_state.last_normalization_notes = normalization_notes
                 if run_state.route_repair_exhausted is not None:
                     exhausted_payload = dict(run_state.route_repair_exhausted)
                     rounds.append(
@@ -1078,7 +1077,7 @@ class IterativeVisualAgent:
                         return sweep_final
             else:
                 program = []
-                last_round_normalization_notes = []
+                run_state.last_normalization_notes = []
             if final_round_reserved and not program:
                 answer_result = AnswerAgent(self.backend).run(
                     question=raw_question,
