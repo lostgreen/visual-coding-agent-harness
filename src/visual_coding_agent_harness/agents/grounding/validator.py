@@ -15,6 +15,7 @@ from .contracts import (
     ALLOWED_OPTION_KINDS,
     ALLOWED_RELATION_KINDS,
     GroundingPlan,
+    GroundingTarget,
 )
 
 _KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_:-]{0,63}$")
@@ -25,6 +26,24 @@ _PREDECIDED_CLAIM_RE = re.compile(
     r"option\s+[A-H]\s+(?:is|was)\s+(?:correct|the\s+answer)\b"
     r")",
     flags=re.IGNORECASE,
+)
+_ORDER_POSITION_WORD = (
+    r"(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|final|"
+    r"1st|2nd|3rd|4th|5th|6th|7th|8th|9th|10th)"
+)
+_ORDER_VERB_CONTEXT = (
+    r"(?:present(?:ed|s|ing)?|list(?:ed|s|ing)?|show(?:n|s|ed|ing)?|appear(?:s|ed|ing)?|"
+    r"introduc(?:ed|es|ing)?|plac(?:ed|es|ing)?|rank(?:ed|s|ing)?|order(?:ed|s|ing)?)"
+)
+_ORDER_NOUN_CONTEXT = r"(?:sequence|order|timeline|list)"
+_TEMPORAL_TARGET_POSITION_RE = re.compile(
+    rf"\b{_ORDER_VERB_CONTEXT}\b[^.:\n]{{0,64}}\b{_ORDER_POSITION_WORD}\b|"
+    rf"\b{_ORDER_POSITION_WORD}\b[^.:\n]{{0,64}}\b(?:in|within|of|from)?\s*(?:the\s+)?{_ORDER_NOUN_CONTEXT}\b",
+    flags=re.IGNORECASE,
+)
+_TEMPORAL_TARGET_POSITION_MESSAGE = (
+    "temporal-order targets must be order-neutral items/events; put first/second/third/fourth ordering "
+    "in option ordered_target_keys or relations, not target text"
 )
 
 
@@ -119,6 +138,15 @@ def validate_grounding_plan(
                     "warning",
                 )
             )
+        if route == "temporal_order":
+            for surface_path, surface in _target_text_surfaces(path, target):
+                if _temporal_target_mentions_option_position(surface):
+                    findings.append(
+                        GroundingValidationFinding(
+                            surface_path,
+                            _TEMPORAL_TARGET_POSITION_MESSAGE,
+                        )
+                    )
         if _normalized_value(target.claim_kind) not in ALLOWED_CLAIM_KINDS:
             findings.append(
                 GroundingValidationFinding(f"{path}.claim_kind", f"invalid claim kind: {target.claim_kind}", "warning")
@@ -345,6 +373,21 @@ def _normalized_value(value: object) -> str:
 
 def _predecides_answer(value: object) -> bool:
     return bool(_PREDECIDED_CLAIM_RE.search(_normalize_space(value)))
+
+
+def _target_text_surfaces(path: str, target: GroundingTarget) -> tuple[tuple[str, object], ...]:
+    surfaces: list[tuple[str, object]] = [(f"{path}.canonical_claim", target.canonical_claim)]
+    for index, alias in enumerate(target.aliases):
+        surfaces.append((f"{path}.aliases[{index}]", alias))
+    for index, query in enumerate(target.search_queries):
+        surfaces.append((f"{path}.search_queries[{index}]", query))
+    for index, discriminator in enumerate(target.discriminators):
+        surfaces.append((f"{path}.discriminators[{index}]", discriminator))
+    return tuple(surfaces)
+
+
+def _temporal_target_mentions_option_position(value: object) -> bool:
+    return bool(_TEMPORAL_TARGET_POSITION_RE.search(_normalize_space(value)))
 
 
 def _skill_name(value: object) -> str:

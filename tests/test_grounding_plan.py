@@ -333,6 +333,30 @@ def test_validate_grounding_plan_warns_on_predecided_canonical_claim() -> None:
     )
 
 
+def test_validate_grounding_plan_rejects_temporal_target_position_claims() -> None:
+    plan = replace(
+        _valid_plan(),
+        targets=(
+            replace(
+                _valid_plan().targets[0],
+                canonical_claim="The sculpture 'Apollo and Daphne' is presented second in the sequence",
+                aliases=("Apollo and Daphne second in the sequence",),
+                search_queries=("Apollo and Daphne presented second",),
+            ),
+            _valid_plan().targets[1],
+        ),
+    )
+
+    result = validate_grounding_plan(plan, option_ids=("A", "B"))
+
+    assert not result.is_valid
+    assert any(
+        finding.path == "targets[0].canonical_claim"
+        and "order-neutral" in finding.message
+        for finding in result.findings
+    )
+
+
 def test_validate_grounding_plan_warns_on_discriminator_quality_without_invalidating() -> None:
     plan = replace(
         _valid_plan(),
@@ -426,6 +450,31 @@ def test_ground_question_retries_once_then_uses_valid_plan() -> None:
     assert "Validation feedback" in backend.requests[1].prompt
 
 
+def test_ground_question_retries_when_temporal_targets_encode_option_positions() -> None:
+    bad_plan = replace(
+        _valid_plan(),
+        targets=(
+            replace(
+                _valid_plan().targets[0],
+                canonical_claim="The sculpture 'David' is presented third in the sequence",
+            ),
+            _valid_plan().targets[1],
+        ),
+    )
+    backend = ScriptedGroundingBackend([json.dumps(bad_plan.to_dict()), json.dumps(_valid_plan().to_dict())])
+
+    result = ground_question_with_model(
+        backend,
+        question="Question: Which order are the sculptures presented in?",
+        options=("A. Alpha then Beta", "B. Beta then Alpha"),
+    )
+
+    assert result.plan is not None
+    assert result.validation.is_valid
+    assert result.attempts == 2
+    assert "order-neutral" in backend.requests[1].prompt
+
+
 def test_grounding_prompt_keeps_task_specific_claim_text_and_neutral_keys() -> None:
     backend = ScriptedGroundingBackend([json.dumps(_valid_plan().to_dict())])
 
@@ -449,10 +498,12 @@ def test_grounding_prompt_keeps_task_specific_claim_text_and_neutral_keys() -> N
     assert "relation.kind must be one of" in prompt
     assert "subjects must be objects" in prompt
     assert '"subject_key"' in prompt
-    assert "Use task-specific, option-faithful canonical claims" in prompt
+    assert "Use task-specific, evidence-faithful canonical claims" in prompt
     assert "Each target should include discriminators" in prompt
     assert "1-3 short phrases unique to that option" in prompt
     assert "directly checkable fact probe" in prompt
+    assert "For sequence/order questions, targets must be order-neutral" in prompt
+    assert "Put option order only in each option.ordered_target_keys" in prompt
     assert "Do not make a target canonical_claim that pre-decides an option" in prompt
     assert "Use domain-neutral temporary keys only" in prompt
     assert "Use domain-neutral wording in the plan" not in prompt
