@@ -1416,10 +1416,11 @@ class IterativeVisualAgent:
                     "reason": "planner_final_auto_final_blocked",
                 },
             )
+        budget_projection_status = last_projection_status or self._current_projection_status(raw_question)
         budget_decision = self._request_budget_exhausted_model_final(
             question=raw_question,
             round_number=self.budget.max_rounds,
-            projection_status=last_projection_status or self._current_projection_status(raw_question),
+            projection_status=budget_projection_status,
             answer_agent_status=last_answer_agent_status,
         )
         if budget_decision.is_final:
@@ -1442,6 +1443,31 @@ class IterativeVisualAgent:
                 evidence_ids=final_evidence_ids,
                 planner_skill=None,
             )
+            invalid_reason = _budget_final_answer_grade_rejection_reason(
+                diagnostics,
+                answer=budget_decision.answer,
+                projection_status=budget_projection_status,
+            )
+            if invalid_reason:
+                self.workspace.write_trace_event(
+                    "budget_final_model_declined_or_invalid",
+                    {
+                        "round": self.budget.max_rounds,
+                        "status": "invalid",
+                        "reason": invalid_reason,
+                        "answer": budget_decision.answer,
+                        "diagnostics": diagnostics.to_payload() if diagnostics is not None else {},
+                    },
+                )
+                return IterativeRunResult(
+                    question=raw_question,
+                    video_path=video_path,
+                    answer="",
+                    status="no_model_final",
+                    citations=citations,
+                    rounds=rounds,
+                    final_decision_owner=FinalDecisionOwner.NONE.value,
+                )
             final_rounds = [
                 *rounds,
                 IterativeRound(
@@ -6784,13 +6810,15 @@ def _budget_final_decision_prompt(
         "Treat the evidence table, projection status, and AnswerAgent status as diagnostic constraints, "
         "not as a framework-owned answer.\n"
         "If diagnostics say evidence is insufficient or ambiguous, do not upgrade weak or unmapped evidence into "
-        "strong support; make the best evidence-based final with evidence_sufficiency=partial and explain the gap.\n"
-        "You must return a final answer for this case. If evidence is partial, choose the best evidence-based "
-        "answer and set evidence_sufficiency to partial with low confidence.\n"
-        "Return only JSON using this schema:\n"
+        "strong support.\n"
+        "Return a final answer only when the selected option has answer-grade evidence in the table or cited "
+        "ledger. If the available evidence is too thin, ambiguous, or missing required target support, return "
+        "no_model_final with a concise reason instead of guessing.\n"
+        "Return only JSON using one of these schemas:\n"
         '{"status":"final","answer":"A","citations":["obs_0001"],"evidence_ids":[],"confidence":0.0,'
         '"evidence_sufficiency":"sufficient|partial","rationale":"brief evidence-only reason"}\n'
-        'Never return {"status":"continue"} or {"status":"no_model_final"} here.\n'
+        '{"status":"no_model_final","reason":"insufficient_or_ambiguous_evidence","missing_evidence":["brief gap"]}\n'
+        'Never return {"status":"continue"} here.\n'
         f"Question:\n{question}\n\n"
         f"Evidence ledger:\n{evidence_text}\n\n"
         f"Evidence table (compact JSON):\n{compact_table}\n\n"
@@ -6838,6 +6866,40 @@ def _compact_budget_final_evidence_table(table: Mapping[str, Any], *, max_rows: 
         "rows": compact_rows,
     }
     return _compact_prompt_json(payload)
+
+
+def _budget_final_answer_grade_rejection_reason(
+    diagnostics: FinalDiagnostics | None,
+    *,
+    answer: str,
+    projection_status: Mapping[str, Any] | None,
+) -> str:
+    if diagnostics is None or diagnostics.status != "rejected":
+        return ""
+    if diagnostics.missing_target_refs and not _budget_final_answer_matches_projection(answer, projection_status):
+        return "budget_final_missing_target_refs"
+    if diagnostics.missing_relation_refs and not _budget_final_answer_matches_projection(answer, projection_status):
+        return "budget_final_missing_relation_refs"
+    return ""
+
+
+def _budget_final_answer_matches_projection(answer: str, projection_status: Mapping[str, Any] | None) -> bool:
+    answer_option = _answer_option_letter(answer)
+    if not answer_option:
+        return False
+    candidates: list[str] = []
+    if projection_status:
+        for key in ("candidate_option_labels", "candidate_options", "option_labels"):
+            value = projection_status.get(key)
+            if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                candidates.extend(str(item) for item in value)
+        for key in ("candidate_option", "top_option", "selected_option"):
+            value = str(projection_status.get(key) or "").strip()
+            if value:
+                candidates.append(value)
+    normalized = {_answer_option_letter(candidate) or str(candidate).strip().upper() for candidate in candidates}
+    normalized.discard("")
+    return bool(normalized) and answer_option in normalized
 
 
 def _compact_prompt_json(value: Mapping[str, Any]) -> str:

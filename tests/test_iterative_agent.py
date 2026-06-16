@@ -241,9 +241,10 @@ def test_budget_exhaustion_requests_required_model_final_from_current_evidence()
                 assert "Projection status (diagnostic, not a framework final):" in request.prompt
                 assert '"candidate_option":"B"' in request.prompt
                 assert "AnswerAgent status (diagnostic, not a framework final):" in request.prompt
-                assert '{"status":"no_model_final","reason"' not in request.prompt
-                assert "must return a final answer" in request.prompt
-                assert 'Never return {"status":"continue"} or {"status":"no_model_final"} here.' in request.prompt
+                assert '{"status":"no_model_final","reason"' in request.prompt
+                assert "instead of guessing" in request.prompt
+                assert "must return a final answer" not in request.prompt
+                assert 'Never return {"status":"continue"} here.' in request.prompt
                 return BackendResponse(
                     text=(
                         '{"status":"final","answer":"B","citations":["obs_0001"],'
@@ -305,6 +306,102 @@ def test_budget_exhaustion_requests_required_model_final_from_current_evidence()
     assert result.answer == "B"
     assert result.final_decision_owner == "model"
     assert [request.task for request in agent.backend.requests][-1] == "final_decision"
+
+
+def test_budget_exhausted_final_rejects_option_missing_answer_grade_support():
+    class UnsupportedBudgetFinalBackend(VisionLanguageBackend):
+        def __init__(self):
+            self.requests = []
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            if request.task == "replan":
+                return BackendResponse(
+                    text=(
+                        '{"status": "continue", "program": ['
+                        '{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "Inspect"}, "assign": "obs"}'
+                        "]}"
+                    )
+                )
+            if request.task == "final_decision":
+                return BackendResponse(
+                    text=(
+                        '{"status":"final","answer":"C","citations":["obs_0001"],'
+                        '"evidence_ids":[],"confidence":0.28,"evidence_sufficiency":"partial",'
+                        '"rationale":"only partial evidence is available"}'
+                    )
+                )
+            return BackendResponse(text="unexpected")
+
+    scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=30.0, window_sec=30.0)
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="budget_rejects_unsupported_option")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[
+                TargetSpec("T1", "the missing central topic"),
+                TargetSpec("T2", "the observed secondary topic"),
+                TargetSpec("T3", "the unsupported distractor"),
+            ],
+            options=[
+                OptionSpec("B", target_sequence=("T2",), raw_option_text="B. observed secondary topic"),
+                OptionSpec("C", target_sequence=("T3",), raw_option_text="C. unsupported distractor"),
+                OptionSpec("D", target_sequence=("T1", "T2"), option_kind="topic_arc", raw_option_text="D. complete main idea"),
+            ],
+        )
+        agent = IterativeVisualAgent(
+            backend=UnsupportedBudgetFinalBackend(),
+            registry=ToolRegistry(),
+            workspace=workspace,
+            scene_index=scene_index,
+            budget=AgentBudget(max_rounds=1, reserve_final_round=False),
+        )
+
+        @tool(name="vision_read", description="Read a focused visual fact.")
+        def vision_read(
+            video_path: str,
+            segment_id: str,
+            start_sec: float = 0.0,
+            end_sec: float = 0.0,
+            ask_for: str = "",
+            event_label: str = "",
+            nframes: int = 0,
+        ):
+            return {
+                "claim": "Only the observed secondary topic is supported.",
+                "confidence": 0.9,
+                "grounding_quality": "visually_confirmed",
+                "answer_evidence_rows": [
+                    {
+                        "tool": "vision_read",
+                        "segment_id": segment_id,
+                        "claim": "Only the observed secondary topic is supported.",
+                        "confidence": 0.9,
+                        "grounding_quality": "visually_confirmed",
+                        "target_ref": "T2",
+                        "supported_option": "B",
+                    }
+                ],
+            }
+
+        agent.registry.register(vision_read)
+
+        result = agent.run(
+            question=(
+                "What is the video mainly about?\n"
+                "A. unrelated first option\n"
+                "B. observed secondary topic\n"
+                "C. unsupported distractor\n"
+                "D. complete main idea"
+            ),
+            video_path="/videos/demo.mp4",
+        )
+        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+
+    assert result.status == "no_model_final"
+    assert result.answer == ""
+    assert result.final_decision_owner == "none"
+    assert "structured_final_diagnostics" in trace
+    assert "budget_final_model_declined_or_invalid" in trace
 
 
 def test_mcq_terminal_no_longer_falls_back_to_latest_hypothesis_option():
