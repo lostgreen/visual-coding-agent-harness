@@ -254,7 +254,6 @@ def update_effective_skill_runtime(
     if verdict.decision in {
         TransitionDecision.ACCEPTED,
         TransitionDecision.ACCEPTED_WITH_POLICY_UNCHANGED,
-        TransitionDecision.REJECTED_THRASHING,
     }:
         previous_id = current_id
         state.effective_skill = verdict.guide or requested_skill
@@ -263,9 +262,7 @@ def update_effective_skill_runtime(
         state.override_reason = rationale
         _write_trace_event(
             write_trace_event,
-            "skill_transition_accepted"
-            if verdict.decision is not TransitionDecision.REJECTED_THRASHING
-            else "skill_transition_rejected",
+            "skill_transition_accepted",
             {
                 "round": round_number,
                 "from": previous_id,

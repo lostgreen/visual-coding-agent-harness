@@ -24,10 +24,23 @@ class RunContext:
     registry: ToolRegistry
     skill_runtime: Any | None = None
     evidence_policy: Any | None = None
-    issued_tool_calls: int = 0
-    seen_tool_semantic_keys: set[str] = field(default_factory=set)
     record_trace: TraceWriter | None = None
     record_observation: ObservationWriter | None = None
+
+    @property
+    def issued_tool_calls(self) -> int:
+        return self.round_state.issued_tool_calls
+
+    def increment_tool_calls(self, n: int = 1) -> None:
+        self.round_state.issued_tool_calls += n
+
+    @property
+    def seen_tool_semantic_keys(self) -> set[str]:
+        return self.run_state.seen_tool_semantic_keys
+
+    @property
+    def zero_yield_tool_signatures(self) -> set[str]:
+        return self.run_state.zero_yield_tool_signatures
 
 
 @dataclass(frozen=True)

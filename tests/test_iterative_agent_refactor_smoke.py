@@ -51,3 +51,28 @@ def test_runtime_state_dataclasses_are_importable() -> None:
     assert run_state.question == "q"
     assert round_state.recent_observations == []
     assert finalization.planner_final_answer_blocked is False
+
+
+def test_default_runstate_has_empty_sets() -> None:
+    run_state = RunState(question="q", video_path="/videos/demo.mp4")
+
+    assert run_state.raw_question == ""
+    assert run_state.vlm_safe_question == ""
+    assert run_state.effective_route == ""
+    assert run_state.inspected_segment_ids == set()
+    assert run_state.seen_tool_semantic_keys == set()
+    assert run_state.zero_yield_tool_signatures == set()
+    assert run_state.executed_recommended_action_ids == set()
+    assert run_state.auto_evidence_promotion_attempted_keys == set()
+    assert run_state.route_repair_counts == {}
+    assert run_state.exhausted_one_shot_tools == set()
+    assert run_state.skill_switch_history == []
+
+
+def test_roundstate_owns_round_scoped_budget_counter() -> None:
+    round_state = RoundState(round_number=2)
+
+    assert round_state.issued_tool_calls == 0
+    assert round_state.recent_observations == []
+    assert round_state.normalization_notes == []
+    assert round_state.hypothesis_snapshot is None

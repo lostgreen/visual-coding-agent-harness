@@ -143,7 +143,7 @@ class ProgramInterpreter:
                 return ()
 
         if self.lifecycle_context is not None and self.pre_tool_hooks:
-            self.lifecycle_context.issued_tool_calls += 1
+            self.lifecycle_context.increment_tool_calls()
         raw_output = dict(self.registry.execute(tool_name, arguments))
         if self.lifecycle_context is not None and self.pre_tool_hooks:
             mark_successful_tool_call(self.lifecycle_context, request)

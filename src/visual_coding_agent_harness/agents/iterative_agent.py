@@ -298,6 +298,23 @@ class IterativeVisualAgent:
             for round_item in rounds
             for segment_id in _segment_ids_from_program(round_item.program)
         }
+        run_state = RunState(
+            question=raw_question,
+            video_path=video_path,
+            question_route=effective_route,
+            raw_question=raw_question,
+            vlm_safe_question=vlm_safe_question,
+            effective_route=effective_route,
+            inspected_segment_ids=inspected_segment_ids,
+            seen_tool_semantic_keys=self._successful_tool_semantic_keys,
+            zero_yield_tool_signatures=self._zero_yield_tool_call_signatures,
+            executed_recommended_action_ids=self._executed_recommended_action_ids,
+            auto_evidence_promotion_attempted_keys=self._auto_evidence_promotion_attempted_keys,
+            route_repair_counts=self._route_repair_counts,
+            route_repair_exhausted=self._route_repair_exhausted,
+            grounding_runtime=grounding_runtime,
+            bootstrap_failure=self._grounding_bootstrap_failure,
+        )
         has_inspect_with_candidate_options = any(
             _program_has_inspect_with_candidate_options(round_item.program) for round_item in rounds
         )
@@ -348,6 +365,17 @@ class IterativeVisualAgent:
         for round_number in range(len(rounds) + 1, self.budget.max_rounds + 1):
             ledger_text = self._read_ledger()
             final_round_reserved = self.budget.reserve_final_round and round_number == self.budget.max_rounds
+            run_state.final_round_reserved = final_round_reserved
+            round_ctx = self._runtime_context(
+                question=raw_question,
+                video_path=video_path,
+                route=effective_route,
+                round_number=round_number,
+                run_state=run_state,
+                round_state=RoundState(round_number=round_number),
+                skill_runtime=skill_runtime,
+                evidence_policy=skill_runtime.effective_policy if skill_runtime is not None else None,
+            )
             evidence_status_summary = self.workspace.evidence_status_summary(
                 question=raw_question,
                 options=extract_candidate_options(raw_question),
@@ -503,6 +531,8 @@ class IterativeVisualAgent:
             active_skill = skill_runtime.effective_skill if skill_runtime is not None else planner_skill
             if skill_runtime is not None or planner_skill is not None:
                 last_selected_skill_id = _runtime_skill_id(active_skill)
+            round_ctx.skill_runtime = skill_runtime
+            round_ctx.evidence_policy = skill_runtime.effective_policy if skill_runtime is not None else None
 
             if status == "final":
                 final_citations = [str(item) for item in action.get("citations", [])]
@@ -585,6 +615,7 @@ class IterativeVisualAgent:
                         question=raw_question,
                         answer=final_answer,
                         citations=final_citations,
+                        runtime_context=round_ctx,
                     )
                     if repair is not None:
                         repair_observation_ids, repair_evidence_ids = repair
@@ -1087,6 +1118,7 @@ class IterativeVisualAgent:
                     source="reserved_final",
                     program=[],
                     observation_ids=[],
+                    runtime_context=round_ctx,
                 )
                 if low_confidence_result is not None:
                     return low_confidence_result
@@ -1152,6 +1184,7 @@ class IterativeVisualAgent:
             )
             program_result = self._run_program(
                 program,
+                ctx=round_ctx,
                 question=raw_question,
                 video_path=video_path,
                 route=effective_route,
@@ -1281,6 +1314,7 @@ class IterativeVisualAgent:
                     observation_ids=observation_ids,
                     remaining_rounds=self.budget.max_rounds - round_number,
                     supported_binding_no_growth_rounds=supported_binding_no_growth_rounds,
+                    runtime_context=round_ctx,
                 )
                 if low_confidence_result is not None:
                     return low_confidence_result
@@ -1387,6 +1421,7 @@ class IterativeVisualAgent:
                         source="prefinal_probe_budget_exhausted",
                         program=program,
                         observation_ids=observation_ids,
+                        runtime_context=round_ctx,
                     )
                     if low_confidence_result is not None:
                         return low_confidence_result
@@ -3164,6 +3199,7 @@ class IterativeVisualAgent:
         question: str,
         answer: str,
         citations: Sequence[str],
+        runtime_context: RunContext,
     ) -> tuple[list[str], list[str]] | None:
         if not self._has_tool("read_segment_detail"):
             self.workspace.write_trace_event(
@@ -3209,6 +3245,7 @@ class IterativeVisualAgent:
             )
             result = self._run_program(
                 program,
+                ctx=runtime_context,
                 question=question,
                 video_path=self.scene_index.video_path,
                 route=classify_question_route(question),
@@ -3956,23 +3993,36 @@ class IterativeVisualAgent:
         video_path: str = "",
         route: str = "",
         round_number: int = 0,
+        run_state: RunState | None = None,
+        round_state: RoundState | None = None,
         skill_runtime: Any | None = None,
         evidence_policy: Any | None = None,
     ) -> RunContext:
+        resolved_route = route or classify_question_route(question)
+        resolved_run_state = run_state or RunState(
+            question=question,
+            video_path=video_path or self.scene_index.video_path,
+            question_route=resolved_route,
+            raw_question=question,
+            vlm_safe_question=question,
+            effective_route=resolved_route,
+            seen_tool_semantic_keys=self._successful_tool_semantic_keys,
+            zero_yield_tool_signatures=self._zero_yield_tool_call_signatures,
+            executed_recommended_action_ids=self._executed_recommended_action_ids,
+            auto_evidence_promotion_attempted_keys=self._auto_evidence_promotion_attempted_keys,
+            route_repair_counts=self._route_repair_counts,
+            route_repair_exhausted=self._route_repair_exhausted,
+            bootstrap_failure=self._grounding_bootstrap_failure,
+        )
         return RunContext(
             workspace=self.workspace,
             scene_index=self.scene_index,
             budget=self.budget,
-            run_state=RunState(
-                question=question,
-                video_path=video_path or self.scene_index.video_path,
-                question_route=route or classify_question_route(question),
-            ),
-            round_state=RoundState(round_number=round_number),
+            run_state=resolved_run_state,
+            round_state=round_state or RoundState(round_number=round_number),
             registry=self.registry,
             skill_runtime=skill_runtime,
             evidence_policy=evidence_policy,
-            seen_tool_semantic_keys=self._successful_tool_semantic_keys,
             record_trace=self.workspace.write_trace_event,
             record_observation=None,
         )
@@ -3981,7 +4031,7 @@ class IterativeVisualAgent:
         self,
         program: Sequence[Mapping[str, Any]],
         *,
-        ctx: RunContext | None = None,
+        ctx: RunContext,
         question: str = "",
         video_path: str = "",
         route: str = "",
@@ -3992,15 +4042,7 @@ class IterativeVisualAgent:
     ):
         return self.runtime_host.run(
             program,
-            ctx=ctx
-            or self._runtime_context(
-                question=question,
-                video_path=video_path,
-                route=route,
-                round_number=round_number,
-                skill_runtime=skill_runtime,
-                evidence_policy=evidence_policy,
-            ),
+            ctx=ctx,
             slots=slots,
         )
 
@@ -4143,6 +4185,12 @@ class IterativeVisualAgent:
             coverage_args["group_by_option"] = True
         else:
             coverage_args["targets"] = targets
+        runtime_context = self._runtime_context(
+            question=question,
+            video_path=self.scene_index.video_path,
+            route=classify_question_route(question),
+            round_number=0,
+        )
         try:
             result = self._run_program(
                 [
@@ -4152,6 +4200,7 @@ class IterativeVisualAgent:
                         "assign": "auto_target_coverage",
                     }
                 ],
+                ctx=runtime_context,
                 question="",
                 video_path=self.scene_index.video_path,
                 route="",
@@ -4170,6 +4219,12 @@ class IterativeVisualAgent:
                 },
             )
             coverage_args = {"targets": fallback_targets, "top_k": 3}
+            fallback_context = self._runtime_context(
+                question=question,
+                video_path=self.scene_index.video_path,
+                route=classify_question_route(question),
+                round_number=0,
+            )
             result = self._run_program(
                 [
                     {
@@ -4178,6 +4233,7 @@ class IterativeVisualAgent:
                         "assign": "auto_target_coverage",
                     }
                 ],
+                ctx=fallback_context,
                 question="",
                 video_path=self.scene_index.video_path,
                 route="",
@@ -4326,6 +4382,7 @@ class IterativeVisualAgent:
         observation_ids: Sequence[str] = (),
         remaining_rounds: int | None = None,
         supported_binding_no_growth_rounds: int = 0,
+        runtime_context: RunContext | None = None,
     ) -> IterativeRunResult | None:
         if answer_result.status != "need_more_evidence" or not answer_result.has_partial_support():
             return None
@@ -4342,6 +4399,7 @@ class IterativeVisualAgent:
             question=question,
             round_number=round_number,
             source=source,
+            runtime_context=runtime_context,
         ):
             return None
         if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES and not auto_promotion_guard_active:
@@ -4409,6 +4467,7 @@ class IterativeVisualAgent:
         question: str,
         round_number: int,
         source: str,
+        runtime_context: RunContext | None = None,
     ) -> bool:
         if not self._has_tool("bind_asr_claim"):
             self.workspace.write_trace_event(
@@ -4465,6 +4524,12 @@ class IterativeVisualAgent:
             return False
         self._auto_evidence_promotion_attempted_keys.add(key)
         before = self._supported_evidence_binding_count()
+        runtime_context = runtime_context or self._runtime_context(
+            question=question,
+            video_path=self.scene_index.video_path,
+            route=classify_question_route(question),
+            round_number=round_number,
+        )
         try:
             result = self._run_program(
                 [
@@ -4473,6 +4538,7 @@ class IterativeVisualAgent:
                         "args": {"segment_id": segment_id, "target_refs": candidate_target_refs},
                     }
                 ],
+                ctx=runtime_context,
                 question=question,
                 video_path=self.scene_index.video_path,
                 route=classify_question_route(question),
@@ -4524,8 +4590,15 @@ class IterativeVisualAgent:
             "iterative_route",
             {"route": "gist_global", "tool": "global_gist", "passes_required": 1, "mode": "topic_hint_seed"},
         )
+        runtime_context = self._runtime_context(
+            question=question,
+            video_path=video_path,
+            route="gist_global",
+            round_number=0,
+        )
         result = self._run_program(
             [first_step],
+            ctx=runtime_context,
             question=question,
             video_path=video_path,
             route="gist_global",
@@ -4786,6 +4859,7 @@ class IterativeVisualAgent:
                     source="hard_skill_budget_exhausted",
                     program=program,
                     observation_ids=round_observation_ids,
+                    runtime_context=runtime_context,
                 )
                 if low_confidence_result is not None:
                     return low_confidence_result

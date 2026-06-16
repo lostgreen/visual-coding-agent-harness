@@ -6,6 +6,7 @@ from visual_coding_agent_harness.agents.skill_runtime import (
     SkillSwitchRecord,
     TransitionDecision,
     TransitionPolicy,
+    TransitionVerdict,
     update_effective_skill_runtime,
     _initial_skill_runtime_state,
     _skill_id,
@@ -75,6 +76,70 @@ def test_transition_policy_thrashing() -> None:
 
     assert verdict.decision is TransitionDecision.REJECTED_THRASHING
     assert verdict.policy is current_skill.policy
+
+
+def test_rejected_transition_does_not_mutate_state() -> None:
+    class ThrashingPolicy:
+        def __init__(self, guide, policy) -> None:
+            self.guide = guide
+            self.policy = policy
+
+        def evaluate(self, **kwargs) -> TransitionVerdict:
+            del kwargs
+            return TransitionVerdict(
+                decision=TransitionDecision.REJECTED_THRASHING,
+                guide=self.guide,
+                policy=self.policy,
+                reason="recent_switch_limit",
+            )
+
+    registry = builtin_skill_registry()
+    current_skill = registry.get("visual_timeline_qa")
+    requested_skill = registry.get("mixed_asr_visual_qa")
+    state = SkillRuntimeState(
+        recommended_skill=current_skill,
+        compatible_skill_ids=("visual_timeline_qa@v1", "mixed_asr_visual_qa@v1"),
+        effective_skill=current_skill,
+        effective_policy=current_skill.policy,
+        override_reason="classifier default",
+    )
+    previous_skill = state.effective_skill
+    previous_policy = state.effective_policy
+    previous_reason = state.override_reason
+    events: list[tuple[str, dict[str, object]]] = []
+
+    update_effective_skill_runtime(
+        state,
+        requested_skill=requested_skill,
+        requested_skill_text="mixed_asr_visual_qa@v1",
+        round_number=3,
+        rationale="planner wants another modality",
+        executed_rounds=2,
+        supported_binding_no_growth_rounds=0,
+        no_evidence_growth_rounds=0,
+        write_trace_event=lambda event_type, payload: events.append((event_type, dict(payload))),
+        transition_policy=ThrashingPolicy(requested_skill, requested_skill.policy),
+        recent_switches=(
+            SkillSwitchRecord(round_number=1, from_skill="visual_timeline_qa@v1", to_skill="mixed_asr_visual_qa@v1"),
+            SkillSwitchRecord(round_number=2, from_skill="mixed_asr_visual_qa@v1", to_skill="visual_timeline_qa@v1"),
+        ),
+    )
+
+    assert state.effective_skill is previous_skill
+    assert state.effective_policy is previous_policy
+    assert state.override_reason == previous_reason
+    assert events == [
+        (
+            "skill_transition_rejected",
+            {
+                "round": 3,
+                "requested_skill": "mixed_asr_visual_qa@v1",
+                "effective_skill": "visual_timeline_qa@v1",
+                "decision": "rejected_thrashing",
+                "reason": "recent_switch_limit",
+            },
+        )
+    ]
 
 
 def test_transition_policy_accepts_strictening() -> None:

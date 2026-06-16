@@ -214,20 +214,22 @@ def test_duplicate_guard_hook_blocks_repeated_semantic_key() -> None:
 
 def test_budget_hook_blocks_when_round_tool_budget_exhausted() -> None:
     registry = ToolRegistry()
+    round_state = RoundState(round_number=1, issued_tool_calls=1)
     ctx = RunContext(
         workspace=None,
         scene_index=None,
         budget=AgentBudget(max_tool_calls_per_round=1),
         run_state=RunState(question="q", video_path="/v.mp4", question_route="needle_local"),
-        round_state=RoundState(round_number=1),
+        round_state=round_state,
         registry=registry,
-        issued_tool_calls=1,
     )
 
     decision = BudgetHook()(ctx, ToolRequest(tool="echo", arguments={}))
 
     assert decision.rejected is True
     assert decision.reason == "round_tool_budget_exhausted"
+    assert ctx.issued_tool_calls == 1
+    assert ctx.round_state is round_state
 
 
 def test_observation_adapter_hook_uses_runtime_spec_adapter() -> None:
@@ -463,20 +465,43 @@ def test_duplicate_guard_commits_only_after_successful_execution(tmp_path) -> No
         )
     )
     workspace = EvidenceWorkspace.create(tmp_path, "duplicate_success")
+    run_state = RunState(question="q", video_path="/v.mp4", question_route="needle_local")
     ctx = RunContext(
         workspace=workspace,
         scene_index=None,
         budget=AgentBudget(max_tool_calls_per_round=1),
-        run_state=RunState(question="q", video_path="/v.mp4", question_route="needle_local"),
-        round_state=RoundState(round_number=1),
+        run_state=run_state,
+        round_state=RoundState(round_number=1, issued_tool_calls=1),
         registry=registry,
-        issued_tool_calls=1,
     )
     request = ToolRequest(tool="echo", arguments={"value": "alpha"}, request_id="1")
 
     assert DuplicateGuardHook()(ctx, request).rejected is False
     assert BudgetHook()(ctx, request).rejected is True
     assert "echo:alpha" not in ctx.seen_tool_semantic_keys
+    assert ctx.seen_tool_semantic_keys is run_state.seen_tool_semantic_keys
+
+
+def test_run_context_proxies_state_scoped_fields() -> None:
+    registry = ToolRegistry()
+    run_state = RunState(question="q", video_path="/v.mp4", question_route="needle_local")
+    round_state = RoundState(round_number=1)
+    ctx = RunContext(
+        workspace=None,
+        scene_index=None,
+        budget=AgentBudget(max_tool_calls_per_round=2),
+        run_state=run_state,
+        round_state=round_state,
+        registry=registry,
+    )
+
+    ctx.increment_tool_calls()
+    ctx.seen_tool_semantic_keys.add("echo:alpha")
+
+    assert ctx.issued_tool_calls == 1
+    assert round_state.issued_tool_calls == 1
+    assert ctx.seen_tool_semantic_keys is run_state.seen_tool_semantic_keys
+    assert run_state.seen_tool_semantic_keys == {"echo:alpha"}
 
 
 def test_iterative_agent_real_path_uses_runtime_lifecycle(tmp_path) -> None:
@@ -597,6 +622,126 @@ def test_iterative_agent_real_registry_rejects_duplicate_bind_asr_claim(tmp_path
     assert [request.task for request in backend.requests].count("asr_claim_binding") == 1
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert "duplicate_tool_call" in trace
+
+
+def test_auto_evidence_promotion_uses_shared_round_budget(tmp_path) -> None:
+    @tool(name="bind_asr_claim", description="Bind a transcript claim to target refs.")
+    def bind_asr_claim(segment_id: str, target_refs: list[str]):
+        return {
+            "claim": f"bound {segment_id} to {','.join(target_refs)}",
+            "confidence": 0.9,
+            "evidence_binding": {"status": "supported", "target_refs": target_refs},
+        }
+
+    registry = ToolRegistry()
+    registry.register(bind_asr_claim)
+    workspace = EvidenceWorkspace.create(tmp_path, "auto_promotion_budget")
+    workspace.target_registry = TargetRegistry.from_specs(
+        targets=[TargetSpec(target_id="T1", canonical_text="alpha appears")]
+    )
+    workspace.write_observation(
+        tool_name="target_coverage",
+        claim="coverage for alpha",
+        confidence=0.8,
+        raw_output={
+            "coverage": [
+                {
+                    "target_ref": "T1",
+                    "target": "alpha appears",
+                    "candidates": [{"segment_id": "seg_0001", "score": 0.9, "source": "asr"}],
+                }
+            ]
+        },
+    )
+    scene_index = SceneIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=1.0,
+        segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=1.0)],
+    )
+    agent = IterativeVisualAgent(
+        backend=RuntimeBackendForUnexpectedCalls(),
+        registry=registry,
+        workspace=workspace,
+        scene_index=scene_index,
+        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=1, reserve_final_round=False),
+    )
+    runtime_context = agent._runtime_context(
+        question="What is visible?",
+        video_path="/videos/demo.mp4",
+        route="needle_local",
+        round_number=1,
+    )
+    runtime_context.increment_tool_calls()
+
+    promoted = agent._try_auto_evidence_promotion(
+        answer="alpha appears",
+        question="What is visible?",
+        round_number=1,
+        source="test",
+        runtime_context=runtime_context,
+    )
+
+    assert promoted is False
+    assert workspace.observation_count(tool_name="bind_asr_claim") == 0
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "round_tool_budget_exhausted" in trace
+
+
+def test_target_coverage_seed_fallback_gets_fresh_seed_context(tmp_path) -> None:
+    @tool(name="target_coverage", description="Build target coverage.")
+    def target_coverage(
+        targets: list[str] | None = None,
+        target_refs: list[str] | None = None,
+        top_k: int = 3,
+        group_by_option: bool = False,
+    ):
+        del top_k, group_by_option
+        if target_refs:
+            raise ToolError("workspace target_refs unavailable")
+        return {
+            "claim": "fallback coverage",
+            "confidence": 0.8,
+            "coverage": [
+                {
+                    "target": str((targets or [""])[0]),
+                    "candidates": [{"segment_id": "seg_0001", "score": 0.9}],
+                }
+            ],
+        }
+
+    registry = ToolRegistry()
+    registry.register(target_coverage)
+    workspace = EvidenceWorkspace.create(tmp_path, "target_coverage_fallback_budget")
+    workspace.target_registry = TargetRegistry.from_specs(
+        targets=[TargetSpec(target_id="T1", canonical_text="alpha appears")]
+    )
+    scene_index = SceneIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=1.0,
+        segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=1.0)],
+    )
+    agent = IterativeVisualAgent(
+        backend=RuntimeBackendForUnexpectedCalls(),
+        registry=registry,
+        workspace=workspace,
+        scene_index=scene_index,
+        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=1, reserve_final_round=False),
+    )
+    agent._exploration_target_entities = ("alpha appears",)
+
+    agent._seed_target_coverage(
+        "Which option is correct?\nOptions:\nA. alpha appears\nB. beta appears"
+    )
+
+    assert workspace.observation_count(tool_name="target_coverage") == 1
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "target_coverage_seed_fallback" in trace
+    assert "round_tool_budget_exhausted" not in trace
+
+
+class RuntimeBackendForUnexpectedCalls(VisionLanguageBackend):
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        raise AssertionError(f"unexpected backend request: {request.task}")
 
 
 def test_add_new_tool_no_loop_change(tmp_path) -> None:
