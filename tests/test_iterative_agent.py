@@ -18,6 +18,7 @@ from visual_coding_agent_harness.agents.iterative_agent import (
 )
 from visual_coding_agent_harness.agents.answer_agent import AnswerAgentResult
 from visual_coding_agent_harness.agents.question_policy import extract_candidate_options
+from visual_coding_agent_harness.agents.skills.specs import PrefinalRepairKind, SkillBehaviors
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import ClaimRelation, ClaimModality, OptionSpec, TargetRegistry, TargetSpec
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
@@ -817,7 +818,11 @@ def test_option_b_requires_complete_relation_chain():
         "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
         "D. Borned in the upper class and lived in seclusion in a farmhouse."
     )
-    skill = type("Skill", (), {"name": "narration_timeline_qa"})()
+    skill = type(
+        "Skill",
+        (),
+        {"behaviors": SkillBehaviors(prefinal_repair=PrefinalRepairKind.NARRATION_TIMELINE)},
+    )()
 
     with tempfile.TemporaryDirectory() as tmp:
         workspace = EvidenceWorkspace.create(Path(tmp), run_id="missing_relation_gate")
@@ -886,7 +891,11 @@ def test_612_complete_chain_maps_to_b_gate():
         "C. Born with a humble background, lived in seclusion in a farmhouse and then entered the upper class.\n"
         "D. Borned in the upper class and lived in seclusion in a farmhouse."
     )
-    skill = type("Skill", (), {"name": "narration_timeline_qa"})()
+    skill = type(
+        "Skill",
+        (),
+        {"behaviors": SkillBehaviors(prefinal_repair=PrefinalRepairKind.NARRATION_TIMELINE)},
+    )()
 
     with tempfile.TemporaryDirectory() as tmp:
         workspace = EvidenceWorkspace.create(Path(tmp), run_id="complete_relation_gate")

@@ -48,7 +48,7 @@ from .skills.predicates import (
     selected_option_has_structured_support,
     temporal_order_consistent,
 )
-from .skills.specs import SkillSpec, builtin_skill_registry, select_skill
+from .skills.specs import PrefinalRepairKind, SkillSpec, builtin_skill_registry, select_skill
 from .skill_runtime import (
     _initial_skill_runtime_state as _build_initial_skill_runtime_state,
     _planner_selected_skill as _select_planner_skill,
@@ -91,6 +91,12 @@ _ANSWER_AGENT_AUTO_FINAL_SOURCES = frozenset(
         "repeated_program_guard",
     }
 )
+
+
+def _prefinal_repair_kind(skill: SkillSpec | None) -> PrefinalRepairKind:
+    if skill is None:
+        return PrefinalRepairKind.NONE
+    return skill.behaviors.prefinal_repair
 
 
 @dataclass(frozen=True)
@@ -586,8 +592,7 @@ class IterativeVisualAgent:
                 if (
                     blocked_reason == "planner_final_requires_supported_evidence_id"
                     and not prefinal_evidence_repair_done
-                    and active_skill is not None
-                    and active_skill.name == "narration_timeline_qa"
+                    and _prefinal_repair_kind(active_skill) is PrefinalRepairKind.NARRATION_TIMELINE
                 ):
                     prefinal_evidence_repair_done = True
                     repair = self._try_narration_prefinal_evidence_repair(
@@ -5465,7 +5470,7 @@ def _blocked_planner_final_reason(
     planner_skill: SkillSpec | None = None,
 ) -> str:
     final_evidence_refs = _unique_preserving_order([*citations, *evidence_ids])
-    if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
+    if _prefinal_repair_kind(planner_skill) is PrefinalRepairKind.NARRATION_TIMELINE:
         if not _has_supported_evidence_binding_id(workspace, evidence_ids):
             return "planner_final_requires_supported_evidence_id"
     gate_decision = _structured_final_gate_decision(
@@ -5508,7 +5513,7 @@ def _blocked_planner_final_reason(
         return ""
     if planner_skill is None and classify_question_route(question) != "gist_global":
         return ""
-    if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
+    if _prefinal_repair_kind(planner_skill) is PrefinalRepairKind.NARRATION_TIMELINE:
         relation_reason = _missing_required_relations_final_reason(
             workspace=workspace,
             question=question,
