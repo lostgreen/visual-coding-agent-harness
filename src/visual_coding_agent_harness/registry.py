@@ -38,6 +38,7 @@ class DuplicateGuardPolicy(str, Enum):
 @dataclass(frozen=True)
 class ToolRuntimeSpec:
     tool_spec: ToolSpec
+    aliases: Sequence[str] = ()
     argument_normalizer: Any | None = None
     semantic_key_builder: Any | None = None
     duplicate_guard_policy: DuplicateGuardPolicy = DuplicateGuardPolicy.STRICT
@@ -60,13 +61,16 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: Dict[str, ToolRuntimeSpec] = {}
+        self._aliases: Dict[str, str] = {}
 
     def register(self, spec: ToolSpec | ToolRuntimeSpec) -> None:
         runtime_spec = spec if isinstance(spec, ToolRuntimeSpec) else ToolRuntimeSpec(tool_spec=spec)
         tool_spec = runtime_spec.tool_spec
         if tool_spec.name in self._tools:
             raise ToolError(f"Tool already registered: {tool_spec.name}")
+        self._validate_aliases(runtime_spec)
         self._tools[tool_spec.name] = runtime_spec
+        self._register_aliases(runtime_spec)
 
     def extend(self, other: "ToolRegistry") -> None:
         for runtime_spec in other.list_runtime_specs():
@@ -74,7 +78,11 @@ class ToolRegistry:
 
     def replace_runtime_spec(self, name: str, **updates: Any) -> None:
         runtime_spec = self.get_runtime_spec(name)
-        self._tools[name] = replace(runtime_spec, **updates)
+        updated = replace(runtime_spec, **updates)
+        self._validate_aliases(updated, replacing=name)
+        self._remove_aliases_for(name)
+        self._tools[name] = updated
+        self._register_aliases(updated)
 
     def list_specs(self) -> Sequence[ToolSpec]:
         return tuple(runtime_spec.tool_spec for runtime_spec in self._tools.values())
@@ -90,6 +98,9 @@ class ToolRegistry:
             return self._tools[name]
         except KeyError as exc:
             raise ToolError(f"Unknown tool: {name}") from exc
+
+    def resolve_alias(self, name: str) -> str:
+        return self._aliases.get(name, name)
 
     def execute(self, name: str, arguments: Optional[Mapping[str, Any]] = None) -> Mapping[str, Any]:
         spec = self.get(name)
@@ -113,3 +124,34 @@ class ToolRegistry:
             signature.bind(**arguments)
         except TypeError as exc:
             raise ToolError(f"Invalid arguments for {spec.name}: {exc}") from exc
+
+    def _validate_aliases(self, runtime_spec: ToolRuntimeSpec, *, replacing: str | None = None) -> None:
+        canonical = runtime_spec.tool_spec.name
+        for alias in self._normalized_aliases(runtime_spec):
+            if alias == canonical:
+                continue
+            existing_tool = self._tools.get(alias)
+            if existing_tool is not None and alias != replacing:
+                raise ToolError(f"Tool alias conflicts with registered tool: {alias}")
+            existing_alias = self._aliases.get(alias)
+            if existing_alias is not None and existing_alias != replacing:
+                raise ToolError(f"Tool alias already registered: {alias}")
+
+    def _register_aliases(self, runtime_spec: ToolRuntimeSpec) -> None:
+        canonical = runtime_spec.tool_spec.name
+        for alias in self._normalized_aliases(runtime_spec):
+            if alias != canonical:
+                self._aliases[alias] = canonical
+
+    def _remove_aliases_for(self, name: str) -> None:
+        for alias, canonical in tuple(self._aliases.items()):
+            if canonical == name:
+                del self._aliases[alias]
+
+    def _normalized_aliases(self, runtime_spec: ToolRuntimeSpec) -> tuple[str, ...]:
+        aliases = []
+        for alias in runtime_spec.aliases:
+            normalized = str(alias).strip()
+            if normalized:
+                aliases.append(normalized)
+        return tuple(dict.fromkeys(aliases))
