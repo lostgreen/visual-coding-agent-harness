@@ -687,6 +687,96 @@ def test_auto_evidence_promotion_uses_shared_round_budget(tmp_path) -> None:
     assert "round_tool_budget_exhausted" in trace
 
 
+def test_all_programs_in_logical_round_share_budget(tmp_path) -> None:
+    class SharedBudgetBackend(VisionLanguageBackend):
+        def __init__(self) -> None:
+            self.requests: list[BackendRequest] = []
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            if request.task == "replan":
+                return BackendResponse(
+                    text='{"status":"continue","rationale":"probe","program":[{"tool":"probe","args":{"value":"alpha"}}]}'
+                )
+            if request.task == "answer_from_evidence":
+                return BackendResponse(
+                    text=(
+                        '{"status":"need_more_evidence","answer":"","citations":[],"confidence":0.0,'
+                        '"candidate_option_relations":[{'
+                        '"option":"D","relation":"support","strength":0.8,'
+                        '"grounding_quality":"indexed_transcript","observation_id":"obs_0001"'
+                        "}],"
+                        '"missing_evidence":[]}'
+                    )
+                )
+            raise AssertionError(f"unexpected backend request: {request.task}")
+
+    @tool(name="probe", description="Consume one planner tool call.")
+    def probe(value: str):
+        return {"claim": f"probe {value}", "confidence": 0.4}
+
+    @tool(name="bind_asr_claim", description="Bind transcript claim to target refs.")
+    def bind_asr_claim(segment_id: str, target_refs: list[str]):
+        return {
+            "claim": f"bound {segment_id} to {','.join(target_refs)}",
+            "confidence": 0.9,
+            "evidence_binding": {"status": "supported", "target_refs": target_refs},
+        }
+
+    registry = ToolRegistry()
+    registry.register(probe)
+    registry.register(bind_asr_claim)
+    workspace = EvidenceWorkspace.create(tmp_path, "agent_shared_round_budget")
+    workspace.target_registry = TargetRegistry.from_specs(
+        targets=[TargetSpec(target_id="T1", canonical_text="alpha appears")]
+    )
+    workspace.write_observation(
+        tool_name="target_coverage",
+        claim="coverage for alpha",
+        confidence=0.8,
+        raw_output={
+            "coverage": [
+                {
+                    "target_ref": "T1",
+                    "target": "alpha appears",
+                    "candidates": [{"segment_id": "seg_0001", "score": 0.9, "source": "asr"}],
+                }
+            ]
+        },
+    )
+    agent = IterativeVisualAgent(
+        backend=SharedBudgetBackend(),
+        registry=registry,
+        workspace=workspace,
+        scene_index=SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=1.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=1.0)],
+        ),
+        budget=AgentBudget(
+            max_rounds=6,
+            max_tool_calls_per_round=1,
+            reserve_final_round=False,
+            max_repeated_programs=0,
+            hard_skill_runtime=False,
+            disable_global_gist_route=True,
+        ),
+    )
+
+    result = agent.run(
+        question="Which option is supported?\nA. wrong\nD. alpha appears",
+        video_path="/videos/demo.mp4",
+    )
+
+    assert result.status == "low_confidence_final"
+    assert workspace.observation_count(tool_name="probe") >= 1
+    assert workspace.observation_count(tool_name="bind_asr_claim") == 0
+    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert "auto_evidence_promotion_attempted" in trace
+    assert "tool_call_rejected" in trace
+    assert "round_tool_budget_exhausted" in trace
+
+
 def test_target_coverage_seed_fallback_gets_fresh_seed_context(tmp_path) -> None:
     @tool(name="target_coverage", description="Build target coverage.")
     def target_coverage(
