@@ -218,15 +218,9 @@ class IterativeVisualAgent:
         self.scene_index = scene_index
         self.budget = budget or AgentBudget()
         self._exploration_target_entities: tuple[str, ...] = ()
-        self._route_repair_counts: dict[tuple[str, str, tuple[str, ...]], int] = {}
-        self._route_repair_exhausted: Mapping[str, Any] | None = None
-        self._executed_recommended_action_ids: set[str] = set()
-        self._auto_evidence_promotion_attempted_keys: set[tuple[str, str, tuple[str, ...]]] = set()
-        self._zero_yield_tool_call_signatures: set[str] = set()
         self._answer_suggestion_state = AnswerSuggestionState()
         self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure: Mapping[str, Any] | None = None
-        self._successful_tool_semantic_keys: set[str] = set()
         self.runtime_host = ToolRuntimeHost(registry=self.registry, workspace=self.workspace)
         self.context_allocator = default_context_budget_allocator(
             total_budget_tokens=self.budget.context_budget_tokens,
@@ -234,15 +228,9 @@ class IterativeVisualAgent:
         )
 
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
-        self._route_repair_counts = {}
-        self._route_repair_exhausted = None
-        self._executed_recommended_action_ids = set()
-        self._auto_evidence_promotion_attempted_keys = set()
-        self._zero_yield_tool_call_signatures = set()
         self._answer_suggestion_state = AnswerSuggestionState()
         self._no_progress_warning_emitted = False
         self._grounding_bootstrap_failure = None
-        self._successful_tool_semantic_keys = set()
         question_context = build_question_context(question)
         raw_question = question_context.raw_question
         vlm_safe_question = question_context.vlm_safe_question
@@ -306,12 +294,6 @@ class IterativeVisualAgent:
             vlm_safe_question=vlm_safe_question,
             effective_route=effective_route,
             inspected_segment_ids=inspected_segment_ids,
-            seen_tool_semantic_keys=self._successful_tool_semantic_keys,
-            zero_yield_tool_signatures=self._zero_yield_tool_call_signatures,
-            executed_recommended_action_ids=self._executed_recommended_action_ids,
-            auto_evidence_promotion_attempted_keys=self._auto_evidence_promotion_attempted_keys,
-            route_repair_counts=self._route_repair_counts,
-            route_repair_exhausted=self._route_repair_exhausted,
             grounding_runtime=grounding_runtime,
             bootstrap_failure=self._grounding_bootstrap_failure,
         )
@@ -457,7 +439,7 @@ class IterativeVisualAgent:
                     failure_tag="planner_json_parse_error",
                     rule="return valid JSON matching the continue/final response contract before using tools",
                 )
-                recovery_program = self._safe_parse_error_recovery_program()
+                recovery_program = self._safe_parse_error_recovery_program(run_state=run_state)
                 if recovery_program:
                     action = {
                         "status": "continue",
@@ -793,10 +775,11 @@ class IterativeVisualAgent:
                     final_round_reserved=final_round_reserved,
                     planner_skill=active_skill,
                     notes_out=normalization_notes,
+                    run_state=run_state,
                 )
                 last_round_normalization_notes = normalization_notes
-                if self._route_repair_exhausted is not None:
-                    exhausted_payload = dict(self._route_repair_exhausted)
+                if run_state.route_repair_exhausted is not None:
+                    exhausted_payload = dict(run_state.route_repair_exhausted)
                     rounds.append(
                         IterativeRound(
                             round_number=round_number,
@@ -898,6 +881,7 @@ class IterativeVisualAgent:
                     skip_reason = self._generic_forced_visual_skip_reason(
                         question=raw_question,
                         planner_skill=active_skill,
+                        run_state=run_state,
                     )
                     forced_program = [] if skip_reason else self._fallback_visual_evidence_program(
                         question=exploration_question_text,
@@ -941,6 +925,7 @@ class IterativeVisualAgent:
                     skip_reason = self._generic_forced_visual_skip_reason(
                         question=raw_question,
                         planner_skill=active_skill,
+                        run_state=run_state,
                     )
                     forced_program = [] if skip_reason else self._visual_evidence_from_navigation_program(
                         program=program,
@@ -985,6 +970,7 @@ class IterativeVisualAgent:
                     skip_reason = self._generic_forced_visual_skip_reason(
                         question=raw_question,
                         planner_skill=active_skill,
+                        run_state=run_state,
                     )
                     forced_program = [] if skip_reason else self._fallback_visual_evidence_program(
                         question=exploration_question_text,
@@ -1197,11 +1183,16 @@ class IterativeVisualAgent:
                 evidence_policy=skill_runtime.effective_policy if skill_runtime is not None else None,
             )
             observation_ids = [str(observation_id) for observation_id in program_result.observation_ids]
-            self._record_zero_yield_tool_calls(program=program, observation_ids=observation_ids)
+            self._record_zero_yield_tool_calls(
+                program=program,
+                observation_ids=observation_ids,
+                run_state=run_state,
+            )
             self._write_recovery_execution_traces(
                 round_number=round_number,
                 program=program,
                 observation_ids=observation_ids,
+                run_state=run_state,
             )
             citations.extend(observation_ids)
             inspected_segment_ids.update(_segment_ids_from_program(program))
@@ -1238,7 +1229,7 @@ class IterativeVisualAgent:
                 supported_binding_no_growth_rounds += 1
             else:
                 supported_binding_no_growth_rounds = 0
-                self._reset_route_repair_counts_for_supported_bindings()
+                self._reset_route_repair_counts_for_supported_bindings(run_state=run_state)
             last_supported_binding_count = current_supported_binding_count
             if (
                 prefinal_evidence_repair_failed
@@ -1269,7 +1260,7 @@ class IterativeVisualAgent:
                 promotion_candidates = _latest_asr_binding_candidates(
                     workspace=self.workspace,
                     target_refs=(),
-                    failed_call_signatures=self._zero_yield_tool_call_signatures,
+                    failed_call_signatures=run_state.zero_yield_tool_signatures,
                     limit=2,
                 )
                 self.workspace.write_trace_event(
@@ -2153,6 +2144,7 @@ class IterativeVisualAgent:
         *,
         program: Sequence[Mapping[str, Any]],
         observation_ids: Sequence[str],
+        run_state: RunState,
     ) -> None:
         for step, observation_id in zip(program, observation_ids):
             if not isinstance(step, Mapping):
@@ -2170,7 +2162,7 @@ class IterativeVisualAgent:
             signature = _tool_call_signature(tool_name=tool_name, args=args)
             if not signature:
                 continue
-            self._zero_yield_tool_call_signatures.add(signature)
+            run_state.zero_yield_tool_signatures.add(signature)
             self.workspace.write_trace_event(
                 "zero_yield_tool_call_recorded",
                 {
@@ -2193,6 +2185,7 @@ class IterativeVisualAgent:
         notes_out: list[NormalizationNote] | None = None,
         raw_question: str = "",
         vlm_safe_question: str = "",
+        run_state: RunState,
     ) -> Sequence[Mapping[str, Any]]:
         if not isinstance(program, list):
             raise ValueError("Planner action status=continue requires a list program")
@@ -2332,6 +2325,7 @@ class IterativeVisualAgent:
                 route_kind = _route_kind_for_repair_reason(repair_reason)
                 candidate_id = str(args.pop("_candidate_id", "") or candidate_id)
                 repair_action = self._record_route_repair_attempt(
+                    run_state=run_state,
                     reason=repair_reason,
                     original_tool_name=original_tool_name,
                     original_args=original_args,
@@ -2679,7 +2673,7 @@ class IterativeVisualAgent:
                 reserved_segment_ids.add(segment.segment_id)
 
             zero_yield_signature = _tool_call_signature(tool_name=tool_name, args=args)
-            if zero_yield_signature in self._zero_yield_tool_call_signatures:
+            if zero_yield_signature in run_state.zero_yield_tool_signatures:
                 next_action = (
                     f"The exact {tool_name} call already produced no answer-grade evidence. "
                     "Use a different segment, target_refs, or evidence tool instead of repeating it."
@@ -3044,6 +3038,7 @@ class IterativeVisualAgent:
     def _record_route_repair_attempt(
         self,
         *,
+        run_state: RunState,
         reason: str,
         original_tool_name: str,
         original_args: Mapping[str, Any],
@@ -3053,8 +3048,8 @@ class IterativeVisualAgent:
         notes_out: list[NormalizationNote] | None,
     ) -> str:
         key = _route_repair_key(reason=reason, args=original_args)
-        count = self._route_repair_counts.get(key, 0) + 1
-        self._route_repair_counts[key] = count
+        count = run_state.route_repair_counts.get(key, 0) + 1
+        run_state.route_repair_counts[key] = count
         key_payload = _route_repair_key_payload(key)
 
         if count == 1:
@@ -3104,7 +3099,7 @@ class IterativeVisualAgent:
             )
             return "propose"
 
-        self._route_repair_exhausted = {
+        run_state.route_repair_exhausted = {
             **key_payload,
             "count": count,
             "skill": active_skill.name if active_skill is not None else "",
@@ -3112,7 +3107,7 @@ class IterativeVisualAgent:
             "resolved_tool": repaired_tool_name,
             "recommended_program": recovery_program,
         }
-        self.workspace.write_trace_event("route_repair_exhausted", dict(self._route_repair_exhausted))
+        self.workspace.write_trace_event("route_repair_exhausted", dict(run_state.route_repair_exhausted))
         _append_normalization_note(
             notes_out,
             tool=original_tool_name,
@@ -3126,19 +3121,19 @@ class IterativeVisualAgent:
     def _supported_evidence_binding_count(self) -> int:
         return len(_supported_evidence_binding_rows(self.workspace))
 
-    def _reset_route_repair_counts_for_supported_bindings(self) -> None:
-        if not self._route_repair_counts:
+    def _reset_route_repair_counts_for_supported_bindings(self, *, run_state: RunState) -> None:
+        if not run_state.route_repair_counts:
             return
         rows = _supported_evidence_binding_rows(self.workspace)
         if not rows:
             return
         reset_keys = [
             key
-            for key in self._route_repair_counts
+            for key in run_state.route_repair_counts
             if any(_supported_binding_overlaps_route_repair_key(row, key) for row in rows)
         ]
         for key in reset_keys:
-            self._route_repair_counts.pop(key, None)
+            run_state.route_repair_counts.pop(key, None)
         if reset_keys:
             self.workspace.write_trace_event(
                 "route_repair_count_reset",
@@ -3588,7 +3583,7 @@ class IterativeVisualAgent:
             "promote_answer_evidence": True,
         }
 
-    def _safe_parse_error_recovery_program(self) -> list[dict[str, Any]]:
+    def _safe_parse_error_recovery_program(self, *, run_state: RunState) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         for observation in self.workspace.read_observations():
             raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
@@ -3609,7 +3604,7 @@ class IterativeVisualAgent:
                     continue
                 candidate_id = str(action.get("candidate_id") or observation.observation_id).strip()
                 action_key = f"{route_kind}:{candidate_id}"
-                if action_key in self._executed_recommended_action_ids:
+                if action_key in run_state.executed_recommended_action_ids:
                     continue
                 candidates.append(
                     {
@@ -3639,6 +3634,7 @@ class IterativeVisualAgent:
         round_number: int,
         program: Sequence[Mapping[str, Any]],
         observation_ids: Sequence[str],
+        run_state: RunState,
     ) -> None:
         for step, observation_id in zip(program, observation_ids):
             if not isinstance(step, Mapping):
@@ -3649,7 +3645,7 @@ class IterativeVisualAgent:
             candidate_id = str(step.get("candidate_id") or "")
             action_key = f"{route_kind}:{candidate_id}"
             if candidate_id:
-                self._executed_recommended_action_ids.add(action_key)
+                run_state.executed_recommended_action_ids.add(action_key)
             self.workspace.write_trace_event(
                 "pending_action_execution_started",
                 {
@@ -3726,14 +3722,15 @@ class IterativeVisualAgent:
         *,
         question: str,
         planner_skill: SkillSpec | None,
+        run_state: RunState,
     ) -> str:
         if planner_skill is not None and planner_skill.name == "narration_timeline_qa":
             return "narration_transcript_route"
-        if self._has_pending_candidate_specific_action():
+        if self._has_pending_candidate_specific_action(run_state=run_state):
             return "pending_candidate_specific_action"
         return "silent_forced_visual_disabled"
 
-    def _has_pending_candidate_specific_action(self) -> bool:
+    def _has_pending_candidate_specific_action(self, *, run_state: RunState) -> bool:
         for observation in self.workspace.read_observations():
             raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
             actions = raw_output.get("recommended_next_actions")
@@ -3751,7 +3748,7 @@ class IterativeVisualAgent:
                     continue
                 candidate_id = str(action.get("candidate_id") or observation.observation_id).strip()
                 action_key = f"{route_kind}:{candidate_id}"
-                if action_key not in self._executed_recommended_action_ids:
+                if action_key not in run_state.executed_recommended_action_ids:
                     return True
         return False
 
@@ -4010,12 +4007,6 @@ class IterativeVisualAgent:
             raw_question=question,
             vlm_safe_question=question,
             effective_route=resolved_route,
-            seen_tool_semantic_keys=self._successful_tool_semantic_keys,
-            zero_yield_tool_signatures=self._zero_yield_tool_call_signatures,
-            executed_recommended_action_ids=self._executed_recommended_action_ids,
-            auto_evidence_promotion_attempted_keys=self._auto_evidence_promotion_attempted_keys,
-            route_repair_counts=self._route_repair_counts,
-            route_repair_exhausted=self._route_repair_exhausted,
             bootstrap_failure=self._grounding_bootstrap_failure,
         )
         return RunContext(
@@ -4486,10 +4477,17 @@ class IterativeVisualAgent:
                 {"round": round_number, "source": source, "answer": answer, "succeeded": False, "reason": "no_target_refs"},
             )
             return False
+        runtime_context = runtime_context or self._runtime_context(
+            question=question,
+            video_path=self.scene_index.video_path,
+            route=classify_question_route(question),
+            round_number=round_number,
+        )
+        run_state = runtime_context.run_state
         candidate = _latest_asr_binding_candidates(
             workspace=self.workspace,
             target_refs=target_refs,
-            failed_call_signatures=self._zero_yield_tool_call_signatures,
+            failed_call_signatures=run_state.zero_yield_tool_signatures,
             limit=1,
         )
         if not candidate:
@@ -4512,7 +4510,7 @@ class IterativeVisualAgent:
             if str(ref).strip()
         ]
         key = (str(_answer_option_letter(answer) or answer), segment_id, tuple(candidate_target_refs))
-        if key in self._auto_evidence_promotion_attempted_keys:
+        if key in run_state.auto_evidence_promotion_attempted_keys:
             self.workspace.write_trace_event(
                 "auto_evidence_promotion_attempted",
                 {
@@ -4526,14 +4524,8 @@ class IterativeVisualAgent:
                 },
             )
             return False
-        self._auto_evidence_promotion_attempted_keys.add(key)
+        run_state.auto_evidence_promotion_attempted_keys.add(key)
         before = self._supported_evidence_binding_count()
-        runtime_context = runtime_context or self._runtime_context(
-            question=question,
-            video_path=self.scene_index.video_path,
-            route=classify_question_route(question),
-            round_number=round_number,
-        )
         try:
             result = self._run_program(
                 [

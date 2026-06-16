@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
+from typing import Any
 
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
 from visual_coding_agent_harness.agents.question_policy import (
     extract_option_sequence_specs,
     extract_option_target_atoms,
 )
+from visual_coding_agent_harness.agents.runtime.state import RunState
 from visual_coding_agent_harness.agents.skills.specs import builtin_skill_registry
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse
 from visual_coding_agent_harness.registry import ToolRegistry, tool
@@ -47,6 +49,23 @@ def _scene_index() -> SceneIndex:
         duration_sec=12.0,
         segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
     )
+
+
+def _normalize_program(agent: IterativeVisualAgent, program: Any, **kwargs: Any) -> Any:
+    question = str(kwargs.get("question") or "")
+    video_path = str(kwargs.get("video_path") or "")
+    kwargs.setdefault(
+        "run_state",
+        RunState(
+            question=question,
+            video_path=video_path,
+            raw_question=str(kwargs.get("raw_question") or question),
+            vlm_safe_question=str(kwargs.get("vlm_safe_question") or question),
+            inspected_segment_ids=set(kwargs.get("inspected_segment_ids") or ()),
+            final_round_reserved=bool(kwargs.get("final_round_reserved", False)),
+        ),
+    )
+    return agent._normalize_program(program, **kwargs)
 
 
 BERNINI_ORDER_QUESTION = """VideoMME multiple-choice question.
@@ -224,7 +243,7 @@ def test_main_idea_allows_local_read_after_global_floor(tmp_path: Path):
         budget=AgentBudget(max_rounds=2, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "vision_read", "args": {"segment_id": "seg_0001", "ask_for": "main idea"}}],
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
@@ -254,7 +273,7 @@ def test_main_idea_allows_video_map_exploration(tmp_path: Path):
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "target_coverage", "args": {"targets": ["main topic"], "top_k": 2}}],
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
@@ -285,7 +304,7 @@ def test_timeline_repairs_read_segment_to_detail_with_targets(tmp_path: Path):
     )
     agent._exploration_target_entities = ("David", "Apollo and Daphne")
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "read_segment", "args": {"segment_id": "seg_0001"}}],
         question="Which artwork appears first?\nA. David\nB. Apollo and Daphne",
         video_path="/videos/demo.mp4",
@@ -317,7 +336,7 @@ def test_text_segment_tool_invalid_segment_is_rejected(tmp_path: Path):
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0008", "targets": ["David"]}}],
         question="Which artwork appears first?\nA. David\nB. Apollo and Daphne",
         video_path="/videos/demo.mp4",
@@ -349,7 +368,7 @@ def test_normalization_strips_unsupported_read_timeline_sorted_args(tmp_path: Pa
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "read_timeline_sorted", "args": {"segment_id": "seg_0006"}}],
         question="Which event appears first?",
         video_path="/videos/demo.mp4",
@@ -390,7 +409,7 @@ def test_known_legacy_target_id_rewrites_to_target_refs(tmp_path: Path):
     )
     notes = []
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["T1"]}}],
         question="Where is T1?",
         video_path="/videos/demo.mp4",
@@ -427,7 +446,7 @@ def test_unknown_target_ref_rejects_tool_call(tmp_path: Path):
     )
     notes = []
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "target_refs": ["T9"]}}],
         question="Where is T9?",
         video_path="/videos/demo.mp4",
@@ -500,7 +519,7 @@ def test_unknown_legacy_target_id_rejects_entire_tool_call(tmp_path: Path):
     )
     notes = []
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["T9"]}}],
         question="Where is T9?",
         video_path="/videos/demo.mp4",
@@ -532,7 +551,7 @@ def test_free_text_target_ref_rejects_tool_call(tmp_path: Path):
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [
             {
                 "tool": "locate_targets_in_segment",
@@ -581,7 +600,7 @@ def test_exact_paired_coverage_query_id_is_rejected_even_with_matching_text(tmp_
     )
     notes = []
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [
             {
                 "tool": "target_coverage",
@@ -636,7 +655,7 @@ def test_unpaired_coverage_query_id_is_rejected(tmp_path: Path):
     )
     notes = []
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [
             {
                 "tool": "target_coverage",
@@ -672,7 +691,7 @@ def test_natural_language_targets_are_preserved(tmp_path: Path):
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [
             {
                 "tool": "locate_targets_in_segment",
@@ -825,7 +844,7 @@ def test_timeline_ordering_rewrites_window_expansion_to_locator(tmp_path: Path):
     )
     agent._exploration_target_entities = ("David", "Apollo and Daphne")
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "expand_window", "args": {"segment_id": "seg_0001", "before_sec": 2.0, "after_sec": 3.0}}],
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
@@ -885,7 +904,7 @@ def test_timeline_ordering_repairs_repeated_locator_to_verify_anchors(tmp_path: 
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "locate_targets_in_segment", "args": {"segment_id": "seg_0001", "targets": ["David"]}}],
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
@@ -949,7 +968,7 @@ def test_verify_segment_anchors_does_not_avoid_repeated_anchor_segment(tmp_path:
         }
     ]
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "verify_segment_anchors", "args": {"segment_id": "seg_0002", "anchors": anchors}}],
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
@@ -989,7 +1008,7 @@ def test_timeline_skill_upgrades_empty_read_segment_before_deny_list(tmp_path: P
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "read_segment", "args": {"segment_id": "seg_0001"}}],
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
@@ -1026,7 +1045,7 @@ def test_skill_aware_empty_program_fallback_uses_allowed_visual_tool(tmp_path: P
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [],
         question="Which order is shown?",
         video_path="/videos/demo.mp4",
@@ -1057,7 +1076,7 @@ def test_same_round_duplicate_global_gist_is_dropped(tmp_path: Path):
         budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=2, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [
             {"tool": "global_gist", "args": {"question": "main idea", "duration_sec": 12.0}},
             {"tool": "global_gist", "args": {"question": "main idea again", "duration_sec": 12.0}},
@@ -1083,7 +1102,7 @@ def test_skill_name_tool_step_is_dropped_without_route_violation(tmp_path: Path)
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "main_idea@v1", "args": {}}],
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
@@ -1109,7 +1128,7 @@ def test_skill_name_tool_step_is_dropped(tmp_path: Path):
         budget=AgentBudget(max_rounds=1, reserve_final_round=False),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [{"tool": "main_idea@v1", "args": {}}],
         question="What is the video mainly about?",
         video_path="/videos/demo.mp4",
@@ -1268,7 +1287,7 @@ def test_timeline_skill_repairs_batch_caption_segments_to_single_caption_segment
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [
             {
                 "tool": "caption_segments",
@@ -1320,7 +1339,7 @@ def test_timeline_skill_repairs_caption_segment_with_segment_ids_argument(tmp_pa
         budget=AgentBudget(max_rounds=1, reserve_final_round=False, hard_skill_runtime=True),
     )
 
-    normalized = agent._normalize_program(
+    normalized = _normalize_program(agent,
         [
             {
                 "tool": "caption_segment",

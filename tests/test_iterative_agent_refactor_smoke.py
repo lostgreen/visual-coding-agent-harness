@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from visual_coding_agent_harness.agents import iterative_agent
+from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
 from visual_coding_agent_harness.agents.skill_runtime import (
     _initial_skill_runtime_state,
     _skill_id,
     update_effective_skill_runtime,
 )
+from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.agents.runtime.state import FinalizationContext, RoundState, RunState
+from visual_coding_agent_harness.registry import ToolRegistry
+from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
+from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 def test_skill_runtime_symbols_are_not_reexported_from_iterative_agent() -> None:
@@ -76,3 +81,29 @@ def test_roundstate_owns_round_scoped_budget_counter() -> None:
     assert round_state.recent_observations == []
     assert round_state.normalization_notes == []
     assert round_state.hypothesis_snapshot is None
+
+
+def test_runtime_context_fallback_uses_runstate_defaults(tmp_path) -> None:
+    class UnexpectedBackend(VisionLanguageBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            raise AssertionError(f"unexpected backend request: {request.task}")
+
+    agent = IterativeVisualAgent(
+        backend=UnexpectedBackend(),
+        registry=ToolRegistry(),
+        workspace=EvidenceWorkspace.create(tmp_path, "runtime_context_defaults"),
+        scene_index=SceneIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=1.0,
+            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=1.0)],
+        ),
+        budget=AgentBudget(max_rounds=1),
+    )
+
+    ctx = agent._runtime_context(question="What is visible?", video_path="/videos/demo.mp4", round_number=1)
+
+    assert ctx.run_state.seen_tool_semantic_keys == set()
+    assert ctx.run_state.zero_yield_tool_signatures == set()
+    assert ctx.run_state.executed_recommended_action_ids == set()
+    assert ctx.run_state.auto_evidence_promotion_attempted_keys == set()
+    assert ctx.run_state.route_repair_counts == {}
