@@ -192,6 +192,12 @@ class SkillTargetFact:
     mutex_group_id: str = ""
 
 
+@dataclass(frozen=True)
+class GroundingBootstrapState:
+    runtime: CompiledGroundingPlan | None = None
+    failure: Mapping[str, Any] | None = None
+
+
 class IterativeVisualAgent:
     """Let a VLM repeatedly plan tools, inspect evidence, and decide when to stop."""
 
@@ -210,7 +216,6 @@ class IterativeVisualAgent:
         self.scene_index = scene_index
         self.budget = budget or AgentBudget()
         self._exploration_target_entities: tuple[str, ...] = ()
-        self._grounding_bootstrap_failure: Mapping[str, Any] | None = None
         self.runtime_host = ToolRuntimeHost(registry=self.registry, workspace=self.workspace)
         self.context_allocator = default_context_budget_allocator(
             total_budget_tokens=self.budget.context_budget_tokens,
@@ -218,17 +223,17 @@ class IterativeVisualAgent:
         )
 
     def run(self, *, question: str, video_path: str) -> IterativeRunResult:
-        self._grounding_bootstrap_failure = None
         question_context = build_question_context(question)
         raw_question = question_context.raw_question
         vlm_safe_question = question_context.vlm_safe_question
         self.workspace.ensure_hypothesis(raw_question)
-        grounding_runtime = self._initialize_planner_owned_grounding(question_context)
-        if self._grounding_bootstrap_failure is not None:
+        grounding_bootstrap = self._initialize_planner_owned_grounding(question_context)
+        grounding_runtime = grounding_bootstrap.runtime
+        if grounding_bootstrap.failure is not None:
             return self._grounding_bootstrap_failed_result(
                 question=raw_question,
                 video_path=video_path,
-                failure=self._grounding_bootstrap_failure,
+                failure=grounding_bootstrap.failure,
             )
         effective_route = self._effective_route(raw_question)
         exploration_question_text = self._question_for_exploration(
@@ -283,7 +288,7 @@ class IterativeVisualAgent:
             effective_route=effective_route,
             inspected_segment_ids=inspected_segment_ids,
             grounding_runtime=grounding_runtime,
-            bootstrap_failure=self._grounding_bootstrap_failure,
+            bootstrap_failure=grounding_bootstrap.failure,
         )
         has_inspect_with_candidate_options = any(
             _program_has_inspect_with_candidate_options(round_item.program) for round_item in rounds
@@ -1706,11 +1711,11 @@ class IterativeVisualAgent:
         )
         return rewrite.exploration_question or question_context.vlm_safe_question
 
-    def _initialize_planner_owned_grounding(self, question_context: QuestionContext) -> CompiledGroundingPlan | None:
+    def _initialize_planner_owned_grounding(self, question_context: QuestionContext) -> GroundingBootstrapState:
         if not self.budget.planner_owned_grounding:
-            return None
+            return GroundingBootstrapState()
         if getattr(self.workspace, "target_registry", None) is not None:
-            return getattr(self.workspace, "grounding_runtime", None)
+            return GroundingBootstrapState(runtime=getattr(self.workspace, "grounding_runtime", None))
         route_hint = classify_question_route(question_context.raw_question)
         self.workspace.write_trace_event(
             "grounding_requested",
@@ -1761,9 +1766,8 @@ class IterativeVisualAgent:
                     "raw_text_chars": len(result.raw_text or ""),
                     "raw_text_excerpt": raw_text_excerpt,
                 }
-                self._grounding_bootstrap_failure = failure
                 self.workspace.write_trace_event("grounding_bootstrap_failed", failure)
-                return None
+                return GroundingBootstrapState(failure=failure)
             self.workspace.write_trace_event(
                 "grounding_fallback_compiled",
                 {
@@ -1807,7 +1811,7 @@ class IterativeVisualAgent:
                 "option_count": len(compiled.registry.options_by_id),
             },
         )
-        return compiled
+        return GroundingBootstrapState(runtime=compiled)
 
     def _grounding_bootstrap_failed_result(
         self,
@@ -4002,7 +4006,6 @@ class IterativeVisualAgent:
             raw_question=question,
             vlm_safe_question=question,
             effective_route=resolved_route,
-            bootstrap_failure=self._grounding_bootstrap_failure,
         )
         return RunContext(
             workspace=self.workspace,

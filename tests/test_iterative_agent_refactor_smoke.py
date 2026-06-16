@@ -109,6 +109,7 @@ def test_runtime_context_fallback_uses_runstate_defaults(tmp_path) -> None:
 
     ctx = agent._runtime_context(question="What is visible?", video_path="/videos/demo.mp4", round_number=1)
 
+    assert not hasattr(agent, "_grounding_bootstrap_failure")
     assert ctx.run_state.seen_tool_semantic_keys == set()
     assert ctx.run_state.zero_yield_tool_signatures == set()
     assert ctx.run_state.executed_recommended_action_ids == set()

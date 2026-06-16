@@ -36,7 +36,7 @@ class RunState:
     answer_suggestion_state: AnswerSuggestionState = field(default_factory=AnswerSuggestionState)
     no_progress_warning_emitted: bool = False
     grounding_runtime: Any | None = None
-    bootstrap_failure: str | None = None
+    bootstrap_failure: Mapping[str, Any] | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 

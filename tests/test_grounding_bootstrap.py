@@ -222,6 +222,45 @@ def test_bootstrap_invalid_grounding_falls_back_and_enters_planner_loop(tmp_path
     assert "x" * 700 not in trace
 
 
+def test_bootstrap_fallback_compile_failure_returns_failure_without_instance_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fail_compile(*args, **kwargs):
+        raise RuntimeError("fallback unavailable")
+
+    monkeypatch.setattr(
+        "visual_coding_agent_harness.agents.iterative_agent.compile_fallback_plan",
+        fail_compile,
+    )
+    backend = RecordingBackend(
+        {
+            "ground_question": ["not json", "nope", "still not json"],
+            "replan": ['{"status": "continue", "program": []}'],
+        }
+    )
+    agent = _agent(tmp_path, backend, "bootstrap_failure")
+
+    result = agent.run(
+        question="Which sequence is described?\nA. first then second\nB. second then first",
+        video_path="/videos/generic.mp4",
+    )
+
+    assert result.status == "grounding_bootstrap_failed"
+    assert result.answer == "grounding_bootstrap_failed"
+    assert not hasattr(agent, "_grounding_bootstrap_failure")
+    assert [request.task for request in backend.requests if request.task == "ground_question"] == [
+        "ground_question",
+        "ground_question",
+        "ground_question",
+    ]
+    assert not any(request.task == "replan" for request in backend.requests)
+    trace = (agent.workspace.root / "trace.jsonl").read_text(encoding="utf-8")
+    assert '"type": "grounding_bootstrap_failed"' in trace
+    assert '"type": "iterative_final_rejected"' in trace
+    assert "fallback unavailable" in trace
+
+
 def test_bootstrap_success_prompt_exposes_target_refs_without_empty_registry_line(tmp_path: Path) -> None:
     backend = RecordingBackend(
         {
