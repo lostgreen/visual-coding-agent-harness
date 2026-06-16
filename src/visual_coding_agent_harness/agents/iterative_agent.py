@@ -348,8 +348,6 @@ class IterativeVisualAgent:
         has_inspect_with_candidate_options = any(
             _program_has_inspect_with_candidate_options(round_item.program) for round_item in rounds
         )
-        answer_feedback: list[str] = []
-        pending_inferences: list[str] = []
         repeated_program_key = ""
         repeated_program_count = 0
         invalid_failure_counts: dict[FailureSignature, int] = {}
@@ -420,8 +418,8 @@ class IterativeVisualAgent:
                 allocator=self.context_allocator,
                 inspected_segment_ids=sorted(run_state.inspected_segment_ids),
                 final_round_reserved=final_round_reserved,
-                answer_feedback=answer_feedback,
-                pending_inferences=pending_inferences,
+                answer_feedback=run_state.answer_feedback,
+                pending_inferences=run_state.pending_inferences,
                 normalization_notes=run_state.last_normalization_notes,
                 hypothesis_text=self.workspace.read_hypothesis_text(),
                 reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
@@ -766,13 +764,13 @@ class IterativeVisualAgent:
                         )
                     planned_program = []
                     if prefinal_evidence_repair_failed and post_repair_action_rounds_remaining > 0:
-                        answer_feedback = [
+                        run_state.answer_feedback = [
                             "Prefinal evidence repair did not create answer-grade evidence. You have one "
                             "post-repair action round: provide a different answer with explicit supported "
                             "evidence_ids, call one non-repeating transcript evidence tool, or abstain."
                         ]
                     elif bridge_result.ambiguous:
-                        answer_feedback = [
+                        run_state.answer_feedback = [
                             "A cited observation maps to multiple supported evidence bindings; do not guess. "
                             f"Choose explicit evidence_ids from: {bridge_result.ambiguous[:3]}."
                         ]
@@ -899,7 +897,7 @@ class IterativeVisualAgent:
                                 "recovery": recovery,
                             },
                         )
-                        answer_feedback = [_protocol_recovery_feedback(recovery)]
+                        run_state.answer_feedback = [_protocol_recovery_feedback(recovery)]
                 if not program and not final_round_reserved and normalization_notes:
                     self.workspace.write_trace_event(
                         "iterative_normalization_empty",
@@ -915,7 +913,7 @@ class IterativeVisualAgent:
                         if len(reasons) >= 3:
                             break
                     if reasons:
-                        answer_feedback = [
+                        run_state.answer_feedback = [
                             "All your tool calls were filtered. Last reasons: " + ", ".join(reasons) + "."
                         ]
                 if (
@@ -1070,7 +1068,7 @@ class IterativeVisualAgent:
                         run_state=run_state,
                         program=program,
                         observation_ids=[],
-                        pending_inferences_out=pending_inferences,
+                        pending_inferences_out=run_state.pending_inferences,
                     )
                     if sweep_final is not None:
                         return sweep_final
@@ -1119,7 +1117,7 @@ class IterativeVisualAgent:
                                 "citations": list(answer_result.citations),
                             },
                         )
-                        answer_feedback = [blocked_reason]
+                        run_state.answer_feedback = [blocked_reason]
                     else:
                         rounds.append(
                             IterativeRound(
@@ -1189,7 +1187,7 @@ class IterativeVisualAgent:
                     run_state=run_state,
                     program=program,
                     observation_ids=[],
-                    pending_inferences_out=pending_inferences,
+                    pending_inferences_out=run_state.pending_inferences,
                 )
                 if guard_final is not None:
                     return guard_final
@@ -1254,7 +1252,7 @@ class IterativeVisualAgent:
             if timeline_decision is not None:
                 timeline_citations = [str(obs_id) for obs_id in timeline_decision["citations"]]
                 inference_hint = _timeline_decision_pending_inference(timeline_decision)
-                pending_inferences = [inference_hint]
+                run_state.pending_inferences = [inference_hint]
                 self.workspace.write_trace_event(
                     "iterative_timeline_temporal_inference",
                     {
@@ -1321,7 +1319,7 @@ class IterativeVisualAgent:
                         "promotion_candidates": promotion_candidates,
                     },
                 )
-                answer_feedback = _supported_binding_no_growth_feedback(
+                run_state.answer_feedback = _supported_binding_no_growth_feedback(
                     candidates=promotion_candidates,
                     skill_locked=bool(skill_runtime is not None and skill_runtime.locked),
                 )
@@ -1376,7 +1374,7 @@ class IterativeVisualAgent:
                     if finalization_ready is not None:
                         return finalization_ready
                 if answer_result.status == "final" or answer_result.has_partial_support():
-                    pending_inferences = [
+                    run_state.pending_inferences = [
                         _answer_result_pending_inference(answer_result, source="evidence_table_no_growth")
                     ]
             if _should_run_answer_probe(
@@ -1427,7 +1425,7 @@ class IterativeVisualAgent:
                                 "citations": list(answer_result.citations),
                             },
                         )
-                        answer_feedback = [blocked_reason]
+                        run_state.answer_feedback = [blocked_reason]
                         continue
                     stable_final = self._try_stable_answer_suggestion_final(
                         answer_result=answer_result,
@@ -1443,7 +1441,7 @@ class IterativeVisualAgent:
                     )
                     if stable_final is not None:
                         return stable_final
-                    pending_inferences = [_answer_result_pending_inference(answer_result, source="prefinal_probe")]
+                    run_state.pending_inferences = [_answer_result_pending_inference(answer_result, source="prefinal_probe")]
                     self.workspace.write_trace_event(
                         "iterative_answer_suggestion",
                         {
@@ -1469,7 +1467,7 @@ class IterativeVisualAgent:
                     )
                     if low_confidence_result is not None:
                         return low_confidence_result
-                answer_feedback = (
+                run_state.answer_feedback = (
                     _sanitize_option_blind_feedback(answer_result.missing_evidence, raw_question=raw_question)
                     if self.budget.rewrite_mcq_for_exploration
                     else list(answer_result.missing_evidence)
