@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from string import Formatter
 from typing import Any, FrozenSet, Mapping, Sequence
@@ -49,6 +50,62 @@ class EvidencePolicy:
     sufficiency_rule: str = ""
 
 
+class SchedulerKind(str, Enum):
+    NONE = "none"
+    FOLLOWUP_QUEUE = "followup_queue"
+    SUBEVENT_TIMELINE = "subevent_timeline"
+
+
+class FinalizationStrategy(str, Enum):
+    EVIDENCE_GATE = "evidence_gate"
+    WHOLE_VIDEO_COVERAGE = "whole_video_coverage"
+
+
+class EvidenceFollowupKind(str, Enum):
+    NONE = "none"
+    SEGMENT_DETAIL_AND_ASR = "segment_detail_and_asr"
+
+
+class ExplorationProfile(str, Enum):
+    DEFAULT = "default"
+    TIMELINE_FAMILY = "timeline_family"
+    MAIN_IDEA = "main_idea"
+    GROUNDED_FACTUAL = "grounded_factual"
+
+
+class RouteRepairPolicyKind(str, Enum):
+    DEFAULT = "default"
+    GIST_FAMILY = "gist_family"
+
+
+class OptionEvaluationKind(str, Enum):
+    NONE = "none"
+    MUTEX_OR_GROUNDED = "mutex_or_grounded"
+
+
+class FinalGateProfile(str, Enum):
+    DEFAULT = "default"
+    NARRATION_EXTRA_HINTS = "narration_extra_hints"
+    TIMELINE_FAMILY_HINTS = "timeline_family_hints"
+
+
+class PrefinalRepairKind(str, Enum):
+    NONE = "none"
+    NARRATION_TIMELINE = "narration_timeline"
+
+
+@dataclass(frozen=True)
+class SkillBehaviors:
+    scheduler: SchedulerKind = SchedulerKind.NONE
+    finalization: FinalizationStrategy = FinalizationStrategy.EVIDENCE_GATE
+    evidence_followup: EvidenceFollowupKind = EvidenceFollowupKind.NONE
+    exploration_profile: ExplorationProfile = ExplorationProfile.DEFAULT
+    route_repair: RouteRepairPolicyKind = RouteRepairPolicyKind.DEFAULT
+    option_evaluation: OptionEvaluationKind = OptionEvaluationKind.NONE
+    final_gate: FinalGateProfile = FinalGateProfile.DEFAULT
+    prefinal_repair: PrefinalRepairKind = PrefinalRepairKind.NONE
+
+
 @dataclass(frozen=True)
 class SkillSpec:
     name: str
@@ -70,8 +127,11 @@ class SkillSpec:
     when_to_use: str = ""
     guide: SkillGuide | None = None
     policy: EvidencePolicy | None = None
+    behaviors: SkillBehaviors | None = None
 
     def __post_init__(self) -> None:
+        if self.behaviors is None:
+            object.__setattr__(self, "behaviors", SkillBehaviors())
         if self.guide is None:
             object.__setattr__(
                 self,
@@ -147,6 +207,7 @@ class SkillSpec:
         verifier_checks: Sequence[str] = (),
         allowed_actions: FrozenSet[str] = frozenset(),
         playbook: Playbook | None = None,
+        behaviors: SkillBehaviors | None = None,
     ) -> "SkillSpec":
         front_matter, body = _split_front_matter(text)
         metadata = _parse_front_matter(front_matter)
@@ -170,6 +231,7 @@ class SkillSpec:
             playbook=playbook,
             description=str(metadata.get("description", "")),
             when_to_use=str(metadata.get("when_to_use", "")),
+            behaviors=behaviors,
         )
 
     @classmethod
@@ -401,6 +463,7 @@ def _load_builtin_playbook(
     verifier_checks: Sequence[str],
     allowed_actions: FrozenSet[str],
     playbook: Playbook | None = None,
+    behaviors: SkillBehaviors | None = None,
 ) -> SkillSpec:
     return SkillSpec.from_markdown_playbook_path(
         _playbook_dir() / filename,
@@ -412,6 +475,7 @@ def _load_builtin_playbook(
         verifier_checks=verifier_checks,
         allowed_actions=allowed_actions,
         playbook=playbook,
+        behaviors=behaviors,
     )
 
 
@@ -538,9 +602,18 @@ def builtin_skill_registry() -> SkillRegistry:
         playbook_for_operator("main_arc", question="", options=(), registry=None),
         sorted(main_idea_actions),
     )
+    main_idea_behaviors = SkillBehaviors(
+        finalization=FinalizationStrategy.WHOLE_VIDEO_COVERAGE,
+        exploration_profile=ExplorationProfile.MAIN_IDEA,
+        route_repair=RouteRepairPolicyKind.GIST_FAMILY,
+    )
     grounded_playbook = with_suggested_actions(
         playbook_for_operator("select_present", question="", options=(), registry=None),
         sorted(grounded_allowed_actions),
+    )
+    grounded_behaviors = SkillBehaviors(
+        exploration_profile=ExplorationProfile.GROUNDED_FACTUAL,
+        option_evaluation=OptionEvaluationKind.MUTEX_OR_GROUNDED,
     )
     complement_actions = grounded_allowed_actions | {"bind_asr_claim"}
     complement_playbook = with_suggested_actions(
@@ -556,6 +629,21 @@ def builtin_skill_registry() -> SkillRegistry:
     universal_playbook = with_suggested_actions(
         playbook_for_operator("universal_intersection", question="", options=(), registry=None),
         sorted(universal_actions),
+    )
+    narration_timeline_behaviors = SkillBehaviors(
+        evidence_followup=EvidenceFollowupKind.SEGMENT_DETAIL_AND_ASR,
+        exploration_profile=ExplorationProfile.TIMELINE_FAMILY,
+        final_gate=FinalGateProfile.NARRATION_EXTRA_HINTS,
+        prefinal_repair=PrefinalRepairKind.NARRATION_TIMELINE,
+    )
+    timeline_behaviors = SkillBehaviors(
+        exploration_profile=ExplorationProfile.TIMELINE_FAMILY,
+        final_gate=FinalGateProfile.TIMELINE_FAMILY_HINTS,
+    )
+    mutex_behaviors = SkillBehaviors(
+        scheduler=SchedulerKind.FOLLOWUP_QUEUE,
+        exploration_profile=ExplorationProfile.GROUNDED_FACTUAL,
+        option_evaluation=OptionEvaluationKind.MUTEX_OR_GROUNDED,
     )
     return SkillRegistry(
         [
@@ -605,6 +693,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 self_check=("global_gist is not an option vote", "decision cites coverage evidence"),
                 allowed_actions=main_idea_actions,
                 playbook=main_idea_playbook,
+                behaviors=main_idea_behaviors,
             ),
             SkillSpec(
                 name="complement_absence_qa",
@@ -696,6 +785,7 @@ def builtin_skill_registry() -> SkillRegistry:
                     }
                     | {"verify_ledger_answer"}
                 ),
+                behaviors=mutex_behaviors,
             ),
             _load_builtin_playbook(
                 "narration_timeline_qa.md",
@@ -706,6 +796,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 sufficiency=("narrated_fact_sequence_has_asr_or_transcript_support", "timeline_conflicts_resolved"),
                 verifier_checks=("narrated_fact_support_present", "selected_option_has_structured_support"),
                 allowed_actions=timeline_allowed_actions | {"bind_asr_claim"},
+                behaviors=narration_timeline_behaviors,
             ),
             _load_builtin_playbook(
                 "visual_timeline_qa.md",
@@ -716,6 +807,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 sufficiency=_timeline_sufficiency(),
                 verifier_checks=_timeline_verifier_checks(),
                 allowed_actions=timeline_allowed_actions,
+                behaviors=timeline_behaviors,
             ),
             _load_builtin_playbook(
                 "mixed_asr_visual_qa.md",
@@ -741,6 +833,7 @@ def builtin_skill_registry() -> SkillRegistry:
                 ),
                 allowed_actions=grounded_allowed_actions,
                 playbook=grounded_playbook,
+                behaviors=grounded_behaviors,
             ),
             SkillSpec(
                 name="timeline_ordering",
@@ -762,6 +855,11 @@ def builtin_skill_registry() -> SkillRegistry:
                 ),
                 self_check=("decision.option != null", "decision.citations all confirmed"),
                 allowed_actions=timeline_allowed_actions,
+                behaviors=SkillBehaviors(
+                    scheduler=SchedulerKind.SUBEVENT_TIMELINE,
+                    exploration_profile=ExplorationProfile.TIMELINE_FAMILY,
+                    final_gate=FinalGateProfile.TIMELINE_FAMILY_HINTS,
+                ),
             ),
         ]
     )

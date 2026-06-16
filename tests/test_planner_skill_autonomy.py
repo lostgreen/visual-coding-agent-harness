@@ -52,6 +52,9 @@ def test_catalog_renders_guide_not_policy() -> None:
     assert "allowed_modalities" not in rendered
     assert "verifier_checks" not in rendered
     assert "forbidden_actions" not in rendered
+    assert "behaviors" not in rendered
+    assert "exploration_profile" not in rendered
+    assert "prefinal_repair" not in rendered
 
 
 def test_transition_policy_thrashing() -> None:

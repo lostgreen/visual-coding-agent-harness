@@ -1,6 +1,15 @@
 import pytest
 
 from visual_coding_agent_harness.agents.skills.specs import (
+    EvidenceFollowupKind,
+    ExplorationProfile,
+    FinalGateProfile,
+    FinalizationStrategy,
+    OptionEvaluationKind,
+    PrefinalRepairKind,
+    RouteRepairPolicyKind,
+    SchedulerKind,
+    SkillBehaviors,
     SkillRegistry,
     SkillSpec,
     SkillTrigger,
@@ -82,6 +91,53 @@ def test_skill_spec_decomposition():
         assert skill.guide.when_to_use
         assert skill.policy.allowed_modalities
         assert skill.policy.verifier_checks == tuple(skill.verifier_checks)
+
+
+def test_builtin_skills_declare_typed_behaviors() -> None:
+    expected = {
+        "grounded_factual_qa": SkillBehaviors(
+            exploration_profile=ExplorationProfile.GROUNDED_FACTUAL,
+            option_evaluation=OptionEvaluationKind.MUTEX_OR_GROUNDED,
+        ),
+        "main_idea": SkillBehaviors(
+            finalization=FinalizationStrategy.WHOLE_VIDEO_COVERAGE,
+            exploration_profile=ExplorationProfile.MAIN_IDEA,
+            route_repair=RouteRepairPolicyKind.GIST_FAMILY,
+        ),
+        "narration_timeline_qa": SkillBehaviors(
+            evidence_followup=EvidenceFollowupKind.SEGMENT_DETAIL_AND_ASR,
+            exploration_profile=ExplorationProfile.TIMELINE_FAMILY,
+            final_gate=FinalGateProfile.NARRATION_EXTRA_HINTS,
+            prefinal_repair=PrefinalRepairKind.NARRATION_TIMELINE,
+        ),
+        "visual_timeline_qa": SkillBehaviors(
+            exploration_profile=ExplorationProfile.TIMELINE_FAMILY,
+            final_gate=FinalGateProfile.TIMELINE_FAMILY_HINTS,
+        ),
+        "timeline_ordering": SkillBehaviors(
+            scheduler=SchedulerKind.SUBEVENT_TIMELINE,
+            exploration_profile=ExplorationProfile.TIMELINE_FAMILY,
+            final_gate=FinalGateProfile.TIMELINE_FAMILY_HINTS,
+        ),
+        "mutex_fact_qa": SkillBehaviors(
+            scheduler=SchedulerKind.FOLLOWUP_QUEUE,
+            exploration_profile=ExplorationProfile.GROUNDED_FACTUAL,
+            option_evaluation=OptionEvaluationKind.MUTEX_OR_GROUNDED,
+        ),
+    }
+    default_names = {
+        "mixed_asr_visual_qa",
+        "causal_asr_qa",
+        "complement_absence_qa",
+        "universal_set_qa",
+        "general_exploration",
+    }
+    registry = builtin_skill_registry()
+
+    for name, behaviors in expected.items():
+        assert registry.get(name).behaviors == behaviors
+    for name in default_names:
+        assert registry.get(name).behaviors == SkillBehaviors()
 
 
 def test_mutex_fact_skill_one_call_per_window():
