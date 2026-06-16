@@ -10,6 +10,10 @@ from .question_policy import classify_narration_subroute, classify_question_rout
 from .skills.specs import EvidencePolicy, SkillRegistry, SkillSpec, builtin_skill_registry, select_skill
 
 
+SWITCH_THRASHING_WINDOW_ROUNDS = 3
+SWITCH_THRASHING_THRESHOLD = 2
+
+
 @dataclass
 class SkillRuntimeState:
     recommended_skill: SkillSpec
@@ -58,6 +62,7 @@ class TransitionPolicy:
         evidence_state: Any,
         rationale: str,
         recent_switches: tuple[SkillSwitchRecord, ...],
+        current_round_number: int,
     ) -> TransitionVerdict:
         del task_route, evidence_state, rationale
         proposed_name = _skill_name_from_id(proposed_guide_name)
@@ -73,8 +78,9 @@ class TransitionPolicy:
         current_policy = current.effective_policy or (
             current.effective_skill.policy if current.effective_skill is not None else current.recommended_skill.policy
         )
-        recent = recent_switches[-3:]
-        if len(recent) >= 2:
+        window_start = current_round_number - SWITCH_THRASHING_WINDOW_ROUNDS
+        in_window = tuple(switch for switch in recent_switches if switch.round_number >= window_start)
+        if len(in_window) >= SWITCH_THRASHING_THRESHOLD:
             return TransitionVerdict(
                 decision=TransitionDecision.REJECTED_THRASHING,
                 guide=proposed,
@@ -194,12 +200,13 @@ def update_effective_skill_runtime(
     executed_rounds: int,
     supported_binding_no_growth_rounds: int,
     no_evidence_growth_rounds: int,
+    current_round_number: int | None = None,
     write_trace_event: Callable[[str, Mapping[str, Any]], None] | None = None,
     transition_policy: TransitionPolicy | None = None,
     recent_switches: tuple[SkillSwitchRecord, ...] = (),
-) -> None:
+) -> SkillSwitchRecord | None:
     if requested_skill is None:
-        return
+        return None
     current_id = _skill_id(state.effective_skill)
     requested_id = _skill_id(requested_skill)
     if requested_skill.name == "timeline_ordering" and current_id in {
@@ -216,9 +223,9 @@ def update_effective_skill_runtime(
                 "message": "timeline_ordering@v1 is retained for replay only; the run-level effective skill stays locked.",
             },
         )
-        return
+        return None
     if requested_id == current_id:
-        return
+        return None
     if requested_id not in state.compatible_skill_ids:
         _write_trace_event(
             write_trace_event,
@@ -242,7 +249,7 @@ def update_effective_skill_runtime(
                 "compatible_skills": list(state.compatible_skill_ids),
             },
         )
-        return
+        return None
     verdict = (transition_policy or TransitionPolicy()).evaluate(
         current=state,
         proposed_guide_name=requested_id,
@@ -250,6 +257,7 @@ def update_effective_skill_runtime(
         evidence_state=None,
         rationale=rationale,
         recent_switches=recent_switches,
+        current_round_number=round_number if current_round_number is None else current_round_number,
     )
     if verdict.decision in {
         TransitionDecision.ACCEPTED,
@@ -260,18 +268,21 @@ def update_effective_skill_runtime(
         if verdict.policy is not None:
             state.effective_policy = verdict.policy
         state.override_reason = rationale
+        new_id = _skill_id(state.effective_skill)
         _write_trace_event(
             write_trace_event,
             "skill_transition_accepted",
             {
                 "round": round_number,
                 "from": previous_id,
-                "to": _skill_id(state.effective_skill),
+                "to": new_id,
                 "decision": verdict.decision.value,
                 "reason": verdict.reason or rationale,
             },
         )
-        return
+        if previous_id != new_id:
+            return SkillSwitchRecord(round_number=round_number, from_skill=previous_id, to_skill=new_id)
+        return None
     _write_trace_event(
         write_trace_event,
         "skill_transition_rejected",
@@ -283,7 +294,7 @@ def update_effective_skill_runtime(
             "reason": verdict.reason,
         },
     )
-    return
+    return None
 
 
 def _write_trace_event(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from visual_coding_agent_harness.agents.skills.specs import builtin_skill_registry, skill_catalog_prompt
 from visual_coding_agent_harness.agents.skill_runtime import (
     SkillRuntimeState,
@@ -72,10 +74,120 @@ def test_transition_policy_thrashing() -> None:
             SkillSwitchRecord(round_number=1, from_skill="a", to_skill="b"),
             SkillSwitchRecord(round_number=2, from_skill="b", to_skill="a"),
         ),
+        current_round_number=3,
     )
 
     assert verdict.decision is TransitionDecision.REJECTED_THRASHING
     assert verdict.policy is current_skill.policy
+
+
+@pytest.mark.parametrize(
+    ("history_rounds", "current_round", "expected_decision"),
+    [
+        ([2, 4], 10, TransitionDecision.ACCEPTED_WITH_POLICY_UNCHANGED),
+        ([8, 9], 10, TransitionDecision.REJECTED_THRASHING),
+        ([9], 10, TransitionDecision.ACCEPTED_WITH_POLICY_UNCHANGED),
+    ],
+)
+def test_thrashing_window_semantics(history_rounds, current_round, expected_decision) -> None:
+    registry = builtin_skill_registry()
+    current_skill = registry.get("visual_timeline_qa")
+    state = SkillRuntimeState(
+        recommended_skill=current_skill,
+        compatible_skill_ids=("visual_timeline_qa@v1", "mixed_asr_visual_qa@v1"),
+        effective_skill=current_skill,
+        effective_policy=current_skill.policy,
+    )
+
+    verdict = TransitionPolicy(registry).evaluate(
+        current=state,
+        proposed_guide_name="mixed_asr_visual_qa",
+        task_route="temporal_order",
+        evidence_state=None,
+        rationale="need another modality",
+        recent_switches=tuple(
+            SkillSwitchRecord(round_number=round_number, from_skill="a", to_skill="b")
+            for round_number in history_rounds
+        ),
+        current_round_number=current_round,
+    )
+
+    assert verdict.decision is expected_decision
+
+
+def test_accepted_switch_returns_history_record_and_same_skill_noop_does_not() -> None:
+    registry = builtin_skill_registry()
+    current_skill = registry.get("visual_timeline_qa")
+    requested_skill = registry.get("mixed_asr_visual_qa")
+    state = SkillRuntimeState(
+        recommended_skill=current_skill,
+        compatible_skill_ids=("visual_timeline_qa@v1", "mixed_asr_visual_qa@v1"),
+        effective_skill=current_skill,
+        effective_policy=current_skill.policy,
+    )
+
+    for round_number in range(1, 6):
+        record = update_effective_skill_runtime(
+            state,
+            requested_skill=current_skill,
+            requested_skill_text="visual_timeline_qa@v1",
+            round_number=round_number,
+            current_round_number=round_number,
+            rationale="same skill",
+            executed_rounds=round_number - 1,
+            supported_binding_no_growth_rounds=0,
+            no_evidence_growth_rounds=0,
+        )
+        assert record is None
+
+    record = update_effective_skill_runtime(
+        state,
+        requested_skill=requested_skill,
+        requested_skill_text="mixed_asr_visual_qa@v1",
+        round_number=10,
+        current_round_number=10,
+        rationale="switch modalities",
+        executed_rounds=9,
+        supported_binding_no_growth_rounds=0,
+        no_evidence_growth_rounds=0,
+    )
+
+    assert record == SkillSwitchRecord(
+        round_number=10,
+        from_skill="visual_timeline_qa@v1",
+        to_skill="mixed_asr_visual_qa@v1",
+    )
+
+
+def test_rejected_transition_returns_no_history_record() -> None:
+    registry = builtin_skill_registry()
+    current_skill = registry.get("visual_timeline_qa")
+    requested_skill = registry.get("mixed_asr_visual_qa")
+    state = SkillRuntimeState(
+        recommended_skill=current_skill,
+        compatible_skill_ids=("visual_timeline_qa@v1", "mixed_asr_visual_qa@v1"),
+        effective_skill=current_skill,
+        effective_policy=current_skill.policy,
+    )
+
+    record = update_effective_skill_runtime(
+        state,
+        requested_skill=requested_skill,
+        requested_skill_text="mixed_asr_visual_qa@v1",
+        round_number=10,
+        current_round_number=10,
+        rationale="switch modalities",
+        executed_rounds=9,
+        supported_binding_no_growth_rounds=0,
+        no_evidence_growth_rounds=0,
+        recent_switches=(
+            SkillSwitchRecord(round_number=8, from_skill="a", to_skill="b"),
+            SkillSwitchRecord(round_number=9, from_skill="b", to_skill="a"),
+        ),
+    )
+
+    assert record is None
+    assert state.effective_skill is current_skill
 
 
 def test_rejected_transition_does_not_mutate_state() -> None:
@@ -159,6 +271,7 @@ def test_transition_policy_accepts_strictening() -> None:
         evidence_state=None,
         rationale="visual order question",
         recent_switches=(),
+        current_round_number=1,
     )
 
     assert verdict.decision is TransitionDecision.ACCEPTED
@@ -182,6 +295,7 @@ def test_transition_policy_rejects_disjoint_modality_switch() -> None:
         evidence_state=None,
         rationale="",
         recent_switches=(),
+        current_round_number=1,
     )
 
     assert verdict.decision is TransitionDecision.REJECTED_INCOMPATIBLE
@@ -205,6 +319,7 @@ def test_transition_policy_keeps_policy_when_loosening() -> None:
         evidence_state=None,
         rationale="fallback",
         recent_switches=(),
+        current_round_number=1,
     )
 
     assert verdict.decision is TransitionDecision.ACCEPTED_WITH_POLICY_UNCHANGED

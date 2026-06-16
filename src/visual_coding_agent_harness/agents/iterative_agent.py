@@ -499,17 +499,21 @@ class IterativeVisualAgent:
                     },
                 )
                 if skill_runtime is not None:
-                    _update_effective_skill_runtime(
+                    switch_record = _update_effective_skill_runtime(
                         skill_runtime,
                         requested_skill=planner_skill,
                         requested_skill_text=skill_status["requested_skill"],
                         round_number=round_number,
+                        current_round_number=round_number,
                         rationale=rationale,
                         executed_rounds=len(rounds),
                         supported_binding_no_growth_rounds=supported_binding_no_growth_rounds,
                         no_evidence_growth_rounds=no_evidence_growth_rounds,
                         write_trace_event=self.workspace.write_trace_event,
+                        recent_switches=tuple(run_state.skill_switch_history),
                     )
+                    if switch_record is not None:
+                        run_state.skill_switch_history.append(switch_record)
                 else:
                     last_selected_skill_id = f"{planner_skill.name}@v{planner_skill.version}"
             elif skill_status["status"] == "missing":
