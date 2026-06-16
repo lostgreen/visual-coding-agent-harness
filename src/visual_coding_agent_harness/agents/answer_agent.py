@@ -31,60 +31,6 @@ class AnswerAgentResult:
     def has_partial_support(self) -> bool:
         return any(_is_visual_support_relation(relation) for relation in self.candidate_option_relations)
 
-    def as_low_confidence_final(self) -> "AnswerAgentResult":
-        supports = [relation for relation in self.candidate_option_relations if _is_visual_support_relation(relation)]
-        if not supports:
-            return self
-        counts: dict[str, list[float]] = {}
-        for relation in supports:
-            option = str(relation.get("option", "")).strip().upper()[:1]
-            if not option:
-                continue
-            counts.setdefault(option, []).append(float(relation.get("strength", relation.get("confidence", 0.0)) or 0.0))
-        if not counts:
-            return self
-        option, strengths = sorted(counts.items(), key=lambda item: (-len(item[1]), -sum(item[1]), item[0]))[0]
-        winning_supports = [
-            relation
-            for relation in supports
-            if str(relation.get("option", "")).strip().upper().startswith(option)
-        ]
-        answer_grade = any(_is_answer_grade_relation(relation) for relation in winning_supports)
-        confidence = (sum(strengths) / len(strengths)) * 0.7 if strengths else 0.0
-        if not answer_grade:
-            confidence = min(confidence, 0.5)
-        operator = str(self.answer_operator or "select_present")
-        operator_suffix = ""
-        if operator != "select_present":
-            confidence = min(confidence, 0.35)
-            operator_suffix = (
-                f" (operator-gated uncertainty: {operator}"
-                f"{', projection_reason=' + self.projection_reason if self.projection_reason else ''}"
-                f"{', final_gate=' + self.final_gate_rejection_reason if self.final_gate_rejection_reason else ''})"
-            )
-        citations = [
-            str(relation.get("observation_id", ""))
-            for relation in winning_supports
-            if str(relation.get("observation_id", ""))
-        ]
-        rationale_suffix = "" if answer_grade else " (navigation-only, not answer-grade)"
-        return AnswerAgentResult(
-            status="low_confidence_final",
-            answer=option,
-            rationale=f"Follow-up budget exhausted; option {option} has partial support{rationale_suffix}{operator_suffix}.",
-            citations=citations,
-            candidate_option_relations=list(self.candidate_option_relations),
-            missing_evidence=list(self.missing_evidence),
-            confidence=confidence,
-            conflict=dict(self.conflict),
-            raw_text=self.raw_text,
-            answer_operator=self.answer_operator,
-            projection_candidate=self.projection_candidate,
-            projection_reason=self.projection_reason,
-            final_gate_rejection_reason=self.final_gate_rejection_reason,
-            diagnostic_repair_hint=self.diagnostic_repair_hint,
-        )
-
 
 class AnswerAgent:
     """Generate a final answer from evidence text without raw video access."""
@@ -240,7 +186,7 @@ def arbitrate_evidence_table(
         f"Cited evidence is {', '.join(citations)}."
     )
     return AnswerAgentResult(
-        status="final",
+        status="candidate",
         answer=answer,
         rationale=rationale,
         citations=citations,
@@ -358,7 +304,7 @@ def _parse_answer_response(text: str) -> AnswerAgentResult:
     citations = [str(item) for item in payload.get("citations", [])]
     candidate_option_relations = _candidate_option_relations(payload.get("candidate_option_relations"))
     missing_evidence = [str(item) for item in payload.get("missing_evidence", [])]
-    status = "need_more_evidence" if answer.lower() == "need_more_evidence" or not citations else "final"
+    status = "need_more_evidence" if answer.lower() == "need_more_evidence" or not citations else "candidate"
     return AnswerAgentResult(
         status=status,
         answer=answer,

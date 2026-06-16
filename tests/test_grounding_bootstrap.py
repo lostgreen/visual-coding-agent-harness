@@ -257,7 +257,7 @@ def test_bootstrap_fallback_compile_failure_returns_failure_without_instance_sta
     assert not any(request.task == "replan" for request in backend.requests)
     trace = (agent.workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert '"type": "grounding_bootstrap_failed"' in trace
-    assert '"type": "iterative_final_rejected"' in trace
+    assert '"type": "grounding_bootstrap_diagnostics"' in trace
     assert "fallback unavailable" in trace
 
 

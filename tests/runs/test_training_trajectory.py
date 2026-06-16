@@ -76,6 +76,24 @@ def test_training_trajectory_export_does_not_inline_raw_output(tmp_path):
     assert "raw_output" not in json.dumps(payload)
 
 
+def test_training_trajectory_flags_disabled_framework_final_events(tmp_path):
+    workspace = _workspace_with_chain(tmp_path)
+    workspace.write_trace_event("mcq_forced_fallback", {"answer": "A"})
+    workspace.write_trace_event("iterative_final", {"answer": "A", "final_decision_owner": "framework"})
+
+    trajectory = TrainingTrajectory.from_workspace(
+        workspace,
+        case_id="case_001",
+        question="Which object is visible?",
+        final_decision="final",
+        selected_option="A",
+    )
+
+    assert trajectory.final_decision_owner == "framework"
+    assert "active trace emitted disabled mcq_forced_fallback" in trajectory.diagnostic_errors
+    assert "active trace emitted framework-owned final decision" in trajectory.diagnostic_errors
+
+
 def test_training_trajectory_redacts_reasoning_leaks_from_public_fields(tmp_path):
     workspace = _workspace_with_chain(
         tmp_path,

@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 from visual_coding_agent_harness.agents.iterative_agent import (
     AgentBudget,
     IterativeVisualAgent,
@@ -142,7 +144,7 @@ def test_read_segment_detail_does_not_auto_inject_option_targets():
     assert "option_targets" not in result.rounds[0].program[0]["args"]
 
 
-def test_mcq_budget_exhaustion_never_returns_empty_answer_after_answer_parse_failure():
+def test_mcq_budget_exhaustion_returns_no_model_final_after_answer_parse_failure():
     class ParseFailingAnswerBackend(VisionLanguageBackend):
         def __init__(self):
             self.requests = []
@@ -208,14 +210,14 @@ def test_mcq_budget_exhaustion_never_returns_empty_answer_after_answer_parse_fai
         )
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
-    assert result.status in {"final", "low_confidence_final"}
-    assert result.answer.startswith("B")
-    assert result.answer
+    assert result.status == "no_model_final"
+    assert result.answer == "no_model_final"
     assert calls["vision"] == 1
-    assert "iterative_answer_agent" in trace
+    assert "budget_final_model_declined_or_invalid" in trace
+    assert "mcq_forced_fallback" not in trace
 
 
-def test_mcq_terminal_fallback_prefers_latest_hypothesis_option_before_fixed_option():
+def test_mcq_terminal_no_longer_falls_back_to_latest_hypothesis_option():
     class AbstainingBackend(VisionLanguageBackend):
         def generate(self, request: BackendRequest) -> BackendResponse:
             if request.task == "replan":
@@ -244,12 +246,13 @@ def test_mcq_terminal_fallback_prefers_latest_hypothesis_option_before_fixed_opt
         )
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
-    assert result.status == "low_confidence_final"
-    assert result.answer == "C"
-    assert '"fallback_source": "latest_hypothesis"' in trace
+    assert result.status == "no_model_final"
+    assert result.answer == "no_model_final"
+    assert '"fallback_source": "latest_hypothesis"' not in trace
+    assert "mcq_forced_fallback" not in trace
 
 
-def test_mcq_terminal_fallback_prefers_complete_projection_over_low_confidence_answer():
+def test_mcq_terminal_projection_is_diagnostic_not_framework_final():
     class LowConfidenceAnswerBackend(VisionLanguageBackend):
         def generate(self, request: BackendRequest) -> BackendResponse:
             if request.task == "replan":
@@ -340,9 +343,10 @@ def test_mcq_terminal_fallback_prefers_complete_projection_over_low_confidence_a
         )
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
-    assert result.status == "low_confidence_final"
-    assert result.answer == "D"
-    assert '"fallback_source": "answer_evidence_projection"' in trace
+    assert result.status == "no_model_final"
+    assert result.answer == "no_model_final"
+    assert '"fallback_source": "answer_evidence_projection"' not in trace
+    assert "mcq_forced_fallback" not in trace
 
 
 def test_projection_evidence_ignores_contradictory_relation_target_refs():
@@ -423,19 +427,15 @@ def test_mcq_terminal_fallback_ignores_ambiguous_projection_before_hypothesis():
             ],
         }
 
-        result = agent._forced_mcq_fallback_result(
-            question=question,
-            video_path="/videos/demo.mp4",
-            rounds=[],
-            round_number=1,
-            citations=[],
-            source="unit_test",
-        )
-        trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-
-    assert result is not None
-    assert result.answer == "C"
-    assert '"fallback_source": "latest_hypothesis"' in trace
+        with pytest.raises(AssertionError, match="Framework-owned MCQ fallback is disabled"):
+            agent._forced_mcq_fallback_result(
+                question=question,
+                video_path="/videos/demo.mp4",
+                rounds=[],
+                round_number=1,
+                citations=[],
+                source="unit_test",
+            )
 
 
 def test_repeated_zero_yield_asr_binding_call_is_skipped():
@@ -493,7 +493,7 @@ def test_repeated_zero_yield_asr_binding_call_is_skipped():
         )
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
-    assert result.status == "low_confidence_final"
+    assert result.status == "no_model_final"
     assert result.answer
     assert calls["bind"] == 1
     assert "zero_yield_tool_call_skipped" in trace
@@ -549,14 +549,14 @@ def test_repeated_clean_zero_yield_asr_binding_call_is_skipped_without_limitatio
         )
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
-    assert result.status == "low_confidence_final"
+    assert result.status == "no_model_final"
     assert result.answer
     assert calls["bind"] == 1
     assert "zero_yield_tool_call_recorded" in trace
     assert "zero_yield_tool_call_skipped" in trace
 
 
-def test_stable_answer_agent_suggestion_can_finalize_before_reserved_round():
+def test_stable_answer_agent_suggestion_is_advisory_before_reserved_round():
     class StableSuggestionBackend(VisionLanguageBackend):
         def __init__(self):
             self.requests = []
@@ -642,13 +642,13 @@ def test_stable_answer_agent_suggestion_can_finalize_before_reserved_round():
         )
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
-    assert result.status == "final"
-    assert result.answer.startswith("B")
-    assert len(result.rounds) < 5
-    assert "stable_answer_suggestion_finalized" in trace
+    assert result.status == "no_model_final"
+    assert result.answer == "no_model_final"
+    assert "iterative_answer_suggestion" in trace
+    assert "stable_answer_suggestion_finalized" not in trace
 
 
-def test_low_confidence_near_exhaustion_auto_promotes_asr_binding_before_final():
+def test_low_confidence_near_exhaustion_records_advisory_suggestion_only():
     video_map = VideoMap(
         video_path="/videos/asr.mp4",
         duration_sec=30.0,
@@ -738,19 +738,14 @@ def test_low_confidence_near_exhaustion_auto_promotes_asr_binding_before_final()
             remaining_rounds=2,
             supported_binding_no_growth_rounds=5,
         )
-        rows = workspace.read_evidence_table_v3(question="Question?", options=[]).get("rows", [])
         trace = _trace_events(workspace)
 
     assert result is None
-    assert backend.requests[0].task == "asr_claim_binding"
-    assert any(row.get("evidence_binding", {}).get("status") == "supported" for row in rows)
-    assert any(
-        event["type"] == "auto_evidence_promotion_attempted" and event["payload"].get("succeeded") is True
-        for event in trace
-    )
+    assert backend.requests == []
+    assert any(event["type"] == "iterative_answer_suggestion" and event["payload"].get("advisory_only") is True for event in trace)
 
 
-def test_low_confidence_near_exhaustion_allows_final_after_auto_promotion_failure():
+def test_low_confidence_near_exhaustion_does_not_finalize_after_auto_promotion_failure():
     answer = AnswerAgentResult(
         status="need_more_evidence",
         candidate_option_relations=[
@@ -786,9 +781,7 @@ def test_low_confidence_near_exhaustion_allows_final_after_auto_promotion_failur
             supported_binding_no_growth_rounds=5,
         )
 
-    assert result is not None
-    assert result.status == "low_confidence_final"
-    assert result.answer == "D"
+    assert result is None
 
 
 def test_planner_final_keeps_temporal_free_text_for_verifier():
@@ -1389,14 +1382,15 @@ def test_answer_verifier_blocks_conflicting_planner_sequence_final():
 
         result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
-        assert result.status == "low_confidence_final"
-        assert result.answer == "D"
+        assert result.status == "final"
+        assert result.answer == "C"
+        assert result.final_decision_owner == "model"
         trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
         assert "deterministic_evidence_mapping" not in trace
         assert "answer_conflict_detected" not in trace
-        assert "planner_final_verifier_disagrees" in trace
+        assert "planner_final_verifier_disagrees" not in trace
         assert '"planner_answer": "C"' in trace
-        assert "mcq_forced_fallback" in trace
+        assert "mcq_forced_fallback" not in trace
 
 
 BERNINI_ORDER_QUESTION = (
@@ -2458,13 +2452,13 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(workspace.observation_count(tool_name="global_gist"), 1)
             self.assertIn("replan", [request.task for request in backend.requests])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("global_gist_topic_seeded", trace)
-            self.assertIn("iterative_final_rejected", trace)
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("iterative_final_rejected", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_budget_can_disable_global_gist_shortcut_for_planner_trace_debugging(self):
         backend = ScriptedPlannerBackend(
@@ -3405,7 +3399,7 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="Find the same thing", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(len(result.rounds), 2)
             self.assertEqual(calls["video_ls"], 2)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -3468,7 +3462,7 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="Which order is shown?", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(verify_calls["count"], 1)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("route_repair_applied", trace)
@@ -3568,13 +3562,13 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=BERNINI_ORDER_QUESTION, video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(calls["vision"], 1)
             self.assertEqual(calls["verify"], 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("route_recovery_selected", trace)
             self.assertIn("focused_ordered_list_vision_executed", trace)
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
             self.assertNotIn("repair_repeated_locator_to_verify_segment_anchors", trace)
 
     def test_parse_error_executes_unique_safe_pending_action(self):
@@ -3640,13 +3634,13 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=BERNINI_ORDER_QUESTION, video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(calls["vision"], 1)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_json_parse_error", trace)
             self.assertIn("planner_parse_error_recovery_selected", trace)
             self.assertIn("focused_ordered_list_vision_executed", trace)
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_narration_recovery_uses_transcript_detail_before_anchor_verify(self):
         repeated_locator = (
@@ -3715,7 +3709,7 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="How was his life journey according to the video?", video_path="/videos/goya.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(calls["detail"], 1)
             self.assertEqual(calls["verify"], 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -3844,7 +3838,7 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="Which order is shown?", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(verify_calls["count"], 2)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("route_repair_recovery_proposed", trace)
@@ -3878,7 +3872,7 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="Find the narrated evidence", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_no_progress_warning", trace)
             self.assertIn("supported_evidence_binding_no_growth", trace)
@@ -4241,12 +4235,12 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             self.assertEqual(result.status, "final")
-            self.assertEqual(result.citations, ["obs_0001"])
-            self.assertEqual(result.rounds[0].status, "continue")
-            self.assertEqual(result.rounds[0].program[0]["tool"], "inspect_segment")
-            self.assertNotIn("candidate_options", result.rounds[0].program[0]["args"])
+            self.assertEqual(result.answer, "A")
+            self.assertEqual(result.final_decision_owner, "model")
+            self.assertEqual(result.citations, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("iterative_final_blocked", trace)
+            self.assertIn("structured_final_diagnostics", trace)
+            self.assertNotIn("iterative_final_blocked", trace)
 
     def test_planner_final_mcq_is_not_replaced_by_answer_agent_final(self):
         class FinalVerifierBackend(VisionLanguageBackend):
@@ -4296,8 +4290,9 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertNotEqual(result.status, "final")
-            self.assertFalse(result.answer.startswith("B"))
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "A")
+            self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_final_answer_verifier", trace)
             self.assertIn("planner_final_verifier_disagrees", trace)
@@ -4359,11 +4354,13 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertNotEqual(result.status, "final")
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "C")
+            self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("iterative_final_blocked", trace)
+            self.assertNotIn("iterative_final_blocked", trace)
             self.assertIn("planner_final_answer_verifier", trace)
-            self.assertIn("selected_option_has_structured_support", trace)
+            self.assertIn("iterative_final", trace)
 
     def test_planner_final_is_used_when_answer_agent_abstains_but_visual_citations_are_valid(self):
         class AbstainingAnswerBackend(VisionLanguageBackend):
@@ -4427,10 +4424,11 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             self.assertEqual(result.status, "final")
-            self.assertTrue(result.answer.startswith("D"))
+            self.assertEqual(result.answer, "D")
+            self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_final_answer_verifier", trace)
-            self.assertIn("planner_final_after_answer_agent_verifier", trace)
+            self.assertIn("planner_final_after_answer_agent_diagnostics", trace)
 
     def test_planner_final_after_abstain_can_use_single_answer_grade_citation(self):
         class OneObservationCitationBackend(VisionLanguageBackend):
@@ -4490,9 +4488,10 @@ class IterativeAgentTest(unittest.TestCase):
 
             self.assertEqual(result.status, "final")
             self.assertTrue(result.answer.startswith("D"))
+            self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_final_answer_verifier", trace)
-            self.assertIn("planner_final_after_answer_agent_verifier", trace)
+            self.assertIn("planner_final_after_answer_agent_diagnostics", trace)
 
     def test_unique_supported_binding_can_fill_narration_evidence_id(self):
         class NarrationFinalWithoutEvidenceIdBackend(VisionLanguageBackend):
@@ -4604,12 +4603,14 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "evidence_repair_exhausted")
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.final_decision_owner, "model")
             self.assertEqual(result.evidence_ids, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_final_evidence_id_bridge", trace)
             self.assertIn("candidate_evidence_ids", trace)
-            self.assertIn("evidence_repair_exhausted", trace)
+            self.assertNotIn("evidence_repair_exhausted", trace)
 
     def test_narration_timeline_planner_final_accepts_explicit_supported_evidence_id(self):
         class NarrationFinalWithEvidenceIdBackend(VisionLanguageBackend):
@@ -4669,7 +4670,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.evidence_ids, ["ev_bind_seg_0001_T1"])
             self.assertEqual(result.to_dict()["output"]["evidence_ids"], ["ev_bind_seg_0001_T1"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("planner_final_after_answer_agent_verifier", trace)
+            self.assertIn("planner_final_after_answer_agent_diagnostics", trace)
 
     def test_narration_prefinal_repair_promotes_real_transcript_evidence_id(self):
         class NarrationFinalNeedsRepairBackend(VisionLanguageBackend):
@@ -4737,13 +4738,13 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/goya.mp4")
 
-            self.assertEqual(result.status, "evidence_repair_exhausted")
-            self.assertIn("candidate option B", result.answer)
-            self.assertEqual(result.evidence_ids, [])
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("skill_recommended", trace)
             self.assertIn("skill_transition_rejected", trace)
-            self.assertIn("prefinal_evidence_repair_requested", trace)
+            self.assertNotIn("prefinal_evidence_repair_requested", trace)
             self.assertNotIn("planner_final_after_prefinal_evidence_repair", trace)
 
     def test_repair_failure_has_terminal_evidence_repair_exhausted_status(self):
@@ -4777,13 +4778,12 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "evidence_repair_exhausted")
-            self.assertNotEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("prefinal_evidence_repair_failed", trace)
-            self.assertIn("evidence_repair_exhausted", trace)
-            self.assertIn('"selected_option": ""', trace)
-            self.assertIn('"candidate_option": "B"', trace)
+            self.assertNotIn("prefinal_evidence_repair_failed", trace)
+            self.assertNotIn("evidence_repair_exhausted", trace)
 
     def test_post_repair_allows_only_one_action_round(self):
         class PostRepairActionBackend(VisionLanguageBackend):
@@ -4834,12 +4834,13 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "evidence_repair_exhausted")
-            self.assertEqual(backend.replan_count, 2)
-            self.assertLessEqual(len(result.rounds), 2)
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(backend.replan_count, 1)
+            self.assertLessEqual(len(result.rounds), 1)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("prefinal_evidence_repair_failed", trace)
-            self.assertIn("evidence_repair_exhausted", trace)
+            self.assertNotIn("prefinal_evidence_repair_failed", trace)
+            self.assertNotIn("evidence_repair_exhausted", trace)
 
     def test_iterative_agent_indexes_scene_coverage_for_main_idea_mcq(self):
         class SceneCoverageBackend(VisionLanguageBackend):
@@ -4905,7 +4906,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             table = workspace.evidence_table_v2(
                 question="What is the video mainly about?",
                 options=[
@@ -4915,7 +4916,7 @@ class IterativeAgentTest(unittest.TestCase):
             )
             self.assertEqual(table["groups"]["D"], [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_iterative_agent_indexes_scene_order_for_videomme_masterpiece_sequence(self):
         class SceneOrderBackend(VisionLanguageBackend):
@@ -5045,11 +5046,11 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/goya.mp4")
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("planner_skill_selection", trace)
             self.assertNotIn("timeline_temporal_order", trace)
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_iterative_agent_prompt_includes_broad_long_video_index(self):
         backend = ScriptedPlannerBackend(
@@ -5098,10 +5099,9 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(result.citations, ["obs_0001"])
-            self.assertIn("Partial evidence summary", result.answer)
-            self.assertIn("aircraft history", result.answer)
+            self.assertEqual(result.answer, "no_model_final")
 
     def test_iterative_agent_returns_low_confidence_when_budget_exhausts_with_partial_support(self):
         class LowConfidenceBackend(VisionLanguageBackend):
@@ -5154,13 +5154,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
-            self.assertEqual(result.answer, "B")
-            self.assertEqual(result.citations, ["obs_0001"])
-            self.assertAlmostEqual(result.confidence, 0.5)
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("budget_exhausted", trace)
-            self.assertIn("low_confidence_final", trace)
+            self.assertNotIn("low_confidence_final", trace)
 
     def test_iterative_agent_low_confidence_from_arbitration_partial_support_at_budget(self):
         class CloseSupportBackend(VisionLanguageBackend):
@@ -5239,12 +5237,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
-            self.assertEqual(result.answer, "A")
-            self.assertEqual(result.citations, ["obs_0001"])
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("resolve close support", trace)
-            self.assertIn("low_confidence_final", trace)
+            self.assertIn("budget_final_model_declined_or_invalid", trace)
+            self.assertNotIn("low_confidence_final", trace)
 
     def test_iterative_agent_blocks_low_confidence_without_visual_citation(self):
         class NoVisualLowConfidenceBackend(VisionLanguageBackend):
@@ -5302,11 +5299,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
-            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("low_confidence_final_blocked", trace)
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("low_confidence_final_blocked", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_iterative_agent_reserves_final_round_from_new_visual_tools(self):
         backend = ScriptedPlannerBackend(
@@ -5336,7 +5333,7 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="What happens?", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "max_rounds_reached")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(result.citations, [])
             self.assertEqual(result.rounds[0].program, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -5392,11 +5389,10 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "B")
-            self.assertEqual(result.citations, ["obs_0001"])
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             self.assertIn("obs_0001", backend.answer_prompt)
-            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "answer_from_evidence"])
+            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "answer_from_evidence", "final_decision"])
 
     def test_iterative_agent_answer_agent_arbitrates_option_grouped_evidence(self):
         class ArbitrationBackend(VisionLanguageBackend):
@@ -5479,10 +5475,9 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D. fourth")
-            self.assertEqual(result.citations, ["obs_0001"])
-            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "replan"])
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
+            self.assertEqual([request.task for request in backend.requests], ["replan", "replan", "replan", "final_decision"])
 
     def test_iterative_agent_feeds_prefinal_answer_gaps_into_next_prompt(self):
         class PrefinalProbeBackend(VisionLanguageBackend):
@@ -5562,8 +5557,8 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D")
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             self.assertIn("Answer Agent says these evidence gaps", backend.round3_prompt)
             self.assertIn("explicit order of the four options", backend.round3_prompt)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -5619,8 +5614,8 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D")
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             self.assertIn("AnswerAgent suggestion from prefinal_probe", backend.round3_prompt)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_answer_suggestion", trace)
@@ -5698,7 +5693,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertLessEqual(workspace.observation_count(tool_name="caption_segment"), 1)
             self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -5706,8 +5701,8 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("timeline_caption_", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
-            self.assertIn("iterative_final_rejected", trace)
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("iterative_final_rejected", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_interactive_timeline_locator_rows_do_not_auto_final(self):
         video_map = VideoMap(
@@ -5778,11 +5773,11 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertNotEqual(result.answer, "D")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_case_611_2_read_segment_detail_ordered_asr_replay_final_selects_d(self):
         video_map = VideoMap(
@@ -5867,10 +5862,11 @@ class IterativeAgentTest(unittest.TestCase):
             result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
             self.assertEqual(result.status, "final")
-            self.assertTrue(result.answer.startswith("D"))
+            self.assertEqual(result.answer, "D")
+            self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn('"gate_status": "accepted"', trace)
-            self.assertIn("structured_final_gate", trace)
+            self.assertIn("structured_final_diagnostics", trace)
             self.assertIn("seq_seg_0002", trace)
 
     def test_case_605_1_two_segment_main_idea_replay_final_selects_d(self):
@@ -5957,7 +5953,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertTrue(result.answer.startswith("D"))
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn('"gate_status": "accepted"', trace)
-            self.assertIn("structured_final_gate", trace)
+            self.assertIn("structured_final_diagnostics", trace)
 
     def test_confirmed_timeline_inference_is_prompt_hint_not_auto_final(self):
         registry = ToolRegistry()
@@ -6036,7 +6032,9 @@ class IterativeAgentTest(unittest.TestCase):
             result = agent.run(question=question, video_path="/videos/demo.mp4")
 
             self.assertEqual(len(backend.replan_prompts), 2)
-            self.assertNotEqual(result.status, "final")
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.answer, "B")
+            self.assertEqual(result.final_decision_owner, "model")
             self.assertIn("# Pending Inference", backend.replan_prompts[1])
             self.assertIn("option B", backend.replan_prompts[1])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -6172,14 +6170,14 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(result.rounds[0].program, [])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("skill_recommended", trace)
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("iterative_timeline_temporal_decision", trace)
             self.assertEqual(calls, [])
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_timeline_ordering_missing_entity_returns_need_more_evidence(self):
         registry = ToolRegistry()
@@ -6230,11 +6228,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertLessEqual(workspace.observation_count(tool_name="caption_segment"), 1)
             self.assertEqual(workspace.observation_count(tool_name="vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_timeline_ordering_ignores_negative_caption_echoes(self):
         registry = ToolRegistry()
@@ -6286,14 +6284,14 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual([call[0] for call in calls].count("caption_segment"), 1)
             self.assertEqual([call[0] for call in calls].count("vision_read"), 0)
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("skill_recommended", trace)
             self.assertIn("visual_timeline_qa@v1", trace)
             self.assertNotIn("timeline_ordering_missing_entity", trace)
-            self.assertIn("mcq_forced_fallback", trace)
+            self.assertNotIn("mcq_forced_fallback", trace)
 
     def test_no_evidence_growth_defers_low_confidence_until_budget(self):
         planner_responses = [
@@ -6350,9 +6348,8 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question="Which option is visible?\nA. red object\nB. blue object", video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "low_confidence_final")
-            self.assertEqual(result.answer, "A")
-            self.assertGreaterEqual(len(result.rounds), 5)
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("evidence_table_no_growth", trace)
             self.assertIn("iterative_answer_suggestion", trace)
@@ -6574,7 +6571,7 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "low_confidence_final")
+            self.assertEqual(result.status, "no_model_final")
             self.assertEqual(
                 [call[0] for call in calls],
                 ["search_segments", "search_segments", "search_segments", "search_segments"],
@@ -6591,8 +6588,7 @@ class IterativeAgentTest(unittest.TestCase):
                     "answer_from_evidence",
                     "replan",
                     "answer_from_evidence",
-                    "answer_from_evidence",
-                    "answer_from_evidence",
+                    "final_decision",
                 ],
             )
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
@@ -6706,8 +6702,8 @@ class IterativeAgentTest(unittest.TestCase):
 
             result = agent.run(question=raw_question, video_path="/videos/demo.mp4")
 
-            self.assertEqual(result.status, "final")
-            self.assertTrue(result.answer.startswith("D"))
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             self.assertEqual(result.question, raw_question)
             self.assertEqual(rewritten, calls[0]["ask_for"])
             self.assertNotIn("option B", calls[0]["ask_for"])
@@ -6800,11 +6796,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertTrue(result.answer.startswith("D"))
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("source\": \"evidence_table_no_growth", trace)
-            self.assertIn("iterative_finalization_ready", trace)
+            self.assertIn("iterative_answer_suggestion", trace)
 
     def test_no_growth_guard_finalizes_from_answer_verifier_before_budget(self):
         class ShouldNotAnswerBackend(ScriptedPlannerBackend):
@@ -6866,12 +6862,11 @@ class IterativeAgentTest(unittest.TestCase):
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertTrue(result.answer.startswith("D"))
-            self.assertLess(len(result.rounds), 6)
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("source\": \"evidence_table_no_growth", trace)
-            self.assertIn("iterative_finalization_ready", trace)
+            self.assertIn("iterative_answer_suggestion", trace)
 
     def test_navigation_only_no_growth_forces_visual_read_on_requested_segment(self):
         class NavThenAnswerBackend(VisionLanguageBackend):

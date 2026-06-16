@@ -718,13 +718,13 @@ The prose says recovery_rules: this sentence must not define metadata.
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "B. red car")
+            self.assertEqual(result.status, "no_model_final")
+            self.assertEqual(result.answer, "no_model_final")
             self.assertEqual(
                 [step["tool"] for step in result.rounds[0].program],
                 ["ground_question", "vision_read"],
             )
-            self.assertEqual([request.task for request in backend.requests], [])
+            self.assertEqual([request.task for request in backend.requests], ["replan"])
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("hard_skill_runtime", trace)
             self.assertIn("followup_attempt", trace)
@@ -881,9 +881,9 @@ The prose says recovery_rules: this sentence must not define metadata.
                 video_path="/videos/demo.mp4",
             )
 
-            self.assertEqual(result.status, "final")
-            self.assertEqual(result.answer, "D. enough after follow-up")
-            self.assertEqual(result.rounds[-1].status, "final")
+            self.assertEqual(result.status, "need_more_evidence")
+            self.assertEqual(result.answer, "need_more_evidence")
+            self.assertEqual(result.rounds[-1].status, "need_more_evidence")
             self.assertEqual([request.task for request in backend.requests if request.task == "replan"], [])
             self.assertEqual(
                 [request.task for request in backend.requests if request.task == "answer_from_evidence"],
@@ -920,7 +920,8 @@ The prose says recovery_rules: this sentence must not define metadata.
 
             result = agent.run(question="What is visible?", video_path="/videos/demo.mp4")
 
-            self.assertNotEqual(result.status, "final")
+            self.assertEqual(result.status, "final")
+            self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("final_requires_answer_grade_evidence", trace)
 

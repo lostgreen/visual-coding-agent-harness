@@ -27,7 +27,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
 
         result = agent.run(question="Which object?\nA. blue car\nB. red car", evidence_text="- obs_0002 red car")
 
-        self.assertEqual(result.status, "final")
+        self.assertEqual(result.status, "candidate")
         self.assertEqual(result.candidate_option_relations[0]["option"], "B")
         self.assertEqual(result.candidate_option_relations[0]["observation_id"], "obs_0002")
         self.assertIn("candidate_option_relations", backend.requests[0].prompt)
@@ -64,7 +64,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
 
         result = AnswerAgent(backend).run(question="Which option?", evidence_text="- obs_0003 supports D")
 
-        self.assertEqual(result.status, "final")
+        self.assertEqual(result.status, "candidate")
         self.assertEqual(result.answer, "D. full rise and fall")
         self.assertEqual(result.citations, ["obs_0003"])
 
@@ -122,7 +122,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
 
         result = arbitrate_evidence_table(table)
 
-        self.assertEqual(result.status, "final")
+        self.assertEqual(result.status, "candidate")
         self.assertEqual(result.answer, "D. Aeneas, David, Persephone, Apollo and Daphne")
 
     def test_hypothesis_disagreement_returns_conflict_instead_of_final(self):
@@ -274,7 +274,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
 
         result = arbitrate_evidence_table(table)
 
-        self.assertEqual(result.status, "final")
+        self.assertEqual(result.status, "candidate")
         self.assertEqual(result.answer, "D. fourth order")
         self.assertEqual(result.citations, ["obs_0002"])
         self.assertEqual(result.conflict["options"], ["A", "D"])
@@ -342,7 +342,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertTrue(result.missing_evidence)
         self.assertIn("targeted", result.missing_evidence[0])
 
-    def test_arbitration_abstain_preserves_partial_support_for_budget_fallback(self):
+    def test_arbitration_abstain_preserves_partial_support_as_candidate_only(self):
         table = {
             "options": ["A. first order", "D. fourth order"],
             "groups": {
@@ -366,13 +366,10 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         }
 
         result = arbitrate_evidence_table(table, min_margin=0.1)
-        low_conf = result.as_low_confidence_final()
-
         self.assertEqual(result.status, "need_more_evidence")
         self.assertTrue(result.has_partial_support())
-        self.assertEqual(low_conf.status, "low_confidence_final")
-        self.assertEqual(low_conf.answer, "A")
-        self.assertEqual(low_conf.citations, ["obs_0001"])
+        self.assertEqual(result.candidate_option_relations[0]["option"], "A")
+        self.assertEqual(result.candidate_option_relations[0]["observation_id"], "obs_0001")
 
     def test_arbitration_does_not_final_from_global_sparse_floor(self):
         table = {
@@ -401,7 +398,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
 
         result = arbitrate_evidence_table(table)
 
-        self.assertEqual(result.status, "final")
+        self.assertEqual(result.status, "candidate")
         self.assertEqual(result.answer, "B. a local scene guess")
         self.assertEqual(result.citations, ["obs_0002"])
 
@@ -466,7 +463,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
 
         result = arbitrate_evidence_table(table)
 
-        self.assertEqual(result.status, "final")
+        self.assertEqual(result.status, "candidate")
         self.assertEqual(result.answer, "D. How the Austro-Hungarian Empire rose and fell")
         self.assertEqual(set(result.citations), {"obs_0003", "obs_0006"})
         self.assertEqual(result.conflict["winner"], "D")
@@ -537,7 +534,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         self.assertEqual(result.status, "need_more_evidence")
         self.assertEqual(result.missing_evidence, ["disambiguate_overlapping_options"])
 
-    def test_low_conf_picks_most_supported_option(self):
+    def test_partial_support_preserves_candidate_relations(self):
         backend = StaticBackend(
             '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '
             '"candidate_option_relations": ['
@@ -548,16 +545,12 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         )
         result = AnswerAgent(backend).run(question="Which option?", evidence_text="- partial evidence")
 
-        low_conf = result.as_low_confidence_final()
-
         self.assertTrue(result.has_partial_support())
-        self.assertEqual(low_conf.status, "low_confidence_final")
-        self.assertEqual(low_conf.answer, "B")
-        self.assertEqual(low_conf.citations, ["obs_0002", "obs_0003"])
-        self.assertAlmostEqual(low_conf.confidence, 0.5)
-        self.assertIn("navigation-only, not answer-grade", low_conf.rationale)
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertEqual([item["option"] for item in result.candidate_option_relations], ["A", "B", "B"])
+        self.assertEqual([item["observation_id"] for item in result.candidate_option_relations[1:]], ["obs_0002", "obs_0003"])
 
-    def test_low_conf_indexed_transcript_support_is_not_navigation_capped(self):
+    def test_indexed_transcript_support_stays_candidate_relation(self):
         backend = StaticBackend(
             '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '
             '"candidate_option_relations": ['
@@ -567,13 +560,11 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         )
         result = AnswerAgent(backend).run(question="Which option?", evidence_text="- partial evidence")
 
-        low_conf = result.as_low_confidence_final()
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertTrue(result.has_partial_support())
+        self.assertEqual(result.candidate_option_relations[0]["grounding_quality"], "indexed_transcript")
 
-        self.assertEqual(low_conf.status, "low_confidence_final")
-        self.assertAlmostEqual(low_conf.confidence, 0.525)
-        self.assertNotIn("navigation-only", low_conf.rationale)
-
-    def test_non_select_present_low_confidence_keeps_explicit_uncertainty(self):
+    def test_non_select_present_candidate_keeps_operator_context(self):
         backend = StaticBackend(
             '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '
             '"candidate_option_relations": ['
@@ -589,14 +580,12 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
             final_gate_rejection_reason="topic_overlap_only",
         )
 
-        low_conf = result.as_low_confidence_final()
+        self.assertEqual(result.status, "need_more_evidence")
+        self.assertEqual(result.answer_operator, "causal_bind")
+        self.assertEqual(result.projection_candidate, "B")
+        self.assertTrue(result.has_partial_support())
 
-        self.assertEqual(low_conf.status, "low_confidence_final")
-        self.assertEqual(low_conf.answer, "B")
-        self.assertLessEqual(low_conf.confidence, 0.35)
-        self.assertIn("operator-gated uncertainty", low_conf.rationale)
-
-    def test_low_conf_requires_at_least_one_visual(self):
+    def test_partial_support_requires_at_least_one_supported_modality(self):
         backend = StaticBackend(
             '{"answer": "need_more_evidence", "rationale": "partial", "citations": [], '
             '"candidate_option_relations": [{"option": "A", "relation": "support", '
@@ -606,7 +595,7 @@ class AnswerAgentArbitrationTest(unittest.TestCase):
         result = AnswerAgent(backend).run(question="Which option?", evidence_text="- weak evidence")
 
         self.assertFalse(result.has_partial_support())
-        self.assertEqual(result.as_low_confidence_final().status, "need_more_evidence")
+        self.assertEqual(result.status, "need_more_evidence")
 
 
 if __name__ == "__main__":

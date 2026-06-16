@@ -20,6 +20,14 @@ from ..workspace import EvidenceWorkspace
 from .answer_agent import AnswerAgent, AnswerAgentResult
 from .contracts import OptionEvaluation, VISUAL_EVIDENCE_NFRAMES
 from .context_budget import default_context_budget_allocator
+from .final_control import (
+    FinalDecisionOwner,
+    FinalDiagnostics,
+    ModelFinalDecision,
+    parse_model_final_payload,
+    parse_model_final_response,
+    recover_locked_answer_from_malformed_final,
+)
 from .final_gate import evaluate_final_candidate
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
 from .grounding import CompiledGroundingPlan, compile_fallback_plan, compile_grounding_plan, ground_question_with_model
@@ -207,6 +215,7 @@ class IterativeRunResult:
     evidence_ids: Sequence[str] = field(default_factory=list)
     confidence: float = 0.0
     rounds: Sequence[IterativeRound] = field(default_factory=list)
+    final_decision_owner: str = FinalDecisionOwner.NONE.value
 
     def to_dict(self) -> Mapping[str, Any]:
         return {
@@ -217,6 +226,7 @@ class IterativeRunResult:
                 "citations": list(self.citations),
                 "evidence_ids": list(self.evidence_ids),
                 "confidence": self.confidence,
+                "final_decision_owner": self.final_decision_owner,
             },
             "rounds": [round_result.to_dict() for round_result in self.rounds],
         }
@@ -630,11 +640,34 @@ class IterativeVisualAgent:
             round_ctx.evidence_policy = skill_runtime.effective_policy if skill_runtime is not None else None
 
             if status == "final":
-                final_citations = [str(item) for item in action.get("citations", [])]
-                final_evidence_ids = [str(item) for item in action.get("evidence_ids", [])]
+                model_decision = parse_model_final_payload(
+                    action,
+                    allowed_options=extract_candidate_options(raw_question),
+                    raw_text=planner_response.text,
+                )
+                if not model_decision.is_final:
+                    self.workspace.write_trace_event(
+                        "model_final_declined_or_invalid",
+                        {
+                            "round": round_number,
+                            "source": "planner_final",
+                            "status": model_decision.status,
+                            "reason": model_decision.reason,
+                        },
+                    )
+                    return self._no_model_final_result(
+                        question=raw_question,
+                        video_path=video_path,
+                        rounds=rounds,
+                        round_number=round_number,
+                        planner_text=planner_response.text,
+                        reason=model_decision.reason or model_decision.status,
+                    )
+                final_citations = [str(item) for item in model_decision.citations]
+                final_evidence_ids = [str(item) for item in model_decision.evidence_ids]
                 final_answer = _planner_final_answer_with_option(
                     question=raw_question,
-                    answer=str(action.get("answer", "")),
+                    answer=model_decision.answer,
                 )
                 bridge_result = _bridge_final_evidence_refs(
                     workspace=self.workspace,
@@ -659,6 +692,7 @@ class IterativeVisualAgent:
                 final_citations = bridge_result.citations
                 final_evidence_ids = bridge_result.evidence_ids
                 final_source = "planner_final"
+                verifier_diagnostics: FinalDiagnostics | None = None
                 if extract_candidate_options(raw_question):
                     self.workspace.write_trace_event(
                         "planner_final_answer_verifier_requested",
@@ -670,206 +704,50 @@ class IterativeVisualAgent:
                             "planner_evidence_ids": final_evidence_ids,
                         },
                     )
-                    verifier_blocked_reason = self._verify_planner_final_with_answer_agent(
+                    verifier_diagnostics = self._verify_planner_final_with_answer_agent(
                         question=raw_question,
                         round_number=round_number,
                         answer=final_answer,
                         citations=final_citations,
                     )
-                    if verifier_blocked_reason:
-                        blocked_reason = verifier_blocked_reason
-                    else:
-                        blocked_reason = _blocked_planner_final_reason(
-                            question=raw_question,
-                            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                            workspace=self.workspace,
-                            answer=final_answer,
-                            citations=final_citations,
-                            evidence_ids=final_evidence_ids,
-                            planner_skill=active_skill,
-                        )
-                    final_source = "planner_final_after_answer_agent_verifier"
-                else:
-                    blocked_reason = _blocked_planner_final_reason(
-                        question=raw_question,
-                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                        workspace=self.workspace,
-                        answer=final_answer,
-                        citations=final_citations,
-                        evidence_ids=final_evidence_ids,
-                        planner_skill=active_skill,
-                    )
-                if (
-                    blocked_reason == "planner_final_requires_supported_evidence_id"
-                    and not prefinal_evidence_repair_done
-                    and _prefinal_repair_kind(active_skill) is PrefinalRepairKind.NARRATION_TIMELINE
-                ):
-                    prefinal_evidence_repair_done = True
-                    repair = self._try_narration_prefinal_evidence_repair(
-                        question=raw_question,
-                        answer=final_answer,
-                        citations=final_citations,
-                        runtime_context=round_ctx,
-                    )
-                    if repair is not None:
-                        repair_observation_ids, repair_evidence_ids = repair
-                        citations.extend(
-                            obs_id for obs_id in repair_observation_ids if obs_id not in citations
-                        )
-                        final_citations = _unique_preserving_order([*final_citations, *repair_observation_ids])
-                        final_evidence_ids = _unique_preserving_order([*final_evidence_ids, *repair_evidence_ids])
-                        blocked_reason = _blocked_planner_final_reason(
-                            question=raw_question,
-                            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                            workspace=self.workspace,
-                            answer=final_answer,
-                            citations=final_citations,
-                            evidence_ids=final_evidence_ids,
-                            planner_skill=active_skill,
-                        )
-                        if not blocked_reason:
-                            final_source = "planner_final_after_prefinal_evidence_repair"
-                    else:
-                        prefinal_evidence_repair_failed = True
-                        post_repair_action_rounds_remaining = 1
-                        post_repair_action_start_round = round_number + 1
-                        evidence_repair_candidate_answer = final_answer
-                        evidence_repair_failure_reason = "prefinal_repair_failed"
-                if blocked_reason:
-                    if (
-                        blocked_reason == "planner_final_requires_supported_evidence_id"
-                        and prefinal_evidence_repair_done
-                        and prefinal_evidence_repair_failed
-                        and post_repair_action_rounds_remaining <= 0
-                    ):
-                        return self._evidence_repair_exhausted_result(
-                            question=raw_question,
-                            video_path=video_path,
-                            rounds=rounds,
-                            round_number=round_number,
-                            planner_text=planner_response.text,
-                            rationale=rationale or blocked_reason,
-                            citations=citations,
-                            candidate_answer=evidence_repair_candidate_answer or final_answer,
-                            failure_reason=evidence_repair_failure_reason or blocked_reason,
-                        )
-                    if blocked_reason == "planner_final_verifier_disagrees":
-                        planner_final_verifier_disagreed = True
-                        planner_final_auto_final_blocked = True
-                    if blocked_reason == "planner_final_requires_supported_evidence_id":
-                        planner_final_auto_final_blocked = True
-                    if blocked_reason.startswith("final_gate:"):
-                        reason_code, repair_hint = _final_gate_feedback_parts(blocked_reason)
-                        last_diagnostic_repair_hint = repair_hint
-                        last_projection_status = {
-                            "status": "rejected",
-                            "candidate_option": _answer_option_letter(final_answer) or "",
-                            "reason": reason_code,
-                            "missing": repair_hint,
-                        }
-                    self.workspace.write_trace_event(
-                        "iterative_final_blocked",
-                        {
-                            "round": round_number,
-                            "reason": blocked_reason,
-                            "answer": final_answer,
-                            "citations": final_citations,
-                            "evidence_ids": final_evidence_ids,
-                            "diagnostic_repair_hint": last_diagnostic_repair_hint,
-                        },
-                    )
-                    self.workspace.write_reflection_memory(
-                        route=effective_route,
-                        failure_tag=blocked_reason,
-                        rule=_reflection_rule_for_failure(blocked_reason),
-                    )
-                    if final_round_reserved:
-                        final_decision = f"final_rejected:{_final_rejection_reason_code(blocked_reason)}"
-                        self.workspace.write_trace_event(
-                            "iterative_final_rejected",
-                            {
-                                "round": round_number,
-                                "final_decision": final_decision,
-                                "reason": blocked_reason,
-                                "answer": final_answer,
-                                "citations": final_citations,
-                                "evidence_ids": final_evidence_ids,
-                            },
-                        )
-                        rounds.append(
-                            IterativeRound(
-                                round_number=round_number,
-                                status="final_rejected",
-                                planner_text=planner_response.text,
-                                rationale=blocked_reason,
-                            )
-                        )
-                        fallback_result = self._forced_mcq_fallback_result(
-                            question=raw_question,
-                            video_path=video_path,
-                            rounds=rounds,
-                            round_number=round_number,
-                            citations=final_citations or citations,
-                            source="final_rejected",
-                            candidate_answer=final_answer,
-                            reason=blocked_reason,
-                        )
-                        if fallback_result is not None:
-                            return fallback_result
-                        return IterativeRunResult(
-                            question=raw_question,
-                            video_path=video_path,
-                            answer=final_decision,
-                            status="final_rejected",
-                            citations=final_citations,
-                            evidence_ids=final_evidence_ids,
-                            confidence=float(action.get("confidence", 0.0) or 0.0),
-                            rounds=rounds,
-                        )
-                    planned_program = []
-                    if prefinal_evidence_repair_failed and post_repair_action_rounds_remaining > 0:
-                        run_state.answer_feedback = [
-                            "Prefinal evidence repair did not create answer-grade evidence. You have one "
-                            "post-repair action round: provide a different answer with explicit supported "
-                            "evidence_ids, call one non-repeating transcript evidence tool, or abstain."
-                        ]
-                    elif bridge_result.ambiguous:
-                        run_state.answer_feedback = [
-                            "A cited observation maps to multiple supported evidence bindings; do not guess. "
-                            f"Choose explicit evidence_ids from: {bridge_result.ambiguous[:3]}."
-                        ]
-                    if not final_round_reserved and not prefinal_evidence_repair_failed:
-                        planned_program = self._fallback_inspector_program(
-                            question=exploration_question_text,
-                            inspected_segment_ids=run_state.inspected_segment_ids,
-                        )
-                    status = "continue"
-                    rationale = blocked_reason
-                else:
-                    result_round = IterativeRound(
-                        round_number=round_number,
-                        status="final",
-                        planner_text=planner_response.text,
-                        rationale=rationale,
-                    )
-                    rounds.append(result_round)
-                    self._write_final_trace(
-                        round_number=round_number,
-                        answer=final_answer,
-                        citations=final_citations,
-                        evidence_ids=final_evidence_ids,
-                        source=final_source,
-                    )
-                    return IterativeRunResult(
-                        question=raw_question,
-                        video_path=video_path,
-                        answer=final_answer,
-                        status="final",
-                        citations=final_citations,
-                        evidence_ids=final_evidence_ids,
-                        confidence=float(action.get("confidence", 0.0)),
-                        rounds=rounds,
-                    )
+                    final_source = "planner_final_after_answer_agent_diagnostics"
+                diagnostics = self._diagnose_model_final(
+                    question=raw_question,
+                    has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                    answer=final_answer,
+                    citations=final_citations,
+                    evidence_ids=final_evidence_ids,
+                    planner_skill=active_skill,
+                )
+                if diagnostics is None:
+                    diagnostics = verifier_diagnostics
+                result_round = IterativeRound(
+                    round_number=round_number,
+                    status="final",
+                    planner_text=planner_response.text,
+                    rationale=rationale,
+                )
+                rounds.append(result_round)
+                self._write_final_trace(
+                    round_number=round_number,
+                    answer=final_answer,
+                    citations=final_citations,
+                    evidence_ids=final_evidence_ids,
+                    source=final_source,
+                    owner=FinalDecisionOwner.MODEL,
+                    diagnostics=diagnostics,
+                )
+                return IterativeRunResult(
+                    question=raw_question,
+                    video_path=video_path,
+                    answer=final_answer,
+                    status="final",
+                    citations=final_citations,
+                    evidence_ids=final_evidence_ids,
+                    confidence=model_decision.confidence,
+                    rounds=rounds,
+                    final_decision_owner=FinalDecisionOwner.MODEL.value,
+                )
 
             if status == "continue":
                 normalization_notes: list[NormalizationNote] = []
@@ -1162,52 +1040,20 @@ class IterativeVisualAgent:
                         **_answer_agent_trace_fields(answer_result),
                     },
                 )
-                if answer_result.status == "final":
-                    blocked_reason = _blocked_final_reason(
-                        question=raw_question,
-                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                        workspace=self.workspace,
-                        answer=answer_result.answer,
-                        citations=answer_result.citations,
+                if answer_result.status == "candidate" or answer_result.has_partial_support():
+                    run_state.pending_inferences = [_answer_result_pending_inference(answer_result, source="reserved_final")]
+                    self.workspace.write_trace_event(
+                        "iterative_answer_suggestion",
+                        {
+                            "round": round_number,
+                            "source": "reserved_final",
+                            "answer": answer_result.answer,
+                            "citations": list(answer_result.citations),
+                            "confidence": answer_result.confidence,
+                            "recommended_to_planner": True,
+                            "advisory_only": True,
+                        },
                     )
-                    if blocked_reason:
-                        self.workspace.write_trace_event(
-                            "iterative_final_blocked",
-                            {
-                                "round": round_number,
-                                "source": "reserved_final",
-                                "reason": blocked_reason,
-                                "answer": answer_result.answer,
-                                "citations": list(answer_result.citations),
-                            },
-                        )
-                        run_state.answer_feedback = [blocked_reason]
-                    else:
-                        rounds.append(
-                            IterativeRound(
-                                round_number=round_number,
-                                status="final",
-                                planner_text=answer_result.raw_text,
-                                rationale=answer_result.rationale,
-                            )
-                        )
-                        self._write_final_trace(
-                            round_number=round_number,
-                            answer=answer_result.answer,
-                            citations=answer_result.citations,
-                            source="answer_agent",
-                        )
-                        return IterativeRunResult(
-                            question=raw_question,
-                            video_path=video_path,
-                            answer=answer_result.answer,
-                            status="final",
-                            citations=list(answer_result.citations),
-                            confidence=answer_result.confidence,
-                            rounds=rounds,
-                        )
-                if answer_result.status == "final":
-                    continue
                 low_confidence_result = self._try_low_confidence_final(
                     answer_result=answer_result,
                     question=raw_question,
@@ -1445,24 +1291,21 @@ class IterativeVisualAgent:
                 )
                 if low_confidence_result is not None:
                     return low_confidence_result
-                if answer_result.status == "final":
-                    finalization_ready = self._finalize_answer_agent_result(
-                        answer_result=answer_result,
-                        question=raw_question,
-                        video_path=video_path,
-                        rounds=rounds,
-                        round_number=round_number,
-                        source="evidence_table_no_growth",
-                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                        program=program,
-                        observation_ids=observation_ids,
-                    )
-                    if finalization_ready is not None:
-                        return finalization_ready
-                if answer_result.status == "final" or answer_result.has_partial_support():
+                if answer_result.status == "candidate" or answer_result.has_partial_support():
                     run_state.pending_inferences = [
                         _answer_result_pending_inference(answer_result, source="evidence_table_no_growth")
                     ]
+                    self.workspace.write_trace_event(
+                        "iterative_answer_suggestion",
+                        {
+                            "round": round_number,
+                            "source": "evidence_table_no_growth",
+                            "answer": answer_result.answer,
+                            "citations": list(answer_result.citations),
+                            "confidence": answer_result.confidence,
+                            "recommended_to_planner": True,
+                        },
+                    )
             if _should_run_answer_probe(
                 budget=self.budget,
                 question=raw_question,
@@ -1492,41 +1335,7 @@ class IterativeVisualAgent:
                         **_answer_agent_trace_fields(answer_result),
                     },
                 )
-                if answer_result.status == "final":
-                    blocked_reason = _blocked_final_reason(
-                        question=raw_question,
-                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                        workspace=self.workspace,
-                        answer=answer_result.answer,
-                        citations=answer_result.citations,
-                    )
-                    if blocked_reason:
-                        self.workspace.write_trace_event(
-                            "iterative_final_blocked",
-                            {
-                                "round": round_number,
-                                "source": "prefinal_probe",
-                                "reason": blocked_reason,
-                                "answer": answer_result.answer,
-                                "citations": list(answer_result.citations),
-                            },
-                        )
-                        run_state.answer_feedback = [blocked_reason]
-                        continue
-                    stable_final = self._try_stable_answer_suggestion_final(
-                        answer_result=answer_result,
-                        question=raw_question,
-                        video_path=video_path,
-                        rounds=rounds,
-                        round_number=round_number,
-                        source="prefinal_probe",
-                        has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                        run_state=run_state,
-                        program=program,
-                        observation_ids=observation_ids,
-                    )
-                    if stable_final is not None:
-                        return stable_final
+                if answer_result.status == "candidate":
                     run_state.pending_inferences = [_answer_result_pending_inference(answer_result, source="prefinal_probe")]
                     self.workspace.write_trace_event(
                         "iterative_answer_suggestion",
@@ -1573,97 +1382,85 @@ class IterativeVisualAgent:
             "iterative_budget_exhausted",
             {"max_rounds": self.budget.max_rounds, "citations": citations},
         )
-        if not planner_final_auto_final_blocked:
-            budget_final = self._try_answer_agent_final(
-                question=raw_question,
-                video_path=video_path,
-                rounds=rounds,
-                round_number=self.budget.max_rounds,
-                source="budget_exhausted",
-                has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                run_state=run_state,
-            )
-            if budget_final is not None:
-                return budget_final
-        else:
+        if planner_final_auto_final_blocked:
             self.workspace.write_trace_event(
-                "iterative_answer_agent_skipped",
+                "legacy_answer_agent_final_skipped",
                 {
                     "round": self.budget.max_rounds,
                     "source": "budget_exhausted",
                     "reason": "planner_final_auto_final_blocked",
                 },
             )
-        if prefinal_evidence_repair_failed:
-            return self._evidence_repair_exhausted_result(
-                question=raw_question,
-                video_path=video_path,
-                rounds=rounds,
-                round_number=self.budget.max_rounds,
-                planner_text="",
-                rationale="budget_exhausted_after_prefinal_evidence_repair_failed",
-                citations=citations,
-                candidate_answer=evidence_repair_candidate_answer,
-                failure_reason=evidence_repair_failure_reason or "budget_exhausted_after_prefinal_evidence_repair_failed",
-            )
-        budget_answer_result: AnswerAgentResult | None = None
-        if extract_candidate_options(raw_question) and citations and not planner_final_auto_final_blocked:
-            answer_result = AnswerAgent(self.backend).run(
-                question=raw_question,
-                evidence_text=self._read_ledger(),
-                evidence_table=self._answer_evidence_table(raw_question),
-                **_answer_agent_operator_kwargs(
-                    workspace=self.workspace,
-                    projection_status=last_projection_status,
-                    diagnostic_repair_hint=last_diagnostic_repair_hint,
-                ),
-            )
-            budget_answer_result = answer_result
-            self.workspace.write_trace_event(
-                "iterative_answer_agent",
-                {
-                    "round": self.budget.max_rounds,
-                    "source": "budget_exhausted",
-                    "status": answer_result.status,
-                    "answer": answer_result.answer,
-                    "citations": list(answer_result.citations),
-                    "missing_evidence": list(answer_result.missing_evidence),
-                    **_answer_agent_trace_fields(answer_result),
-                },
-            )
-            low_confidence_result = self._try_low_confidence_final(
-                answer_result=answer_result,
-                question=raw_question,
-                video_path=video_path,
-                rounds=rounds,
-                round_number=self.budget.max_rounds,
-                source="budget_exhausted",
-            )
-            if low_confidence_result is not None:
-                return low_confidence_result
-        forced_mcq = self._forced_mcq_fallback_result(
+        budget_decision = self._request_budget_exhausted_model_final(
             question=raw_question,
-            video_path=video_path,
-            rounds=rounds,
             round_number=self.budget.max_rounds,
-            citations=citations,
-            source="budget_exhausted",
-            answer_result=budget_answer_result,
-            candidate_answer=_partial_answer_from_ledger(self._read_ledger()),
-            reason="budget_exhausted",
         )
-        if forced_mcq is not None:
-            return forced_mcq
-        plural = "round" if self.budget.max_rounds == 1 else "rounds"
-        partial_answer = _partial_answer_from_ledger(self._read_ledger())
+        if budget_decision.is_final:
+            final_citations = [str(item) for item in budget_decision.citations]
+            final_evidence_ids = [str(item) for item in budget_decision.evidence_ids]
+            bridge_result = _bridge_final_evidence_refs(
+                workspace=self.workspace,
+                question=raw_question,
+                answer=budget_decision.answer,
+                citations=final_citations,
+                evidence_ids=final_evidence_ids,
+            )
+            final_citations = bridge_result.citations
+            final_evidence_ids = bridge_result.evidence_ids
+            diagnostics = self._diagnose_model_final(
+                question=raw_question,
+                has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+                answer=budget_decision.answer,
+                citations=final_citations,
+                evidence_ids=final_evidence_ids,
+                planner_skill=None,
+            )
+            final_rounds = [
+                *rounds,
+                IterativeRound(
+                    round_number=self.budget.max_rounds,
+                    status="final",
+                    planner_text=budget_decision.raw_text,
+                    rationale=budget_decision.rationale,
+                ),
+            ]
+            self._write_final_trace(
+                round_number=self.budget.max_rounds,
+                answer=budget_decision.answer,
+                citations=final_citations,
+                evidence_ids=final_evidence_ids,
+                source="budget_exhausted_model_final",
+                owner=FinalDecisionOwner.MODEL,
+                diagnostics=diagnostics,
+            )
+            return IterativeRunResult(
+                question=raw_question,
+                video_path=video_path,
+                answer=budget_decision.answer,
+                status="final",
+                citations=final_citations,
+                evidence_ids=final_evidence_ids,
+                confidence=budget_decision.confidence,
+                rounds=final_rounds,
+                final_decision_owner=FinalDecisionOwner.MODEL.value,
+            )
+        self.workspace.write_trace_event(
+            "budget_final_model_declined_or_invalid",
+            {
+                "round": self.budget.max_rounds,
+                "status": budget_decision.status,
+                "reason": budget_decision.reason,
+            },
+        )
+        reason = budget_decision.reason or budget_decision.status or "budget_exhausted_without_model_final"
         return IterativeRunResult(
             question=raw_question,
             video_path=video_path,
-            answer=partial_answer
-            or f"Stopped after {self.budget.max_rounds} exploration {plural} with partial evidence.",
-            status="max_rounds_reached",
+            answer="no_model_final",
+            status="no_model_final",
             citations=citations,
             rounds=rounds,
+            final_decision_owner=FinalDecisionOwner.NONE.value,
         )
 
     def _forced_mcq_fallback_result(
@@ -1679,93 +1476,129 @@ class IterativeVisualAgent:
         candidate_answer: str = "",
         reason: str = "",
     ) -> IterativeRunResult | None:
+        raise AssertionError(
+            "Framework-owned MCQ fallback is disabled; request a model final decision or return no_model_final."
+        )
+
+    def _request_budget_exhausted_model_final(
+        self,
+        *,
+        question: str,
+        round_number: int,
+    ) -> ModelFinalDecision:
+        try:
+            response = self.backend.generate(
+                BackendRequest(
+                    task="final_decision",
+                    prompt=_budget_final_decision_prompt(
+                        question=question,
+                        evidence_text=self._read_ledger(),
+                    ),
+                    max_new_tokens=1024,
+                    metadata={"round": round_number, "source": "budget_exhausted"},
+                )
+            )
+        except Exception as exc:
+            self.workspace.write_trace_event(
+                "budget_final_model_request_failed",
+                {"round": round_number, "error": f"{type(exc).__name__}: {str(exc)[:240]}"},
+            )
+            return ModelFinalDecision(status="invalid", reason="final_decision_request_failed")
         options = extract_candidate_options(question)
-        if not options:
-            return None
-        table = self._answer_evidence_table(question)
-        projection_result = _projected_option_from_evidence_table(
+        decision = parse_model_final_response(response.text, allowed_options=options)
+        if decision.is_final or decision.status == "no_model_final":
+            return decision
+        repaired = self._try_repair_model_final_format(
             question=question,
-            options=options,
-            table=table,
-            target_registry=getattr(self.workspace, "target_registry", None),
-            answer_operator=str(getattr(getattr(self.workspace, "grounding_runtime", None), "answer_operator", "") or ""),
+            raw_text=response.text,
+            round_number=round_number,
+            source="budget_exhausted",
         )
-        projection_answer = projection_result.option_label if projection_result.status == "supported" else ""
-        low_confidence = answer_result.as_low_confidence_final() if answer_result is not None else None
-        answer = projection_answer or (
-            _answer_option_letter(low_confidence.answer) if low_confidence is not None and low_confidence.status == "low_confidence_final" else ""
-        )
-        fallback_source = (
-            "answer_evidence_projection"
-            if projection_answer
-            else "answer_agent_partial_support"
-            if low_confidence is not None and low_confidence.status == "low_confidence_final"
-            else ""
-        )
-        if not answer and answer_result is not None:
-            answer = _answer_option_letter(answer_result.answer) or ""
-            fallback_source = "answer_agent_answer" if answer else fallback_source
-        if not answer:
-            answer = _best_effort_option_from_evidence_table(table)
-            fallback_source = "answer_evidence_table_strong" if answer else fallback_source
-        if not answer:
-            answer = _top_option_from_evidence_table(table)
-            fallback_source = "answer_evidence_table_top" if answer else fallback_source
-        if not answer:
-            answer = _answer_option_letter(candidate_answer) or ""
-            fallback_source = "candidate_answer" if answer else fallback_source
-        if not answer:
-            answer = _latest_hypothesis_option(self.workspace)
-            fallback_source = "latest_hypothesis" if answer else fallback_source
-        if not answer:
-            answer = _first_candidate_option_letter(options) or ""
-            fallback_source = "fixed_first_option" if answer else fallback_source
-        projection_citations = list(projection_result.supporting_evidence_ids) if projection_answer else []
-        fallback_citations = (
-            projection_citations
-            or (list(low_confidence.citations) if low_confidence is not None and low_confidence.status == "low_confidence_final" else list(citations))
-        )
-        confidence = (
-            min(0.8, float(projection_result.score or 0.0))
-            if projection_answer
-            else (low_confidence.confidence if low_confidence is not None and low_confidence.status == "low_confidence_final" else 0.0)
-        )
+        return repaired if repaired is not None else decision
+
+    def _no_model_final_result(
+        self,
+        *,
+        question: str,
+        video_path: str,
+        rounds: Sequence[IterativeRound],
+        round_number: int,
+        planner_text: str,
+        reason: str,
+    ) -> IterativeRunResult:
         self.workspace.write_trace_event(
-            "mcq_forced_fallback",
+            "no_model_final",
             {
                 "round": round_number,
-                "source": source,
-                "answer": answer,
-                "reason": reason or "mcq_terminal_non_empty_answer",
-                "fallback_source": fallback_source or "fixed_first_option",
-                "answer_agent_parse_failed": _answer_agent_parse_failed(answer_result),
-                "projection_strategy": projection_result.strategy if projection_answer else "",
-                "projection_status": projection_result.status,
-                "projection_candidate": projection_result.option_label or "",
-                "projection_reason": projection_result.reason,
-                "projection_citations": projection_citations,
+                "reason": reason,
+                "final_decision_owner": FinalDecisionOwner.NONE.value,
             },
-        )
-        final_rounds = list(rounds)
-        final_rounds.append(
-            IterativeRound(
-                round_number=round_number,
-                status="low_confidence_final",
-                planner_text="",
-                rationale="MCQ budget exhausted; returning best-effort non-empty option.",
-                program=(),
-                observation_ids=(),
-            )
         )
         return IterativeRunResult(
             question=question,
             video_path=video_path,
-            answer=answer,
-            status="low_confidence_final",
-            citations=fallback_citations,
-            confidence=confidence,
-            rounds=final_rounds,
+            answer="no_model_final",
+            status="no_model_final",
+            citations=(),
+            evidence_ids=(),
+            confidence=0.0,
+            rounds=[
+                *rounds,
+                IterativeRound(
+                    round_number=round_number,
+                    status="no_model_final",
+                    planner_text=planner_text,
+                    rationale=reason,
+                ),
+            ],
+            final_decision_owner=FinalDecisionOwner.NONE.value,
         )
+
+    def _try_repair_model_final_format(
+        self,
+        *,
+        question: str,
+        raw_text: str,
+        round_number: int,
+        source: str,
+    ) -> ModelFinalDecision | None:
+        options = extract_candidate_options(question)
+        locked_answer = recover_locked_answer_from_malformed_final(raw_text, allowed_options=options)
+        if not locked_answer:
+            return None
+        self.workspace.write_trace_event(
+            "model_final_format_repair_requested",
+            {"round": round_number, "source": source, "locked_answer": locked_answer},
+        )
+        response = self.backend.generate(
+            BackendRequest(
+                task="final_decision_format_repair",
+                prompt=_format_repair_final_decision_prompt(
+                    question=question,
+                    raw_text=raw_text,
+                    locked_answer=locked_answer,
+                ),
+                max_new_tokens=512,
+                metadata={"round": round_number, "source": source, "locked_answer": locked_answer},
+            )
+        )
+        decision = parse_model_final_response(
+            response.text,
+            allowed_options=options,
+            locked_answer=locked_answer,
+        )
+        self.workspace.write_trace_event(
+            "model_final_format_repair_result",
+            {
+                "round": round_number,
+                "source": source,
+                "status": decision.status,
+                "reason": decision.reason,
+                "locked_answer": locked_answer,
+                "repaired_answer": decision.answer,
+            },
+        )
+        return decision if decision.is_final else None
 
     def _evidence_repair_exhausted_result(
         self,
@@ -1958,7 +1791,7 @@ class IterativeVisualAgent:
         failure: Mapping[str, Any],
     ) -> IterativeRunResult:
         self.workspace.write_trace_event(
-            "iterative_final_rejected",
+            "grounding_bootstrap_diagnostics",
             {
                 "status": "grounding_bootstrap_failed",
                 "final_decision": "grounding_bootstrap_failed",
@@ -1991,9 +1824,9 @@ class IterativeVisualAgent:
         round_number: int,
         answer: str,
         citations: Sequence[str],
-    ) -> str:
+    ) -> FinalDiagnostics | None:
         if not extract_candidate_options(question):
-            return ""
+            return None
         answer_result = AnswerAgent(self.backend).run(
             question=question,
             evidence_text=self._read_ledger(),
@@ -2003,12 +1836,12 @@ class IterativeVisualAgent:
         planner_option = _answer_option_letter(answer)
         verifier_option = _answer_option_letter(answer_result.answer)
         verifier_disagrees = (
-            answer_result.status == "final"
+            answer_result.status == "candidate"
             and planner_option is not None
             and verifier_option is not None
             and verifier_option != planner_option
         )
-        if answer_result.status == "final" and answer_result.candidate_option_relations and not verifier_disagrees:
+        if answer_result.status == "candidate" and answer_result.candidate_option_relations and not verifier_disagrees:
             self.workspace.annotate_candidate_option_relations(
                 observation_ids=answer_result.citations,
                 relations=answer_result.candidate_option_relations,
@@ -2042,9 +1875,79 @@ class IterativeVisualAgent:
                 **_answer_agent_trace_fields(answer_result),
             },
         )
-        if verifier_disagrees:
-            return "planner_final_verifier_disagrees"
-        return ""
+        return FinalDiagnostics(
+            status="rejected" if verifier_disagrees else "accepted",
+            reason_code="planner_final_verifier_disagrees" if verifier_disagrees else "",
+            verifier_status=answer_result.status,
+            verifier_answer=answer_result.answer,
+            verifier_disagrees=verifier_disagrees,
+        )
+
+    def _diagnose_model_final(
+        self,
+        *,
+        question: str,
+        has_inspect_with_candidate_options: bool,
+        answer: str,
+        citations: Sequence[str],
+        evidence_ids: Sequence[str],
+        planner_skill: SkillSpec | None,
+    ) -> FinalDiagnostics | None:
+        final_refs = _unique_preserving_order([*citations, *evidence_ids])
+        gate_decision = _structured_final_gate_decision(
+            workspace=self.workspace,
+            question=question,
+            answer=answer,
+            final_refs=final_refs,
+            planner_skill=planner_skill,
+        )
+        if gate_decision is not None:
+            diagnostics = FinalDiagnostics(
+                status=gate_decision.gate_status,
+                reason_code=str(gate_decision.reason_code or ""),
+                repair_hint=str(getattr(gate_decision, "diagnostic_repair_hint", "") or ""),
+                supporting_evidence_ids=list(gate_decision.supporting_evidence_ids),
+                missing_target_refs=list(gate_decision.missing_target_refs),
+                missing_relation_refs=list(gate_decision.missing_relation_refs),
+            )
+            self.workspace.write_trace_event(
+                "structured_final_diagnostics",
+                {
+                    "proposed_option": gate_decision.proposed_option,
+                    "gate_status": gate_decision.gate_status,
+                    "reason_code": gate_decision.reason_code or "",
+                    "answer_operator": str(getattr(getattr(self.workspace, "grounding_runtime", None), "answer_operator", "") or "select_present"),
+                    "diagnostic_repair_hint": str(getattr(gate_decision, "diagnostic_repair_hint", "") or ""),
+                    "supporting_evidence_ids": list(gate_decision.supporting_evidence_ids),
+                    "missing_target_refs": list(gate_decision.missing_target_refs),
+                    "missing_relation_refs": list(gate_decision.missing_relation_refs),
+                    "advisory_only": True,
+                },
+            )
+            return diagnostics
+        reason = _blocked_final_reason(
+            question=question,
+            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
+            workspace=self.workspace,
+            answer=answer,
+            citations=final_refs,
+        )
+        if not reason:
+            return None
+        diagnostics = FinalDiagnostics(status="rejected", reason_code=reason)
+        self.workspace.write_trace_event(
+            "structured_final_diagnostics",
+            {
+                "proposed_option": _answer_option_letter(answer) or "",
+                "gate_status": "rejected",
+                "reason_code": reason,
+                "supporting_evidence_ids": [],
+                "missing_target_refs": [],
+                "missing_relation_refs": [],
+                "advisory_only": True,
+            },
+        )
+        return diagnostics
 
     def _finalize_answer_agent_result(
         self,
@@ -2059,61 +1962,18 @@ class IterativeVisualAgent:
         program: Sequence[Mapping[str, Any]] = (),
         observation_ids: Sequence[str] = (),
     ) -> IterativeRunResult | None:
-        blocked_reason = _blocked_final_reason(
-            question=question,
-            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-            workspace=self.workspace,
-            answer=answer_result.answer,
-            citations=answer_result.citations,
-        )
-        if blocked_reason:
-            self.workspace.write_trace_event(
-                "iterative_final_blocked",
-                {
-                    "round": round_number,
-                    "source": source,
-                    "reason": blocked_reason,
-                    "answer": answer_result.answer,
-                    "citations": list(answer_result.citations),
-                },
-            )
-            return None
         self.workspace.write_trace_event(
-            "iterative_finalization_ready",
+            "answer_agent_finalization_disabled",
             {
                 "round": round_number,
                 "source": source,
                 "answer": answer_result.answer,
                 "citations": list(answer_result.citations),
                 "confidence": answer_result.confidence,
+                "advisory_only": True,
             },
         )
-        final_rounds = list(rounds)
-        final_rounds.append(
-            IterativeRound(
-                round_number=round_number,
-                status="final",
-                planner_text=answer_result.raw_text,
-                rationale=answer_result.rationale,
-                program=program,
-                observation_ids=observation_ids,
-            )
-        )
-        self._write_final_trace(
-            round_number=round_number,
-            answer=answer_result.answer,
-            citations=answer_result.citations,
-            source=source,
-        )
-        return IterativeRunResult(
-            question=question,
-            video_path=video_path,
-            answer=answer_result.answer,
-            status="final",
-            citations=list(answer_result.citations),
-            confidence=answer_result.confidence,
-            rounds=final_rounds,
-        )
+        return None
 
     def _try_answer_agent_final(
         self,
@@ -2150,42 +2010,7 @@ class IterativeVisualAgent:
                 **_answer_agent_trace_fields(answer_result),
             },
         )
-        if answer_result.status != "final":
-            return None
-        blocked_reason = _blocked_final_reason(
-            question=question,
-            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-            workspace=self.workspace,
-            answer=answer_result.answer,
-            citations=answer_result.citations,
-        )
-        if blocked_reason:
-            self.workspace.write_trace_event(
-                "iterative_final_blocked",
-                {
-                    "round": round_number,
-                    "source": source,
-                    "reason": blocked_reason,
-                    "answer": answer_result.answer,
-                    "citations": list(answer_result.citations),
-                },
-            )
-            return None
-        if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES:
-            stable_final = self._try_stable_answer_suggestion_final(
-                answer_result=answer_result,
-                question=question,
-                video_path=video_path,
-                rounds=rounds,
-                round_number=round_number,
-                source=source,
-                has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-                run_state=run_state,
-                program=program,
-                observation_ids=observation_ids,
-            )
-            if stable_final is not None:
-                return stable_final
+        if answer_result.status == "candidate" or answer_result.has_partial_support():
             if pending_inferences_out is not None:
                 pending_inferences_out.append(_answer_result_pending_inference(answer_result, source=source))
             self.workspace.write_trace_event(
@@ -2197,20 +2022,10 @@ class IterativeVisualAgent:
                     "citations": list(answer_result.citations),
                     "confidence": answer_result.confidence,
                     "recommended_to_planner": True,
+                    "advisory_only": True,
                 },
             )
-            return None
-        return self._finalize_answer_agent_result(
-            answer_result=answer_result,
-            question=question,
-            video_path=video_path,
-            rounds=rounds,
-            round_number=round_number,
-            source=source,
-            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-            program=program,
-            observation_ids=observation_ids,
-        )
+        return None
 
     def _try_stable_answer_suggestion_final(
         self,
@@ -2228,7 +2043,7 @@ class IterativeVisualAgent:
     ) -> IterativeRunResult | None:
         option = _answer_option_letter(answer_result.answer)
         citations = tuple(str(citation) for citation in answer_result.citations if str(citation))
-        if answer_result.status != "final" or not option or not citations or answer_result.confidence < 0.9:
+        if answer_result.status != "candidate" or not option or not citations or answer_result.confidence < 0.9:
             run_state.answer_suggestion_state = AnswerSuggestionState()
             return None
         previous = run_state.answer_suggestion_state
@@ -2254,26 +2069,17 @@ class IterativeVisualAgent:
         if count < 2:
             return None
         self.workspace.write_trace_event(
-            "stable_answer_suggestion_finalized",
+            "stable_answer_suggestion_advisory",
             {
                 "round": round_number,
                 "source": source,
                 "answer": answer_result.answer,
                 "citations": list(citations),
                 "confidence": answer_result.confidence,
+                "advisory_only": True,
             },
         )
-        return self._finalize_answer_agent_result(
-            answer_result=answer_result,
-            question=question,
-            video_path=video_path,
-            rounds=rounds,
-            round_number=round_number,
-            source="stable_answer_suggestion",
-            has_inspect_with_candidate_options=has_inspect_with_candidate_options,
-            program=program,
-            observation_ids=observation_ids,
-        )
+        return None
 
     def _record_zero_yield_tool_calls(
         self,
@@ -4240,6 +4046,8 @@ class IterativeVisualAgent:
         evidence_ids: Sequence[str] = (),
         source: str = "",
         status: str = "final",
+        owner: FinalDecisionOwner | str = FinalDecisionOwner.MODEL,
+        diagnostics: FinalDiagnostics | None = None,
         planner_answer: str = "",
         resolved_answer: str = "",
         conflict: bool | None = None,
@@ -4248,6 +4056,7 @@ class IterativeVisualAgent:
             "round": round_number,
             "answer": answer,
             "citations": list(citations),
+            "final_decision_owner": str(owner.value if isinstance(owner, FinalDecisionOwner) else owner),
         }
         if evidence_ids:
             payload["evidence_ids"] = list(evidence_ids)
@@ -4262,6 +4071,8 @@ class IterativeVisualAgent:
             payload["conflict"] = bool(conflict)
         if status != "final":
             payload["status"] = status
+        if diagnostics is not None:
+            payload["diagnostics"] = diagnostics.to_payload()
         provenance = self._citation_provenance(_unique_preserving_order([*citations, *evidence_ids]))
         if provenance:
             payload["citation_provenance"] = provenance
@@ -4522,81 +4333,23 @@ class IterativeVisualAgent:
         supported_binding_no_growth_rounds: int = 0,
         runtime_context: RunContext | None = None,
     ) -> IterativeRunResult | None:
-        if answer_result.status != "need_more_evidence" or not answer_result.has_partial_support():
+        if not answer_result.has_partial_support():
             return None
-        low_confidence = answer_result.as_low_confidence_final()
-        if low_confidence.status != "low_confidence_final":
-            return None
-        auto_promotion_guard_active = (
-            supported_binding_no_growth_rounds >= 5
-            and remaining_rounds is not None
-            and remaining_rounds <= 3
+        candidate_answer, candidate_citations, confidence = _partial_support_candidate(answer_result)
+        self.workspace.write_trace_event(
+            "iterative_answer_suggestion",
+            {
+                "round": round_number,
+                "source": source,
+                "answer": candidate_answer,
+                "citations": list(candidate_citations),
+                "confidence": confidence,
+                "status": "candidate",
+                "recommended_to_planner": True,
+                "advisory_only": True,
+            },
         )
-        if auto_promotion_guard_active and self._try_auto_evidence_promotion(
-            answer=low_confidence.answer,
-            question=question,
-            round_number=round_number,
-            source=source,
-            runtime_context=runtime_context,
-        ):
-            return None
-        if source not in _ANSWER_AGENT_AUTO_FINAL_SOURCES and not auto_promotion_guard_active:
-            self.workspace.write_trace_event(
-                "iterative_answer_suggestion",
-                {
-                    "round": round_number,
-                    "source": source,
-                    "answer": low_confidence.answer,
-                    "citations": list(low_confidence.citations),
-                    "confidence": low_confidence.confidence,
-                    "status": low_confidence.status,
-                    "recommended_to_planner": True,
-                },
-            )
-            return None
-        if not auto_promotion_guard_active and not _has_answer_grade_citation(
-            workspace=self.workspace,
-            question=question,
-            answer=low_confidence.answer,
-            citations=low_confidence.citations,
-        ):
-            self.workspace.write_trace_event(
-                "low_confidence_final_blocked",
-                {
-                    "round": round_number,
-                    "source": source,
-                    "reason": "final_requires_answer_grade_evidence",
-                    "citations": list(low_confidence.citations),
-                },
-            )
-            return None
-        final_rounds = list(rounds)
-        final_rounds.append(
-            IterativeRound(
-                round_number=round_number,
-                status="low_confidence_final",
-                planner_text=low_confidence.raw_text,
-                rationale=low_confidence.rationale,
-                program=program,
-                observation_ids=observation_ids,
-            )
-        )
-        self._write_final_trace(
-            round_number=round_number,
-            answer=low_confidence.answer,
-            citations=low_confidence.citations,
-            source=source,
-            status="low_confidence_final",
-        )
-        return IterativeRunResult(
-            question=question,
-            video_path=video_path,
-            answer=low_confidence.answer,
-            status="low_confidence_final",
-            citations=list(low_confidence.citations),
-            confidence=low_confidence.confidence,
-            rounds=final_rounds,
-        )
+        return None
 
     def _try_auto_evidence_promotion(
         self,
@@ -4903,7 +4656,7 @@ class IterativeVisualAgent:
                 **_answer_agent_operator_kwargs(workspace=self.workspace),
             )
             last_answer_result = answer_result
-            if answer_result.status == "final" and answer_result.candidate_option_relations:
+            if answer_result.status == "candidate" and answer_result.candidate_option_relations:
                 self.workspace.annotate_candidate_option_relations(
                     observation_ids=answer_result.citations,
                     relations=answer_result.candidate_option_relations,
@@ -4919,51 +4672,8 @@ class IterativeVisualAgent:
                 selected_option=selected_option,
                 citations=answer_result.citations,
             )
-            if (
-                answer_result.status == "final"
-                and not gate_reason
-                and _scheduler_kind(skill) is SchedulerKind.FOLLOWUP_QUEUE
-                and scheduler.queue
-            ):
+            if answer_result.status == "candidate" and not gate_reason and _scheduler_kind(skill) is SchedulerKind.FOLLOWUP_QUEUE and scheduler.queue:
                 gate_reason = "mutex_pending_targets"
-            if answer_result.status == "final" and not gate_reason:
-                self.workspace.write_trace_event(
-                    "iterative_answer_agent",
-                    {
-                        "round": round_number,
-                        "source": "hard_skill_runtime",
-                        "status": answer_result.status,
-                        "answer": answer_result.answer,
-                        "citations": list(answer_result.citations),
-                        "missing_evidence": list(answer_result.missing_evidence),
-                        **_answer_agent_trace_fields(answer_result),
-                    },
-                )
-                self._write_final_trace(
-                    round_number=round_number,
-                    answer=answer_result.answer,
-                    citations=answer_result.citations,
-                    source="hard_skill_runtime",
-                )
-                return IterativeRunResult(
-                    question=question,
-                    video_path=video_path,
-                    answer=answer_result.answer,
-                    status="final",
-                    citations=list(answer_result.citations),
-                    confidence=answer_result.confidence,
-                    rounds=[
-                        *rounds,
-                        IterativeRound(
-                            round_number=round_number,
-                            status="final",
-                            planner_text=answer_result.raw_text,
-                            rationale=answer_result.rationale,
-                            program=program,
-                            observation_ids=round_observation_ids,
-                        ),
-                    ],
-                )
 
             last_failure_tag = gate_reason or "answer_agent_need_more_evidence"
             self.workspace.write_trace_event(
@@ -4971,7 +4681,7 @@ class IterativeVisualAgent:
                 {
                     "round": round_number,
                     "source": "hard_skill_runtime",
-                    "status": "need_more_evidence",
+                    "status": answer_result.status,
                     "answer": answer_result.answer,
                     "citations": list(answer_result.citations),
                     "missing_evidence": list(answer_result.missing_evidence),
@@ -4979,6 +4689,19 @@ class IterativeVisualAgent:
                     **_answer_agent_trace_fields(answer_result),
                 },
             )
+            if answer_result.status == "candidate" or answer_result.has_partial_support():
+                self.workspace.write_trace_event(
+                    "iterative_answer_suggestion",
+                    {
+                        "round": round_number,
+                        "source": "hard_skill_runtime",
+                        "answer": answer_result.answer,
+                        "citations": list(answer_result.citations),
+                        "confidence": answer_result.confidence,
+                        "recommended_to_planner": True,
+                        "advisory_only": True,
+                    },
+                )
             self.workspace.write_reflection_memory(
                 route=route,
                 failure_tag=last_failure_tag,
@@ -6940,6 +6663,32 @@ def _planner_final_answer_with_option(*, question: str, answer: str) -> str:
     return str(answer)
 
 
+def _budget_final_decision_prompt(*, question: str, evidence_text: str) -> str:
+    return (
+        "The exploration budget is exhausted. You own the final decision.\n"
+        "Use only the evidence below. Do not call tools and do not return a program.\n"
+        "Return only JSON using one of these schemas:\n"
+        '{"status":"final","answer":"A","citations":["obs_0001"],"evidence_ids":[],"confidence":0.0,'
+        '"evidence_sufficiency":"sufficient|partial","rationale":"brief evidence-only reason"}\n'
+        '{"status":"no_model_final","reason":"insufficient_evidence"}\n'
+        'Never return {"status":"continue"} here.\n'
+        f"Question:\n{question}\n\n"
+        f"Evidence:\n{evidence_text}\n"
+    )
+
+
+def _format_repair_final_decision_prompt(*, question: str, raw_text: str, locked_answer: str) -> str:
+    return (
+        "Repair the malformed final-decision JSON without changing the answer.\n"
+        f"The locked answer is: {locked_answer}\n"
+        "Return only valid JSON with status final, the same answer, citations/evidence_ids arrays if present, "
+        "confidence, evidence_sufficiency, and rationale. If you cannot preserve the same answer, return "
+        '{"status":"no_model_final","reason":"format_repair_locked_answer_unavailable"}.\n'
+        f"Question:\n{question}\n\n"
+        f"Malformed response:\n{raw_text}\n"
+    )
+
+
 def _timeline_temporal_decision(
     *,
     question: str,
@@ -7045,23 +6794,64 @@ def _answer_result_pending_inference(answer_result: AnswerAgentResult, *, source
     answer = str(answer_result.answer or "unknown").strip()
     citations = ", ".join(str(citation) for citation in list(answer_result.citations)[:5] if str(citation))
     citation_text = f" with citations {citations}" if citations else ""
-    if answer_result.status == "final":
+    if answer_result.status == "candidate":
         return (
             f"AnswerAgent suggestion from {source}: option/answer {answer}{citation_text} "
             f"(confidence {answer_result.confidence:.2f}). This is suggestion-only; planner must decide "
             "whether to finalize or gather more evidence."
         )
     if answer_result.has_partial_support():
-        low_confidence = answer_result.as_low_confidence_final()
-        partial_citations = ", ".join(str(citation) for citation in list(low_confidence.citations)[:5] if str(citation))
+        candidate_answer, candidate_citations, confidence = _partial_support_candidate(answer_result)
+        partial_citations = ", ".join(str(citation) for citation in list(candidate_citations)[:5] if str(citation))
         citation_text = f" with partial citations {partial_citations}" if partial_citations else ""
         return (
-            f"AnswerAgent partial-support suggestion from {source}: option/answer {low_confidence.answer}"
-            f"{citation_text} (confidence {low_confidence.confidence:.2f}). This is not a final; "
+            f"AnswerAgent partial-support suggestion from {source}: option/answer {candidate_answer}"
+            f"{citation_text} (confidence {confidence:.2f}). This is not a final; "
             "resolve the missing evidence before finalizing."
         )
     missing = "; ".join(str(item) for item in list(answer_result.missing_evidence)[:3] if str(item))
     return f"AnswerAgent from {source} needs more evidence: {missing or answer_result.rationale or 'targeted follow-up needed'}."
+
+
+def _partial_support_candidate(answer_result: AnswerAgentResult) -> tuple[str, list[str], float]:
+    supports: list[Mapping[str, Any]] = []
+    for relation in answer_result.candidate_option_relations:
+        if not isinstance(relation, Mapping):
+            continue
+        relation_kind = str(relation.get("relation", "")).strip().lower()
+        if relation_kind not in {"support", "supports", "supported_by", "positive"}:
+            continue
+        option = str(relation.get("option", "")).strip().upper()[:1]
+        if not option:
+            continue
+        supports.append(relation)
+    if not supports:
+        return str(answer_result.answer or ""), list(answer_result.citations), float(answer_result.confidence or 0.0)
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for relation in supports:
+        grouped.setdefault(str(relation.get("option", "")).strip().upper()[:1], []).append(relation)
+    option, relations = sorted(
+        grouped.items(),
+        key=lambda item: (
+            -len(item[1]),
+            -sum(_relation_strength(relation) for relation in item[1]),
+            item[0],
+        ),
+    )[0]
+    citations = [
+        str(relation.get("observation_id", ""))
+        for relation in relations
+        if str(relation.get("observation_id", ""))
+    ]
+    strength = sum(_relation_strength(relation) for relation in relations) / len(relations)
+    return option, citations or list(answer_result.citations), min(1.0, max(0.0, strength))
+
+
+def _relation_strength(relation: Mapping[str, Any]) -> float:
+    try:
+        return float(relation.get("strength", relation.get("confidence", 0.0)) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _confirmed_timeline_rows(timeline: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:

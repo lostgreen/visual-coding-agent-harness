@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from visual_coding_agent_harness.agents.contracts import CONTRACT_VERSION
+from visual_coding_agent_harness.agents.final_control import FinalDecisionOwner
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -19,6 +20,8 @@ class TrainingTrajectory:
     options: list[str]
     ground_truth: str | None
     final_decision: str
+    final_decision_owner: str
+    diagnostic_errors: list[str]
     selected_option: str | None
     is_correct: bool | None
     evidence_chain_ids: list[list[str]]
@@ -52,6 +55,7 @@ class TrainingTrajectory:
         trace_events = _read_jsonl(workspace.root / "trace.jsonl")
         chains = workspace.evidence_chain_summaries(max_chains=100)
         planner_turns = _planner_turns(trace_events, workspace=workspace)
+        final_decision_owner = _final_decision_owner(trace_events)
         trajectory = cls(
             run_id=workspace.run_id,
             case_id=str(case_id),
@@ -59,6 +63,8 @@ class TrainingTrajectory:
             options=[str(item) for item in options],
             ground_truth=str(ground_truth) if ground_truth is not None else None,
             final_decision=str(final_decision),
+            final_decision_owner=final_decision_owner,
+            diagnostic_errors=_final_control_diagnostic_errors(trace_events),
             selected_option=str(selected_option) if selected_option else None,
             is_correct=is_correct,
             evidence_chain_ids=[
@@ -150,6 +156,40 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return dict(payload) if isinstance(payload, Mapping) else None
+
+
+def _final_decision_owner(trace_events: Sequence[Mapping[str, Any]]) -> str:
+    for event in reversed(trace_events):
+        if _event_type(event) != "iterative_final":
+            continue
+        owner = str(_event_payload(event).get("final_decision_owner", "")).strip()
+        if owner:
+            return owner
+    return ""
+
+
+def _final_control_diagnostic_errors(trace_events: Sequence[Mapping[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    for event in trace_events:
+        event_type = _event_type(event)
+        payload = _event_payload(event)
+        owner = str(payload.get("final_decision_owner", "")).strip()
+        if event_type == "mcq_forced_fallback":
+            errors.append("active trace emitted disabled mcq_forced_fallback")
+        if event_type == "framework_selected_option":
+            errors.append("active trace emitted disabled framework_selected_option")
+        if owner == FinalDecisionOwner.FRAMEWORK.value:
+            errors.append("active trace emitted framework-owned final decision")
+    return sorted(set(errors))
+
+
+def _event_type(event: Mapping[str, Any]) -> str:
+    return str(event.get("type", ""))
+
+
+def _event_payload(event: Mapping[str, Any]) -> Mapping[str, Any]:
+    payload = event.get("payload", {})
+    return payload if isinstance(payload, Mapping) else {}
 
 
 def _balanced_json_candidates(text: str) -> list[str]:

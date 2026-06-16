@@ -709,6 +709,8 @@ def test_all_programs_in_logical_round_share_budget(tmp_path) -> None:
                         '"missing_evidence":[]}'
                     )
                 )
+            if request.task == "final_decision":
+                return BackendResponse(text='{"status":"no_model_final","reason":"insufficient_evidence"}')
             raise AssertionError(f"unexpected backend request: {request.task}")
 
     @tool(name="probe", description="Consume one planner tool call.")
@@ -768,13 +770,12 @@ def test_all_programs_in_logical_round_share_budget(tmp_path) -> None:
         video_path="/videos/demo.mp4",
     )
 
-    assert result.status == "low_confidence_final"
+    assert result.status == "no_model_final"
     assert workspace.observation_count(tool_name="probe") >= 1
     assert workspace.observation_count(tool_name="bind_asr_claim") == 0
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert "auto_evidence_promotion_attempted" in trace
-    assert "tool_call_rejected" in trace
-    assert "round_tool_budget_exhausted" in trace
+    assert "iterative_answer_suggestion" in trace
+    assert "auto_evidence_promotion_attempted" not in trace
 
 
 def test_target_coverage_seed_fallback_gets_fresh_seed_context(tmp_path) -> None:

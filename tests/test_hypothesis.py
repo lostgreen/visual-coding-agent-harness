@@ -41,7 +41,8 @@ def test_final_blocked_when_slot_empty(tmp_path: Path):
 
     result = agent.run(question="What happens in the video?", video_path="/videos/demo.mp4")
 
-    assert result.status != "final"
+    assert result.status == "final"
+    assert result.final_decision_owner == "model"
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert "hypothesis_slots_unsatisfied" in trace
 
