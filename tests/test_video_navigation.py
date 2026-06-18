@@ -77,6 +77,8 @@ class VideoNavigationTest(unittest.TestCase):
 
         self.assertIn("3 segments", listing["claim"])
         self.assertEqual(search["regions"][0]["segment_id"], "seg_0002")
+        self.assertEqual(search["produced_anchors"][0]["source_kind"], "retrieval_hit")
+        self.assertEqual(search["produced_anchors"][0]["segment_id"], "seg_0002")
         self.assertIn("AVIATION HISTORY", segment["claim"])
         self.assertEqual(window["regions"][0]["start_sec"], 25.0)
         self.assertEqual(window["regions"][0]["end_sec"], 120.0)
@@ -124,6 +126,8 @@ class VideoNavigationTest(unittest.TestCase):
         self.assertEqual(coverage["coverage"][0]["source"], "free_text_query")
         self.assertNotIn("target_ref", coverage["coverage"][0])
         self.assertIn("Q1 blue aircraft", coverage["claim"])
+        self.assertEqual(coverage["produced_anchors"][0]["source_kind"], "coverage_hit")
+        self.assertEqual(coverage["produced_anchors"][0]["segment_id"], "seg_0002")
 
     def test_target_coverage_resolves_target_refs_and_groups_by_option(self):
         video_map = VideoMap(
@@ -604,6 +608,42 @@ class VideoNavigationTest(unittest.TestCase):
             )
 
         self.assertEqual([hit["target"] for hit in detail["target_hits"]], ["humble background"])
+
+    def test_read_segment_detail_emits_source_anchors_for_indexed_fields(self):
+        video_map = VideoMap(
+            video_path="/videos/history.mp4",
+            duration_sec=60.0,
+            segments=[
+                VideoMapSegment(
+                    segment_id="seg_0005",
+                    start_sec=10.0,
+                    end_sec=40.0,
+                    low_fps_caption="A red shield with a white cross appears over Central Europe.",
+                    asr_text="Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe.",
+                    ocr_text="EUROPE",
+                    asr_sentences=[
+                        {
+                            "cue_id": "206",
+                            "start_sec": 20.0,
+                            "end_sec": 25.0,
+                            "text": "Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe.",
+                        }
+                    ],
+                    ocr_frames=[{"frame_ref": "frame_001", "text": "EUROPE"}],
+                )
+            ],
+        )
+        registry = build_video_navigation_registry(video_map)
+
+        detail = registry.execute("read_segment_detail", {"segment_id": "seg_0005"})
+
+        anchors = {anchor["anchor_id"]: anchor for anchor in detail["produced_anchors"]}
+        self.assertEqual(anchors["anch_seg_0005_asr_206"]["source_kind"], "asr_cue")
+        self.assertIn("buffer between Russia and Western Europe", anchors["anch_seg_0005_asr_206"]["excerpt"])
+        self.assertEqual(anchors["anch_seg_0005_caption_001"]["source_kind"], "caption_fact")
+        self.assertEqual(anchors["anch_seg_0005_ocr_001"]["source_kind"], "ocr_span")
+        self.assertEqual(detail["legacy_evidence_bindings"], [])
+        self.assertEqual(detail["legacy_answer_evidence_rows"], [])
 
     def test_read_segment_detail_promotes_bound_target_refs_when_requested(self):
         video_map = VideoMap(
@@ -1315,6 +1355,8 @@ class VideoNavigationTest(unittest.TestCase):
 
         self.assertEqual(grounded["modalities_used"], ("asr",))
         self.assertIn("unknown modality 'visual_fact' ignored", grounded["limitations"])
+        self.assertEqual(grounded["produced_anchors"][0]["source_kind"], "retrieval_hit")
+        self.assertEqual(grounded["produced_anchors"][0]["segment_id"], "seg_0001")
         self.assertEqual(coverage["modalities_used"], ("caption", "asr", "ocr", "entities"))
         self.assertIn("unknown modality 'visual_fact' ignored", coverage["limitations"])
 

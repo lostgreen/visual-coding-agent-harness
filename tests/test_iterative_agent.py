@@ -36,6 +36,7 @@ from visual_coding_agent_harness.agents.skills.specs import (
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import ClaimRelation, ClaimModality, OptionSpec, TargetRegistry, TargetSpec
 from visual_coding_agent_harness.iterative_smoke import run_iterative_smoke
+from visual_coding_agent_harness.memory import SourceAnchor
 from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
@@ -308,7 +309,8 @@ def test_budget_exhaustion_requests_required_model_final_from_current_evidence()
     assert [request.task for request in agent.backend.requests][-1] == "final_decision"
 
 
-def test_budget_exhausted_final_rejects_option_missing_answer_grade_support():
+def test_budget_exhausted_final_rejects_option_missing_answer_grade_support(monkeypatch):
+    monkeypatch.setenv("HARNESS_FINAL_GATE_MODE", "legacy")
     class UnsupportedBudgetFinalBackend(VisionLanguageBackend):
         def __init__(self):
             self.requests = []
@@ -1388,7 +1390,8 @@ def test_route_repair_recovery_program_uses_behavior_route_hints_with_custom_ski
     assert narration_program[0]["args"]["question_route"] == "narration_timeline_qa"
 
 
-def test_option_b_requires_complete_relation_chain():
+def test_option_b_requires_complete_relation_chain(monkeypatch):
+    monkeypatch.setenv("HARNESS_FINAL_GATE_MODE", "legacy")
     question = (
         "How was his life journey according to the video?\n"
         "A. Born with humble background and lived in seclusion in a farmhouse.\n"
@@ -1461,7 +1464,8 @@ def test_option_b_requires_complete_relation_chain():
     assert reason == "final_gate:missing_relation_binding"
 
 
-def test_612_complete_chain_maps_to_b_gate():
+def test_612_complete_chain_maps_to_b_gate(monkeypatch):
+    monkeypatch.setenv("HARNESS_FINAL_GATE_MODE", "legacy")
     question = (
         "How was his life journey according to the video?\n"
         "A. Born with humble background and lived in seclusion in a farmhouse.\n"
@@ -1523,6 +1527,53 @@ def test_612_complete_chain_maps_to_b_gate():
             citations=["obs_T1", "obs_T2", "obs_T3"],
             evidence_ids=["ev_bind_seg_0001_T1", "ev_bind_seg_0001_T2", "ev_bind_seg_0001_T3"],
             planner_skill=skill,
+        )
+
+    assert reason == ""
+
+
+def test_memory_citation_satisfies_default_minimal_planner_final_gate(monkeypatch):
+    monkeypatch.delenv("HARNESS_FINAL_GATE_MODE", raising=False)
+    question = (
+        "What role did Austria-Hungary play according to the narration?\n"
+        "A. A battlefield.\n"
+        "D. A buffer zone between Western Europe and Russia."
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        workspace = EvidenceWorkspace.create(Path(tmp), run_id="minimal_memory_gate")
+        workspace.target_registry = TargetRegistry.from_specs(
+            targets=[TargetSpec("T1", "buffer zone", modality_hint=ClaimModality.NARRATED_FACT)],
+            options=[OptionSpec("D", target_sequence=("T1",))],
+        )
+        workspace.write_produced_anchors(
+            [
+                SourceAnchor(
+                    anchor_id="anch_seg_0005_asr_206",
+                    observation_id="obs_0017",
+                    source_kind="asr_cue",
+                    segment_id="seg_0005",
+                    cue_id="206",
+                    field_path="asr_sentences[cue_id=206].text",
+                    excerpt="Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe.",
+                )
+            ]
+        )
+        workspace.write_memory(
+            kind="support",
+            claim="The narration says Austria-Hungary was a buffer between Russia and Western Europe.",
+            anchors=[{"anchor_id": "anch_seg_0005_asr_206", "excerpt": "buffer between Russia and Western Europe"}],
+            supports_option="D",
+            confidence="high",
+        )
+
+        reason = _blocked_planner_final_reason(
+            question=question,
+            has_inspect_with_candidate_options=False,
+            workspace=workspace,
+            answer="D",
+            citations=["mem_0001"],
+            planner_skill=None,
         )
 
     assert reason == ""
@@ -2363,8 +2414,8 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("delegate localized visual reading to one focused evidence tool", prompt)
             self.assertIn("Do not spend every round on navigation-only tools", prompt)
             self.assertIn("Local VLM tools must receive neutral factual prompts", prompt)
-            self.assertIn("navigation-only evidence and locate candidates are insufficient", prompt)
-            self.assertIn("answer-grade citation", prompt)
+            self.assertIn("Use Memory as your working notebook", prompt)
+            self.assertIn("real memory id or observation id", prompt)
 
     def test_option_blind_mcq_seeds_target_coverage_before_first_planner_round(self):
         class RewriteThenPlanBackend(ScriptedPlannerBackend):
@@ -4100,7 +4151,7 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("route_repair_recovery_proposed", trace)
 
-    def test_no_progress_warning_after_three_rounds_without_supported_binding(self):
+    def test_no_progress_warning_after_three_rounds_without_memory(self):
         backend = ScriptedPlannerBackend(
             [
                 '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "first"}}]}',
@@ -4132,7 +4183,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "no_model_final")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("iterative_no_progress_warning", trace)
-            self.assertIn("supported_evidence_binding_no_growth", trace)
+            self.assertIn("memory_no_growth", trace)
 
     def test_iterative_agent_repairs_media_tool_missing_segment_id_from_time_window(self):
         backend = ScriptedPlannerBackend(
@@ -4458,6 +4509,12 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(tool_args["question"], "Describe the actual visible objects and narrated facts.")
 
     def test_iterative_agent_blocks_mcq_final_until_answer_grade_evidence(self):
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setenv("HARNESS_FINAL_GATE_MODE", "legacy")
+
+            self._run_iterative_agent_blocks_mcq_final_until_answer_grade_evidence()
+
+    def _run_iterative_agent_blocks_mcq_final_until_answer_grade_evidence(self):
         class McqFinalBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 if request.task == "answer_from_evidence":
@@ -5243,7 +5300,9 @@ class IterativeAgentTest(unittest.TestCase):
                 ),
             )
 
-            result = agent.run(question=question, video_path="/videos/bernini.mp4")
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.setenv("HARNESS_FINAL_GATE_MODE", "legacy")
+                result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
             self.assertNotEqual(result.status, "final")
             self.assertNotIn("timeline_temporal_order", (workspace.root / "trace.jsonl").read_text(encoding="utf-8"))
@@ -6028,7 +6087,9 @@ class IterativeAgentTest(unittest.TestCase):
                 budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=2, reserve_final_round=False),
             )
 
-            result = agent.run(question=question, video_path="/videos/bernini.mp4")
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.setenv("HARNESS_FINAL_GATE_MODE", "legacy")
+                result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
             self.assertEqual(result.status, "no_model_final")
             self.assertNotEqual(result.answer, "D")
@@ -6116,7 +6177,9 @@ class IterativeAgentTest(unittest.TestCase):
                 budget=AgentBudget(max_rounds=2, max_tool_calls_per_round=1, reserve_final_round=False),
             )
 
-            result = agent.run(question=question, video_path="/videos/bernini.mp4")
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.setenv("HARNESS_FINAL_GATE_MODE", "legacy")
+                result = agent.run(question=question, video_path="/videos/bernini.mp4")
 
             self.assertEqual(result.status, "final")
             self.assertEqual(result.answer, "D")
@@ -6204,7 +6267,9 @@ class IterativeAgentTest(unittest.TestCase):
                 budget=AgentBudget(max_rounds=2, max_tool_calls_per_round=2, reserve_final_round=False),
             )
 
-            result = agent.run(question=question, video_path="/videos/empire.mp4")
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.setenv("HARNESS_FINAL_GATE_MODE", "legacy")
+                result = agent.run(question=question, video_path="/videos/empire.mp4")
 
             self.assertEqual(result.status, "final")
             self.assertTrue(result.answer.startswith("D"))

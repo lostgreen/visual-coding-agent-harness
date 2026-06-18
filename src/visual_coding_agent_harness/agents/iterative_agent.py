@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import os
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Optional, Sequence
@@ -28,7 +29,7 @@ from .final_control import (
     parse_model_final_response,
     recover_locked_answer_from_malformed_final,
 )
-from .final_gate import evaluate_final_candidate
+from .final_gate import evaluate_final_candidate, evaluate_final_integrity
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
 from .grounding import CompiledGroundingPlan, compile_fallback_plan, compile_grounding_plan, ground_question_with_model
 from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
@@ -415,9 +416,9 @@ class IterativeVisualAgent:
         repeated_program_count = 0
         invalid_failure_counts: dict[FailureSignature, int] = {}
         no_evidence_growth_rounds = 0
-        supported_binding_no_growth_rounds = 0
+        memory_no_growth_rounds = 0
         last_evidence_table_row_count = self.workspace.evidence_table_row_count()
-        last_supported_binding_count = self._supported_evidence_binding_count()
+        last_memory_count = len(self.workspace.memory_entries())
         all_segments_answer_attempted = False
         planner_final_verifier_disagreed = False
         planner_final_auto_final_blocked = False
@@ -495,6 +496,8 @@ class IterativeVisualAgent:
                 normalization_notes=run_state.last_normalization_notes,
                 hypothesis_text=self.workspace.read_hypothesis_text(),
                 reflection_memory=self.workspace.reflection_memory(max_items=self.budget.reflection_memory_max_items),
+                memory_snapshot=self.workspace.memory_snapshot_text(),
+                uncommitted_observations=self.workspace.uncommitted_observations_text(current_round=round_number),
                 evidence_status_summary=evidence_status_summary,
                 recent_tool_outputs=self.workspace.recent_tool_outputs(limit=3),
                 exhausted_tools=exhausted_tools,
@@ -609,7 +612,7 @@ class IterativeVisualAgent:
                         current_round_number=round_number,
                         rationale=rationale,
                         executed_rounds=len(rounds),
-                        supported_binding_no_growth_rounds=supported_binding_no_growth_rounds,
+                        supported_binding_no_growth_rounds=memory_no_growth_rounds,
                         no_evidence_growth_rounds=no_evidence_growth_rounds,
                         write_trace_event=self.workspace.write_trace_event,
                         recent_switches=tuple(run_state.skill_switch_history),
@@ -1215,15 +1218,15 @@ class IterativeVisualAgent:
                         **(current_projection_status or {"status": "unsupported", "reason": "no_projection"}),
                     },
                 )
-            current_supported_binding_count = self._supported_evidence_binding_count()
-            if current_supported_binding_count <= last_supported_binding_count:
-                supported_binding_no_growth_rounds += 1
+            current_memory_count = len(self.workspace.memory_entries())
+            if current_memory_count <= last_memory_count:
+                memory_no_growth_rounds += 1
             else:
-                supported_binding_no_growth_rounds = 0
+                memory_no_growth_rounds = 0
                 self._reset_route_repair_counts_for_supported_bindings(run_state=run_state)
                 run_state.program_key_counts.clear()
                 run_state.banned_program_keys.clear()
-            last_supported_binding_count = current_supported_binding_count
+            last_memory_count = current_memory_count
             if (
                 prefinal_evidence_repair_failed
                 and post_repair_action_rounds_remaining > 0
@@ -1248,28 +1251,20 @@ class IterativeVisualAgent:
                         program=program,
                         observation_ids=observation_ids,
                     )
-            if supported_binding_no_growth_rounds >= 3 and not run_state.no_progress_warning_emitted:
+            if memory_no_growth_rounds >= 3 and not run_state.no_progress_warning_emitted:
                 run_state.no_progress_warning_emitted = True
-                promotion_candidates = _latest_asr_binding_candidates(
-                    workspace=self.workspace,
-                    target_refs=(),
-                    failed_call_signatures=run_state.zero_yield_tool_signatures,
-                    limit=2,
-                )
                 self.workspace.write_trace_event(
                     "iterative_no_progress_warning",
                     {
                         "round": round_number,
-                        "reason": "supported_evidence_binding_no_growth",
-                        "no_growth_rounds": supported_binding_no_growth_rounds,
-                        "supported_binding_count": current_supported_binding_count,
-                        "promotion_candidates": promotion_candidates,
+                        "reason": "memory_no_growth",
+                        "no_growth_rounds": memory_no_growth_rounds,
+                        "memory_count": current_memory_count,
                     },
                 )
-                run_state.answer_feedback = _supported_binding_no_growth_feedback(
-                    candidates=promotion_candidates,
-                    skill_locked=bool(skill_runtime is not None and skill_runtime.locked),
-                )
+                run_state.answer_feedback = [
+                    "Write memory from useful anchored observations, mark unhelpful observations rejected, or choose a different segment/tool."
+                ]
             if no_evidence_growth_rounds >= 2 and not final_round_reserved:
                 answer_result = AnswerAgent(self.backend).run(
                     question=raw_question,
@@ -1306,7 +1301,7 @@ class IterativeVisualAgent:
                     program=program,
                     observation_ids=observation_ids,
                     remaining_rounds=self.budget.max_rounds - round_number,
-                    supported_binding_no_growth_rounds=supported_binding_no_growth_rounds,
+                    supported_binding_no_growth_rounds=memory_no_growth_rounds,
                     runtime_context=round_ctx,
                 )
                 if low_confidence_result is not None:
@@ -1953,6 +1948,33 @@ class IterativeVisualAgent:
         planner_skill: SkillSpec | None,
     ) -> FinalDiagnostics | None:
         final_refs = _unique_preserving_order([*citations, *evidence_ids])
+        if _final_gate_mode() == "minimal":
+            selected_option = _answer_option_letter(answer) or str(answer or "").strip()
+            decision = evaluate_final_integrity(
+                selected_option=selected_option,
+                citations=final_refs,
+                workspace=self.workspace,
+            )
+            self.workspace.write_trace_event(
+                "final_integrity_diagnostics",
+                {
+                    "selected_option": decision.selected_option,
+                    "gate_status": "accepted" if decision.accepted else "rejected",
+                    "rejection_reason": decision.rejection_reason or "",
+                    "rejection_hint": decision.rejection_hint,
+                    "cited_memory_ids": list(decision.cited_memory_ids),
+                    "cited_observation_ids": list(decision.cited_observation_ids),
+                    "warnings": list(decision.warnings),
+                    "advisory_only": True,
+                },
+            )
+            if decision.accepted:
+                return None
+            return FinalDiagnostics(
+                status="rejected",
+                reason_code=str(decision.rejection_reason or "integrity_failed"),
+                repair_hint=decision.rejection_hint,
+            )
         gate_decision = _structured_final_gate_decision(
             workspace=self.workspace,
             question=question,
@@ -5446,6 +5468,28 @@ def _blocked_planner_final_reason(
     planner_skill: SkillSpec | None = None,
 ) -> str:
     final_evidence_refs = _unique_preserving_order([*citations, *evidence_ids])
+    if _final_gate_mode() == "minimal":
+        selected_option = _answer_option_letter(answer) or str(answer or "").strip()
+        decision = evaluate_final_integrity(
+            selected_option=selected_option,
+            citations=final_evidence_refs,
+            workspace=workspace,
+        )
+        workspace.write_trace_event(
+            "final_integrity_gate",
+            {
+                "selected_option": decision.selected_option,
+                "gate_status": "accepted" if decision.accepted else "rejected",
+                "rejection_reason": decision.rejection_reason or "",
+                "rejection_hint": decision.rejection_hint,
+                "cited_memory_ids": list(decision.cited_memory_ids),
+                "cited_observation_ids": list(decision.cited_observation_ids),
+                "warnings": list(decision.warnings),
+            },
+        )
+        if decision.accepted:
+            return ""
+        return "final_gate:" + str(decision.rejection_reason or "integrity_failed")
     if _prefinal_repair_kind(planner_skill) is PrefinalRepairKind.NARRATION_TIMELINE:
         if not _has_supported_evidence_binding_id(workspace, evidence_ids):
             return "planner_final_requires_supported_evidence_id"
@@ -5514,6 +5558,11 @@ def _blocked_planner_final_reason(
         selected_option=selected_option,
         citations=final_evidence_refs,
     )
+
+
+def _final_gate_mode() -> str:
+    mode = os.environ.get("HARNESS_FINAL_GATE_MODE", "minimal").strip().lower()
+    return "legacy" if mode == "legacy" else "minimal"
 
 
 def _structured_final_gate_decision(

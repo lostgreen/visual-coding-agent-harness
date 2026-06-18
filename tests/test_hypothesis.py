@@ -9,7 +9,7 @@ from visual_coding_agent_harness.video_index import fixed_window_scene_index
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
-def test_final_blocked_when_slot_empty(tmp_path: Path):
+def test_final_with_empty_hypothesis_slot_uses_minimal_integrity_gate(tmp_path: Path):
     class FinalBackend(VisionLanguageBackend):
         def generate(self, request: BackendRequest) -> BackendResponse:
             return BackendResponse(
@@ -44,7 +44,8 @@ def test_final_blocked_when_slot_empty(tmp_path: Path):
     assert result.status == "final"
     assert result.final_decision_owner == "model"
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert "hypothesis_slots_unsatisfied" in trace
+    assert "final_integrity_diagnostics" in trace
+    assert '"gate_status": "accepted"' in trace
 
 
 def test_hypothesis_slot_in_replanning_prompt():

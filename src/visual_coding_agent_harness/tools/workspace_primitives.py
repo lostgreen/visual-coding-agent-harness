@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
@@ -118,6 +118,48 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
             "limitations": "Cheap workspace write; no video frames inspected.",
         }
 
+    @tool(name="write_memory", description="Write a concise planner memory entry backed by produced anchor ids.")
+    def write_memory(
+        kind: str,
+        claim: str,
+        anchors: Sequence[Mapping[str, Any]],
+        supports_option: str = "",
+        confidence: str = "medium",
+        previous_memory_refs: Sequence[str] = (),
+        tags: Sequence[str] = (),
+    ) -> Mapping[str, object]:
+        if workspace is None:
+            return {
+                "claim": "No workspace is attached; memory was not written.",
+                "confidence": 0.0,
+                "regions": [],
+                "limitations": "Workspace-backed tool requires an EvidenceWorkspace.",
+            }
+        entry = workspace.write_memory(
+            kind=kind,
+            claim=claim,
+            anchors=anchors,
+            supports_option=supports_option,
+            confidence=confidence,
+            previous_memory_refs=previous_memory_refs,
+            tags=tags,
+        )
+        return {
+            "claim": f"Memory {entry.entry_id} written.",
+            "confidence": 1.0,
+            "entry_id": entry.entry_id,
+            "memory": entry.to_dict(),
+            "regions": [
+                {
+                    "entry_id": entry.entry_id,
+                    "kind": entry.kind,
+                    "supports_option": entry.supports_option,
+                    "anchor_ids": [anchor.anchor_id for anchor in entry.anchors],
+                }
+            ],
+            "limitations": "Memory records planner notes; provenance is checked but semantic support is not judged.",
+        }
+
     registry.register(view_observation)
     registry.register(read_observation_detail)
     registry.register(grep_evidence)
@@ -125,6 +167,7 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
     registry.register(read_timeline_sorted)
     registry.register(read_hypothesis)
     registry.register(update_hypothesis_slot)
+    registry.register(write_memory)
     return registry
 
 

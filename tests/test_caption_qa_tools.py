@@ -203,6 +203,8 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(result["input_artifacts"], ["frame_cache:precomputed_2fps:demo.mp4:10.000-20.000:n=2"])
         self.assertEqual(result["regions"][0]["source_video_path"], "/videos/demo.mp4")
         self.assertEqual(result["regions"][0]["frame_cache_policy"], "precomputed_2fps")
+        self.assertEqual(result["produced_anchors"][0]["source_kind"], "caption_fact")
+        self.assertEqual(result["produced_anchors"][0]["segment_id"], "seg_0002")
 
     def test_caption_and_qa_segment_sanitize_full_mcq_before_backend_generate(self):
         backend = CaptionQARecordingBackend()
@@ -435,6 +437,9 @@ class CaptionQAToolsTest(unittest.TestCase):
         self.assertEqual(result["time_range"], [30.0, 42.0])
         self.assertEqual(result["grounding_quality"], "visually_confirmed")
         self.assertEqual(result["facts"][0]["event_label"], "red object")
+        self.assertEqual(result["produced_anchors"][0]["source_kind"], "visual_fact")
+        self.assertEqual(result["produced_anchors"][0]["segment_id"], "seg_0004")
+        self.assertEqual(result["produced_anchors"][0]["field_path"], "claim")
 
     def test_vision_read_expands_registry_target_refs_in_additional_targets(self):
         backend = CaptionQARecordingBackend()

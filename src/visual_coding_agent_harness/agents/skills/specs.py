@@ -542,6 +542,7 @@ def _timeline_allowed_actions() -> frozenset[str]:
             "locate_targets_in_segment",
             "verify_segment_anchors",
             "search_segments",
+            "write_memory",
         }
         | {"verify_ledger_answer"}
     )
@@ -583,6 +584,7 @@ def _grounded_allowed_actions() -> frozenset[str]:
             "locate_targets_in_segment",
             "verify_segment_anchors",
             "search_segments",
+            "write_memory",
         }
         | {"verify_ledger_answer"}
     )
@@ -594,7 +596,7 @@ def builtin_skill_registry() -> SkillRegistry:
     grounded_steps = _grounded_factual_steps()
     grounded_allowed_actions = _grounded_allowed_actions()
     main_idea_actions = frozenset(
-        {"global_gist", "query_context", "vision_read", "target_coverage", "read_segment_detail", "search_segments"}
+        {"global_gist", "query_context", "vision_read", "target_coverage", "read_segment_detail", "search_segments", "write_memory"}
         | {"bind_asr_claim"}
         | {"verify_ledger_answer"}
     )

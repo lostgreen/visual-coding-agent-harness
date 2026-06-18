@@ -70,6 +70,8 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
                 "route_playbook",
                 "skill_catalog",
                 "trajectory_snapshot",
+                "memory_snapshot",
+                "uncommitted_observations",
                 "evidence_snapshot",
                 "hypothesis",
                 "scene_index_snapshot",
@@ -97,7 +99,35 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("visual_timeline_qa@v1", prompt)
         self.assertNotIn("timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
-        self.assertIn("Final answers require at least one answer-grade citation", prompt)
+        self.assertIn("Final answers require at least one citation to a real memory id or observation id", prompt)
+
+    def test_memory_snapshot_and_uncommitted_observations_are_evidence_blocks(self):
+        scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
+
+        slots = compose_replanning_prompt_slots(
+            question="What does the narration imply?\nA. first\nD. fourth",
+            scene_index=scene_index,
+            ledger_text="# Compact Evidence Context\n(none)",
+            round_number=3,
+            budget=AgentBudget(max_rounds=4),
+            memory_snapshot=(
+                "- mem_0001 [support D, high]\n"
+                "  claim: The narration says Austria-Hungary was a buffer.\n"
+                "  anchors: obs_0017 / anch_seg_0005_asr_206"
+            ),
+            uncommitted_observations=(
+                "- obs_0017 read_segment_detail(seg_0005)\n"
+                "  ASR cue 206: buffer between Russia and Western Europe\n"
+                "  anchors: anch_seg_0005_asr_206"
+            ),
+        )
+
+        evidence_slot = slots["evidence"]
+        self.assertIn("# Memory Snapshot", evidence_slot)
+        self.assertIn("mem_0001 [support D, high]", evidence_slot)
+        self.assertIn("# Uncommitted Observations", evidence_slot)
+        self.assertIn("obs_0017 read_segment_detail(seg_0005)", evidence_slot)
+        self.assertLess(evidence_slot.index("# Memory Snapshot"), evidence_slot.index("# Evidence Snapshot"))
 
     def test_builtin_skill_playbooks_load_front_matter_and_body_for_planner(self):
         registry = builtin_skill_registry()
@@ -307,6 +337,7 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("view_observation(", rendered)
         self.assertIn("read_observation_detail(", rendered)
         self.assertIn("read_timeline_sorted(", rendered)
+        self.assertIn("write_memory(", rendered)
         self.assertNotIn("inspect_segment(", rendered)
         self.assertIn("<more tools available; request_tool: <exact_tool_name> in rationale to widen>", rendered)
 
@@ -892,7 +923,7 @@ The prose says recovery_rules: this sentence must not define metadata.
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn('"source": "hard_skill_runtime"', trace)
 
-    def test_planner_final_with_navigation_only_citation_is_blocked(self):
+    def test_planner_final_accepts_real_observation_citation_under_minimal_gate(self):
         backend = RecordingBackend(
             [
                 '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "red car"}, "assign": "map"}]}',
@@ -923,7 +954,8 @@ The prose says recovery_rules: this sentence must not define metadata.
             self.assertEqual(result.status, "final")
             self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("final_requires_answer_grade_evidence", trace)
+            self.assertIn("final_integrity_diagnostics", trace)
+            self.assertIn('"gate_status": "accepted"', trace)
 
     def test_failure_reflection_memory_is_injected_after_parse_error(self):
         backend = RecordingBackend(

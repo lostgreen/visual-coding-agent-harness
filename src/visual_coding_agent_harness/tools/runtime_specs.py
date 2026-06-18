@@ -24,6 +24,7 @@ _CORE_RUNTIME_SPEC_TOOLS = (
     "search_segments",
     "caption_segment",
     "read_timeline_sorted",
+    "write_memory",
 )
 
 
@@ -126,6 +127,14 @@ def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = Fals
         argument_normalizer=_normalize_no_args,
         semantic_key_builder=_read_timeline_sorted_key,
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
+        "write_memory",
+        missing=missing,
+        argument_normalizer=_normalize_write_memory,
+        semantic_key_builder=_key_from_normalizer("write_memory", _normalize_write_memory),
+        duplicate_guard_policy=DuplicateGuardPolicy.OFF,
     )
     if required:
         required_missing = [tool_name for tool_name in _CORE_RUNTIME_SPEC_TOOLS if tool_name in missing]
@@ -267,6 +276,23 @@ def _normalize_caption_segment(_ctx: RunContext, request: ToolRequest) -> Mappin
     if args.get("nframes") is not None:
         normalized["nframes"] = _positive_int(args.get("nframes"), default=8)
     return normalized
+
+
+def _normalize_write_memory(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "kind": _text(args.get("kind")) or "note",
+        "claim": _text(args.get("claim")),
+        "anchor_ids": [
+            _text(anchor.get("anchor_id"))
+            for anchor in _mapping_list(args.get("anchors"))
+            if _text(anchor.get("anchor_id"))
+        ],
+        "supports_option": _text(args.get("supports_option")),
+        "confidence": _text(args.get("confidence")) or "medium",
+        "previous_memory_refs": _string_list(args.get("previous_memory_refs")),
+        "tags": _string_list(args.get("tags")),
+    }
 
 
 def _normalize_no_args(_ctx: RunContext, _request: ToolRequest) -> Mapping[str, Any]:

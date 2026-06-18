@@ -92,6 +92,7 @@ def build_video_navigation_registry(
             "input_artifacts": [current.video_path],
             "regions": [result.to_dict() for result in results],
             "modalities": _modality_results(current=current, query=query, top_k=top_k, modalities=modalities),
+            "produced_anchors": _search_result_anchors(results=results, prefix="anch_search"),
             "limitations": _search_segments_limitations(modalities),
         }
 
@@ -155,6 +156,7 @@ def build_video_navigation_registry(
             "coverage": rows,
             "option_coverage": option_coverage,
             "modalities_used": _resolve_search_modalities(modalities),
+            "produced_anchors": _coverage_anchors(rows),
             "limitations": " ".join(
                 [
                     *search_modality_limitations(modalities),
@@ -179,6 +181,7 @@ def build_video_navigation_registry(
             "regions": candidates,
             "candidates": candidates,
             "normalized_query": normalized_query,
+            "produced_anchors": _grounding_anchors(candidates),
             "recommended_next_tools": [
                 {
                     "tool": "vision_read",
@@ -319,6 +322,10 @@ def build_video_navigation_registry(
             "evidence_bindings": evidence_bindings,
             "relation_bindings": relation_bindings,
             "answer_evidence_rows": answer_evidence_rows,
+            "produced_anchors": _segment_detail_anchors(segment),
+            "excerpt_candidates": _segment_detail_excerpt_candidates(segment),
+            "legacy_evidence_bindings": list(evidence_bindings),
+            "legacy_answer_evidence_rows": list(answer_evidence_rows),
             "promote_answer_evidence": bool(promote_answer_evidence),
             "target_refs": [target.target_id for target in binding_targets],
             "nav_digest": nav_digest,
@@ -764,6 +771,241 @@ def _search_segments_limitations(modalities: Sequence[str]) -> str:
         "embedding retrieval can replace the scoring backend without changing this contract."
     )
     return " ".join([*search_modality_limitations(modalities), base_limitations])
+
+
+def _search_result_anchors(*, results: Sequence[object], prefix: str) -> list[Mapping[str, object]]:
+    anchors: list[Mapping[str, object]] = []
+    for index, result in enumerate(results, start=1):
+        segment = getattr(result, "segment")
+        matches = [match for match in getattr(result, "matches", []) or () if isinstance(match, Mapping)]
+        if matches:
+            for match_index, match in enumerate(matches[:3], start=1):
+                excerpt = str(match.get("evidence") or match.get("snippet") or "")
+                if not excerpt:
+                    continue
+                anchors.append(
+                    _anchor_payload(
+                        anchor_id=f"{prefix}_{segment.segment_id}_{index:02d}_{match_index:02d}",
+                        source_kind="retrieval_hit",
+                        segment_id=segment.segment_id,
+                        start_sec=float(segment.start_sec),
+                        end_sec=float(segment.end_sec),
+                        field_path=f"regions[{index - 1}].matches[{match_index - 1}]",
+                        excerpt=excerpt,
+                        metadata={
+                            "field": str(match.get("field") or match.get("modality") or ""),
+                            "score": float(match.get("score", 0.0) or 0.0),
+                        },
+                    )
+                )
+            continue
+        summary = str(segment.compact_text())
+        if summary:
+            anchors.append(
+                _anchor_payload(
+                    anchor_id=f"{prefix}_{segment.segment_id}_{index:02d}",
+                    source_kind="retrieval_hit",
+                    segment_id=segment.segment_id,
+                    start_sec=float(segment.start_sec),
+                    end_sec=float(segment.end_sec),
+                    field_path=f"regions[{index - 1}].summary",
+                    excerpt=summary,
+                    metadata={"score": float(getattr(result, "score", 0.0) or 0.0)},
+                )
+            )
+    return anchors
+
+
+def _coverage_anchors(rows: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
+    anchors: list[Mapping[str, object]] = []
+    for row in rows:
+        target_id = _anchor_key(str(row.get("target_id") or row.get("target_ref") or "target"))
+        candidates = row.get("candidates", [])
+        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+            continue
+        for index, candidate in enumerate(candidates[:3], start=1):
+            if not isinstance(candidate, Mapping):
+                continue
+            segment_id = str(candidate.get("segment_id") or "")
+            if not segment_id:
+                continue
+            snippet = str(candidate.get("snippet") or candidate.get("summary") or "")
+            if not snippet:
+                continue
+            anchors.append(
+                _anchor_payload(
+                    anchor_id=f"anch_cov_{segment_id}_{target_id}_{index:02d}",
+                    source_kind="coverage_hit",
+                    segment_id=segment_id,
+                    start_sec=_optional_float(candidate.get("start_sec")),
+                    end_sec=_optional_float(candidate.get("end_sec")),
+                    field_path=f"coverage[{target_id}].candidates[{index - 1}]",
+                    excerpt=snippet,
+                    metadata={
+                        "target_id": str(row.get("target_id") or ""),
+                        "target": str(row.get("target") or ""),
+                        "source": str(candidate.get("source") or ""),
+                        "score": float(candidate.get("score", 0.0) or 0.0),
+                    },
+                )
+            )
+    return anchors
+
+
+def _grounding_anchors(candidates: Sequence[Mapping[str, object]]) -> list[Mapping[str, object]]:
+    anchors: list[Mapping[str, object]] = []
+    for index, candidate in enumerate(candidates, start=1):
+        segment_id = str(candidate.get("segment_id") or "")
+        if not segment_id:
+            continue
+        excerpt = str(candidate.get("reason") or candidate.get("modality") or "")
+        if not excerpt:
+            excerpt = f"candidate window {segment_id}"
+        anchors.append(
+            _anchor_payload(
+                anchor_id=f"anch_ground_{segment_id}_{index:02d}",
+                source_kind="retrieval_hit",
+                segment_id=segment_id,
+                start_sec=_optional_float(candidate.get("start_sec")),
+                end_sec=_optional_float(candidate.get("end_sec")),
+                field_path=f"candidates[{index - 1}]",
+                excerpt=excerpt,
+                metadata={
+                    "confidence": float(candidate.get("confidence", 0.0) or 0.0),
+                    "matched_fields": list(candidate.get("matched_fields", []) or []),
+                },
+            )
+        )
+    return anchors
+
+
+def _segment_detail_anchors(segment: VideoMapSegment) -> list[Mapping[str, object]]:
+    anchors: list[Mapping[str, object]] = []
+    asr_sentences = [sentence for sentence in getattr(segment, "asr_sentences", ()) or () if isinstance(sentence, Mapping)]
+    if asr_sentences:
+        for index, sentence in enumerate(asr_sentences, start=1):
+            text = str(sentence.get("text") or "").strip()
+            if not text:
+                continue
+            cue_id = str(sentence.get("cue_id") or sentence.get("id") or f"{index:03d}")
+            anchors.append(
+                _anchor_payload(
+                    anchor_id=f"anch_{segment.segment_id}_asr_{_anchor_key(cue_id)}",
+                    source_kind="asr_cue",
+                    segment_id=segment.segment_id,
+                    cue_id=cue_id,
+                    start_sec=_optional_float(sentence.get("start_sec")) or float(segment.start_sec),
+                    end_sec=_optional_float(sentence.get("end_sec")) or float(segment.end_sec),
+                    field_path=f"asr_sentences[cue_id={cue_id}].text",
+                    excerpt=text,
+                )
+            )
+    elif str(segment.asr_text or "").strip():
+        anchors.append(
+            _anchor_payload(
+                anchor_id=f"anch_{segment.segment_id}_asr_001",
+                source_kind="asr_span",
+                segment_id=segment.segment_id,
+                start_sec=float(segment.start_sec),
+                end_sec=float(segment.end_sec),
+                field_path="raw_asr_excerpt",
+                excerpt=str(segment.asr_text),
+            )
+        )
+    if str(segment.low_fps_caption or "").strip():
+        anchors.append(
+            _anchor_payload(
+                anchor_id=f"anch_{segment.segment_id}_caption_001",
+                source_kind="caption_fact",
+                segment_id=segment.segment_id,
+                start_sec=float(segment.start_sec),
+                end_sec=float(segment.end_sec),
+                field_path="visual_caption",
+                excerpt=str(segment.low_fps_caption),
+            )
+        )
+    ocr_frames = [frame for frame in getattr(segment, "ocr_frames", ()) or () if isinstance(frame, Mapping)]
+    if ocr_frames:
+        for index, frame in enumerate(ocr_frames, start=1):
+            text = str(frame.get("text") or "").strip()
+            if not text:
+                continue
+            timestamp = _optional_float(frame.get("timestamp_sec")) or float(segment.start_sec)
+            anchors.append(
+                _anchor_payload(
+                    anchor_id=f"anch_{segment.segment_id}_ocr_{index:03d}",
+                    source_kind="ocr_span",
+                    segment_id=segment.segment_id,
+                    start_sec=timestamp,
+                    end_sec=timestamp,
+                    field_path=f"ocr_frames[{index - 1}].text",
+                    excerpt=text,
+                    metadata={"frame_ref": str(frame.get("frame_ref") or "")},
+                )
+            )
+    elif str(segment.ocr_text or "").strip():
+        anchors.append(
+            _anchor_payload(
+                anchor_id=f"anch_{segment.segment_id}_ocr_001",
+                source_kind="ocr_span",
+                segment_id=segment.segment_id,
+                start_sec=float(segment.start_sec),
+                end_sec=float(segment.end_sec),
+                field_path="ocr_text",
+                excerpt=str(segment.ocr_text),
+            )
+        )
+    return anchors
+
+
+def _segment_detail_excerpt_candidates(segment: VideoMapSegment) -> list[Mapping[str, object]]:
+    return [
+        {
+            "anchor_id": str(anchor.get("anchor_id", "")),
+            "source_kind": str(anchor.get("source_kind", "")),
+            "excerpt": str(anchor.get("excerpt", "")),
+        }
+        for anchor in _segment_detail_anchors(segment)
+    ]
+
+
+def _anchor_payload(
+    *,
+    anchor_id: str,
+    source_kind: str,
+    segment_id: str,
+    field_path: str,
+    excerpt: str,
+    start_sec: float | None = None,
+    end_sec: float | None = None,
+    cue_id: str | None = None,
+    metadata: Mapping[str, object] | None = None,
+) -> Mapping[str, object]:
+    return {
+        "anchor_id": anchor_id,
+        "observation_id": "__pending__",
+        "source_kind": source_kind,
+        "segment_id": segment_id,
+        "cue_id": cue_id,
+        "start_sec": start_sec,
+        "end_sec": end_sec,
+        "field_path": field_path,
+        "excerpt": str(excerpt),
+        "metadata": dict(metadata or {}),
+    }
+
+
+def _anchor_key(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(value).strip()).strip("_").lower() or "x"
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _grounding_candidate(result: object) -> Mapping[str, object]:

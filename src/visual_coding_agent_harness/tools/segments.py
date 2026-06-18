@@ -187,11 +187,35 @@ def _run_segment_tool(
         "regions": [metadata],
         "limitations": limitations,
         "raw_backend": dict(response.raw),
+        "produced_anchors": [
+            _segment_anchor(
+                task=task,
+                segment_id=segment_id,
+                start_sec=float(start_sec),
+                end_sec=float(end_sec),
+                excerpt=claim,
+            )
+        ],
     }
     if confidence_signal:
         result["confidence_signal"] = confidence_signal
         result["grounding_quality"] = "inferred"
     return result
+
+
+def _segment_anchor(*, task: str, segment_id: str, start_sec: float, end_sec: float, excerpt: str) -> Mapping[str, object]:
+    source_kind = "caption_fact" if task == "caption_segment" else "visual_fact"
+    suffix = "caption" if task == "caption_segment" else "qa"
+    return {
+        "anchor_id": f"anch_{segment_id}_{suffix}_001",
+        "observation_id": "__pending__",
+        "source_kind": source_kind,
+        "segment_id": segment_id,
+        "start_sec": float(start_sec),
+        "end_sec": float(end_sec),
+        "field_path": "claim",
+        "excerpt": excerpt,
+    }
 
 
 def _segment_prompt(*, task: str, segment_id: str, start_sec: float, end_sec: float, question: str) -> str:

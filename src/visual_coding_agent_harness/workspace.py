@@ -20,6 +20,7 @@ from .contracts import (
     build_ordered_transcript_sequence,
 )
 from .evidence.order_extraction import extract_observed_order_from_text, match_observed_order_to_hypotheses
+from .memory import MemoryEntry, SourceAnchor, excerpt_hash, normalized_text
 from .schemas import EvidenceRowV2
 
 
@@ -231,6 +232,8 @@ class EvidenceWorkspace:
 
         for filename in [
             "observations.jsonl",
+            "produced_anchors.jsonl",
+            "memory.jsonl",
             "trace.jsonl",
             "evidence.jsonl",
             "evidence_table.jsonl",
@@ -267,21 +270,210 @@ class EvidenceWorkspace:
         raw_output: Mapping[str, Any] | None = None,
         frame_set_id: str | None = None,
     ) -> Observation:
+        observation_id = self._next_observation_id()
+        raw_payload = dict(raw_output or {})
+        produced_anchors = self._produced_anchors_for_observation(
+            raw_payload.get("produced_anchors", ()),
+            observation_id=observation_id,
+        )
+        if produced_anchors:
+            raw_payload["produced_anchors"] = [anchor.to_dict() for anchor in produced_anchors]
         observation = Observation(
-            observation_id=self._next_observation_id(),
+            observation_id=observation_id,
             tool=tool_name,
             claim=claim,
             confidence=confidence,
             input_artifacts=list(input_artifacts),
             regions=list(regions),
             limitations=limitations,
-            confidence_signal=confidence_signal or str((raw_output or {}).get("confidence_signal", "")),
-            raw_output=dict(raw_output or {}),
+            confidence_signal=confidence_signal or str(raw_payload.get("confidence_signal", "")),
+            raw_output=raw_payload,
             created_at=_utc_now(),
             frame_set_id=frame_set_id,
         )
         self._append_jsonl("observations.jsonl", asdict(observation))
+        if produced_anchors:
+            self.write_produced_anchors(produced_anchors)
         return self._apply_post_observation_hooks(observation)
+
+    def write_produced_anchors(self, anchors: Sequence[SourceAnchor | Mapping[str, Any]]) -> list[SourceAnchor]:
+        resolved: list[SourceAnchor] = []
+        for item in anchors:
+            anchor = item if isinstance(item, SourceAnchor) else SourceAnchor.from_mapping(item)
+            if not anchor.anchor_id:
+                raise ValueError("anchor_validation_failed: anchor_id must not be empty")
+            if not anchor.observation_id:
+                raise ValueError("anchor_validation_failed: observation_id must not be empty")
+            payload = anchor.to_dict()
+            payload["excerpt_hash"] = payload.get("excerpt_hash") or excerpt_hash(str(payload.get("excerpt", "")))
+            anchor = SourceAnchor.from_mapping(payload)
+            self._append_jsonl("produced_anchors.jsonl", anchor.to_dict())
+            resolved.append(anchor)
+        return resolved
+
+    def read_produced_anchors(self) -> list[SourceAnchor]:
+        return [SourceAnchor.from_mapping(row) for row in self._read_jsonl_dicts("produced_anchors.jsonl")]
+
+    def read_produced_anchors_by_id(self) -> dict[str, SourceAnchor]:
+        anchors: dict[str, SourceAnchor] = {}
+        for anchor in self.read_produced_anchors():
+            anchors[anchor.anchor_id] = anchor
+        return anchors
+
+    def write_memory(
+        self,
+        *,
+        kind: str,
+        claim: str,
+        anchors: Sequence[Mapping[str, Any]],
+        supports_option: str = "",
+        confidence: str = "medium",
+        previous_memory_refs: Sequence[str] = (),
+        tags: Sequence[str] = (),
+        round_number: int | None = None,
+        role: str | None = None,
+        layer: str | None = None,
+        metadata: Mapping[str, object] | None = None,
+    ) -> MemoryEntry:
+        if not anchors:
+            raise ValueError("memory_validation_failed: anchors must not be empty")
+
+        available = self.read_produced_anchors_by_id()
+        resolved_anchors: list[SourceAnchor] = []
+        for payload in anchors:
+            anchor_id = str(payload.get("anchor_id", "")).strip()
+            if anchor_id not in available:
+                raise ValueError(f"memory_validation_failed: unknown anchor_id={anchor_id}")
+            resolved = available[anchor_id]
+            model_excerpt = str(payload.get("excerpt", "") or "").strip()
+            if model_excerpt and normalized_text(model_excerpt) not in normalized_text(resolved.excerpt):
+                raise ValueError(f"memory_validation_failed: excerpt not found in anchor {anchor_id}")
+            resolved_anchors.append(resolved)
+
+        option_id = str(supports_option or "").strip()
+        if option_id and self._known_option_ids() and option_id not in self._known_option_ids():
+            raise ValueError(f"memory_validation_failed: unknown option {option_id}")
+
+        for ref in previous_memory_refs:
+            ref_text = str(ref).strip()
+            if ref_text and self.get_memory(ref_text) is None:
+                raise ValueError(f"memory_validation_failed: unknown memory ref={ref_text}")
+
+        entry = MemoryEntry(
+            entry_id=self._next_memory_id(),
+            round_number=round_number if round_number is not None else self.current_round(),
+            kind=kind,  # type: ignore[arg-type]
+            claim=claim,
+            anchors=tuple(resolved_anchors),
+            supports_option=option_id or None,
+            confidence=confidence,  # type: ignore[arg-type]
+            previous_memory_refs=tuple(str(ref) for ref in previous_memory_refs if str(ref).strip()),
+            tags=tuple(str(tag) for tag in tags),
+            created_at_sec=time.time(),
+            role=role,
+            layer=layer,
+            metadata=dict(metadata or {}),
+        )
+        self._append_jsonl("memory.jsonl", entry.to_dict())
+        self.write_trace_event(
+            "memory_written",
+            {
+                "entry_id": entry.entry_id,
+                "kind": entry.kind,
+                "supports_option": entry.supports_option or "",
+                "anchor_ids": [anchor.anchor_id for anchor in entry.anchors],
+            },
+        )
+        return entry
+
+    def memory_entries(self) -> list[MemoryEntry]:
+        return [MemoryEntry.from_mapping(row) for row in self._read_jsonl_dicts("memory.jsonl")]
+
+    def get_memory(self, entry_id: str) -> MemoryEntry | None:
+        for entry in self.memory_entries():
+            if entry.entry_id == str(entry_id):
+                return entry
+        return None
+
+    def current_round(self) -> int:
+        rounds = [
+            int(event.get("payload", {}).get("round", 0) or 0)
+            for event in self._read_jsonl_dicts("trace.jsonl")
+            if str(event.get("type", "")) == "iterative_round_start" and isinstance(event.get("payload"), Mapping)
+        ]
+        return max(rounds) if rounds else 0
+
+    def memory_snapshot_text(self, *, max_entries: int = 12) -> str:
+        entries = self.memory_entries()
+        if not entries:
+            return ""
+        lines: list[str] = []
+        for entry in entries[-max_entries:]:
+            support = f" {entry.supports_option}" if entry.supports_option else ""
+            lines.append(f"- {entry.entry_id} [{entry.kind}{support}, {entry.confidence}]")
+            lines.append(f"  claim: {entry.claim}")
+            if entry.anchors:
+                anchor_refs = ", ".join(f"{anchor.observation_id} / {anchor.anchor_id}" for anchor in entry.anchors)
+                lines.append(f"  anchors: {anchor_refs}")
+                excerpt = entry.anchors[0].excerpt
+                if excerpt:
+                    lines.append(f"  excerpt: \"{excerpt}\"")
+        return "\n".join(lines)
+
+    def uncommitted_observations_text(self, *, current_round: int | None = None, max_items: int = 8) -> str:
+        committed_observation_ids = {
+            anchor.observation_id
+            for entry in self.memory_entries()
+            for anchor in entry.anchors
+        }
+        lines: list[str] = []
+        for observation in self.read_observations():
+            if observation.observation_id in committed_observation_ids:
+                continue
+            anchors = self._anchors_for_observation(observation.observation_id)
+            if not anchors:
+                continue
+            segment = str(observation.raw_output.get("segment_id", "") or "")
+            label = f"{observation.tool}({segment})" if segment else observation.tool
+            lines.append(f"- {observation.observation_id} {label}")
+            claim = normalized_text(observation.claim)
+            if claim:
+                lines.append(f"  claim: {claim[:240]}")
+            lines.append("  anchors: " + ", ".join(anchor.anchor_id for anchor in anchors[:5]))
+            if len(lines) >= max_items * 3:
+                break
+        return "\n".join(lines)
+
+    def _anchors_for_observation(self, observation_id: str) -> list[SourceAnchor]:
+        return [anchor for anchor in self.read_produced_anchors() if anchor.observation_id == observation_id]
+
+    def _produced_anchors_for_observation(
+        self,
+        anchors: Any,
+        *,
+        observation_id: str,
+    ) -> list[SourceAnchor]:
+        if not isinstance(anchors, Sequence) or isinstance(anchors, (str, bytes)):
+            return []
+        resolved: list[SourceAnchor] = []
+        for item in anchors:
+            if not isinstance(item, Mapping):
+                continue
+            payload = dict(item)
+            if str(payload.get("observation_id", "")) in {"", "__pending__"}:
+                payload["observation_id"] = observation_id
+            resolved.append(SourceAnchor.from_mapping(payload))
+        return resolved
+
+    def _next_memory_id(self) -> str:
+        return f"mem_{len(self._read_jsonl_dicts('memory.jsonl')) + 1:04d}"
+
+    def _known_option_ids(self) -> set[str]:
+        registry = getattr(self, "target_registry", None)
+        options_by_id = getattr(registry, "options_by_id", {})
+        if isinstance(options_by_id, Mapping):
+            return {str(key) for key in options_by_id.keys()}
+        return set()
 
     def promote_textual_answer_evidence_payload(
         self,

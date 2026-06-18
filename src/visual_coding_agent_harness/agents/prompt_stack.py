@@ -46,6 +46,8 @@ SLOT_OF_BLOCK: Mapping[str, SlotName] = {
     "skill_catalog": "task",
     "trajectory_snapshot": "trajectory",
     "hypothesis": "hypothesis",
+    "memory_snapshot": "evidence",
+    "uncommitted_observations": "evidence",
     "evidence_snapshot": "evidence",
     "scene_index_snapshot": "scene_index",
     "normalization_notes": "feedback",
@@ -65,6 +67,8 @@ _RENDERED_SLOT_BLOCKS = frozenset(
         "base_identity",
         "route_playbook",
         "skill_catalog",
+        "memory_snapshot",
+        "uncommitted_observations",
         "evidence_snapshot",
         "normalization_notes",
         "answer_feedback",
@@ -109,6 +113,8 @@ def build_replanning_prompt(
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
+    memory_snapshot: str = "",
+    uncommitted_observations: str = "",
     evidence_status_summary: Mapping[str, Any] | None = None,
     recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
     exhausted_tools: frozenset[str] | None = None,
@@ -133,6 +139,8 @@ def build_replanning_prompt(
         normalization_notes=normalization_notes,
         hypothesis_text=hypothesis_text,
         reflection_memory=reflection_memory,
+        memory_snapshot=memory_snapshot,
+        uncommitted_observations=uncommitted_observations,
         evidence_status_summary=evidence_status_summary,
         recent_tool_outputs=recent_tool_outputs,
         exhausted_tools=exhausted_tools,
@@ -172,6 +180,8 @@ def compose_planner_prompts(
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
+    memory_snapshot: str = "",
+    uncommitted_observations: str = "",
     evidence_status_summary: Mapping[str, Any] | None = None,
     recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
     exhausted_tools: frozenset[str] | None = None,
@@ -200,6 +210,8 @@ def compose_planner_prompts(
             normalization_notes=normalization_notes,
             hypothesis_text=hypothesis_text,
             reflection_memory=reflection_memory,
+            memory_snapshot=memory_snapshot,
+            uncommitted_observations=uncommitted_observations,
             evidence_status_summary=evidence_status_summary,
             recent_tool_outputs=recent_tool_outputs,
             exhausted_tools=exhausted_tools,
@@ -226,6 +238,8 @@ def compose_planner_prompts(
         normalization_notes=normalization_notes,
         hypothesis_text=hypothesis_text,
         reflection_memory=reflection_memory,
+        memory_snapshot=memory_snapshot,
+        uncommitted_observations=uncommitted_observations,
         evidence_status_summary=evidence_status_summary,
         recent_tool_outputs=recent_tool_outputs,
         exhausted_tools=exhausted_tools,
@@ -337,6 +351,8 @@ def compose_replanning_prompt_slots(
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
+    memory_snapshot: str = "",
+    uncommitted_observations: str = "",
     evidence_status_summary: Mapping[str, Any] | None = None,
     recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
     exhausted_tools: frozenset[str] | None = None,
@@ -362,6 +378,8 @@ def compose_replanning_prompt_slots(
         normalization_notes=normalization_notes,
         hypothesis_text=hypothesis_text,
         reflection_memory=reflection_memory,
+        memory_snapshot=memory_snapshot,
+        uncommitted_observations=uncommitted_observations,
         evidence_status_summary=evidence_status_summary,
         recent_tool_outputs=recent_tool_outputs,
         exhausted_tools=exhausted_tools,
@@ -391,6 +409,8 @@ def compose_replanning_prompt_blocks(
     normalization_notes: Sequence[Any] = (),
     hypothesis_text: str = "",
     reflection_memory: Sequence[str] = (),
+    memory_snapshot: str = "",
+    uncommitted_observations: str = "",
     evidence_status_summary: Mapping[str, Any] | None = None,
     recent_tool_outputs: Sequence[Mapping[str, Any]] = (),
     exhausted_tools: frozenset[str] | None = None,
@@ -446,6 +466,16 @@ def compose_replanning_prompt_blocks(
                 budget=budget,
                 inspected_segment_ids=inspected_segment_ids,
             ),
+        ),
+        PromptBlock(
+            name="memory_snapshot",
+            title="Memory Snapshot",
+            body=memory_snapshot.strip() or "(none)",
+        ),
+        PromptBlock(
+            name="uncommitted_observations",
+            title="Uncommitted Observations",
+            body=uncommitted_observations.strip() or "(none)",
         ),
         PromptBlock(
             name="evidence_snapshot",
@@ -614,6 +644,7 @@ _GLOBAL_PROMPT_TOOL_NAMES = frozenset(
         "read_observation_detail",
         "grep_evidence",
         "read_timeline_sorted",
+        "write_memory",
     }
 )
 
@@ -684,6 +715,7 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         "read_timeline_sorted()",
         "read_hypothesis()",
         "update_hypothesis_slot(slot_name: str, status: str, evidence_obs_id: str = '')",
+        "write_memory(kind: str, claim: str, anchors: list, supports_option: str = '', confidence: str = 'medium', previous_memory_refs: list = [], tags: list = [])",
         "vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, additional_targets: list = [], event_label: str = '', nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
         inspect_schema,
         "caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, additional_targets: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
@@ -1093,7 +1125,10 @@ def _final_gate_block(
     lines.extend(_ROUTE_SPECIFIC_FINAL_RULES.get(str(route or ""), ()))
     lines.extend(_OPTION_BLIND_FINAL_RULES if option_blind else _OPTION_LABELED_FINAL_RULES)
     lines.append(
-        "- Final answers require at least one answer-grade citation from visual tools, indexed ASR/OCR, or QA evidence; navigation-only evidence and locate candidates are insufficient."
+        "- Use Memory as your working notebook: when tool output has useful ASR/OCR/visual/caption/retrieval content, call write_memory with real anchor ids."
+    )
+    lines.append(
+        "- Final answers require at least one citation to a real memory id or observation id; prefer citing Memory entries backed by direct ASR/OCR/visual/caption anchors."
     )
     if final_round_line:
         lines.append(final_round_line.strip())

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from visual_coding_agent_harness.memory import SourceAnchor
 from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
@@ -87,3 +88,36 @@ def test_recent_tool_outputs_returns_latest_three_with_raw_payload(tmp_path: Pat
     assert outputs[-1]["raw_output"]["visual_caption"] == "caption 3"
     assert outputs[-1]["raw_output"]["anchors_for_vlm"] == [{"segment_id": "seg_0003"}]
     assert len(outputs[-1]["raw_output"]["long_field"]) < 1200
+
+
+def test_write_memory_tool_persists_anchor_backed_memory(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_write_memory_tool")
+    workspace.write_produced_anchors(
+        [
+            SourceAnchor(
+                anchor_id="anch_seg_0005_asr_206",
+                observation_id="obs_0017",
+                source_kind="asr_cue",
+                segment_id="seg_0005",
+                cue_id="206",
+                field_path="asr_sentences[cue_id=206].text",
+                excerpt="Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe.",
+            )
+        ]
+    )
+    registry = build_workspace_primitives_registry(workspace=workspace)
+
+    result = registry.execute(
+        "write_memory",
+        {
+            "kind": "support",
+            "claim": "The narration says Austria-Hungary was a buffer.",
+            "anchors": [{"anchor_id": "anch_seg_0005_asr_206", "excerpt": "buffer between Russia and Western Europe"}],
+            "supports_option": "D",
+            "confidence": "high",
+        },
+    )
+
+    assert result["entry_id"] == "mem_0001"
+    assert result["claim"] == "Memory mem_0001 written."
+    assert workspace.memory_entries()[0].supports_option == "D"

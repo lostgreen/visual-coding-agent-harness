@@ -118,6 +118,7 @@ def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
         "search_segments",
         "caption_segment",
         "read_timeline_sorted",
+        "write_memory",
     ]
     for tool_name in runtime_spec_tools:
         runtime_spec = registry.get_runtime_spec(tool_name)

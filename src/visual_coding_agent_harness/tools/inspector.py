@@ -136,6 +136,14 @@ def build_segment_inspector_registry(
                 "event_label": resolved_event,
                 "time_range": time_range,
                 "grounding_quality": grounding_quality,
+                "produced_anchors": [
+                    _visual_anchor(
+                        segment_id=segment_id,
+                        start_sec=float(start_sec),
+                        end_sec=float(end_sec),
+                        excerpt=str(result.get("claim", "")),
+                    )
+                ],
             }
         )
         if confidence_signal:
@@ -370,6 +378,19 @@ def _append_additional_targets_to_question(question: str, additional_targets: Se
     base = str(question or "").strip()
     suffix = "Additional targets: " + "; ".join(extras)
     return f"{base}\n{suffix}" if base else suffix
+
+
+def _visual_anchor(*, segment_id: str, start_sec: float, end_sec: float, excerpt: str) -> Mapping[str, object]:
+    return {
+        "anchor_id": f"anch_{segment_id}_vis_001",
+        "observation_id": "__pending__",
+        "source_kind": "visual_fact",
+        "segment_id": segment_id,
+        "start_sec": float(start_sec),
+        "end_sec": float(end_sec),
+        "field_path": "claim",
+        "excerpt": excerpt,
+    }
 
 
 def _unique_nonempty_texts(values: Sequence[str]) -> list[str]:
