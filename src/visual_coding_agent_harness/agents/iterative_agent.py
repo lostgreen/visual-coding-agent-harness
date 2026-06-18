@@ -418,7 +418,7 @@ class IterativeVisualAgent:
         no_evidence_growth_rounds = 0
         memory_no_growth_rounds = 0
         last_evidence_table_row_count = self.workspace.evidence_table_row_count()
-        last_memory_count = len(self.workspace.memory_entries())
+        last_memory_anchor_ids = self.workspace.committed_memory_anchor_ids()
         all_segments_answer_attempted = False
         planner_final_verifier_disagreed = False
         planner_final_auto_final_blocked = False
@@ -1218,15 +1218,14 @@ class IterativeVisualAgent:
                         **(current_projection_status or {"status": "unsupported", "reason": "no_projection"}),
                     },
                 )
-            current_memory_count = len(self.workspace.memory_entries())
-            if current_memory_count <= last_memory_count:
+            current_memory_anchor_ids = self.workspace.committed_memory_anchor_ids()
+            new_committed_anchor_ids = current_memory_anchor_ids - last_memory_anchor_ids
+            if not new_committed_anchor_ids:
                 memory_no_growth_rounds += 1
             else:
                 memory_no_growth_rounds = 0
                 self._reset_route_repair_counts_for_supported_bindings(run_state=run_state)
-                run_state.program_key_counts.clear()
-                run_state.banned_program_keys.clear()
-            last_memory_count = current_memory_count
+            last_memory_anchor_ids = current_memory_anchor_ids
             if (
                 prefinal_evidence_repair_failed
                 and post_repair_action_rounds_remaining > 0
@@ -1259,7 +1258,7 @@ class IterativeVisualAgent:
                         "round": round_number,
                         "reason": "memory_no_growth",
                         "no_growth_rounds": memory_no_growth_rounds,
-                        "memory_count": current_memory_count,
+                        "committed_anchor_count": len(current_memory_anchor_ids),
                     },
                 )
                 run_state.answer_feedback = [
@@ -1965,7 +1964,8 @@ class IterativeVisualAgent:
                     "cited_memory_ids": list(decision.cited_memory_ids),
                     "cited_observation_ids": list(decision.cited_observation_ids),
                     "warnings": list(decision.warnings),
-                    "advisory_only": True,
+                    "mode": "minimal_blocking",
+                    "blocking": True,
                 },
             )
             if decision.accepted:
@@ -5485,6 +5485,8 @@ def _blocked_planner_final_reason(
                 "cited_memory_ids": list(decision.cited_memory_ids),
                 "cited_observation_ids": list(decision.cited_observation_ids),
                 "warnings": list(decision.warnings),
+                "mode": "minimal_blocking",
+                "blocking": True,
             },
         )
         if decision.accepted:

@@ -923,7 +923,7 @@ The prose says recovery_rules: this sentence must not define metadata.
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn('"source": "hard_skill_runtime"', trace)
 
-    def test_planner_final_accepts_real_observation_citation_under_minimal_gate(self):
+    def test_planner_final_rejects_raw_observation_citation_under_minimal_gate(self):
         backend = RecordingBackend(
             [
                 '{"status": "continue", "program": [{"tool": "video_ls", "args": {"query": "red car"}, "assign": "map"}]}',
@@ -955,7 +955,8 @@ The prose says recovery_rules: this sentence must not define metadata.
             self.assertEqual(result.final_decision_owner, "model")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertIn("final_integrity_diagnostics", trace)
-            self.assertIn('"gate_status": "accepted"', trace)
+            self.assertIn('"gate_status": "rejected"', trace)
+            self.assertIn("raw_observation_citation_without_memory", trace)
 
     def test_failure_reflection_memory_is_injected_after_parse_error(self):
         backend = RecordingBackend(

@@ -4599,10 +4599,12 @@ class IterativeAgentTest(unittest.TestCase):
                 budget=AgentBudget(max_rounds=1, reserve_final_round=False),
             )
 
-            result = agent.run(
-                question="Which option is supported?\nA. wrong option\nB. correct option from evidence",
-                video_path="/videos/demo.mp4",
-            )
+            with pytest.MonkeyPatch.context() as monkeypatch:
+                monkeypatch.setenv("HARNESS_ALLOW_RAW_OBS_FINAL_CITATION", "1")
+                result = agent.run(
+                    question="Which option is supported?\nA. wrong option\nB. correct option from evidence",
+                    video_path="/videos/demo.mp4",
+                )
 
             self.assertEqual(result.status, "final")
             self.assertEqual(result.answer, "A")

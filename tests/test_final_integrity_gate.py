@@ -1,6 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from visual_coding_agent_harness.agents.final_gate import evaluate_final_integrity
 from visual_coding_agent_harness.memory import SourceAnchor
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -45,6 +47,50 @@ def test_final_accepts_memory_citation_with_valid_anchor(tmp_path: Path) -> None
     assert decision.selected_option == "D"
     assert decision.cited_memory_ids == ("mem_0001",)
     assert decision.cited_observation_ids == ()
+
+
+def test_final_rejects_raw_observation_citation_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HARNESS_ALLOW_RAW_OBS_FINAL_CITATION", raising=False)
+    workspace = EvidenceWorkspace.create(tmp_path, "minimal_final_raw_obs")
+    observation = workspace.write_observation(
+        tool_name="vision_read",
+        claim="The door opens.",
+        confidence=0.9,
+        raw_output={"grounding_quality": "visually_confirmed"},
+    )
+
+    decision = evaluate_final_integrity(
+        selected_option="A",
+        citations=[observation.observation_id],
+        workspace=workspace,
+    )
+
+    assert not decision.accepted
+    assert decision.rejection_reason == "raw_observation_citation_without_memory"
+
+
+def test_final_allows_raw_observation_citation_with_explicit_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HARNESS_ALLOW_RAW_OBS_FINAL_CITATION", "1")
+    workspace = EvidenceWorkspace.create(tmp_path, "minimal_final_raw_obs_allowed")
+    observation = workspace.write_observation(
+        tool_name="vision_read",
+        claim="The door opens.",
+        confidence=0.9,
+        raw_output={"grounding_quality": "visually_confirmed"},
+    )
+
+    decision = evaluate_final_integrity(
+        selected_option="A",
+        citations=[observation.observation_id],
+        workspace=workspace,
+    )
+
+    assert decision.accepted
+    assert decision.cited_observation_ids == (observation.observation_id,)
+    assert "raw_observation_citation_without_memory" in decision.warnings
 
 
 def test_final_rejects_no_citation(tmp_path: Path) -> None:

@@ -13,7 +13,7 @@ def test_final_with_empty_hypothesis_slot_uses_minimal_integrity_gate(tmp_path: 
     class FinalBackend(VisionLanguageBackend):
         def generate(self, request: BackendRequest) -> BackendResponse:
             return BackendResponse(
-                text='{"status": "final", "answer": "The door opens.", "citations": ["obs_0001"], "confidence": 0.8}'
+                text='{"status": "final", "answer": "The door opens.", "citations": ["mem_0001"], "confidence": 0.8}'
             )
 
     workspace = EvidenceWorkspace.create(tmp_path, "hypothesis_empty")
@@ -21,7 +21,24 @@ def test_final_with_empty_hypothesis_slot_uses_minimal_integrity_gate(tmp_path: 
         tool_name="vision_read",
         claim="The door opens.",
         confidence=0.88,
-        raw_output={"grounding_quality": "visually_confirmed"},
+        raw_output={
+            "grounding_quality": "visually_confirmed",
+            "produced_anchors": [
+                {
+                    "anchor_id": "anch_obs_0001_door",
+                    "observation_id": "__pending__",
+                    "source_kind": "visual_fact",
+                    "field_path": "claim",
+                    "excerpt": "The door opens.",
+                }
+            ],
+        },
+    )
+    workspace.write_memory(
+        kind="support",
+        claim="The door opens.",
+        anchors=[{"anchor_id": "anch_obs_0001_door", "excerpt": "The door opens."}],
+        confidence="high",
     )
     workspace.write_hypothesis(
         {
@@ -46,6 +63,9 @@ def test_final_with_empty_hypothesis_slot_uses_minimal_integrity_gate(tmp_path: 
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
     assert "final_integrity_diagnostics" in trace
     assert '"gate_status": "accepted"' in trace
+    assert '"mode": "minimal_blocking"' in trace
+    assert '"blocking": true' in trace
+    assert '"advisory_only": true' not in trace
 
 
 def test_hypothesis_slot_in_replanning_prompt():

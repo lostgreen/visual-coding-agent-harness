@@ -115,9 +115,18 @@ def test_write_memory_tool_persists_anchor_backed_memory(tmp_path: Path):
             "anchors": [{"anchor_id": "anch_seg_0005_asr_206", "excerpt": "buffer between Russia and Western Europe"}],
             "supports_option": "D",
             "confidence": "high",
+            "role": "episodic",
+            "layer": "visual",
+            "embedding_refs": ["clip://seg_0005/frame_0012"],
+            "metadata": {"source": "planner"},
         },
     )
 
     assert result["entry_id"] == "mem_0001"
     assert result["claim"] == "Memory mem_0001 written."
-    assert workspace.memory_entries()[0].supports_option == "D"
+    entry = workspace.memory_entries()[0]
+    assert entry.supports_option == "D"
+    assert entry.role == "episodic"
+    assert entry.layer == "visual"
+    assert entry.embedding_refs == ("clip://seg_0005/frame_0012",)
+    assert entry.metadata == {"source": "planner"}

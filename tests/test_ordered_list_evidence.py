@@ -53,7 +53,8 @@ def test_match_observed_order_to_hypotheses_exact_option() -> None:
     assert match.option_id == "D"
 
 
-def test_read_segment_detail_promotes_ordered_list_evidence_for_option_d() -> None:
+def test_read_segment_detail_promotes_ordered_list_evidence_for_option_d(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_LEGACY_BINDER_TELEMETRY", "1")
     compiled = _compiled_order_plan()
     video_map = VideoMap(
         video_path="/videos/bernini.mp4",

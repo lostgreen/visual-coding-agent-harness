@@ -127,6 +127,10 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
         confidence: str = "medium",
         previous_memory_refs: Sequence[str] = (),
         tags: Sequence[str] = (),
+        role: str = "",
+        layer: str = "",
+        embedding_refs: Sequence[str] = (),
+        metadata: Mapping[str, Any] | None = None,
     ) -> Mapping[str, object]:
         if workspace is None:
             return {
@@ -143,6 +147,10 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
             confidence=confidence,
             previous_memory_refs=previous_memory_refs,
             tags=tags,
+            role=role,
+            layer=layer,
+            embedding_refs=embedding_refs,
+            metadata=metadata,
         )
         return {
             "claim": f"Memory {entry.entry_id} written.",

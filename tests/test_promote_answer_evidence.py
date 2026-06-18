@@ -254,7 +254,8 @@ def test_ordered_target_rows_project_to_matching_option_sequence():
     assert table["groups"]["A"] == []
 
 
-def test_post_observation_hook_grows_answer_evidence_after_one_detail_observation():
+def test_post_observation_hook_grows_answer_evidence_after_one_detail_observation(monkeypatch):
+    monkeypatch.setenv("HARNESS_LEGACY_BINDER_TELEMETRY", "1")
     with tempfile.TemporaryDirectory() as tmp:
         workspace = EvidenceWorkspace.create(Path(tmp), run_id="post_observation_growth")
         workspace.target_registry = _sequence_registry()

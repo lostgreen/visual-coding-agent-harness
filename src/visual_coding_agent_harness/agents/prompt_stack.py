@@ -715,7 +715,7 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         "read_timeline_sorted()",
         "read_hypothesis()",
         "update_hypothesis_slot(slot_name: str, status: str, evidence_obs_id: str = '')",
-        "write_memory(kind: str, claim: str, anchors: list, supports_option: str = '', confidence: str = 'medium', previous_memory_refs: list = [], tags: list = [])",
+        "write_memory(kind: str, claim: str, anchors: list, supports_option: str = '', confidence: str = 'medium', previous_memory_refs: list = [], tags: list = [], role: str = '', layer: str = '', embedding_refs: list = [], metadata: dict = {})",
         "vision_read(video_path: str, segment_id: str, start_sec: float, end_sec: float, ask_for: str, additional_targets: list = [], event_label: str = '', nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
         inspect_schema,
         "caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, additional_targets: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",

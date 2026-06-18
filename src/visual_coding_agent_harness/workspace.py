@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, field, replace
@@ -333,6 +334,7 @@ class EvidenceWorkspace:
         round_number: int | None = None,
         role: str | None = None,
         layer: str | None = None,
+        embedding_refs: Sequence[str] = (),
         metadata: Mapping[str, object] | None = None,
     ) -> MemoryEntry:
         if not anchors:
@@ -372,6 +374,7 @@ class EvidenceWorkspace:
             created_at_sec=time.time(),
             role=role,
             layer=layer,
+            embedding_refs=tuple(str(ref) for ref in embedding_refs if str(ref).strip()),
             metadata=dict(metadata or {}),
         )
         self._append_jsonl("memory.jsonl", entry.to_dict())
@@ -385,6 +388,14 @@ class EvidenceWorkspace:
             },
         )
         return entry
+
+    def committed_memory_anchor_ids(self) -> set[str]:
+        return {
+            anchor.anchor_id
+            for entry in self.memory_entries()
+            for anchor in entry.anchors
+            if anchor.anchor_id
+        }
 
     def memory_entries(self) -> list[MemoryEntry]:
         return [MemoryEntry.from_mapping(row) for row in self._read_jsonl_dicts("memory.jsonl")]
@@ -492,6 +503,8 @@ class EvidenceWorkspace:
         return promoted
 
     def _apply_post_observation_hooks(self, observation: Observation) -> Observation:
+        if not _legacy_binder_enabled():
+            return observation
         promoted_raw_output, generated_rows = self._promoted_textual_answer_evidence(
             tool_name=observation.tool,
             raw_output=observation.raw_output,
@@ -2072,6 +2085,12 @@ def _tool_allows_textual_promotion(*, tool_name: str, raw_output: Mapping[str, A
     if tool_name == "read_segment_detail":
         return bool(raw_output.get("promote_answer_evidence"))
     return tool_name in {"read_segment", "locate_targets_in_segment"}
+
+
+def _legacy_binder_enabled() -> bool:
+    if os.environ.get("HARNESS_FINAL_GATE_MODE", "").strip().lower() == "legacy":
+        return True
+    return os.environ.get("HARNESS_LEGACY_BINDER_TELEMETRY", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _workspace_registry_targets(workspace: EvidenceWorkspace) -> list[TargetSpec]:

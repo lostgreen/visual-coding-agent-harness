@@ -292,6 +292,10 @@ def _normalize_write_memory(_ctx: RunContext, request: ToolRequest) -> Mapping[s
         "confidence": _text(args.get("confidence")) or "medium",
         "previous_memory_refs": _string_list(args.get("previous_memory_refs")),
         "tags": _string_list(args.get("tags")),
+        "role": _text(args.get("role")),
+        "layer": _text(args.get("layer")),
+        "embedding_refs": _string_list(args.get("embedding_refs")),
+        "metadata": _canonical_value(args.get("metadata")) if isinstance(args.get("metadata"), Mapping) else {},
     }
 
 

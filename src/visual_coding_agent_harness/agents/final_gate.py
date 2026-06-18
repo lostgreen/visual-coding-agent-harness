@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -54,13 +55,14 @@ def evaluate_final_integrity(
         return _integrity_reject(
             option_id,
             "missing_citation",
-            "Final answers must cite at least one memory or observation id.",
+            "Final answers must cite at least one memory id.",
             cited_memory_ids=(),
             cited_observation_ids=(),
         )
 
     cited_memory_ids: list[str] = []
     cited_observation_ids: list[str] = []
+    warnings: list[str] = []
     anchor_by_id = workspace.read_produced_anchors_by_id()
     for citation in citation_ids:
         if citation.startswith("mem_"):
@@ -110,6 +112,14 @@ def evaluate_final_integrity(
             cited_memory_ids.append(citation)
             continue
         if citation.startswith("obs_"):
+            if not _allow_raw_observation_final_citation():
+                return _integrity_reject(
+                    option_id,
+                    "raw_observation_citation_without_memory",
+                    f"Final answers must cite planner memory, not raw observation {citation}.",
+                    cited_memory_ids=tuple(cited_memory_ids),
+                    cited_observation_ids=tuple(cited_observation_ids),
+                )
             if workspace.get_observation(citation) is None:
                 return _integrity_reject(
                     option_id,
@@ -119,6 +129,7 @@ def evaluate_final_integrity(
                     cited_observation_ids=tuple(cited_observation_ids),
                 )
             cited_observation_ids.append(citation)
+            warnings.append("raw_observation_citation_without_memory")
             continue
         return _integrity_reject(
             option_id,
@@ -128,7 +139,7 @@ def evaluate_final_integrity(
             cited_observation_ids=tuple(cited_observation_ids),
         )
 
-    warnings = _integrity_warnings(workspace=workspace, selected_option=option_id)
+    warnings.extend(_integrity_warnings(workspace=workspace, selected_option=option_id))
     return FinalIntegrityDecision(
         accepted=True,
         selected_option=option_id,
@@ -136,7 +147,7 @@ def evaluate_final_integrity(
         rejection_hint="",
         cited_memory_ids=tuple(cited_memory_ids),
         cited_observation_ids=tuple(cited_observation_ids),
-        warnings=warnings,
+        warnings=tuple(warnings),
     )
 
 
@@ -149,6 +160,10 @@ def _integrity_option_ids(workspace: Any) -> set[str]:
     if isinstance(options_by_id, dict):
         return {str(key) for key in options_by_id.keys()}
     return set()
+
+
+def _allow_raw_observation_final_citation() -> bool:
+    return os.environ.get("HARNESS_ALLOW_RAW_OBS_FINAL_CITATION", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _integrity_warnings(*, workspace: Any, selected_option: str) -> tuple[str, ...]:
