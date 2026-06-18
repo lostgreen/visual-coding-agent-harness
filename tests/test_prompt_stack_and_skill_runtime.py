@@ -2,6 +2,7 @@ import tempfile
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from visual_coding_agent_harness.agents.iterative_agent import (
     AgentBudget,
@@ -72,7 +73,6 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
                 "trajectory_snapshot",
                 "memory_snapshot",
                 "uncommitted_observations",
-                "evidence_snapshot",
                 "hypothesis",
                 "scene_index_snapshot",
                 "answer_feedback",
@@ -85,9 +85,10 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         )
         self.assertLess(prompt.index("# Base Identity"), prompt.index("# Route Playbook"))
         self.assertLess(prompt.index("# Route Playbook"), prompt.index("# Skill Catalog"))
-        self.assertLess(prompt.index("# Evidence Snapshot"), prompt.index("# Tool Schema"))
+        self.assertLess(prompt.index("# Memory Snapshot"), prompt.index("# Tool Schema"))
+        self.assertLess(prompt.index("# Uncommitted Observations"), prompt.index("# Tool Schema"))
         self.assertLess(prompt.index("# Compact Scene Index"), prompt.index("# Tool Schema"))
-        self.assertLess(prompt.index("# Evidence Snapshot"), prompt.index("# Hypothesis"))
+        self.assertNotIn("# Evidence Snapshot", prompt)
         self.assertIn("Allowed ReAct actions: ground_question, vision_read, answer_agent, verify", prompt)
         self.assertIn("Available skills:", prompt)
         self.assertIn('"skill": string', prompt)
@@ -99,7 +100,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("visual_timeline_qa@v1", prompt)
         self.assertNotIn("timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
-        self.assertIn("Final answers require at least one citation to a real memory id or observation id", prompt)
+        self.assertIn("Final answers require at least one citation to a real memory id", prompt)
 
     def test_memory_snapshot_and_uncommitted_observations_are_evidence_blocks(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
@@ -127,7 +128,8 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("mem_0001 [support D, high]", evidence_slot)
         self.assertIn("# Uncommitted Observations", evidence_slot)
         self.assertIn("obs_0017 read_segment_detail(seg_0005)", evidence_slot)
-        self.assertLess(evidence_slot.index("# Memory Snapshot"), evidence_slot.index("# Evidence Snapshot"))
+        self.assertLess(evidence_slot.index("# Memory Snapshot"), evidence_slot.index("# Uncommitted Observations"))
+        self.assertNotIn("# Evidence Snapshot", evidence_slot)
 
     def test_builtin_skill_playbooks_load_front_matter_and_body_for_planner(self):
         registry = builtin_skill_registry()
@@ -190,7 +192,7 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertLess(prompt.index("## Evidence"), prompt.index("## Compact scene index"))
         self.assertLess(prompt.index("## Compact scene index"), prompt.index("## Current budgets"))
         self.assertLess(prompt.index("## Current budgets"), prompt.index("## Tooling"))
-        self.assertIn("obs_0001 | red car", prompt)
+        self.assertNotIn("obs_0001 | red car", prompt)
         self.assertEqual(report.turn_index, 0)
         self.assertIn("task", report.used_tokens_per_slot)
         self.assertIn("tooling", report.used_tokens_per_slot)
@@ -255,29 +257,30 @@ The prose says recovery_rules: this sentence must not define metadata.
 
         self.assertEqual(prompt.count("Round: 2/4"), 1)
 
-    def test_replanning_prompt_includes_recent_tool_outputs_before_ledger(self):
+    def test_legacy_replanning_prompt_includes_recent_tool_outputs_before_ledger(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
         allocator = default_context_budget_allocator(total_budget_tokens=600)
 
-        prompt, _report = build_replanning_prompt(
-            question="What order is shown?",
-            scene_index=scene_index,
-            ledger_text="# Compact Evidence Context\nolder claim",
-            round_number=2,
-            budget=AgentBudget(max_rounds=3),
-            allocator=allocator,
-            recent_tool_outputs=[
-                {
-                    "observation_id": "obs_0007",
-                    "tool": "locate_targets_in_segment",
-                    "claim": "Locator found candidate anchors.",
-                    "raw_output": {
-                        "anchors_for_vlm": [{"segment_id": "seg_0002", "targets": ["David"]}],
-                        "ordered_list_timeline_rows": [],
-                    },
-                }
-            ],
-        )
+        with patch.dict("os.environ", {"HARNESS_LEGACY_PROMPT_EVIDENCE_SNAPSHOT": "1"}):
+            prompt, _report = build_replanning_prompt(
+                question="What order is shown?",
+                scene_index=scene_index,
+                ledger_text="# Compact Evidence Context\nolder claim",
+                round_number=2,
+                budget=AgentBudget(max_rounds=3),
+                allocator=allocator,
+                recent_tool_outputs=[
+                    {
+                        "observation_id": "obs_0007",
+                        "tool": "locate_targets_in_segment",
+                        "claim": "Locator found candidate anchors.",
+                        "raw_output": {
+                            "anchors_for_vlm": [{"segment_id": "seg_0002", "targets": ["David"]}],
+                            "ordered_list_timeline_rows": [],
+                        },
+                    }
+                ],
+            )
 
         self.assertIn("# Recent Tool Outputs", prompt)
         self.assertLess(prompt.index("# Recent Tool Outputs"), prompt.index("Evidence ledger:"))
@@ -538,29 +541,30 @@ The prose says recovery_rules: this sentence must not define metadata.
 
         self.assertIn("Main-idea answers", body)
 
-    def test_slot_prompt_includes_structured_evidence_status_summary(self):
+    def test_legacy_slot_prompt_includes_structured_evidence_status_summary(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
         allocator = default_context_budget_allocator(total_budget_tokens=800)
 
-        prompt, _report = build_replanning_prompt(
-            question="Which option is visible?\nA. blue car\nB. red aircraft",
-            scene_index=scene_index,
-            ledger_text="# Compact Evidence Context\nobs_0001 | red aircraft",
-            round_number=2,
-            budget=AgentBudget(max_rounds=4),
-            allocator=allocator,
-            evidence_status_summary={
-                "option_coverage": "1/2",
-                "coverage_pct": 0.5,
-                "duplicate_observations": 1,
-                "total_evidence_rows": 2,
-                "option_status": {
-                    "A": {"strong_evidence_count": 0, "weak_evidence_count": 0, "has_visual_citation": False},
-                    "B": {"strong_evidence_count": 2, "weak_evidence_count": 0, "has_visual_citation": True},
+        with patch.dict("os.environ", {"HARNESS_LEGACY_PROMPT_EVIDENCE_SNAPSHOT": "1"}):
+            prompt, _report = build_replanning_prompt(
+                question="Which option is visible?\nA. blue car\nB. red aircraft",
+                scene_index=scene_index,
+                ledger_text="# Compact Evidence Context\nobs_0001 | red aircraft",
+                round_number=2,
+                budget=AgentBudget(max_rounds=4),
+                allocator=allocator,
+                evidence_status_summary={
+                    "option_coverage": "1/2",
+                    "coverage_pct": 0.5,
+                    "duplicate_observations": 1,
+                    "total_evidence_rows": 2,
+                    "option_status": {
+                        "A": {"strong_evidence_count": 0, "weak_evidence_count": 0, "has_visual_citation": False},
+                        "B": {"strong_evidence_count": 2, "weak_evidence_count": 0, "has_visual_citation": True},
+                    },
+                    "hypothesis_gaps": ["entered upper class"],
                 },
-                "hypothesis_gaps": ["entered upper class"],
-            },
-        )
+            )
 
         self.assertIn("Evidence status summary:", prompt)
         self.assertIn("option_coverage: 1/2", prompt)

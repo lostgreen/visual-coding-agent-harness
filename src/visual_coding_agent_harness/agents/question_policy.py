@@ -47,7 +47,7 @@ class QuestionPlaybook:
                     "Local workers should report facts and presentation order only.",
                 ],
                 sufficiency_rules=[
-                    "Citations must include timestamped answer-grade visual, ASR, OCR, or QA evidence for the ordered events.",
+                    "Final memory must cite timestamped visual, ASR, OCR, or QA anchors for the ordered events.",
                     "Evidence must not conflict with the claimed temporal relation.",
                     "Record the observed order with segment or timestamp evidence before final handoff.",
                 ],
@@ -61,7 +61,7 @@ class QuestionPlaybook:
                 "Local workers should report facts only.",
             ],
             sufficiency_rules=[
-                "Final handoff needs cited answer-grade visual, ASR, OCR, or QA evidence.",
+                "Final handoff needs memory entries citing visual, ASR, OCR, or QA anchors.",
                 "State uncertainty when evidence is incomplete or ambiguous.",
             ],
         )
@@ -101,7 +101,7 @@ def select_question_playbook(question: str) -> QuestionPlaybook:
                 "Use local workers for open factual descriptions; use original options for planning/search only.",
             ],
             sufficiency_rules=[
-                "Citations must include timestamped answer-grade visual, ASR, OCR, or QA evidence for the ordered events.",
+                "Final memory must cite timestamped visual, ASR, OCR, or QA anchors for the ordered events.",
                 "Evidence must not conflict with the claimed temporal relation.",
                 "verify option consistency against the cited observation before final.",
             ],
@@ -118,7 +118,7 @@ def select_question_playbook(question: str) -> QuestionPlaybook:
                 "Avoid finalizing from navigation-only evidence.",
             ],
             sufficiency_rules=[
-                "At least one cited answer-grade visual, ASR, OCR, or QA observation must ground the selected option.",
+                "At least one memory entry with real visual, ASR, OCR, or QA anchors must ground the selected option.",
                 "verify option consistency against the cited observation before final.",
                 "Final answer should preserve the option letter when the user provided choices.",
             ],
@@ -132,7 +132,7 @@ def select_question_playbook(question: str) -> QuestionPlaybook:
             "Delegate visual reading to inspect_segment once a candidate is localized.",
         ],
         sufficiency_rules=[
-            "Final answers need cited answer-grade visual, ASR, OCR, or QA evidence.",
+            "Final answers need memory entries citing visual, ASR, OCR, or QA anchors.",
             "State uncertainty when evidence is incomplete or ambiguous.",
         ],
     )

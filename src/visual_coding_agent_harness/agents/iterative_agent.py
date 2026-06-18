@@ -29,7 +29,8 @@ from .final_control import (
     parse_model_final_response,
     recover_locked_answer_from_malformed_final,
 )
-from .final_gate import evaluate_final_candidate, evaluate_final_integrity
+from .final_gate import evaluate_final_integrity
+from .final_gate_legacy import evaluate_final_candidate
 from .followup import FollowupBudget, FollowupRoute, FollowupScheduler, FollowupTarget
 from .grounding import CompiledGroundingPlan, compile_fallback_plan, compile_grounding_plan, ground_question_with_model
 from .open_questions import QuestionContext, build_question_context, exploration_question, rewrite_exploration_question_with_model
@@ -415,9 +416,9 @@ class IterativeVisualAgent:
         repeated_program_key = ""
         repeated_program_count = 0
         invalid_failure_counts: dict[FailureSignature, int] = {}
-        no_evidence_growth_rounds = 0
+        observation_anchor_no_growth_rounds = 0
         memory_no_growth_rounds = 0
-        last_evidence_table_row_count = self.workspace.evidence_table_row_count()
+        last_observation_anchor_count = len(self.workspace.read_produced_anchors_by_id())
         last_memory_anchor_ids = self.workspace.committed_memory_anchor_ids()
         all_segments_answer_attempted = False
         planner_final_verifier_disagreed = False
@@ -613,7 +614,7 @@ class IterativeVisualAgent:
                         rationale=rationale,
                         executed_rounds=len(rounds),
                         supported_binding_no_growth_rounds=memory_no_growth_rounds,
-                        no_evidence_growth_rounds=no_evidence_growth_rounds,
+                        no_evidence_growth_rounds=observation_anchor_no_growth_rounds,
                         write_trace_event=self.workspace.write_trace_event,
                         recent_switches=tuple(run_state.skill_switch_history),
                     )
@@ -862,7 +863,7 @@ class IterativeVisualAgent:
                             "All your tool calls were filtered. Last reasons: " + ", ".join(reasons) + "."
                         ]
                 if (
-                    no_evidence_growth_rounds >= 2
+                    observation_anchor_no_growth_rounds >= 2
                     and not final_round_reserved
                     and program
                     and not _program_has_visual_evidence_tool(program)
@@ -884,7 +885,7 @@ class IterativeVisualAgent:
                             {
                                 "round": round_number,
                                 "reason": skip_reason,
-                                "trigger": "force_visual_after_no_evidence_growth",
+                                "trigger": "force_visual_after_observation_anchor_no_growth",
                             },
                         )
                     if forced_program:
@@ -896,9 +897,9 @@ class IterativeVisualAgent:
                         self.workspace.write_trace_event(
                             "exploration_policy_adjustment",
                             {
-                                "reason": "force_visual_after_no_evidence_growth",
+                                "reason": "force_visual_after_observation_anchor_no_growth",
                                 "round": round_number,
-                                "no_growth_rounds": no_evidence_growth_rounds,
+                                "no_growth_rounds": observation_anchor_no_growth_rounds,
                                 "skipped_tools": [str(step.get("tool", "")) for step in program],
                                 "resolved_program": forced_program,
                                 "mode": "append_visual_followup",
@@ -1202,12 +1203,12 @@ class IterativeVisualAgent:
                         "planner_action": "hint_only",
                     },
                 )
-            current_evidence_table_row_count = self.workspace.evidence_table_row_count()
-            if current_evidence_table_row_count <= last_evidence_table_row_count:
-                no_evidence_growth_rounds += 1
+            current_observation_anchor_count = len(self.workspace.read_produced_anchors_by_id())
+            if current_observation_anchor_count <= last_observation_anchor_count:
+                observation_anchor_no_growth_rounds += 1
             else:
-                no_evidence_growth_rounds = 0
-            last_evidence_table_row_count = current_evidence_table_row_count
+                observation_anchor_no_growth_rounds = 0
+            last_observation_anchor_count = current_observation_anchor_count
             current_projection_status = self._current_projection_status(raw_question)
             if current_projection_status != last_projection_status:
                 last_projection_status = current_projection_status
@@ -1264,7 +1265,7 @@ class IterativeVisualAgent:
                 run_state.answer_feedback = [
                     "Write memory from useful anchored observations, mark unhelpful observations rejected, or choose a different segment/tool."
                 ]
-            if no_evidence_growth_rounds >= 2 and not final_round_reserved:
+            if observation_anchor_no_growth_rounds >= 2 and current_observation_anchor_count > 0 and not final_round_reserved:
                 answer_result = AnswerAgent(self.backend).run(
                     question=raw_question,
                     evidence_text=self._read_ledger(),
@@ -1277,16 +1278,16 @@ class IterativeVisualAgent:
                 )
                 last_answer_agent_status = _answer_agent_status_payload(
                     answer_result,
-                    source="evidence_table_no_growth",
+                    source="observation_anchor_no_growth",
                     round_number=round_number,
                 )
                 self.workspace.write_trace_event(
                     "iterative_no_progress_guard",
                     {
                         "round": round_number,
-                        "reason": "evidence_table_no_growth",
-                        "no_growth_rounds": no_evidence_growth_rounds,
-                        "evidence_table_rows": current_evidence_table_row_count,
+                        "reason": "observation_anchor_no_growth",
+                        "no_growth_rounds": observation_anchor_no_growth_rounds,
+                        "observation_anchor_count": current_observation_anchor_count,
                         "answer_status": answer_result.status,
                     },
                 )
@@ -1296,7 +1297,7 @@ class IterativeVisualAgent:
                     video_path=video_path,
                     rounds=rounds,
                     round_number=round_number,
-                    source="evidence_table_no_growth",
+                    source="observation_anchor_no_growth",
                     program=program,
                     observation_ids=observation_ids,
                     remaining_rounds=self.budget.max_rounds - round_number,
@@ -1307,13 +1308,13 @@ class IterativeVisualAgent:
                     return low_confidence_result
                 if answer_result.status == "candidate" or answer_result.has_partial_support():
                     run_state.pending_inferences = [
-                        _answer_result_pending_inference(answer_result, source="evidence_table_no_growth")
+                        _answer_result_pending_inference(answer_result, source="observation_anchor_no_growth")
                     ]
                     self.workspace.write_trace_event(
                         "iterative_answer_suggestion",
                         {
                             "round": round_number,
-                            "source": "evidence_table_no_growth",
+                            "source": "observation_anchor_no_growth",
                             "answer": answer_result.answer,
                             "citations": list(answer_result.citations),
                             "confidence": answer_result.confidence,
@@ -1695,7 +1696,7 @@ class IterativeVisualAgent:
             question=question,
             video_path=video_path,
             answer=(
-                "Stopped because narration evidence repair did not produce answer-grade supported evidence "
+                "Stopped because narration evidence repair did not produce anchor-backed memory "
                 f"for candidate option {candidate_option or '(unknown)'}."
             ),
             status="evidence_repair_exhausted",
@@ -2698,8 +2699,8 @@ class IterativeVisualAgent:
             zero_yield_signature = _tool_call_signature(tool_name=tool_name, args=args)
             if zero_yield_signature in run_state.zero_yield_tool_signatures:
                 next_action = (
-                    f"The exact {tool_name} call already produced no answer-grade evidence. "
-                    "Use a different segment, target_refs, or evidence tool instead of repeating it."
+                    f"The exact {tool_name} call already produced no new anchors. "
+                    "Use a different segment, target_refs, or evidence tool before writing memory."
                 )
                 self.workspace.write_trace_event(
                     "zero_yield_tool_call_skipped",
@@ -6200,8 +6201,8 @@ def _cited_table_rows_satisfy_grounding_floor(
 def _reflection_rule_for_failure(failure_tag: str) -> str:
     rules = {
         "planner_json_parse_error": "return valid JSON matching the continue/final response contract before using tools",
-        "final_requires_non_navigation_visual_evidence": "cite answer-grade visual, ASR, OCR, or QA evidence before finalizing",
-        "final_requires_answer_grade_evidence": "cite answer-grade visual, ASR, OCR, or QA evidence before finalizing",
+        "final_requires_non_navigation_visual_evidence": "write memory from visual, ASR, OCR, or QA anchors before finalizing",
+        "final_requires_answer_grade_evidence": "write memory from visual, ASR, OCR, or QA anchors before finalizing",
         "mcq_final_requires_local_visual_read": "localize a candidate and call vision_read or inspect_segment before finalizing MCQ answers",
         "answer_agent_need_more_evidence": "request targeted evidence when AnswerAgent abstains instead of forcing an option",
         "selected_option_has_structured_support": "map options only from structured visual facts with candidate_option_relations",
@@ -6862,8 +6863,8 @@ def _budget_final_decision_prompt(
         "not as a framework-owned answer.\n"
         "If diagnostics say evidence is insufficient or ambiguous, do not upgrade weak or unmapped evidence into "
         "strong support.\n"
-        "Return a final answer only when the selected option has answer-grade evidence in the table or cited "
-        "ledger. If the available evidence is too thin, ambiguous, or missing required target support, return "
+        "Return a final answer only when the selected option has memory citations backed by real anchors. "
+        "If the available evidence is too thin, ambiguous, or missing required target support, return "
         "no_model_final with a concise reason instead of guessing.\n"
         "Return only JSON using one of these schemas:\n"
         '{"status":"final","answer":"A","citations":["obs_0001"],"evidence_ids":[],"confidence":0.0,'
@@ -7043,7 +7044,7 @@ def _timeline_decision_pending_inference(decision: Mapping[str, Any]) -> str:
     return (
         f"Timeline heuristic finds option {answer} is consistent with confirmed timeline rows: "
         f"{evidence_summary}. This is a pending inference, not an automatic final; decide whether to "
-        "finalize with answer-grade citations or gather more evidence."
+        "write anchor-backed memory for final citations or gather more evidence."
     )
 
 
@@ -8056,10 +8057,10 @@ def _supported_binding_no_growth_feedback(
     skill_locked: bool,
 ) -> list[str]:
     base = (
-        "No new supported evidence bindings appeared for three rounds; stay within the effective skill and "
-        "promote answer-grade evidence with evidence_binding.status=supported."
+        "No new anchor-backed memory entries appeared for three rounds; stay within the effective skill and "
+        "write memory from a different anchored observation."
         if skill_locked
-        else "No new supported evidence bindings appeared for three rounds; promote answer-grade evidence with evidence_binding.status=supported."
+        else "No new anchor-backed memory entries appeared for three rounds; write memory from a different anchored observation."
     )
     lines = [base]
     actionable = [

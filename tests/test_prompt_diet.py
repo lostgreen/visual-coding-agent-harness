@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from visual_coding_agent_harness.agents.context_budget import default_context_budget_allocator
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget
 from visual_coding_agent_harness.agents.prompt_stack import build_replanning_prompt
@@ -29,27 +31,28 @@ def test_catalog_compresses_when_active() -> None:
 
 def test_evidence_pointer_replaces_full_recent_tool_text() -> None:
     long_payload = {"transcript": "alpha " * 300, "segment_id": "seg_0001"}
-    prompt, _report = build_replanning_prompt(
-        question="What is visible?",
-        scene_index=fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=10.0, window_sec=5.0),
-        ledger_text="# Compact Evidence Context\n- `obs_0001` | ev: `ev_1` | claim: alpha",
-        round_number=2,
-        budget=AgentBudget(max_rounds=3),
-        allocator=default_context_budget_allocator(total_budget_tokens=12000),
-        recent_tool_outputs=[
-            {
-                "observation_id": "obs_0001",
-                "tool": "read_segment_detail",
-                "claim": "alpha",
-                "raw_output": long_payload,
-                "in_evidence_table": True,
-                "evidence_id": "ev_1",
-                "segment_id": "seg_0001",
-                "modality": "narrated_fact",
-                "verdict": "supported",
-            }
-        ],
-    )
+    with patch.dict("os.environ", {"HARNESS_LEGACY_PROMPT_EVIDENCE_SNAPSHOT": "1"}):
+        prompt, _report = build_replanning_prompt(
+            question="What is visible?",
+            scene_index=fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=10.0, window_sec=5.0),
+            ledger_text="# Compact Evidence Context\n- `obs_0001` | ev: `ev_1` | claim: alpha",
+            round_number=2,
+            budget=AgentBudget(max_rounds=3),
+            allocator=default_context_budget_allocator(total_budget_tokens=12000),
+            recent_tool_outputs=[
+                {
+                    "observation_id": "obs_0001",
+                    "tool": "read_segment_detail",
+                    "claim": "alpha",
+                    "raw_output": long_payload,
+                    "in_evidence_table": True,
+                    "evidence_id": "ev_1",
+                    "segment_id": "seg_0001",
+                    "modality": "narrated_fact",
+                    "verdict": "supported",
+                }
+            ],
+        )
 
     assert "[obs:obs_0001] segment=seg_0001 modality=narrated_fact verdict=supported -> see workspace/evidence_table.jsonl" in prompt
     assert "alpha alpha alpha alpha alpha alpha alpha alpha" not in prompt

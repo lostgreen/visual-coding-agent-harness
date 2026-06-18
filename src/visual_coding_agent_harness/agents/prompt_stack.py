@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -49,6 +50,7 @@ SLOT_OF_BLOCK: Mapping[str, SlotName] = {
     "memory_snapshot": "evidence",
     "uncommitted_observations": "evidence",
     "evidence_snapshot": "evidence",
+    "legacy_evidence_snapshot": "evidence",
     "scene_index_snapshot": "scene_index",
     "normalization_notes": "feedback",
     "answer_feedback": "feedback",
@@ -70,6 +72,7 @@ _RENDERED_SLOT_BLOCKS = frozenset(
         "memory_snapshot",
         "uncommitted_observations",
         "evidence_snapshot",
+        "legacy_evidence_snapshot",
         "normalization_notes",
         "answer_feedback",
         "diagnostic_repair_hint",
@@ -478,15 +481,6 @@ def compose_replanning_prompt_blocks(
             body=uncommitted_observations.strip() or "(none)",
         ),
         PromptBlock(
-            name="evidence_snapshot",
-            title="Evidence Snapshot",
-            body=_evidence_only_snapshot_block(
-                ledger_text=ledger_text,
-                evidence_status_summary=evidence_status_summary,
-                recent_tool_outputs=recent_tool_outputs,
-            ),
-        ),
-        PromptBlock(
             name="hypothesis",
             title="Hypothesis",
             body=_hypothesis_slot(hypothesis_text),
@@ -502,6 +496,19 @@ def compose_replanning_prompt_blocks(
             ),
         ),
     ]
+    if _legacy_prompt_evidence_snapshot_enabled():
+        blocks.insert(
+            6,
+            PromptBlock(
+                name="legacy_evidence_snapshot",
+                title="Legacy Evidence Snapshot",
+                body=_evidence_only_snapshot_block(
+                    ledger_text=ledger_text,
+                    evidence_status_summary=evidence_status_summary,
+                    recent_tool_outputs=recent_tool_outputs,
+                ),
+            ),
+        )
     if pending_inferences:
         rendered_pending = _dedupe_pending_inferences(pending_inferences)
         blocks.append(
@@ -676,9 +683,9 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         else "target_coverage(targets: list = [], top_k: int = 3, modalities: list = [], group_by_option: bool = False)"
     )
     read_segment_detail_schema = (
-        "read_segment_detail(segment_id: str, targets: list = [], target_refs: list = [], promote_answer_evidence: bool = False)"
+        "read_segment_detail(segment_id: str, targets: list = [], target_refs: list = [])"
         if include_target_refs
-        else "read_segment_detail(segment_id: str, targets: list = [], promote_answer_evidence: bool = False)"
+        else "read_segment_detail(segment_id: str, targets: list = [])"
     )
     locate_targets_schema = (
         "locate_targets_in_segment(segment_id: str, targets: list = [], target_refs: list = [], top_k_per_target: int = 3)"
@@ -721,6 +728,10 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         "caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, additional_targets: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
         "qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
     )
+
+
+def _legacy_prompt_evidence_snapshot_enabled() -> bool:
+    return os.environ.get("HARNESS_LEGACY_PROMPT_EVIDENCE_SNAPSHOT", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _skill_catalog_block(
@@ -1053,12 +1064,12 @@ def _evidence_only_snapshot_block(
 
 _ROUTE_AGNOSTIC_FINAL_RULES = (
     "- Use navigation output as a map, then delegate localized visual reading to one focused evidence tool on one candidate segment.",
-    "- Do not spend every round on navigation-only tools; gather evidence-grade visual observations before finalizing.",
+    "- Do not spend every round on navigation-only tools; gather anchored observations and write memory before finalizing.",
     "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.",
     "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.",
     "- Continue when evidence is missing, ambiguous, or too coarse.",
-    "- Use verify_ledger_answer before finalizing when answer support is uncertain.",
-    "- Final answers must cite observation ids from the ledger.",
+    "- Use verify_ledger_answer only as a diagnostic when answer support is uncertain.",
+    "- Final answers must cite memory ids written with real anchor ids.",
 )
 
 _TARGET_REF_FINAL_RULES = (
@@ -1080,11 +1091,11 @@ _ROUTE_SPECIFIC_FINAL_RULES: dict[str, tuple[str, ...]] = {
     ),
     "temporal_order": (
         "- For order/sequence questions, use target_coverage or scene-index ASR hints to pick a candidate segment, then call locate_targets_in_segment(segment_id, targets=[...]).",
-        "- A complete contiguous ASR enumeration may be answer-grade order evidence; promote the transcript sequence when route_kind=ordered_list_transcript_complete.",
+        "- A complete contiguous ASR enumeration may be useful order evidence; write memory citing its anchors when route_kind=ordered_list_transcript_complete.",
         "- Use focused vision only when the ASR list is partial, ambiguous, contradicted, or the question explicitly requires onscreen/visible order.",
         "- If locate_targets_in_segment returns recommended_next_actions with route_kind=focused_ordered_list_vision, execute that focused vision_read before anchor verification.",
         "- Use verify_segment_anchors only for separate individual-event anchors; do not use it as the main route for a single ordered-list scene.",
-        "- For narrated biography/life-order claims, use read_segment_detail(promote_answer_evidence=true) instead of visual-verifying abstract narrated facts.",
+        "- For narrated biography/life-order claims, use read_segment_detail and write memory from exact ASR anchors instead of visual-verifying abstract narrated facts.",
     ),
     "needle_local": (
         "- For needle questions, use target_coverage + read_segment_detail to localize the candidate segment.",
@@ -1128,7 +1139,7 @@ def _final_gate_block(
         "- Use Memory as your working notebook: when tool output has useful ASR/OCR/visual/caption/retrieval content, call write_memory with real anchor ids."
     )
     lines.append(
-        "- Final answers require at least one citation to a real memory id or observation id; prefer citing Memory entries backed by direct ASR/OCR/visual/caption anchors."
+        "- Final answers require at least one citation to a real memory id; raw observation citations are rejected unless an explicit fallback env flag is enabled."
     )
     if final_round_line:
         lines.append(final_round_line.strip())

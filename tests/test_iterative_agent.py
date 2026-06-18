@@ -923,7 +923,7 @@ def test_low_confidence_near_exhaustion_records_advisory_suggestion_only():
             video_path="/videos/asr.mp4",
             rounds=[],
             round_number=8,
-            source="evidence_table_no_growth",
+            source="observation_anchor_no_growth",
             remaining_rounds=2,
             supported_binding_no_growth_rounds=5,
         )
@@ -965,7 +965,7 @@ def test_low_confidence_near_exhaustion_does_not_finalize_after_auto_promotion_f
             video_path="/videos/asr.mp4",
             rounds=[],
             round_number=8,
-            source="evidence_table_no_growth",
+            source="observation_anchor_no_growth",
             remaining_rounds=2,
             supported_binding_no_growth_rounds=5,
         )
@@ -2113,11 +2113,22 @@ def build_segment_test_registry() -> ToolRegistry:
         question: str,
         nframes: int = 8,
     ):
+        claim = f"{segment_id} from {start_sec:.1f}s to {end_sec:.1f}s shows aircraft history."
         return {
-            "claim": f"{segment_id} from {start_sec:.1f}s to {end_sec:.1f}s shows aircraft history.",
+            "claim": claim,
             "confidence": 0.72,
             "input_artifacts": [video_path],
             "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec, "nframes": nframes}],
+            "produced_anchors": [
+                {
+                    "anchor_id": f"anch_{segment_id}_caption",
+                    "observation_id": "__pending__",
+                    "source_kind": "caption_fact",
+                    "segment_id": segment_id,
+                    "field_path": "claim",
+                    "excerpt": claim,
+                }
+            ],
         }
 
     registry.register(caption_segment)
@@ -2131,11 +2142,22 @@ def build_segment_test_registry() -> ToolRegistry:
         question: str,
         nframes: int = 8,
     ):
+        claim = f"{segment_id} from {start_sec:.1f}s to {end_sec:.1f}s answers: aircraft history."
         return {
-            "claim": f"{segment_id} from {start_sec:.1f}s to {end_sec:.1f}s answers: aircraft history.",
+            "claim": claim,
             "confidence": 0.78,
             "input_artifacts": [video_path],
             "regions": [{"segment_id": segment_id, "start_sec": start_sec, "end_sec": end_sec, "question": question, "nframes": nframes}],
+            "produced_anchors": [
+                {
+                    "anchor_id": f"anch_{segment_id}_qa",
+                    "observation_id": "__pending__",
+                    "source_kind": "visual_fact",
+                    "segment_id": segment_id,
+                    "field_path": "claim",
+                    "excerpt": claim,
+                }
+            ],
         }
 
     registry.register(qa_segment)
@@ -2150,8 +2172,9 @@ def build_segment_test_registry() -> ToolRegistry:
         candidate_options=None,
         nframes: int = 16,
     ):
+        claim = f"{segment_id} inspector answers: aircraft history."
         return {
-            "claim": f"{segment_id} inspector answers: aircraft history.",
+            "claim": claim,
             "confidence": 0.8,
             "input_artifacts": [video_path],
             "regions": [
@@ -2162,6 +2185,16 @@ def build_segment_test_registry() -> ToolRegistry:
                     "question": question,
                     "candidate_options": list(candidate_options or []),
                     "nframes": nframes,
+                }
+            ],
+            "produced_anchors": [
+                {
+                    "anchor_id": f"anch_{segment_id}_inspect",
+                    "observation_id": "__pending__",
+                    "source_kind": "visual_fact",
+                    "segment_id": segment_id,
+                    "field_path": "claim",
+                    "excerpt": claim,
                 }
             ],
         }
@@ -2289,7 +2322,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(len(backend.requests), 2)
             self.assertIn("Compact scene index", backend.requests[0].prompt)
             self.assertIn("seg_0002 [60.0-120.0s] aircraft museum", backend.requests[0].prompt)
-            self.assertIn("Evidence ledger", backend.requests[1].prompt)
+            self.assertIn("Uncommitted Observations", backend.requests[1].prompt)
             self.assertIn("aircraft history", backend.requests[1].prompt)
             ledger = (workspace.root / "ledger.md").read_text(encoding="utf-8")
             self.assertIn("seg_0002", ledger)
@@ -2394,7 +2427,8 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("search_segments(query", prompt)
             self.assertIn("read_segment(segment_id", prompt)
             self.assertIn("read_segment_detail(segment_id", prompt)
-            self.assertIn("promote_answer_evidence", prompt)
+            self.assertNotIn("promote_answer_evidence", prompt)
+            self.assertIn("write_memory(kind", prompt)
             self.assertIn("locate_targets_in_segment(segment_id", prompt)
             self.assertNotIn("target_refs: list", prompt)
             self.assertIn("No target_refs are registered for this run", prompt)
@@ -2415,7 +2449,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("Do not spend every round on navigation-only tools", prompt)
             self.assertIn("Local VLM tools must receive neutral factual prompts", prompt)
             self.assertIn("Use Memory as your working notebook", prompt)
-            self.assertIn("real memory id or observation id", prompt)
+            self.assertIn("real memory id", prompt)
 
     def test_option_blind_mcq_seeds_target_coverage_before_first_planner_round(self):
         class RewriteThenPlanBackend(ScriptedPlannerBackend):
@@ -2663,7 +2697,8 @@ class IterativeAgentTest(unittest.TestCase):
             agent.run(question="What happens?", video_path="/videos/demo.mp4")
 
             prompt = backend.requests[0].prompt
-            self.assertLess(prompt.index("Evidence ledger"), prompt.index("Available tools"))
+            self.assertLess(prompt.index("Memory Snapshot"), prompt.index("Available tools"))
+            self.assertLess(prompt.index("Uncommitted Observations"), prompt.index("Available tools"))
             self.assertLess(prompt.index("Compact scene index"), prompt.index("Available tools"))
             self.assertLess(prompt.index("Current budgets"), prompt.index("Available tools"))
             self.assertGreater(prompt.rindex("Return only JSON"), prompt.index("Available tools"))
@@ -2715,6 +2750,16 @@ class IterativeAgentTest(unittest.TestCase):
                 raw_output={
                     "grounding_quality": "visually_confirmed",
                     "candidate_option_relations": [{"option": "B", "relation": "support", "strength": 0.82}],
+                    "produced_anchors": [
+                        {
+                            "anchor_id": "anch_obs_0001_red_aircraft",
+                            "observation_id": "__pending__",
+                            "source_kind": "visual_fact",
+                            "segment_id": "seg_0001",
+                            "field_path": "claim",
+                            "excerpt": "The clip shows a red aircraft.",
+                        }
+                    ],
                 },
             )
             agent = IterativeVisualAgent(
@@ -2730,9 +2775,9 @@ class IterativeAgentTest(unittest.TestCase):
             )
 
             prompt = backend.requests[0].prompt
-            self.assertIn("Evidence status summary:", prompt)
-            self.assertIn("option_coverage: 1/2", prompt)
-            self.assertIn("B: strong=1 weak=0 visual=yes", prompt)
+            self.assertIn("# Uncommitted Observations", prompt)
+            self.assertIn("obs_0001 vision_read(seg_0001)", prompt)
+            self.assertIn("red aircraft", prompt)
 
     def test_gist_global_route_seeds_one_topic_hint_without_finalizing(self):
         backend = ScriptedPlannerBackend(
@@ -6654,7 +6699,19 @@ class IterativeAgentTest(unittest.TestCase):
                 confidence=0.8,
                 input_artifacts=["/videos/demo.mp4"],
                 regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 5.0}],
-                raw_output={"grounding_quality": "visually_confirmed"},
+                raw_output={
+                    "grounding_quality": "visually_confirmed",
+                    "produced_anchors": [
+                        {
+                            "anchor_id": "anch_obs_0001_red_object",
+                            "observation_id": "__pending__",
+                            "source_kind": "visual_fact",
+                            "segment_id": "seg_0001",
+                            "field_path": "claim",
+                            "excerpt": "A red object is visible.",
+                        }
+                    ],
+                },
             )
             workspace.write_ledger_entry(observation)
             agent = IterativeVisualAgent(
@@ -6675,7 +6732,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "no_model_final")
             self.assertEqual(result.answer, "")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("evidence_table_no_growth", trace)
+            self.assertIn("observation_anchor_no_growth", trace)
             self.assertIn("iterative_answer_suggestion", trace)
 
     def test_no_evidence_growth_appends_visual_read_to_navigation_only_plan(self):
@@ -6751,7 +6808,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertTrue(calls)
             self.assertNotEqual(calls[-1][0], "vision_read")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("force_visual_after_no_evidence_growth", trace)
+            self.assertIn("force_visual_after_observation_anchor_no_growth", trace)
             self.assertIn("silent_forced_visual_disabled", trace)
             self.assertNotIn("append_visual_followup", trace)
 
@@ -6905,11 +6962,8 @@ class IterativeAgentTest(unittest.TestCase):
                 [
                     "replan",
                     "replan",
-                    "answer_from_evidence",
                     "replan",
-                    "answer_from_evidence",
                     "replan",
-                    "answer_from_evidence",
                     "replan",
                     "answer_from_evidence",
                     "final_decision",
@@ -6918,7 +6972,7 @@ class IterativeAgentTest(unittest.TestCase):
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
             self.assertNotIn('"source": "all_segments_inspected"', trace)
             self.assertNotIn("iterative_finalization_ready", trace)
-            self.assertIn('"source": "evidence_table_no_growth"', trace)
+            self.assertNotIn('"source": "observation_anchor_no_growth"', trace)
             self.assertIn("silent_forced_visual_disabled", trace)
 
     def test_model_rewritten_mcq_is_used_for_planner_and_tools_only(self):
@@ -7061,7 +7115,7 @@ class IterativeAgentTest(unittest.TestCase):
         self.assertNotIn("A. The fall of Rome", joined)
         self.assertNotIn("Why the Austro-Hungarian Empire was divided", joined)
 
-    def test_repeated_empty_program_finalizes_from_answer_verifier_when_gate_passes(self):
+    def test_repeated_empty_program_ignores_legacy_rows_for_anchor_no_growth(self):
         class ShouldNotAnswerBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 if request.task == "answer_from_evidence":
@@ -7123,10 +7177,10 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "no_model_final")
             self.assertEqual(result.answer, "")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("source\": \"evidence_table_no_growth", trace)
-            self.assertIn("iterative_answer_suggestion", trace)
+            self.assertNotIn("source\": \"observation_anchor_no_growth", trace)
+            self.assertNotIn("iterative_answer_suggestion", trace)
 
-    def test_no_growth_guard_finalizes_from_answer_verifier_before_budget(self):
+    def test_no_growth_guard_ignores_legacy_rows_without_observation_anchors(self):
         class ShouldNotAnswerBackend(ScriptedPlannerBackend):
             def generate(self, request: BackendRequest) -> BackendResponse:
                 if request.task == "answer_from_evidence":
@@ -7189,8 +7243,8 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertEqual(result.status, "no_model_final")
             self.assertEqual(result.answer, "")
             trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-            self.assertIn("source\": \"evidence_table_no_growth", trace)
-            self.assertIn("iterative_answer_suggestion", trace)
+            self.assertNotIn("source\": \"observation_anchor_no_growth", trace)
+            self.assertNotIn("iterative_answer_suggestion", trace)
 
     def test_navigation_only_no_growth_forces_visual_read_on_requested_segment(self):
         class NavThenAnswerBackend(VisionLanguageBackend):

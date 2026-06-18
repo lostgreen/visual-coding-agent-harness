@@ -716,7 +716,20 @@ def test_all_programs_in_logical_round_share_budget(tmp_path) -> None:
 
     @tool(name="probe", description="Consume one planner tool call.")
     def probe(value: str):
-        return {"claim": f"probe {value}", "confidence": 0.4}
+        return {
+            "claim": f"probe {value}",
+            "confidence": 0.4,
+            "produced_anchors": [
+                {
+                    "anchor_id": "anch_probe_alpha",
+                    "observation_id": "__pending__",
+                    "source_kind": "asr_fact",
+                    "segment_id": "seg_0001",
+                    "field_path": "claim",
+                    "excerpt": "probe alpha",
+                }
+            ],
+        }
 
     @tool(name="bind_asr_claim", description="Bind transcript claim to target refs.")
     def bind_asr_claim(segment_id: str, target_refs: list[str]):

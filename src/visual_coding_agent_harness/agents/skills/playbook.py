@@ -116,16 +116,16 @@ def _select_present_playbook() -> Playbook:
         skill_name="grounded_factual_qa",
         answer_operator="select_present",
         decomposition=(
-            "For each option, create one affirmable target. The selected answer is the option with supported "
-            "answer-grade evidence."
+            "For each option, create one affirmable target. The selected answer is the option grounded by memory "
+            "entries that cite real anchors."
         ),
         evidence_shape_target=(
-            "candidate option has at least one supported binding",
-            "evidence is answer-grade, not navigation-only",
+            "candidate option has at least one memory entry with real anchors",
+            "anchor-backed memory is not navigation-only",
             "if two options share atoms, use discriminative aliases",
         ),
         investigation_hints=(
-            "Localize likely evidence before asking a visual or transcript tool to bind the target.",
+            "Localize likely evidence before asking a visual or transcript tool to produce anchors.",
             "Prefer direct support for the option claim over broad topical overlap.",
         ),
         unsafe_final_conditions=(
@@ -133,9 +133,9 @@ def _select_present_playbook() -> Playbook:
             "top candidates share unresolved atoms",
         ),
         stop_diagnostics=(
-            StopDiagnostic("candidate_binding_missing", "candidate lacks supported binding", "probe candidate target"),
+            StopDiagnostic("candidate_binding_missing", "candidate lacks anchor-backed memory", "probe candidate target"),
             StopDiagnostic("top2_ambiguous", "top candidates remain tied", "probe discriminative atom"),
-            StopDiagnostic("navigation_only", "support is navigation-only", "localize then read or bind answer-grade evidence"),
+            StopDiagnostic("navigation_only", "support is navigation-only", "localize then read evidence anchors"),
         ),
     )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from visual_coding_agent_harness.agents.contracts import OptionEvaluation
-from visual_coding_agent_harness.agents.final_gate import evaluate_final_candidate
+from visual_coding_agent_harness.agents.final_gate_legacy import evaluate_final_candidate
 from visual_coding_agent_harness.contracts import OptionSpec, TargetRegistry, TargetSpec
 
 

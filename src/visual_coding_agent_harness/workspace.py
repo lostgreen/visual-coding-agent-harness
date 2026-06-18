@@ -294,7 +294,16 @@ class EvidenceWorkspace:
         )
         self._append_jsonl("observations.jsonl", asdict(observation))
         if produced_anchors:
-            self.write_produced_anchors(produced_anchors)
+            written_anchors = self.write_produced_anchors(produced_anchors)
+            self.write_trace_event(
+                "observation_anchors_registered",
+                {
+                    "observation_id": observation_id,
+                    "tool": tool_name,
+                    "anchor_ids": [anchor.anchor_id for anchor in written_anchors],
+                    "anchor_count": len(written_anchors),
+                },
+            )
         return self._apply_post_observation_hooks(observation)
 
     def write_produced_anchors(self, anchors: Sequence[SourceAnchor | Mapping[str, Any]]) -> list[SourceAnchor]:
@@ -379,7 +388,7 @@ class EvidenceWorkspace:
         )
         self._append_jsonl("memory.jsonl", entry.to_dict())
         self.write_trace_event(
-            "memory_written",
+            "memory_entry_written",
             {
                 "entry_id": entry.entry_id,
                 "kind": entry.kind,
@@ -388,6 +397,9 @@ class EvidenceWorkspace:
             },
         )
         return entry
+
+    def write_memory_entry(self, **kwargs: Any) -> MemoryEntry:
+        return self.write_memory(**kwargs)
 
     def committed_memory_anchor_ids(self) -> set[str]:
         return {
@@ -405,6 +417,9 @@ class EvidenceWorkspace:
             if entry.entry_id == str(entry_id):
                 return entry
         return None
+
+    def read_memory_by_id(self, entry_id: str) -> MemoryEntry | None:
+        return self.get_memory(entry_id)
 
     def current_round(self) -> int:
         rounds = [
@@ -444,7 +459,7 @@ class EvidenceWorkspace:
             anchors = self._anchors_for_observation(observation.observation_id)
             if not anchors:
                 continue
-            segment = str(observation.raw_output.get("segment_id", "") or "")
+            segment = _observation_segment_id(observation)
             label = f"{observation.tool}({segment})" if segment else observation.tool
             lines.append(f"- {observation.observation_id} {label}")
             claim = normalized_text(observation.claim)
@@ -454,6 +469,34 @@ class EvidenceWorkspace:
             if len(lines) >= max_items * 3:
                 break
         return "\n".join(lines)
+
+    def uncommitted_observations(self) -> list[dict[str, Any]]:
+        committed_observation_ids = {
+            anchor.observation_id
+            for entry in self.memory_entries()
+            for anchor in entry.anchors
+        }
+        observations: list[dict[str, Any]] = []
+        for observation in self.read_observations():
+            if observation.observation_id in committed_observation_ids:
+                continue
+            anchors = self._anchors_for_observation(observation.observation_id)
+            if not anchors:
+                continue
+            observations.append(
+                {
+                    "observation_id": observation.observation_id,
+                    "tool": observation.tool,
+                    "segment_id": _observation_segment_id(observation),
+                    "claim": observation.claim,
+                    "anchor_ids": [anchor.anchor_id for anchor in anchors],
+                    "anchors": [anchor.to_dict() for anchor in anchors],
+                }
+            )
+        return observations
+
+    def observation_anchors(self, observation_id: str) -> list[SourceAnchor]:
+        return self._anchors_for_observation(observation_id)
 
     def _anchors_for_observation(self, observation_id: str) -> list[SourceAnchor]:
         return [anchor for anchor in self.read_produced_anchors() if anchor.observation_id == observation_id]
@@ -3486,11 +3529,15 @@ def _evidence_provenance_fields(source: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _observation_segment_id(observation: Mapping[str, Any]) -> str:
-    raw_output = observation.get("raw_output", {})
+def _observation_segment_id(observation: Observation | Mapping[str, Any]) -> str:
+    if isinstance(observation, Observation):
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        regions = observation.regions
+    else:
+        raw_output = observation.get("raw_output", {})
+        regions = observation.get("regions", [])
     if isinstance(raw_output, Mapping) and raw_output.get("segment_id"):
         return str(raw_output.get("segment_id"))
-    regions = observation.get("regions", [])
     if isinstance(regions, Sequence) and not isinstance(regions, (str, bytes)):
         for region in regions:
             if isinstance(region, Mapping) and region.get("segment_id"):
