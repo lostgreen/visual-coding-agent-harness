@@ -12,7 +12,9 @@ recovery_rules:
     action: ask_answer_agent_to_abstain
     target: unresolved factual ambiguity
 self_check:
-  citations: decision.citations all visually_confirmed
+  citations: final citations are mem_ ids
+  anchors: cited memory entries have real anchors
+  modalities: use visual anchors when the selected claim is visually observable; use ASR/OCR/caption anchors when the selected claim is narrated or textual
 ---
 # Grounded Factual QA
 
@@ -24,4 +26,6 @@ Planner playbook:
 - Final answers need memory citations backed by real anchors for the selected claim.
 
 Final check:
-- decision.citations all visually_confirmed
+- final citations are mem_ ids
+- cited memory entries have real anchors
+- use visual anchors when the selected claim is visually observable; use ASR/OCR/caption anchors when the selected claim is narrated or textual

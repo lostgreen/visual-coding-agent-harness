@@ -4,6 +4,7 @@ from unittest.mock import patch
 from visual_coding_agent_harness.agents.context_budget import default_context_budget_allocator
 from visual_coding_agent_harness.agents.iterative_agent import AgentBudget
 from visual_coding_agent_harness.agents.prompt_stack import build_replanning_prompt
+from visual_coding_agent_harness.agents.skills.specs import builtin_skill_registry
 from visual_coding_agent_harness.memory import SourceAnchor
 from visual_coding_agent_harness.video_index import fixed_window_scene_index
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -96,6 +97,18 @@ def test_default_prompt_does_not_expose_legacy_evidence_tools() -> None:
     assert "promote indexed ASR cue_ids into supported evidence" not in prompt
     assert "supported evidence" not in prompt
     assert "answer-grade" not in prompt
+
+
+def test_default_skill_playbooks_do_not_require_visually_confirmed_citations() -> None:
+    source = _source("src/visual_coding_agent_harness/agents/skills/playbooks/grounded_factual_qa.md")
+    skill = builtin_skill_registry().get("grounded_factual_qa")
+    rendered = skill.prompt_context()
+
+    for text in (source, rendered, "\n".join(skill.self_check)):
+        assert "decision.citations all visually_confirmed" not in text
+    assert "final citations are mem_ ids" in source
+    assert "final citations are mem_ ids" in "\n".join(skill.self_check)
+    assert "memory entries that cite real anchors" in rendered
 
 
 def test_legacy_prompt_tools_are_env_gated() -> None:

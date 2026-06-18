@@ -80,7 +80,11 @@ def test_grounded_factual_playbook_retains_merged_final_check():
     skill = builtin_skill_registry().get("grounded_factual_qa")
 
     assert skill.recovery["insufficient"]["target"] == "distinguishing fact window"
-    assert skill.self_check == ("decision.citations all visually_confirmed",)
+    assert set(skill.self_check) == {
+        "final citations are mem_ ids",
+        "cited memory entries have real anchors",
+        "use visual anchors when the selected claim is visually observable; use ASR/OCR/caption anchors when the selected claim is narrated or textual",
+    }
 
 
 def test_skill_spec_decomposition():
