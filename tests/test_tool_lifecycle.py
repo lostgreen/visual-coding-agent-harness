@@ -20,6 +20,7 @@ from visual_coding_agent_harness.protocol import ToolRequest, ToolResult
 from visual_coding_agent_harness.registry import DuplicateGuardPolicy, ToolError, ToolRegistry, ToolRuntimeSpec, tool
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.runtime_specs import install_video_runtime_specs
+from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -58,14 +59,17 @@ def test_runtime_spec_commit_required_metadata_defaults_and_survives_updates() -
     def echo(value: str):
         return {"value": value}
 
+    predicate = object()
     registry = ToolRegistry()
     registry.register(ToolRuntimeSpec(tool_spec=echo))
 
     assert registry.get_runtime_spec("echo").commit_required is False
+    assert registry.get_runtime_spec("echo").commit_required_predicate is None
 
-    registry.replace_runtime_spec("echo", commit_required=True)
+    registry.replace_runtime_spec("echo", commit_required=True, commit_required_predicate=predicate)
 
     assert registry.get_runtime_spec("echo").commit_required is True
+    assert registry.get_runtime_spec("echo").commit_required_predicate is predicate
 
 
 def test_registry_extend_preserves_runtime_spec_metadata() -> None:
@@ -83,6 +87,7 @@ def test_registry_extend_preserves_runtime_spec_metadata() -> None:
             semantic_key_builder=key_builder,
             duplicate_guard_policy=DuplicateGuardPolicy.ADVISORY,
             commit_required=True,
+            commit_required_predicate=normalizer,
         )
     )
     parent = ToolRegistry()
@@ -94,6 +99,7 @@ def test_registry_extend_preserves_runtime_spec_metadata() -> None:
     assert runtime_spec.semantic_key_builder is key_builder
     assert runtime_spec.duplicate_guard_policy is DuplicateGuardPolicy.ADVISORY
     assert runtime_spec.commit_required is True
+    assert runtime_spec.commit_required_predicate is normalizer
 
 
 def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
@@ -156,12 +162,50 @@ def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
     assert registry.get_runtime_spec("vision_read").commit_required is True
     assert registry.get_runtime_spec("verify_segment_anchors").commit_required is True
     assert registry.get_runtime_spec("read_clip").commit_required is True
-    assert registry.get_runtime_spec("verify").commit_required is True
+    assert registry.get_runtime_spec("verify").commit_required is False
+    assert registry.get_runtime_spec("verify").commit_required_predicate is not None
     assert registry.get_runtime_spec("synthesize_memory").commit_required is False
     assert registry.get_runtime_spec("search_segments").commit_required is False
     assert registry.get_runtime_spec("search").commit_required is False
+    assert registry.get_runtime_spec("search").commit_required_predicate is not None
     assert registry.get_runtime_spec("list").commit_required is False
     assert registry.get_runtime_spec("commit_observation").commit_required is False
+
+
+def test_synthesize_memory_normalizer_ignores_planner_evidence_obs_ids(tmp_path) -> None:
+    class StaticBackend(VisionLanguageBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            return BackendResponse(text="")
+
+    workspace = EvidenceWorkspace.create(tmp_path, "synthesize_normalizer")
+    video_map = VideoMap(video_path="/videos/demo.mp4", duration_sec=10.0, segments=[])
+    registry = install_video_runtime_specs(
+        build_workspace_v2_registry(video_map=video_map, backend=StaticBackend(), workspace=workspace)
+    )
+    ctx = RunContext(
+        workspace=workspace,
+        scene_index=None,
+        budget=None,
+        run_state=RunState(question="q", video_path="/videos/demo.mp4"),
+        round_state=RoundState(round_number=1),
+        registry=registry,
+    )
+
+    requests = ProgramNormalizer(registry).normalize(
+        [
+            {
+                "tool": "synthesize_memory",
+                "args": {
+                    "claim": "derived",
+                    "supports": ["mem_0001"],
+                    "evidence_obs_ids": ["obs_9999"],
+                },
+            }
+        ],
+        ctx=ctx,
+    )
+
+    assert "evidence_obs_ids" not in requests[0].arguments
 
 
 def test_video_runtime_spec_required_mode_rejects_missing_core_tool() -> None:

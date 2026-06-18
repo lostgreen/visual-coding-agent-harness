@@ -20,6 +20,9 @@ MemoryKind = Literal[
     "hypothesis",
     "open_question",
     "synthesized",
+    "synthesized_support",
+    "answer_conflict_resolved",
+    "unverified_capture",
 ]
 MemoryConfidence = Literal["high", "medium", "low"]
 
@@ -113,6 +116,9 @@ def _memory_kind(value: Any) -> MemoryKind:
         "hypothesis",
         "open_question",
         "synthesized",
+        "synthesized_support",
+        "answer_conflict_resolved",
+        "unverified_capture",
     }:
         return text  # type: ignore[return-value]
     raise ValueError(f"memory_validation_failed: unknown kind={text}")

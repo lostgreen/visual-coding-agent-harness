@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
@@ -9,6 +10,9 @@ from ..registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
 from ..video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_modalities, search_modality_limitations
 from ..workspace import EvidenceWorkspace
 from .workspace_primitives import build_workspace_primitives_registry
+
+
+ANSWER_SUPPORTING_KINDS = frozenset({"answer_support", "synthesized_support", "answer_conflict_resolved"})
 
 
 def build_workspace_v2_registry(
@@ -58,20 +62,37 @@ def build_workspace_v2_registry(
             )
         )
         fact_text = str(response.text or "").strip()
-        source_kind = _source_kind_from_focus(focus_items)
-        anchor_id = f"clip_anch_{segment.segment_id}_{int(start_sec * 1000):08d}_{int(end_sec * 1000):08d}"
+        raw_backend = dict(response.raw or {})
+        fallback_source_kind = _source_kind_from_backend(raw_backend, focus_items)
+        facts = _facts_from_backend_response(
+            text=fact_text,
+            raw_backend=raw_backend,
+            fallback_source_kind=fallback_source_kind,
+            time_range=[start_sec, end_sec],
+        )
+        base_anchor_id = f"clip_anch_{segment.segment_id}_{int(start_sec * 1000):08d}_{int(end_sec * 1000):08d}"
+        produced_anchors = []
+        for index, fact in enumerate(facts):
+            source_kind = str(fact.get("source_kind") or fallback_source_kind)
+            anchor_id = base_anchor_id if len(facts) == 1 else f"{base_anchor_id}_{index + 1:02d}"
+            produced_anchors.append(
+                {
+                    "anchor_id": anchor_id,
+                    "observation_id": "__pending__",
+                    "source_kind": source_kind,
+                    "segment_id": segment.segment_id,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "field_path": f"facts[{index}].text",
+                    "excerpt": str(fact.get("text") or ""),
+                    "frame_refs": list(fact.get("frames_used") or []),
+                    "modality": _anchor_modality(source_kind),
+                }
+            )
         return {
             "claim": fact_text,
             "confidence": 0.74,
-            "facts": [
-                {
-                    "text": fact_text,
-                    "source_kind": source_kind,
-                    "confidence": 0.74,
-                    "time_range": [start_sec, end_sec],
-                    "frames_used": [],
-                }
-            ],
+            "facts": facts,
             "regions": [
                 {
                     "segment_id": segment.segment_id,
@@ -81,23 +102,10 @@ def build_workspace_v2_registry(
                 }
             ],
             "time_range": [start_sec, end_sec],
-            "candidate_anchor_ids": [anchor_id],
-            "produced_anchors": [
-                {
-                    "anchor_id": anchor_id,
-                    "observation_id": "__pending__",
-                    "source_kind": source_kind,
-                    "segment_id": segment.segment_id,
-                    "start_sec": start_sec,
-                    "end_sec": end_sec,
-                    "field_path": "facts[0].text",
-                    "excerpt": fact_text,
-                    "frame_refs": [],
-                    "modality": _anchor_modality(source_kind),
-                }
-            ],
+            "candidate_anchor_ids": [str(anchor["anchor_id"]) for anchor in produced_anchors],
+            "produced_anchors": produced_anchors,
             "limitations": "Facts-only clip read; no answer option vote is emitted.",
-            "raw_backend": dict(response.raw),
+            "raw_backend": raw_backend,
         }
 
     @tool(name="search", description="Search substrate indexes and return candidate-only hits.")
@@ -188,7 +196,12 @@ def build_workspace_v2_registry(
     def verify(claim: str, against: Mapping[str, Any]) -> Mapping[str, object]:
         del claim
         citations = [str(item).strip() for item in _sequence_items(against.get("citations")) if str(item).strip()]
-        accepted, reason = _verify_citations(workspace, citations, require_memory=bool(against.get("final")))
+        accepted, reason = _verify_citations(
+            workspace,
+            citations,
+            require_memory=bool(against.get("final")),
+            require_answer_support=bool(against.get("final")),
+        )
         return {
             "claim": "Provenance gate accepted." if accepted else f"Provenance gate rejected: {reason}",
             "confidence": 1.0 if accepted else 0.0,
@@ -220,11 +233,16 @@ def build_workspace_v2_registry(
         missing = [memory_id for memory_id in support_ids + derived_ids if memory_id not in memory_by_id]
         if missing:
             raise ValueError("synthesize_memory_failed: unknown memory id: " + ", ".join(missing))
+        unsupported_supports = [
+            memory_id
+            for memory_id in support_ids
+            if memory_by_id[memory_id].kind not in ANSWER_SUPPORTING_KINDS
+        ]
+        if unsupported_supports:
+            kinds = ", ".join(f"{memory_id}:{memory_by_id[memory_id].kind}" for memory_id in unsupported_supports)
+            raise ValueError("synthesize_memory_failed: supporting memory kind required for " + kinds)
 
-        observation_ids = _unique_nonempty(evidence_obs_ids)
-        missing_observations = [obs_id for obs_id in observation_ids if workspace.get_observation(obs_id) is None]
-        if missing_observations:
-            raise ValueError("synthesize_memory_failed: unknown observation id: " + ", ".join(missing_observations))
+        del evidence_obs_ids
 
         anchor_ids = _unique_nonempty(
             anchor.anchor_id
@@ -234,8 +252,9 @@ def build_workspace_v2_registry(
         if not anchor_ids:
             raise ValueError("synthesize_memory_failed: supports do not contain anchors")
         lineage = _unique_nonempty([*support_ids, *derived_ids])
+        provenance_obs_ids = _provenance_observation_ids(memory_by_id, lineage)
         entry = workspace.write_memory(
-            kind="synthesized",
+            kind="synthesized_support",
             claim=str(claim),
             anchors=[{"anchor_id": anchor_id} for anchor_id in anchor_ids],
             supports_option=supports_option,
@@ -248,7 +267,7 @@ def build_workspace_v2_registry(
                 "tool": "synthesize_memory",
                 "supports": support_ids,
                 "derived_from": derived_ids,
-                "evidence_obs_ids": observation_ids,
+                "evidence_obs_ids": provenance_obs_ids,
             },
         )
         return {
@@ -264,7 +283,12 @@ def build_workspace_v2_registry(
     @tool(name="answer", description="Validate and return a final answer with committed workspace citations.")
     def answer(text: str, citations: Sequence[str], confidence: str = "medium") -> Mapping[str, object]:
         citation_ids = [str(item).strip() for item in citations if str(item).strip()]
-        accepted, reason = _verify_citations(workspace, citation_ids, require_memory=True)
+        accepted, reason = _verify_citations(
+            workspace,
+            citation_ids,
+            require_memory=True,
+            require_answer_support=True,
+        )
         if not accepted:
             raise ValueError(f"answer_validation_failed: {reason}")
         return {
@@ -290,6 +314,7 @@ def build_workspace_v2_registry(
             tool_spec=search,
             semantic_key_builder=_static_key("search"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+            commit_required_predicate=_search_has_evidence,
         )
     )
     registry.register(
@@ -304,7 +329,7 @@ def build_workspace_v2_registry(
             tool_spec=verify,
             semantic_key_builder=_static_key("verify"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
-            commit_required=True,
+            commit_required_predicate=_verify_has_rejection_evidence,
         )
     )
     registry.register(
@@ -365,6 +390,67 @@ def _source_kind_from_focus(focus: Sequence[str]) -> str:
     return "visual_fact"
 
 
+def _source_kind_from_backend(raw_backend: Mapping[str, Any], focus: Sequence[str]) -> str:
+    source_kind = str(raw_backend.get("source_kind") or "").strip()
+    if source_kind:
+        return source_kind
+    facts = raw_backend.get("facts")
+    if isinstance(facts, Sequence) and not isinstance(facts, (str, bytes)):
+        for item in facts:
+            if isinstance(item, Mapping):
+                source_kind = str(item.get("source_kind") or "").strip()
+                if source_kind:
+                    return source_kind
+    return _source_kind_from_focus(focus)
+
+
+def _facts_from_backend_response(
+    *,
+    text: str,
+    raw_backend: Mapping[str, Any],
+    fallback_source_kind: str,
+    time_range: Sequence[float],
+) -> list[dict[str, Any]]:
+    raw_facts = raw_backend.get("facts")
+    facts: list[dict[str, Any]] = []
+    if isinstance(raw_facts, Sequence) and not isinstance(raw_facts, (str, bytes)):
+        for item in raw_facts:
+            if not isinstance(item, Mapping):
+                continue
+            fact_text = str(item.get("text") or "").strip()
+            if not fact_text:
+                continue
+            facts.append(
+                {
+                    "text": fact_text,
+                    "source_kind": str(item.get("source_kind") or fallback_source_kind),
+                    "confidence": float(item.get("confidence", 0.74) or 0.74),
+                    "time_range": list(item.get("time_range") or time_range),
+                    "frames_used": list(item.get("frames_used") or []),
+                }
+            )
+    if not facts:
+        for sentence in _split_fact_sentences(text):
+            facts.append(
+                {
+                    "text": sentence,
+                    "source_kind": fallback_source_kind,
+                    "confidence": 0.74,
+                    "time_range": list(time_range),
+                    "frames_used": [],
+                }
+            )
+    return facts
+
+
+def _split_fact_sentences(text: str) -> list[str]:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return []
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", normalized) if part.strip()]
+    return parts or [normalized]
+
+
 def _anchor_modality(source_kind: str) -> str:
     if source_kind == "audio_fact":
         return "asr"
@@ -413,6 +499,28 @@ def _first_modality(fields: Sequence[str]) -> str:
     return "caption"
 
 
+def _search_has_evidence(output: Mapping[str, Any]) -> bool:
+    results = output.get("results") or ()
+    if not isinstance(results, Sequence) or isinstance(results, (str, bytes)):
+        return False
+    for row in results:
+        if not isinstance(row, Mapping):
+            continue
+        excerpt = str(row.get("excerpt") or "").strip()
+        segment_id = str(row.get("segment_id") or "").strip()
+        if excerpt and excerpt != segment_id:
+            return True
+    return False
+
+
+def _verify_has_rejection_evidence(output: Mapping[str, Any]) -> bool:
+    if bool(output.get("accepted")):
+        return False
+    reason = str(output.get("reason") or output.get("claim") or "").strip()
+    citations = output.get("citations") or ()
+    return bool(reason or citations)
+
+
 def _row_matches_filter(row: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
     for key, value in expected.items():
         if row.get(str(key)) != value:
@@ -447,10 +555,12 @@ def _verify_citations(
     citations: Sequence[str],
     *,
     require_memory: bool,
+    require_answer_support: bool = False,
 ) -> tuple[bool, str]:
     if workspace is None:
         return False, "workspace is required"
-    known_memory = {entry.entry_id for entry in workspace.memory_entries()}
+    memory_by_id = {entry.entry_id: entry for entry in workspace.memory_entries()}
+    known_memory = set(memory_by_id)
     known_anchors = {str(anchor.get("anchor_id", "")) for anchor in workspace.read_pinned_anchors()}
     known_entities = {str(row.get("entity_id", "")) for row in workspace.read_workspace_section("entities")}
     known_events = {str(row.get("event_id", "")) for row in workspace.read_workspace_section("events")}
@@ -460,9 +570,41 @@ def _verify_citations(
     unknown = [citation for citation in citations if citation not in known]
     if unknown:
         return False, "unknown citation: " + ", ".join(unknown)
-    if require_memory and not any(citation in known_memory for citation in citations):
+    cited_memory = [memory_by_id[citation] for citation in citations if citation in memory_by_id]
+    if require_memory and not cited_memory:
         return False, "final answer requires at least one planner-authored memory citation"
+    if require_answer_support:
+        non_memory = [citation for citation in citations if citation not in memory_by_id]
+        if non_memory:
+            return False, "final answer citations must be memory ids: " + ", ".join(non_memory)
+        unsupported = [entry for entry in cited_memory if entry.kind not in ANSWER_SUPPORTING_KINDS]
+        if unsupported:
+            details = ", ".join(f"{entry.entry_id}:{entry.kind}" for entry in unsupported)
+            return False, (
+                "unsupported final citation memory kind: "
+                + details
+                + "; allowed: "
+                + "/".join(sorted(ANSWER_SUPPORTING_KINDS))
+            )
     return True, ""
+
+
+def _provenance_observation_ids(memory_by_id: Mapping[str, Any], memory_ids: Sequence[str]) -> list[str]:
+    observation_ids: set[str] = set()
+    for memory_id in memory_ids:
+        entry = memory_by_id[memory_id]
+        for anchor in entry.anchors:
+            if anchor.observation_id:
+                observation_ids.add(str(anchor.observation_id))
+        metadata = dict(entry.metadata or {})
+        disposition_observation_id = str(metadata.get("disposition_observation_id") or "").strip()
+        if disposition_observation_id:
+            observation_ids.add(disposition_observation_id)
+        for item in _sequence_items(metadata.get("evidence_obs_ids")):
+            obs_id = str(item).strip()
+            if obs_id:
+                observation_ids.add(obs_id)
+    return sorted(observation_ids)
 
 
 def _static_key(tool_name: str):

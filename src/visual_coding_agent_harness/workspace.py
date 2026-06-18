@@ -203,7 +203,6 @@ class EvidenceWorkspace:
     CONTEXT_ONLY_TOOLS = {"global_gist", "query_context"}
     AUTO_ACKNOWLEDGED_TOOLS = {
         "list",
-        "search",
         "read_workspace",
         "view_observation",
         "read_observation_detail",
@@ -810,82 +809,155 @@ class EvidenceWorkspace:
             rows = [row for row in rows if _row_matches_expected(row, expected)]
         return rows
 
-    def render_plan_view(self, *, question: str, max_recent: int = 5) -> str:
+    def render_plan_view(self, *, question: str, max_recent: int = 5, max_per_section: int = 10) -> str:
         lines = [
             "# Workspace",
             f"Question: {question}",
-            "",
-            "## Deferred Observations",
         ]
-        deferred = self._deferred_observations()
-        if deferred:
-            for item in deferred:
-                lines.append(
-                    f"- {item.get('observation_id')} until={item.get('until') or '-'} reason={item.get('reason') or '-'}"
-                )
-        else:
-            lines.append("(none)")
 
-        lines.extend([
-            "",
-            "## Committed Memory",
-        ])
-        memory_entries = self.memory_entries()
-        if memory_entries:
-            for entry in memory_entries:
-                support = f" supports {entry.supports_option}" if entry.supports_option else ""
-                lines.append(f"- {entry.entry_id} [{entry.kind}{support}] {entry.claim}")
-        else:
-            lines.append("(none)")
+        def render_section(title: str, items: Sequence[Any], formatter: Any, *, hint: str) -> None:
+            lines.extend(["", f"## {title}"])
+            total = len(items)
+            if not items:
+                lines.append("(none)")
+                return
+            shown = list(items)[: max(0, int(max_per_section))]
+            for item in shown:
+                lines.append(f"- {formatter(item)}")
+            if total > len(shown):
+                lines.append(f"... shown {len(shown)}/{total}; use {hint} to see more")
 
-        lines.extend(["", "## Pinned Anchors"])
-        pinned_anchors = self.read_pinned_anchors()
-        if pinned_anchors:
-            for anchor in pinned_anchors:
-                time_range = _format_time_range(anchor.get("time_range") or [anchor.get("start_sec"), anchor.get("end_sec")])
-                excerpt = str(anchor.get("excerpt", "")).strip()
-                lines.append(f"- {anchor.get('anchor_id')} {time_range} {excerpt}".rstrip())
-        else:
-            lines.append("(none)")
+        render_section(
+            "Deferred Observations",
+            self._deferred_observations(),
+            lambda item: f"{item.get('observation_id')} until={item.get('until') or '-'} reason={item.get('reason') or '-'}",
+            hint='read_workspace(section="observations_by_id")',
+        )
 
-        lines.extend(["", "## Entities"])
-        entities = self.read_workspace_section("entities")
-        if entities:
-            for entity in entities:
-                lines.append(f"- {entity.get('entity_id')} {entity.get('kind')} {entity.get('name')}")
-        else:
-            lines.append("(none)")
+        render_section(
+            "Committed Memory",
+            self.memory_entries(),
+            lambda entry: (
+                f"{entry.entry_id} [{entry.kind}"
+                + (f" supports {entry.supports_option}" if entry.supports_option else "")
+                + f"] {entry.claim}"
+            ),
+            hint='read_workspace(section="memory")',
+        )
 
-        lines.extend(["", "## Open Questions"])
-        open_questions = self._note_bullets("notes/open_questions.md")
-        if open_questions:
-            lines.extend(f"- {item}" for item in open_questions)
-        else:
-            lines.append("(none)")
+        render_section(
+            "Pinned Anchors",
+            self.read_pinned_anchors(),
+            lambda anchor: (
+                f"{anchor.get('anchor_id')} "
+                f"{_format_time_range(anchor.get('time_range') or [anchor.get('start_sec'), anchor.get('end_sec')])} "
+                f"{str(anchor.get('excerpt', '')).strip()}"
+            ).rstrip(),
+            hint='read_workspace(section="pinned_anchors")',
+        )
+
+        render_section(
+            "Entities",
+            self.read_workspace_section("entities"),
+            lambda entity: f"{entity.get('entity_id')} {entity.get('kind')} {entity.get('name')}",
+            hint='read_workspace(section="entities")',
+        )
+
+        render_section(
+            "Open Questions",
+            self._note_bullets("notes/open_questions.md"),
+            lambda item: str(item),
+            hint='read_workspace(section="open_questions")',
+        )
 
         lines.extend(["", "## Recent Activity"])
         recent = self.observation_dispositions()[-max(0, int(max_recent)) :]
         if recent:
             for item in recent:
-                lines.append(
-                    f"- {item.get('observation_id')}: {item.get('disposition')}"
-                )
+                obs_id = str(item.get("observation_id") or "")
+                observation = self.get_observation(obs_id)
+                tool = observation.tool if observation is not None else "?"
+                claim_head = (observation.claim if observation is not None else "")[:80]
+                lines.append(f"- {obs_id} ({tool} -> {item.get('disposition')}): {claim_head}".rstrip())
         else:
             lines.append("(none)")
-        lines.extend(["", "## Budget", "(not tracked in workspace view)"])
+        approx_tokens = max(1, sum(len(line) for line in lines) // 4)
+        lines.extend(["", "## Budget", f"round {self.current_round()}/?; workspace tokens ~{approx_tokens}"])
         return "\n".join(lines)
 
     def render_commit_view(self, *, question: str, observation_id: str) -> str:
         observation = self._require_observation(observation_id)
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
         lines = [
             "# Pending Observation",
             f"obs_id: {observation.observation_id}",
             f"tool: {observation.tool}",
             f"claim: {observation.claim}",
             f"limitations: {observation.limitations or '-'}",
-            "",
-            "## Relevant Committed State",
         ]
+
+        regions = _mapping_list(raw_output.get("regions")) or _mapping_list(observation.regions)
+        if regions:
+            lines.extend(["", "## Scope"])
+            for region in regions[:3]:
+                time_range = region.get("time_range") or [region.get("start_sec"), region.get("end_sec")]
+                segment_id = str(region.get("segment_id") or "-")
+                lines.append(f"- segment={segment_id} time={_format_time_range(time_range) or '-'}")
+            if len(regions) > 3:
+                lines.append(f"... more regions hidden: {len(regions) - 3}")
+
+        facts = _mapping_list(raw_output.get("facts"))
+        if facts:
+            lines.extend(["", "## Facts"])
+            for fact in facts[:8]:
+                text = str(fact.get("text") or "").strip()
+                source_kind = str(fact.get("source_kind") or fact.get("kind") or "fact")
+                time_range = _format_time_range(fact.get("time_range"))
+                confidence = str(fact.get("confidence") or "").strip()
+                suffix = f" (conf={confidence})" if confidence else ""
+                time_part = f" @{time_range}" if time_range else ""
+                lines.append(f"- [{source_kind}{time_part}] {text}{suffix}".rstrip())
+            if len(facts) > 8:
+                lines.append(f"... more facts hidden: {len(facts) - 8}")
+
+        produced = _mapping_list(raw_output.get("produced_anchors"))
+        if not produced:
+            produced = [anchor.to_dict() for anchor in self.observation_anchors(observation.observation_id)]
+        candidate_anchor_ids = [
+            str(item).strip()
+            for item in _sequence_items(raw_output.get("candidate_anchor_ids"))
+            if str(item).strip()
+        ]
+        if not candidate_anchor_ids:
+            candidate_anchor_ids = [
+                str(anchor.get("anchor_id") or "").strip()
+                for anchor in produced
+                if str(anchor.get("anchor_id") or "").strip()
+            ]
+        if candidate_anchor_ids:
+            lines.extend(["", "## Candidate Anchor IDs", "candidate_anchor_ids: " + ", ".join(candidate_anchor_ids)])
+        if produced:
+            lines.extend(["", "## Candidate Anchors (verbatim excerpts you may pin)"])
+            for anchor in produced[:8]:
+                anchor_id = str(anchor.get("anchor_id") or "").strip()
+                modality = str(anchor.get("modality") or anchor.get("source_kind") or "anchor")
+                excerpt = str(anchor.get("excerpt") or "").strip()
+                lines.append(f"- {anchor_id} [{modality}]: {excerpt}")
+            if len(produced) > 8:
+                lines.append(f"... more candidate anchors hidden: {len(produced) - 8}")
+
+        results = _mapping_list(raw_output.get("results"))
+        if results:
+            lines.extend(["", "## Search Hits"])
+            for hit in results[:8]:
+                hit_id = str(hit.get("hit_id") or "-")
+                modality = str(hit.get("modality") or "-")
+                excerpt = str(hit.get("excerpt") or "").strip()
+                lines.append(f"- {hit_id} [{modality}] {excerpt}".rstrip())
+            if len(results) > 8:
+                lines.append(f"... more search hits hidden: {len(results) - 8}")
+
+        lines.extend(["", "## Relevant Committed State"])
         memory_entries = self.memory_entries()[-5:]
         if memory_entries:
             for entry in memory_entries:
@@ -2541,6 +2613,11 @@ class EvidenceWorkspace:
         return resolved
 
     def _validate_commit_writes(self, observation: Observation, writes: Mapping[str, Any]) -> None:
+        observation_anchor_ids = {
+            anchor.anchor_id
+            for anchor in self.observation_anchors(observation.observation_id)
+            if anchor.anchor_id
+        }
         pending_anchor_ids = {
             str(anchor.get("anchor_id") or anchor.get("candidate_anchor_id") or "").strip()
             for anchor in _mapping_list(writes.get("pinned_anchors"))
@@ -2555,6 +2632,14 @@ class EvidenceWorkspace:
                 self._validated_observation_ids(_default_evidence_obs_ids(payload, observation.observation_id))
 
         for anchor_payload in _mapping_list(writes.get("pinned_anchors")):
+            anchor_id = str(anchor_payload.get("anchor_id") or anchor_payload.get("candidate_anchor_id") or "").strip()
+            if not anchor_id:
+                raise ValueError("anchor_validation_failed: anchor_id required")
+            if observation_anchor_ids and anchor_id not in observation_anchor_ids:
+                raise ValueError(
+                    f"anchor_validation_failed: anchor_id={anchor_id} not in observation produced_anchors "
+                    f"(allowed: {sorted(observation_anchor_ids)})"
+                )
             excerpt = str(anchor_payload.get("excerpt", "") or "").strip()
             self._validate_excerpt_in_observation(observation, excerpt)
 
@@ -3236,6 +3321,9 @@ def _validate_memory_commit_payload(payload: Mapping[str, Any]) -> None:
         "hypothesis",
         "open_question",
         "synthesized",
+        "synthesized_support",
+        "answer_conflict_resolved",
+        "unverified_capture",
     }:
         raise ValueError(f"memory_validation_failed: unknown kind={kind}")
     confidence = str(payload.get("confidence") or "medium")

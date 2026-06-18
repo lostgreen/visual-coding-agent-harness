@@ -9,7 +9,27 @@ from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
 
 
-def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace] = None) -> ToolRegistry:
+PLAN_PHASE_PRIMITIVES = frozenset({"read_workspace"})
+COMMIT_PHASE_PRIMITIVES = frozenset({"commit_observation", "reject_observation", "defer_observation", "no_commit_needed"})
+INTERNAL_ONLY_PRIMITIVES = frozenset(
+    {
+        "view_observation",
+        "read_observation_detail",
+        "grep_evidence",
+        "query_evidence_table",
+        "read_timeline_sorted",
+        "read_hypothesis",
+        "update_hypothesis_slot",
+        "write_memory",
+    }
+)
+
+
+def build_workspace_primitives_registry(
+    *,
+    workspace: Optional[EvidenceWorkspace] = None,
+    include: Sequence[str] = ("plan", "commit"),
+) -> ToolRegistry:
     registry = ToolRegistry()
 
     def observation_detail_payload(obs_id: str, line_range: tuple[int, int] | None = None) -> Mapping[str, object]:
@@ -226,20 +246,55 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
             "limitations": "Workspace disposition; no video frames inspected.",
         }
 
-    registry.register(view_observation)
-    registry.register(read_observation_detail)
-    registry.register(grep_evidence)
-    registry.register(query_evidence_table)
-    registry.register(read_workspace)
-    registry.register(read_timeline_sorted)
-    registry.register(read_hypothesis)
-    registry.register(update_hypothesis_slot)
-    registry.register(write_memory)
-    registry.register(commit_observation)
-    registry.register(reject_observation)
-    registry.register(defer_observation)
-    registry.register(no_commit_needed)
+    specs = {
+        "view_observation": view_observation,
+        "read_observation_detail": read_observation_detail,
+        "grep_evidence": grep_evidence,
+        "query_evidence_table": query_evidence_table,
+        "read_workspace": read_workspace,
+        "read_timeline_sorted": read_timeline_sorted,
+        "read_hypothesis": read_hypothesis,
+        "update_hypothesis_slot": update_hypothesis_slot,
+        "write_memory": write_memory,
+        "commit_observation": commit_observation,
+        "reject_observation": reject_observation,
+        "defer_observation": defer_observation,
+        "no_commit_needed": no_commit_needed,
+    }
+    for name in _primitive_names_for(include):
+        registry.register(specs[name])
     return registry
+
+
+def _primitive_names_for(include: Sequence[str]) -> tuple[str, ...]:
+    buckets = {
+        "plan": PLAN_PHASE_PRIMITIVES,
+        "commit": COMMIT_PHASE_PRIMITIVES,
+        "internal": INTERNAL_ONLY_PRIMITIVES,
+        "all": PLAN_PHASE_PRIMITIVES | COMMIT_PHASE_PRIMITIVES | INTERNAL_ONLY_PRIMITIVES,
+    }
+    selected: set[str] = set()
+    for bucket_name in include:
+        key = str(bucket_name).strip()
+        if key not in buckets:
+            raise ValueError(f"unknown_workspace_primitive_bucket: {key}")
+        selected.update(buckets[key])
+    ordered = (
+        "view_observation",
+        "read_observation_detail",
+        "grep_evidence",
+        "query_evidence_table",
+        "read_workspace",
+        "read_timeline_sorted",
+        "read_hypothesis",
+        "update_hypothesis_slot",
+        "write_memory",
+        "commit_observation",
+        "reject_observation",
+        "defer_observation",
+        "no_commit_needed",
+    )
+    return tuple(name for name in ordered if name in selected)
 
 
 def _slice_lines(text: str, line_range: tuple[int, int] | None) -> str:

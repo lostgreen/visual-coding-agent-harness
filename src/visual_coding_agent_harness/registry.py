@@ -46,6 +46,7 @@ class ToolRuntimeSpec:
     evidence_promoter: Any | None = None
     permission_predicate: Any | None = None
     commit_required: bool = False
+    commit_required_predicate: Any | None = None
 
 
 def tool(name: str, description: str) -> Callable[[Callable[..., Mapping[str, Any]]], ToolSpec]:

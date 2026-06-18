@@ -74,12 +74,14 @@ class WorkspaceVisualAgent:
             if observation is not None:
                 last_tool_result = f"{observation.observation_id}: {observation.claim}"
 
-            if observation_id and self._commit_required(_tool_name(plan_action)):
+            if observation_id and self._commit_required(_tool_name(plan_action), observation):
                 self._run_commit_phase(
                     question=question,
                     observation_id=observation_id,
                     round_number=round_number,
                 )
+            elif observation_id and self.workspace.observation_status(observation_id) == "uncommitted":
+                self.workspace.no_commit_needed(observation_id, reason="tool output did not require durable commit")
 
         return WorkspaceRunResult(
             answer="need_more_evidence",
@@ -115,6 +117,8 @@ class WorkspaceVisualAgent:
         observation_id: str,
         round_number: int,
         validation_error: str = "",
+        attempt: int = 1,
+        prompt_mode: str = "full",
     ) -> Mapping[str, Any]:
         response = self.backend.generate(
             BackendRequest(
@@ -125,8 +129,16 @@ class WorkspaceVisualAgent:
                     workspace=self.workspace,
                     observation_id=observation_id,
                     validation_error=validation_error,
+                    attempt=attempt,
+                    prompt_mode=prompt_mode,
                 ),
-                metadata={"round": round_number, "phase": "commit", "observation_id": observation_id},
+                metadata={
+                    "round": round_number,
+                    "phase": "commit",
+                    "observation_id": observation_id,
+                    "attempt": attempt,
+                    "prompt_mode": prompt_mode,
+                },
             )
         )
         self.workspace.write_trace_event(
@@ -138,18 +150,31 @@ class WorkspaceVisualAgent:
     def _run_commit_phase(self, *, question: str, observation_id: str, round_number: int) -> None:
         validation_error = ""
         for attempt in range(1, 4):
+            prompt_mode = "minimal" if attempt == 3 else "full"
             commit_action = self._decide_commit(
                 question=question,
                 observation_id=observation_id,
                 round_number=round_number,
                 validation_error=validation_error,
+                attempt=attempt,
+                prompt_mode=prompt_mode,
             )
             if _tool_name(commit_action) not in DISPOSITION_TOOLS:
-                raise ValueError("commit phase only accepts disposition tools")
+                validation_error = "commit phase only accepts disposition tools"
+                self.workspace.write_trace_event(
+                    "workspace_commit_validation_error",
+                    {
+                        "round": round_number,
+                        "attempt": attempt,
+                        "observation_id": observation_id,
+                        "error": validation_error,
+                    },
+                )
+                continue
             try:
                 self.registry.execute(_tool_name(commit_action), _action_args(commit_action))
                 return
-            except ValueError as exc:
+            except (ToolError, ValueError) as exc:
                 validation_error = str(exc)
                 self.workspace.write_trace_event(
                     "workspace_commit_validation_error",
@@ -160,9 +185,74 @@ class WorkspaceVisualAgent:
                         "error": validation_error,
                     },
                 )
-        self.workspace.no_commit_needed(
-            observation_id,
-            reason=f"forced acknowledge after commit validation failures: {validation_error}",
+        observation = self.workspace.get_observation(observation_id)
+        if observation is None:
+            raise ValueError(f"observation_validation_failed: unknown observation_id={observation_id}")
+        self._auto_pin_observation(
+            observation,
+            reason=f"commit_format_failure: {validation_error}",
+        )
+
+    def _auto_pin_observation(self, observation: Any, *, reason: str) -> None:
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        fact_text = _first_fact_text(raw_output.get("facts"))
+        anchors = _mapping_items(raw_output.get("produced_anchors"))
+        if not fact_text or not anchors:
+            self.workspace.defer_observation(
+                observation.observation_id,
+                until="manual_review",
+                reason=reason if fact_text else f"{reason}; no facts",
+            )
+            self.workspace.write_trace_event(
+                "commit_auto_deferred",
+                {"observation_id": observation.observation_id, "reason": reason},
+            )
+            return
+
+        anchor = anchors[0]
+        anchor_id = str(anchor.get("anchor_id") or "").strip()
+        if not anchor_id:
+            self.workspace.defer_observation(
+                observation.observation_id,
+                until="manual_review",
+                reason=f"{reason}; no produced anchor id",
+            )
+            self.workspace.write_trace_event(
+                "commit_auto_deferred",
+                {"observation_id": observation.observation_id, "reason": reason},
+            )
+            return
+
+        source_kind = str(anchor.get("source_kind") or "visual_fact")
+        excerpt = fact_text[:500]
+        self.workspace.commit_observation(
+            observation.observation_id,
+            writes={
+                "pinned_anchors": [
+                    {
+                        "anchor_id": anchor_id,
+                        "kind": str(anchor.get("modality") or source_kind),
+                        "source_kind": source_kind,
+                        "excerpt": excerpt,
+                    }
+                ],
+                "memory": [
+                    {
+                        "kind": "unverified_capture",
+                        "claim": fact_text,
+                        "anchor_ids": [anchor_id],
+                        "confidence": "low",
+                        "metadata": {
+                            "auto_pinned": True,
+                            "auto_pin_reason": reason,
+                        },
+                    }
+                ],
+            },
+        )
+        self.workspace.write_trace_event(
+            "commit_auto_pinned",
+            {"observation_id": observation.observation_id, "reason": reason, "anchor_id": anchor_id},
         )
 
     def _execute_plan_action(
@@ -187,9 +277,14 @@ class WorkspaceVisualAgent:
         )
         return tuple(str(item) for item in result.observation_ids)
 
-    def _commit_required(self, tool_name: str) -> bool:
+    def _commit_required(self, tool_name: str, observation: Any | None = None) -> bool:
         canonical_name = self.registry.resolve_alias(tool_name)
-        return bool(self.registry.get_runtime_spec(canonical_name).commit_required)
+        spec = self.registry.get_runtime_spec(canonical_name)
+        if spec.commit_required:
+            return True
+        if spec.commit_required_predicate is None or observation is None:
+            return False
+        return bool(spec.commit_required_predicate(observation.raw_output or {}))
 
     def _finalize_answer(self, action: Mapping[str, Any], *, rounds: int) -> WorkspaceRunResult:
         args = _action_args(action)
@@ -240,15 +335,34 @@ def compose_commit_prompt(
     workspace: EvidenceWorkspace,
     observation_id: str,
     validation_error: str = "",
+    attempt: int = 1,
+    prompt_mode: str = "full",
 ) -> str:
     sections = [
         "# Question",
         question,
         "",
+        f"# Commit Phase (attempt {attempt})",
         workspace.render_commit_view(question=question, observation_id=observation_id),
     ]
     if validation_error:
-        sections.extend(["", "# Validation Error", validation_error])
+        sections.extend(
+            [
+                "",
+                "# Validation Error From Previous Attempt",
+                validation_error,
+                "",
+                "Re-read the Pending Observation section and ensure pinned_anchors[].anchor_id values appear in the listed Candidate Anchors.",
+            ]
+        )
+    if prompt_mode == "minimal":
+        sections.extend(
+            [
+                "",
+                "# Minimal Commit Mode",
+                "Pin exactly one anchor from Candidate Anchors and write exactly one memory entry. Do not write entities, events, relations, or attributes in this attempt.",
+            ]
+        )
     return "\n".join(sections)
 
 
@@ -276,6 +390,26 @@ def _tool_name(action: Mapping[str, Any]) -> str:
 def _action_args(action: Mapping[str, Any]) -> dict[str, Any]:
     args = action.get("args", {})
     return dict(args) if isinstance(args, Mapping) else {}
+
+
+def _first_fact_text(value: Any) -> str:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            if isinstance(item, Mapping):
+                text = str(item.get("text") or "").strip()
+                if text:
+                    return text
+            else:
+                text = str(item or "").strip()
+                if text:
+                    return text
+    return ""
+
+
+def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
 
 
 def _answer_result(action: Mapping[str, Any], *, rounds: int) -> WorkspaceRunResult:

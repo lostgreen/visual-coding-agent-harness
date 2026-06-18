@@ -205,6 +205,7 @@ def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = Fals
         argument_normalizer=_normalize_workspace_v2_search,
         semantic_key_builder=_key_from_normalizer("search", _normalize_workspace_v2_search),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+        commit_required_predicate=_search_has_evidence,
     )
     _replace(
         registry,
@@ -221,7 +222,7 @@ def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = Fals
         argument_normalizer=_normalize_workspace_v2_verify,
         semantic_key_builder=_key_from_normalizer("verify", _normalize_workspace_v2_verify),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
-        commit_required=True,
+        commit_required_predicate=_verify_has_rejection_evidence,
     )
     _replace(
         registry,
@@ -252,6 +253,28 @@ def _replace(registry: ToolRegistry, name: str, *, missing: list[str], **updates
     except ToolError:
         missing.append(name)
         return
+
+
+def _search_has_evidence(output: Mapping[str, Any]) -> bool:
+    results = output.get("results") or ()
+    if not isinstance(results, Sequence) or isinstance(results, (str, bytes)):
+        return False
+    for row in results:
+        if not isinstance(row, Mapping):
+            continue
+        excerpt = _text(row.get("excerpt"))
+        segment_id = _text(row.get("segment_id"))
+        if excerpt and excerpt != segment_id:
+            return True
+    return False
+
+
+def _verify_has_rejection_evidence(output: Mapping[str, Any]) -> bool:
+    if _bool(output.get("accepted")):
+        return False
+    reason = _text(output.get("reason") or output.get("claim"))
+    citations = _string_list(output.get("citations"))
+    return bool(reason or citations)
 
 
 def _key_from_normalizer(tool_name: str, normalizer: Any):
@@ -481,7 +504,6 @@ def _normalize_workspace_v2_synthesize_memory(_ctx: RunContext, request: ToolReq
         "claim": _text(args.get("claim")),
         "supports": _string_list(args.get("supports")),
         "derived_from": _string_list(args.get("derived_from")),
-        "evidence_obs_ids": _string_list(args.get("evidence_obs_ids")),
         "confidence": _text(args.get("confidence")) or "medium",
         "supports_option": _text(args.get("supports_option")),
         "tags": _string_list(args.get("tags")),

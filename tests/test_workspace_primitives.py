@@ -34,7 +34,7 @@ def test_workspace_primitives_return_deterministic_results(tmp_path: Path):
     )
     workspace.write_hypothesis({"slot_door": {"status": "empty", "evidence_obs_id": ""}})
 
-    registry = build_workspace_primitives_registry(workspace=workspace)
+    registry = build_workspace_primitives_registry(workspace=workspace, include=("all",))
 
     view = registry.execute("view_observation", {"obs_id": "obs_0001"})
     detail = registry.execute("read_observation_detail", {"obs_id": "obs_0001"})
@@ -107,7 +107,7 @@ def test_write_memory_tool_persists_anchor_backed_memory(tmp_path: Path):
             )
         ]
     )
-    registry = build_workspace_primitives_registry(workspace=workspace)
+    registry = build_workspace_primitives_registry(workspace=workspace, include=("internal",))
 
     result = registry.execute(
         "write_memory",
@@ -258,6 +258,118 @@ def test_commit_observation_rejects_excerpt_not_present_in_observation(tmp_path:
         )
 
 
+def test_commit_view_includes_facts_candidate_anchors_and_scope(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_commit_view_details")
+    facts = [
+        {
+            "text": f"fact {index}: Austria-Hungary buffer detail.",
+            "source_kind": "audio_fact",
+            "confidence": 0.8,
+            "time_range": [10.0 + index, 11.0 + index],
+        }
+        for index in range(9)
+    ]
+    observation = workspace.write_observation(
+        tool_name="read_clip",
+        claim="The clip discusses Austria-Hungary as a buffer.",
+        confidence=0.8,
+        regions=[{"segment_id": "seg_0001", "start_sec": 10.0, "end_sec": 20.0}],
+        raw_output={
+            "facts": facts,
+            "candidate_anchor_ids": ["anch_clip_seg_0001_001"],
+            "produced_anchors": [
+                {
+                    "anchor_id": "anch_clip_seg_0001_001",
+                    "observation_id": "__pending__",
+                    "source_kind": "audio_fact",
+                    "segment_id": "seg_0001",
+                    "start_sec": 10.0,
+                    "end_sec": 20.0,
+                    "field_path": "facts[0].text",
+                    "excerpt": "fact 0: Austria-Hungary buffer detail.",
+                    "modality": "asr",
+                }
+            ],
+        },
+    )
+
+    view = workspace.render_commit_view(question="Why?", observation_id=observation.observation_id)
+
+    assert "## Scope" in view
+    assert "segment=seg_0001 time=[10.0-20.0]" in view
+    assert "## Facts" in view
+    assert "fact 0: Austria-Hungary buffer detail." in view
+    assert "fact 8: Austria-Hungary buffer detail." not in view
+    assert "... more facts hidden: 1" in view
+    assert "candidate_anchor_ids: anch_clip_seg_0001_001" in view
+    assert "## Candidate Anchors (verbatim excerpts you may pin)" in view
+    assert "anch_clip_seg_0001_001 [asr]: fact 0: Austria-Hungary buffer detail." in view
+
+
+def test_commit_view_includes_search_hits_without_produced_anchors(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_commit_view_search_hits")
+    observation = workspace.write_observation(
+        tool_name="search",
+        claim="Search for 'buffer' returned one hit.",
+        confidence=0.8,
+        raw_output={
+            "results": [
+                {
+                    "hit_id": "hit_001",
+                    "modality": "asr",
+                    "segment_id": "seg_0001",
+                    "time_range": [10.0, 20.0],
+                    "excerpt": "Austria-Hungary was seen as a buffer.",
+                }
+            ]
+        },
+    )
+
+    view = workspace.render_commit_view(question="Why?", observation_id=observation.observation_id)
+
+    assert "## Search Hits" in view
+    assert "hit_001 [asr] Austria-Hungary was seen as a buffer." in view
+
+
+def test_commit_view_includes_search_hits_when_candidate_anchors_exist(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_commit_view_search_hits_with_anchors")
+    observation = workspace.write_observation(
+        tool_name="search",
+        claim="Search for 'buffer' returned one hit.",
+        confidence=0.8,
+        raw_output={
+            "results": [
+                {
+                    "hit_id": "hit_001",
+                    "modality": "asr",
+                    "segment_id": "seg_0001",
+                    "time_range": [10.0, 20.0],
+                    "excerpt": "Austria-Hungary was seen as a buffer.",
+                }
+            ],
+            "produced_anchors": [
+                {
+                    "anchor_id": "anch_search_seg_0001_001",
+                    "observation_id": "__pending__",
+                    "source_kind": "retrieval_hit",
+                    "segment_id": "seg_0001",
+                    "start_sec": 10.0,
+                    "end_sec": 20.0,
+                    "field_path": "results",
+                    "excerpt": "Austria-Hungary was seen as a buffer.",
+                    "modality": "asr",
+                }
+            ],
+        },
+    )
+
+    view = workspace.render_commit_view(question="Why?", observation_id=observation.observation_id)
+
+    assert "## Candidate Anchors (verbatim excerpts you may pin)" in view
+    assert "## Search Hits" in view
+    assert "hit_001 [asr] Austria-Hungary was seen as a buffer." in view
+
+
 def test_failed_commit_observation_does_not_leave_partial_workspace_writes(tmp_path: Path):
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_commit_atomic_failure")
     observation = workspace.write_observation(
@@ -289,11 +401,18 @@ def test_failed_commit_observation_does_not_leave_partial_workspace_writes(tmp_p
     assert workspace.observation_dispositions() == []
 
 
-def test_cheap_tool_observations_default_to_auto_acknowledged(tmp_path: Path):
+def test_pure_read_tool_observations_default_to_auto_acknowledged(tmp_path: Path):
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_auto_ack")
-    observation = workspace.write_observation(tool_name="search", claim="One candidate ASR hit.", confidence=1.0)
+    observation = workspace.write_observation(tool_name="list", claim="Listed segments.", confidence=1.0)
 
     assert workspace.observation_status(observation.observation_id) == "auto_acknowledged"
+
+
+def test_search_observations_require_explicit_disposition(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_search_disposition")
+    observation = workspace.write_observation(tool_name="search", claim="One candidate ASR hit.", confidence=1.0)
+
+    assert workspace.observation_status(observation.observation_id) == "uncommitted"
 
 
 def test_deferred_observations_are_prioritized_in_plan_view(tmp_path: Path):
@@ -310,6 +429,42 @@ def test_deferred_observations_are_prioritized_in_plan_view(tmp_path: Path):
     assert "## Deferred Observations" in plan_view
     assert observation.observation_id in plan_view
     assert "after_event_anchor_resolved" in plan_view
+
+
+def test_plan_view_folds_large_sections_and_shows_read_workspace_hint(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_plan_view_folding")
+    workspace.write_produced_anchors(
+        [
+            SourceAnchor(
+                anchor_id="anch_shared",
+                observation_id="obs_seed",
+                source_kind="audio_fact",
+                excerpt="shared evidence",
+            )
+        ]
+    )
+    for index in range(30):
+        workspace.write_memory(
+            kind="answer_support",
+            claim=f"memory claim {index:02d}",
+            anchors=[{"anchor_id": "anch_shared"}],
+            confidence="high",
+        )
+    observation = workspace.write_observation(
+        tool_name="search",
+        claim="Search found a candidate buffer cue.",
+        confidence=0.8,
+    )
+    workspace.no_commit_needed(observation.observation_id, reason="No durable evidence.")
+
+    plan_view = workspace.render_plan_view(question="What does the buffer cue mean?")
+
+    assert "memory claim 09" in plan_view
+    assert "memory claim 10" not in plan_view
+    assert "... shown 10/30; use read_workspace(section=\"memory\") to see more" in plan_view
+    assert "obs_0001 (search -> acknowledged): Search found a candidate buffer cue." in plan_view
+    assert "## Budget" in plan_view
+    assert "workspace tokens ~" in plan_view
 
 
 def test_workspace_disposition_tools_and_read_workspace(tmp_path: Path):
@@ -347,3 +502,39 @@ def test_workspace_disposition_tools_and_read_workspace(tmp_path: Path):
     assert workspace.observation_status(defer_obs.observation_id) == "deferred"
     assert workspace.observation_status(ack_obs.observation_id) == "acknowledged"
     assert workspace_read["regions"][0]["observations"][0]["observation_id"] == reject_obs.observation_id
+
+
+def test_commit_observation_rejects_pin_outside_observation_produced_anchors(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_commit_strict_anchor")
+    observation = workspace.write_observation(
+        tool_name="read_clip",
+        claim="The clip discusses Austria-Hungary as a buffer.",
+        confidence=0.8,
+        raw_output={
+            "facts": [{"text": "Austria-Hungary was seen as a buffer."}],
+            "produced_anchors": [
+                {
+                    "anchor_id": "anch_real",
+                    "observation_id": "__pending__",
+                    "source_kind": "audio_fact",
+                    "field_path": "facts[0].text",
+                    "excerpt": "Austria-Hungary was seen as a buffer.",
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValueError, match="not in observation produced_anchors"):
+        workspace.commit_observation(
+            observation.observation_id,
+            writes={
+                "pinned_anchors": [
+                    {
+                        "anchor_id": "anch_fake",
+                        "kind": "asr",
+                        "source_kind": "audio_fact",
+                        "excerpt": "Austria-Hungary was seen as a buffer.",
+                    }
+                ]
+            },
+        )
