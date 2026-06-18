@@ -20,6 +20,7 @@ from .segments import ClipExtractor, build_segment_vlm_registry
 from .timeline import build_timeline_registry
 from .verification import build_verification_registry
 from .workspace_primitives import build_workspace_primitives_registry
+from .workspace_v2 import build_workspace_v2_registry
 
 
 def build_video_exploration_registry(
@@ -48,6 +49,14 @@ def build_video_exploration_registry(
     )
     registry.extend(build_timeline_registry(workspace=workspace))
     registry.extend(build_workspace_primitives_registry(workspace=workspace))
+    registry.extend(
+        build_workspace_v2_registry(
+            video_map=video_map_store,
+            backend=backend,
+            workspace=workspace,
+            include_workspace_primitives=False,
+        )
+    )
     registry.extend(build_verification_registry(workspace=workspace))
     registry.extend(build_asr_binding_registry(video_map_store=video_map_store, backend=backend, workspace=workspace))
     registry.extend(

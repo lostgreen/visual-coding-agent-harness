@@ -265,9 +265,6 @@ def _workspace_path(*, strategy: str, raw_artifacts: Mapping[str, Any], summary_
     workspaces = raw_artifacts.get("workspaces", {}) if isinstance(raw_artifacts.get("workspaces", {}), Mapping) else {}
     if strategy in workspaces:
         return _resolve_path(Path(str(workspaces[strategy])), summary_path=summary_path)
-    legacy = raw_artifacts.get("agent_v2_workspace" if strategy == "agent_v2" else "")
-    if legacy:
-        return _resolve_path(Path(str(legacy)), summary_path=summary_path)
     return None
 
 

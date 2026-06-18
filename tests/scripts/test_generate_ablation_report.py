@@ -5,7 +5,7 @@ from scripts import generate_ablation_report
 
 
 def test_report_contains_all_runs_and_completeness_section(tmp_path: Path):
-    run_root = tmp_path / "agent_v2"
+    run_root = tmp_path / "workspace_v2"
     run_root.mkdir()
     evidence_path = run_root / "evidence_chains.jsonl"
     evidence_path.write_text('{"id":"chain1"}\n{"id":"chain2"}\n', encoding="utf-8")
@@ -39,7 +39,7 @@ def test_report_contains_all_runs_and_completeness_section(tmp_path: Path):
                 "cases": [
                     {
                         "question_id": "605-1",
-                        "raw_artifacts": {"training_trajectories": {"agent_v2": str(trajectory_path)}},
+                        "raw_artifacts": {"training_trajectories": {"workspace_v2": str(trajectory_path)}},
                     }
                 ],
             }
@@ -51,7 +51,7 @@ def test_report_contains_all_runs_and_completeness_section(tmp_path: Path):
         json.dumps(
             {
                 "matrix_id": "unit",
-                "runs": [{"id": "agent_v2", "summary_path": str(summary_path), "status": "done", "exit_code": 0}],
+                "runs": [{"id": "workspace_v2", "summary_path": str(summary_path), "status": "done", "exit_code": 0}],
             }
         ),
         encoding="utf-8",
@@ -62,5 +62,5 @@ def test_report_contains_all_runs_and_completeness_section(tmp_path: Path):
 
     assert report["runs"][0]["evidence_chain_rows"] == 2
     assert report["runs"][0]["trajectory_audit_failures"] == 0
-    assert "| agent_v2 |" in rendered
+    assert "| workspace_v2 |" in rendered
     assert "## Completeness" in rendered

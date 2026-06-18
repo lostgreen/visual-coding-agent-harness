@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
+from visual_coding_agent_harness.agents.budget import AgentBudget
 from visual_coding_agent_harness.agents.runtime.hooks.budget import BudgetHook
 from visual_coding_agent_harness.agents.runtime.hooks.duplicate_guard import DuplicateGuardHook
 from visual_coding_agent_harness.agents.runtime.hooks.evidence_promotion import EvidencePromotionHook
@@ -53,6 +53,21 @@ def test_runtime_spec_can_carry_lifecycle_hooks() -> None:
     assert registry.get_runtime_spec("echo").argument_normalizer is marker
 
 
+def test_runtime_spec_commit_required_metadata_defaults_and_survives_updates() -> None:
+    @tool(name="echo", description="Echo a value.")
+    def echo(value: str):
+        return {"value": value}
+
+    registry = ToolRegistry()
+    registry.register(ToolRuntimeSpec(tool_spec=echo))
+
+    assert registry.get_runtime_spec("echo").commit_required is False
+
+    registry.replace_runtime_spec("echo", commit_required=True)
+
+    assert registry.get_runtime_spec("echo").commit_required is True
+
+
 def test_registry_extend_preserves_runtime_spec_metadata() -> None:
     @tool(name="echo", description="Echo a value.")
     def echo(value: str):
@@ -67,6 +82,7 @@ def test_registry_extend_preserves_runtime_spec_metadata() -> None:
             argument_normalizer=normalizer,
             semantic_key_builder=key_builder,
             duplicate_guard_policy=DuplicateGuardPolicy.ADVISORY,
+            commit_required=True,
         )
     )
     parent = ToolRegistry()
@@ -77,6 +93,7 @@ def test_registry_extend_preserves_runtime_spec_metadata() -> None:
     assert runtime_spec.argument_normalizer is normalizer
     assert runtime_spec.semantic_key_builder is key_builder
     assert runtime_spec.duplicate_guard_policy is DuplicateGuardPolicy.ADVISORY
+    assert runtime_spec.commit_required is True
 
 
 def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
@@ -119,11 +136,32 @@ def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
         "caption_segment",
         "read_timeline_sorted",
         "write_memory",
+        "read_workspace",
+        "commit_observation",
+        "reject_observation",
+        "defer_observation",
+        "no_commit_needed",
+        "read_clip",
+        "search",
+        "list",
+        "verify",
+        "synthesize_memory",
+        "answer",
     ]
     for tool_name in runtime_spec_tools:
         runtime_spec = registry.get_runtime_spec(tool_name)
         assert runtime_spec.argument_normalizer is not None, tool_name
         assert runtime_spec.semantic_key_builder is not None, tool_name
+
+    assert registry.get_runtime_spec("vision_read").commit_required is True
+    assert registry.get_runtime_spec("verify_segment_anchors").commit_required is True
+    assert registry.get_runtime_spec("read_clip").commit_required is True
+    assert registry.get_runtime_spec("verify").commit_required is True
+    assert registry.get_runtime_spec("synthesize_memory").commit_required is False
+    assert registry.get_runtime_spec("search_segments").commit_required is False
+    assert registry.get_runtime_spec("search").commit_required is False
+    assert registry.get_runtime_spec("list").commit_required is False
+    assert registry.get_runtime_spec("commit_observation").commit_required is False
 
 
 def test_video_runtime_spec_required_mode_rejects_missing_core_tool() -> None:
@@ -503,345 +541,6 @@ def test_run_context_proxies_state_scoped_fields() -> None:
     assert round_state.issued_tool_calls == 1
     assert ctx.seen_tool_semantic_keys is run_state.seen_tool_semantic_keys
     assert run_state.seen_tool_semantic_keys == {"echo:alpha"}
-
-
-def test_iterative_agent_real_path_uses_runtime_lifecycle(tmp_path) -> None:
-    class RuntimeBackend(VisionLanguageBackend):
-        def __init__(self) -> None:
-            self.requests: list[BackendRequest] = []
-
-        def generate(self, request: BackendRequest) -> BackendResponse:
-            self.requests.append(request)
-            if request.task == "replan":
-                return BackendResponse(
-                    text=(
-                        '{"status":"continue","rationale":"probe",'
-                        '"program":['
-                        '{"tool":"probe","args":{"value":"  Alpha  "}},'
-                        '{"tool":"probe","args":{"value":"alpha"}}'
-                        "]} "
-                    )
-                )
-            if request.task == "answer_from_evidence":
-                return BackendResponse(text='{"answer":"need_more_evidence","citations":[],"confidence":0.0}')
-            raise AssertionError(request.task)
-
-    @tool(name="probe", description="Probe one value.")
-    def probe(value: str):
-        return {"claim": f"probe {value}", "confidence": 0.8}
-
-    child = ToolRegistry()
-    child.register(
-        ToolRuntimeSpec(
-            tool_spec=probe,
-            argument_normalizer=lambda _ctx, request: {"value": str(request.arguments["value"]).strip().lower()},
-            semantic_key_builder=lambda _ctx, request: f"probe:{str(request.arguments['value']).strip().lower()}",
-            duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
-        )
-    )
-    registry = ToolRegistry()
-    registry.extend(child)
-    workspace = EvidenceWorkspace.create(tmp_path, "agent_runtime_path")
-    agent = IterativeVisualAgent(
-        backend=RuntimeBackend(),
-        registry=registry,
-        workspace=workspace,
-        scene_index=SceneIndex(
-            video_path="/videos/demo.mp4",
-            duration_sec=1.0,
-            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=1.0)],
-        ),
-        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=3, reserve_final_round=False),
-    )
-
-    agent.run(question="What is visible?", video_path="/videos/demo.mp4")
-
-    observations = workspace.read_observations(tool_name="probe")
-    assert len(observations) == 1
-    assert observations[0].claim == "probe alpha"
-    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert "duplicate_tool_call" in trace
-    assert trace.count("tool_lifecycle_result") == 1
-
-
-def test_iterative_agent_real_registry_rejects_duplicate_bind_asr_claim(tmp_path) -> None:
-    class RuntimeBackend(VisionLanguageBackend):
-        def __init__(self) -> None:
-            self.requests: list[BackendRequest] = []
-
-        def generate(self, request: BackendRequest) -> BackendResponse:
-            self.requests.append(request)
-            if request.task == "replan":
-                return BackendResponse(
-                    text=(
-                        '{"status":"continue","rationale":"bind once",'
-                        '"program":['
-                        '{"tool":"bind_asr_claim","args":{"segment_id":" seg_0001 ","target_refs":["T1"]}},'
-                        '{"tool":"bind_asr_claim","args":{"segment_id":"seg_0001","target_refs":["T1"]}}'
-                        "]} "
-                    )
-                )
-            if request.task == "asr_claim_binding":
-                return BackendResponse(text='{"T1":{"verdict":"supports","cue_ids":["cue_0001"],"quote":"alpha appears"}}')
-            if request.task == "answer_from_evidence":
-                return BackendResponse(text='{"answer":"need_more_evidence","citations":[],"confidence":0.0}')
-            raise AssertionError(request.task)
-
-    backend = RuntimeBackend()
-    workspace = EvidenceWorkspace.create(tmp_path, "real_registry_duplicate_bind")
-    workspace.target_registry = TargetRegistry.from_specs(
-        targets=[TargetSpec(target_id="T1", canonical_text="alpha appears")]
-    )
-    scene_index = SceneIndex(
-        video_path="/videos/demo.mp4",
-        duration_sec=10.0,
-        segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=10.0)],
-    )
-    video_map = VideoMap(
-        video_path="/videos/demo.mp4",
-        duration_sec=10.0,
-        segments=[
-            VideoMapSegment(
-                segment_id="seg_0001",
-                start_sec=0.0,
-                end_sec=10.0,
-                asr_sentences=[{"cue_id": "cue_0001", "start_sec": 0.0, "end_sec": 1.0, "text": "alpha appears"}],
-            )
-        ],
-    )
-    agent = IterativeVisualAgent(
-        backend=backend,
-        registry=build_video_exploration_registry(video_map=video_map, backend=backend, workspace=workspace),
-        workspace=workspace,
-        scene_index=scene_index,
-        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=3, reserve_final_round=False),
-    )
-
-    agent.run(question="What is visible?", video_path="/videos/demo.mp4")
-
-    assert workspace.observation_count(tool_name="bind_asr_claim") == 1
-    assert [request.task for request in backend.requests].count("asr_claim_binding") == 1
-    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert "duplicate_tool_call" in trace
-
-
-def test_auto_evidence_promotion_uses_shared_round_budget(tmp_path) -> None:
-    @tool(name="bind_asr_claim", description="Bind a transcript claim to target refs.")
-    def bind_asr_claim(segment_id: str, target_refs: list[str]):
-        return {
-            "claim": f"bound {segment_id} to {','.join(target_refs)}",
-            "confidence": 0.9,
-            "evidence_binding": {"status": "supported", "target_refs": target_refs},
-        }
-
-    registry = ToolRegistry()
-    registry.register(bind_asr_claim)
-    workspace = EvidenceWorkspace.create(tmp_path, "auto_promotion_budget")
-    workspace.target_registry = TargetRegistry.from_specs(
-        targets=[TargetSpec(target_id="T1", canonical_text="alpha appears")]
-    )
-    workspace.write_observation(
-        tool_name="target_coverage",
-        claim="coverage for alpha",
-        confidence=0.8,
-        raw_output={
-            "coverage": [
-                {
-                    "target_ref": "T1",
-                    "target": "alpha appears",
-                    "candidates": [{"segment_id": "seg_0001", "score": 0.9, "source": "asr"}],
-                }
-            ]
-        },
-    )
-    scene_index = SceneIndex(
-        video_path="/videos/demo.mp4",
-        duration_sec=1.0,
-        segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=1.0)],
-    )
-    agent = IterativeVisualAgent(
-        backend=RuntimeBackendForUnexpectedCalls(),
-        registry=registry,
-        workspace=workspace,
-        scene_index=scene_index,
-        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=1, reserve_final_round=False),
-    )
-    runtime_context = agent._runtime_context(
-        question="What is visible?",
-        video_path="/videos/demo.mp4",
-        route="needle_local",
-        round_number=1,
-    )
-    runtime_context.increment_tool_calls()
-
-    promoted = agent._try_auto_evidence_promotion(
-        answer="alpha appears",
-        question="What is visible?",
-        round_number=1,
-        source="test",
-        runtime_context=runtime_context,
-    )
-
-    assert promoted is False
-    assert workspace.observation_count(tool_name="bind_asr_claim") == 0
-    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert "round_tool_budget_exhausted" in trace
-
-
-def test_all_programs_in_logical_round_share_budget(tmp_path) -> None:
-    class SharedBudgetBackend(VisionLanguageBackend):
-        def __init__(self) -> None:
-            self.requests: list[BackendRequest] = []
-
-        def generate(self, request: BackendRequest) -> BackendResponse:
-            self.requests.append(request)
-            if request.task == "replan":
-                return BackendResponse(
-                    text='{"status":"continue","rationale":"probe","program":[{"tool":"probe","args":{"value":"alpha"}}]}'
-                )
-            if request.task == "answer_from_evidence":
-                return BackendResponse(
-                    text=(
-                        '{"status":"need_more_evidence","answer":"","citations":[],"confidence":0.0,'
-                        '"candidate_option_relations":[{'
-                        '"option":"D","relation":"support","strength":0.8,'
-                        '"grounding_quality":"indexed_transcript","observation_id":"obs_0001"'
-                        "}],"
-                        '"missing_evidence":[]}'
-                    )
-                )
-            if request.task == "final_decision":
-                return BackendResponse(text='{"status":"no_model_final","reason":"insufficient_evidence"}')
-            raise AssertionError(f"unexpected backend request: {request.task}")
-
-    @tool(name="probe", description="Consume one planner tool call.")
-    def probe(value: str):
-        return {
-            "claim": f"probe {value}",
-            "confidence": 0.4,
-            "produced_anchors": [
-                {
-                    "anchor_id": "anch_probe_alpha",
-                    "observation_id": "__pending__",
-                    "source_kind": "asr_fact",
-                    "segment_id": "seg_0001",
-                    "field_path": "claim",
-                    "excerpt": "probe alpha",
-                }
-            ],
-        }
-
-    @tool(name="bind_asr_claim", description="Bind transcript claim to target refs.")
-    def bind_asr_claim(segment_id: str, target_refs: list[str]):
-        return {
-            "claim": f"bound {segment_id} to {','.join(target_refs)}",
-            "confidence": 0.9,
-            "evidence_binding": {"status": "supported", "target_refs": target_refs},
-        }
-
-    registry = ToolRegistry()
-    registry.register(probe)
-    registry.register(bind_asr_claim)
-    workspace = EvidenceWorkspace.create(tmp_path, "agent_shared_round_budget")
-    workspace.target_registry = TargetRegistry.from_specs(
-        targets=[TargetSpec(target_id="T1", canonical_text="alpha appears")]
-    )
-    workspace.write_observation(
-        tool_name="target_coverage",
-        claim="coverage for alpha",
-        confidence=0.8,
-        raw_output={
-            "coverage": [
-                {
-                    "target_ref": "T1",
-                    "target": "alpha appears",
-                    "candidates": [{"segment_id": "seg_0001", "score": 0.9, "source": "asr"}],
-                }
-            ]
-        },
-    )
-    agent = IterativeVisualAgent(
-        backend=SharedBudgetBackend(),
-        registry=registry,
-        workspace=workspace,
-        scene_index=SceneIndex(
-            video_path="/videos/demo.mp4",
-            duration_sec=1.0,
-            segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=1.0)],
-        ),
-        budget=AgentBudget(
-            max_rounds=6,
-            max_tool_calls_per_round=1,
-            reserve_final_round=False,
-            max_repeated_programs=0,
-            hard_skill_runtime=False,
-            disable_global_gist_route=True,
-        ),
-    )
-
-    result = agent.run(
-        question="Which option is supported?\nA. wrong\nD. alpha appears",
-        video_path="/videos/demo.mp4",
-    )
-
-    assert result.status == "no_model_final"
-    assert workspace.observation_count(tool_name="probe") >= 1
-    assert workspace.observation_count(tool_name="bind_asr_claim") == 0
-    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert "iterative_answer_suggestion" in trace
-    assert "auto_evidence_promotion_attempted" not in trace
-
-
-def test_target_coverage_seed_fallback_gets_fresh_seed_context(tmp_path) -> None:
-    @tool(name="target_coverage", description="Build target coverage.")
-    def target_coverage(
-        targets: list[str] | None = None,
-        target_refs: list[str] | None = None,
-        top_k: int = 3,
-        group_by_option: bool = False,
-    ):
-        del top_k, group_by_option
-        if target_refs:
-            raise ToolError("workspace target_refs unavailable")
-        return {
-            "claim": "fallback coverage",
-            "confidence": 0.8,
-            "coverage": [
-                {
-                    "target": str((targets or [""])[0]),
-                    "candidates": [{"segment_id": "seg_0001", "score": 0.9}],
-                }
-            ],
-        }
-
-    registry = ToolRegistry()
-    registry.register(target_coverage)
-    workspace = EvidenceWorkspace.create(tmp_path, "target_coverage_fallback_budget")
-    workspace.target_registry = TargetRegistry.from_specs(
-        targets=[TargetSpec(target_id="T1", canonical_text="alpha appears")]
-    )
-    scene_index = SceneIndex(
-        video_path="/videos/demo.mp4",
-        duration_sec=1.0,
-        segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=1.0)],
-    )
-    agent = IterativeVisualAgent(
-        backend=RuntimeBackendForUnexpectedCalls(),
-        registry=registry,
-        workspace=workspace,
-        scene_index=scene_index,
-        budget=AgentBudget(max_rounds=1, max_tool_calls_per_round=1, reserve_final_round=False),
-    )
-    agent._exploration_target_entities = ("alpha appears",)
-
-    agent._seed_target_coverage(
-        "Which option is correct?\nOptions:\nA. alpha appears\nB. beta appears"
-    )
-
-    assert workspace.observation_count(tool_name="target_coverage") == 1
-    trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
-    assert "target_coverage_seed_fallback" in trace
-    assert "round_tool_budget_exhausted" not in trace
 
 
 class RuntimeBackendForUnexpectedCalls(VisionLanguageBackend):

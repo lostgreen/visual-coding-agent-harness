@@ -11,12 +11,13 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeVisualAgent
+from visual_coding_agent_harness.agents.budget import AgentBudget
 from visual_coding_agent_harness.agents.context_budget import parse_budget_ratios
+from visual_coding_agent_harness.agents.workspace_agent import WorkspaceVisualAgent
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
-from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
+from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
 from visual_coding_agent_harness.video_index import SceneIndex
 from visual_coding_agent_harness.video_map import VideoMap
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -40,8 +41,9 @@ DEFAULT_SUBTITLE_DIR = DATA_ROOT / "subtitle"
 DEFAULT_RUN_ROOT = KML_MANAGED_ROOT / "runs" / "videomme_agent_eval"
 DEFAULT_SCENE_INDEX_CACHE_DIR = KML_MANAGED_ROOT / "scene_index_cache"
 DEFAULT_CASES = ("605-1", "611-2", "612-1")
-DEFAULT_STRATEGIES = ("agent_v2",)
-STRATEGIES = ("agent_v2",)
+WORKSPACE_V2_STRATEGY = "workspace_v2"
+DEFAULT_STRATEGIES = (WORKSPACE_V2_STRATEGY,)
+STRATEGIES = (WORKSPACE_V2_STRATEGY,)
 WINDOW_SEC = 300.0
 SEGMENT_NFRAMES = 8
 FRAME_CACHE_FPS = 2.0
@@ -198,56 +200,52 @@ def run_loop(
     budget: AgentBudget,
     extract_clips: bool = True,
     frame_sampler: FrameSampler | None = None,
+    strategy: str = WORKSPACE_V2_STRATEGY,
 ) -> dict[str, Any]:
     start = time.perf_counter()
     workspace = EvidenceWorkspace.create(base_dir=workspace_root, run_id=run_id)
-    agent = IterativeVisualAgent(
-        backend=backend,
-        registry=build_video_exploration_registry(
-            video_map=VideoMap.from_scene_index(scene_index),
+    video_map = VideoMap.from_scene_index(scene_index)
+    if strategy == WORKSPACE_V2_STRATEGY:
+        agent = WorkspaceVisualAgent(
             backend=backend,
+            registry=build_workspace_v2_registry(video_map=video_map, backend=backend, workspace=workspace),
             workspace=workspace,
-            extract_clips=extract_clips,
-            frame_sampler=frame_sampler,
-        ),
-        workspace=workspace,
-        scene_index=scene_index,
-        budget=budget,
-    )
-    result = agent.run(question=question, video_path=video_path)
+            max_rounds=budget.max_rounds,
+            video_path=video_path,
+        )
+        result = agent.run(question)
+    else:
+        raise ValueError(f"Unknown strategy: {strategy}")
     seconds = time.perf_counter() - start
-    reward_tags = _reward_tags_for_result(workspace=workspace, status=result.status, citations=result.citations)
+    status = _result_status(result)
+    answer = str(getattr(result, "answer", ""))
+    citations = _result_citations(result)
+    confidence = getattr(result, "confidence", "")
+    reward_tags = _reward_tags_for_result(workspace=workspace, status=status, citations=citations)
     trajectory_payload = workspace.export_longvideoagent_trajectory(
         question=question,
         video_path=video_path,
         final={
-            "answer": result.answer,
-            "status": result.status,
-            "citations": list(result.citations),
-            "confidence": result.confidence,
+            "answer": answer,
+            "status": status,
+            "citations": list(citations),
+            "confidence": confidence,
         },
-        verifier_result={"status": result.status},
+        verifier_result={"status": status},
         reward_tags=reward_tags,
     )
     evidence_chains_payload = workspace.export_evidence_chains()
     trajectory_path = workspace.root / "artifacts" / "trajectories" / "longvideoagent_trajectory.json"
     evidence_chains_path = workspace.root / "artifacts" / "evidence_chains" / "evidence_chains.json"
     planner_io_dir = workspace.root / "artifacts" / "planner_io"
-    tools = []
-    segments = []
-    for round_item in result.rounds:
-        for step in round_item.program:
-            tools.append(str(step.get("tool", "")))
-            args = step.get("args", {}) if isinstance(step.get("args", {}), Mapping) else {}
-            if args.get("segment_id"):
-                segments.append(str(args["segment_id"]))
+    tools, segments = _result_tools_and_segments(result)
     return {
-        "answer": result.answer,
-        "choice": extract_choice(result.answer),
-        "status": result.status,
-        "confidence": result.confidence,
-        "citations": list(result.citations),
-        "rounds": len(result.rounds),
+        "answer": answer,
+        "choice": extract_choice(answer),
+        "status": status,
+        "confidence": confidence,
+        "citations": list(citations),
+        "rounds": _result_round_count(result),
         "tools": tools,
         "segments": segments,
         "seconds": round(seconds, 3),
@@ -259,6 +257,55 @@ def run_loop(
         "planner_prompt_count": len(list(planner_io_dir.glob("*_prompt.txt"))) if planner_io_dir.exists() else 0,
         "reward_tags": reward_tags,
     }
+
+
+def _result_status(result: Any) -> str:
+    status = getattr(result, "status", "")
+    if status:
+        return str(status)
+    metadata = getattr(result, "metadata", None)
+    if isinstance(metadata, Mapping) and metadata.get("status"):
+        return str(metadata["status"])
+    answer = str(getattr(result, "answer", ""))
+    if answer and answer != "need_more_evidence":
+        return "final"
+    return "need_more_evidence"
+
+
+def _result_citations(result: Any) -> tuple[str, ...]:
+    citations = getattr(result, "citations", ())
+    if isinstance(citations, str):
+        return (citations,) if citations else ()
+    if isinstance(citations, Sequence):
+        return tuple(str(item) for item in citations if str(item))
+    return ()
+
+
+def _result_round_count(result: Any) -> int:
+    rounds = getattr(result, "rounds", ())
+    if isinstance(rounds, int):
+        return rounds
+    if isinstance(rounds, Sequence):
+        return len(rounds)
+    return 0
+
+
+def _result_tools_and_segments(result: Any) -> tuple[list[str], list[str]]:
+    rounds = getattr(result, "rounds", ())
+    if isinstance(rounds, int) or not isinstance(rounds, Sequence):
+        return [], []
+    tools = []
+    segments = []
+    for round_item in rounds:
+        program = getattr(round_item, "program", ())
+        for step in program:
+            if not isinstance(step, Mapping):
+                continue
+            tools.append(str(step.get("tool", "")))
+            args = step.get("args", {}) if isinstance(step.get("args", {}), Mapping) else {}
+            if args.get("segment_id"):
+                segments.append(str(args["segment_id"]))
+    return tools, segments
 
 
 def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
@@ -1008,6 +1055,7 @@ def run_strategy(
         budget=config.budget,
         extract_clips=True,
         frame_sampler=frame_sampler,
+        strategy=strategy,
     )
 
 
@@ -1199,12 +1247,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Use deterministic skill runtime for supported routes before falling back to planner loop.",
     )
     parser.add_argument(
-        "--disable-global-gist-route",
-        action="store_true",
-        default=None,
-        help="Skip the automatic gist_global shortcut so debugging runs capture planner-loop IO.",
-    )
-    parser.add_argument(
         "--use-global-question-rewrite",
         dest="use_global_question_rewrite",
         action="store_true",
@@ -1299,7 +1341,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         "planner_owned_grounding",
         "planner_owned_grounding",
         "budget.planner_owned_grounding",
-        default="agent_v2" in strategies,
+        default=False,
     )
     use_global_question_rewrite = _as_bool(
         _arg_or_config(args, config_data, "use_global_question_rewrite", "enable_mcq_rewrite", default=False)
@@ -1314,9 +1356,8 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         planner_receives_media=_as_bool(_arg_or_config(args, config_data, "planner_receives_media", default=False)),
         reserve_final_round=reserve_final_round,
         max_repeated_programs=max(max_rounds, AgentBudget().max_repeated_programs),
-        disable_global_gist_route=_as_bool(_arg_or_config(args, config_data, "disable_global_gist_route", default=False)),
         rewrite_mcq_for_exploration=use_global_question_rewrite,
-        hard_skill_runtime="agent_v2" in strategies,
+        hard_skill_runtime=False,
         planner_owned_grounding=_as_bool(planner_owned_grounding),
     )
     if args.enable_followup is False:

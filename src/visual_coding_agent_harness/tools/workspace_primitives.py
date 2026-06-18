@@ -77,6 +77,16 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
             "limitations": "Cheap structured workspace query; no video frames inspected.",
         }
 
+    @tool(name="read_workspace", description="Read a bounded section from the durable workspace.")
+    def read_workspace(section: str, filter: Mapping[str, Any] | None = None) -> Mapping[str, object]:
+        rows = workspace.read_workspace_section(section, filter=filter or {}) if workspace is not None else []
+        return {
+            "claim": f"Read {len(rows)} row(s) from workspace section {section}.",
+            "confidence": 1.0,
+            "regions": [{"section": section, "rows": rows, "observations": rows if section == "observations_by_id" else []}],
+            "limitations": "Cheap workspace read; no video frames inspected.",
+        }
+
     @tool(name="read_timeline_sorted", description="Read the workspace timeline sorted by observed time.")
     def read_timeline_sorted() -> Mapping[str, object]:
         entries = workspace.read_timeline_sorted() if workspace is not None else []
@@ -168,14 +178,67 @@ def build_workspace_primitives_registry(*, workspace: Optional[EvidenceWorkspace
             "limitations": "Memory records planner notes; provenance is checked but semantic support is not judged.",
         }
 
+    @tool(name="commit_observation", description="Commit one pending observation into pinned workspace memory.")
+    def commit_observation(observation_id: str, writes: Mapping[str, Any]) -> Mapping[str, object]:
+        if workspace is None:
+            return _missing_workspace_payload("commit_observation")
+        disposition = workspace.commit_observation(observation_id, writes=writes)
+        return {
+            "claim": f"Observation {observation_id} committed.",
+            "confidence": 1.0,
+            "regions": [disposition],
+            "limitations": "Workspace transaction; provenance is validated, semantic entailment is not judged.",
+        }
+
+    @tool(name="reject_observation", description="Reject one pending observation so it stays out of workspace view.")
+    def reject_observation(observation_id: str, reason: str) -> Mapping[str, object]:
+        if workspace is None:
+            return _missing_workspace_payload("reject_observation")
+        disposition = workspace.reject_observation(observation_id, reason=reason)
+        return {
+            "claim": f"Observation {observation_id} rejected.",
+            "confidence": 1.0,
+            "regions": [disposition],
+            "limitations": "Workspace disposition; no video frames inspected.",
+        }
+
+    @tool(name="defer_observation", description="Defer one pending observation until more context is available.")
+    def defer_observation(observation_id: str, until: str = "", reason: str = "") -> Mapping[str, object]:
+        if workspace is None:
+            return _missing_workspace_payload("defer_observation")
+        disposition = workspace.defer_observation(observation_id, until=until, reason=reason)
+        return {
+            "claim": f"Observation {observation_id} deferred.",
+            "confidence": 1.0,
+            "regions": [disposition],
+            "limitations": "Workspace disposition; defer is capped by the workspace state machine.",
+        }
+
+    @tool(name="no_commit_needed", description="Acknowledge one pending observation that adds no durable evidence.")
+    def no_commit_needed(observation_id: str, reason: str) -> Mapping[str, object]:
+        if workspace is None:
+            return _missing_workspace_payload("no_commit_needed")
+        disposition = workspace.no_commit_needed(observation_id, reason=reason)
+        return {
+            "claim": f"Observation {observation_id} acknowledged.",
+            "confidence": 1.0,
+            "regions": [disposition],
+            "limitations": "Workspace disposition; no video frames inspected.",
+        }
+
     registry.register(view_observation)
     registry.register(read_observation_detail)
     registry.register(grep_evidence)
     registry.register(query_evidence_table)
+    registry.register(read_workspace)
     registry.register(read_timeline_sorted)
     registry.register(read_hypothesis)
     registry.register(update_hypothesis_slot)
     registry.register(write_memory)
+    registry.register(commit_observation)
+    registry.register(reject_observation)
+    registry.register(defer_observation)
+    registry.register(no_commit_needed)
     return registry
 
 
@@ -203,3 +266,12 @@ def _row_matches_filter(row: Mapping[str, Any], expected: Mapping[str, Any]) -> 
         if row.get(str(key)) != value:
             return False
     return True
+
+
+def _missing_workspace_payload(tool_name: str) -> Mapping[str, object]:
+    return {
+        "claim": f"No workspace is attached; {tool_name} was not applied.",
+        "confidence": 0.0,
+        "regions": [],
+        "limitations": "Workspace-backed tool requires an EvidenceWorkspace.",
+    }

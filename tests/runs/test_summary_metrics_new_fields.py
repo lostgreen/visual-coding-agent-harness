@@ -72,18 +72,18 @@ def test_summary_payload_aggregates_phase_d_trace_metrics(tmp_path: Path):
         results=[
             {
                 "question_id": "case_001",
-                "strategies": {"agent_v2": {"status": "final", "correct": False, "citations": ["obs_0001"]}},
-                "raw_artifacts": {"workspaces": {"agent_v2": str(unsupported.root)}},
+                "strategies": {"workspace_v2": {"status": "final", "correct": False, "citations": ["obs_0001"]}},
+                "raw_artifacts": {"workspaces": {"workspace_v2": str(unsupported.root)}},
             },
             {
                 "question_id": "case_002",
-                "strategies": {"agent_v2": {"status": "final", "correct": True, "citations": ["obs_0001"]}},
-                "raw_artifacts": {"workspaces": {"agent_v2": str(supported.root)}},
+                "strategies": {"workspace_v2": {"status": "final", "correct": True, "citations": ["obs_0001"]}},
+                "raw_artifacts": {"workspaces": {"workspace_v2": str(supported.root)}},
             },
             {
                 "question_id": "case_003",
-                "strategies": {"agent_v2": {"status": "need_more_evidence", "correct": False}},
-                "raw_artifacts": {"workspaces": {"agent_v2": str(diagnostic.root)}},
+                "strategies": {"workspace_v2": {"status": "need_more_evidence", "correct": False}},
+                "raw_artifacts": {"workspaces": {"workspace_v2": str(diagnostic.root)}},
             },
         ],
     )
@@ -98,7 +98,7 @@ def test_summary_payload_aggregates_phase_d_trace_metrics(tmp_path: Path):
 def test_report_metrics_exposes_phase_d_strategy_metrics(tmp_path: Path):
     run_root = tmp_path / "run"
     workspace_root = run_root / "workspaces"
-    unsupported = EvidenceWorkspace.create(workspace_root, "case_001_agent_v2")
+    unsupported = EvidenceWorkspace.create(workspace_root, "case_001_workspace_v2")
     unsupported_obs = unsupported.write_observation(
         tool_name="vision_read",
         claim="Unsupported citation.",
@@ -107,7 +107,7 @@ def test_report_metrics_exposes_phase_d_strategy_metrics(tmp_path: Path):
     )
     unsupported.write_trace_event("iterative_final", {"citations": [unsupported_obs.observation_id]})
 
-    diagnostic = EvidenceWorkspace.create(workspace_root, "case_002_agent_v2")
+    diagnostic = EvidenceWorkspace.create(workspace_root, "case_002_workspace_v2")
     diagnostic.write_observation(tool_name="vision_read", claim="valid", confidence=0.8)
     diagnostic.write_observation(tool_name="vision_read", claim="degenerate", confidence=0.1)
     diagnostic.write_trace_event("tool_output_degenerate", {"observation_id": "obs_0002"})
@@ -134,26 +134,26 @@ def test_report_metrics_exposes_phase_d_strategy_metrics(tmp_path: Path):
       "question_id": "case_001",
       "gt": "D",
       "strategies": {
-        "agent_v2": {
+        "workspace_v2": {
           "choice": "B",
           "correct": false,
           "status": "final",
           "citations": ["obs_0001"]
         }
       },
-      "raw_artifacts": {"workspaces": {"agent_v2": "workspaces/runs/case_001_agent_v2"}}
+      "raw_artifacts": {"workspaces": {"workspace_v2": "workspaces/runs/case_001_workspace_v2"}}
     },
     {
       "question_id": "case_002",
       "gt": "B",
       "strategies": {
-        "agent_v2": {
+        "workspace_v2": {
           "choice": "",
           "correct": false,
           "status": "need_more_evidence"
         }
       },
-      "raw_artifacts": {"workspaces": {"agent_v2": "workspaces/runs/case_002_agent_v2"}}
+      "raw_artifacts": {"workspaces": {"workspace_v2": "workspaces/runs/case_002_workspace_v2"}}
     }
   ]
 }
@@ -162,7 +162,7 @@ def test_report_metrics_exposes_phase_d_strategy_metrics(tmp_path: Path):
     )
 
     report = report_metrics.build_report(summary_path)
-    strategy = report["strategies"]["agent_v2"]
+    strategy = report["strategies"]["workspace_v2"]
 
     assert strategy["unsupported_citation_rate"] == 1.0
     assert strategy["mutex_conflict_detection_count"] == 1

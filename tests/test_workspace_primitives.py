@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from visual_coding_agent_harness.memory import SourceAnchor
 from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -130,3 +132,218 @@ def test_write_memory_tool_persists_anchor_backed_memory(tmp_path: Path):
     assert entry.layer == "visual"
     assert entry.embedding_refs == ("clip://seg_0005/frame_0012",)
     assert entry.metadata == {"source": "planner"}
+
+
+def test_workspace_v2_layout_is_created_alongside_legacy_files(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_layout")
+
+    expected_paths = [
+        "index/coarse_segments.jsonl",
+        "index/asr.jsonl",
+        "index/shots.jsonl",
+        "index/captions.jsonl",
+        "entities/entities.jsonl",
+        "events/events.jsonl",
+        "relations/relations.jsonl",
+        "attributes/attributes.jsonl",
+        "memory/memory.jsonl",
+        "notes/plan.md",
+        "notes/open_questions.md",
+        "observations/observations.jsonl",
+        "observations/disposition.jsonl",
+        "pinned/pinned_anchors.jsonl",
+    ]
+
+    for relative_path in expected_paths:
+        assert (workspace.root / relative_path).exists(), relative_path
+    assert (workspace.root / "memory.jsonl").exists()
+    assert (workspace.root / "observations.jsonl").exists()
+
+
+def test_commit_observation_writes_pinned_state_and_views(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_commit_observation")
+    observation = workspace.write_observation(
+        tool_name="read_clip",
+        claim="The narration says Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe.",
+        confidence=0.88,
+        raw_output={
+            "facts": [
+                {
+                    "text": "Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe.",
+                    "source_kind": "audio_fact",
+                    "time_range": [1234.5, 1240.0],
+                }
+            ]
+        },
+    )
+
+    disposition = workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": "anch_asr_206",
+                    "kind": "asr",
+                    "source_kind": "audio_fact",
+                    "time_range": [1234.5, 1240.0],
+                    "excerpt": "Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe.",
+                }
+            ],
+            "entities": [
+                {"kind": "concept", "name": "Austria-Hungary"},
+                {"kind": "location", "name": "Russia"},
+                {"kind": "location", "name": "Western Europe"},
+            ],
+            "relations": [
+                {
+                    "subject": "Austria-Hungary",
+                    "predicate": "acts_as_buffer_between",
+                    "objects": ["Russia", "Western Europe"],
+                    "time_range": [1234.5, 1240.0],
+                    "evidence_obs_ids": [observation.observation_id],
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "answer_support",
+                    "claim": "The narration describes Austria-Hungary as a buffer between Russia and Western Europe.",
+                    "supports_option": "D",
+                    "anchor_ids": ["anch_asr_206"],
+                    "evidence_obs_ids": [observation.observation_id],
+                    "confidence": "high",
+                }
+            ],
+            "plan_update": "Need visual confirmation that the shield symbol is the same buffer concept.",
+            "open_questions_add": ["Does the shield visual appear near the same explanatory span?"],
+        },
+    )
+
+    assert disposition["disposition"] == "committed"
+    assert workspace.observation_status(observation.observation_id) == "committed"
+    assert workspace.read_workspace_section("entities")[0]["name"] == "Austria-Hungary"
+    assert workspace.read_workspace_section("relations")[0]["predicate"] == "acts_as_buffer_between"
+    assert workspace.memory_entries()[0].entry_id == "mem_0001"
+    assert workspace.read_workspace_section("pinned_anchors")[0]["anchor_id"] == "anch_asr_206"
+
+    plan_view = workspace.render_plan_view(
+        question="Why was Austria-Hungary shown between Russia and Western Europe?",
+    )
+    assert "# Workspace" in plan_view
+    assert "## Committed Memory" in plan_view
+    assert "mem_0001" in plan_view
+    assert "anch_asr_206" in plan_view
+
+
+def test_commit_observation_rejects_excerpt_not_present_in_observation(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_commit_fake_excerpt")
+    observation = workspace.write_observation(
+        tool_name="read_clip",
+        claim="The map shows a shield icon.",
+        confidence=0.7,
+    )
+
+    with pytest.raises(ValueError, match="excerpt must appear"):
+        workspace.commit_observation(
+            observation.observation_id,
+            writes={
+                "pinned_anchors": [
+                    {
+                        "anchor_id": "anch_fake",
+                        "kind": "asr",
+                        "source_kind": "audio_fact",
+                        "excerpt": "Austria-Hungary was a buffer.",
+                    }
+                ]
+            },
+        )
+
+
+def test_failed_commit_observation_does_not_leave_partial_workspace_writes(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_commit_atomic_failure")
+    observation = workspace.write_observation(
+        tool_name="read_clip",
+        claim="The map shows a shield icon.",
+        confidence=0.7,
+    )
+
+    with pytest.raises(ValueError, match="attribute_validation_failed"):
+        workspace.commit_observation(
+            observation.observation_id,
+            writes={
+                "pinned_anchors": [
+                    {
+                        "anchor_id": "anch_shield",
+                        "kind": "visual_fact",
+                        "source_kind": "visual_fact",
+                        "excerpt": "shield icon",
+                    }
+                ],
+                "entities": [{"kind": "concept", "name": "shield icon"}],
+                "attributes": [{"target": "shield icon", "name": "", "value": "visible"}],
+            },
+        )
+
+    assert workspace.observation_status(observation.observation_id) == "uncommitted"
+    assert workspace.read_workspace_section("pinned_anchors") == []
+    assert workspace.read_workspace_section("entities") == []
+    assert workspace.observation_dispositions() == []
+
+
+def test_cheap_tool_observations_default_to_auto_acknowledged(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_auto_ack")
+    observation = workspace.write_observation(tool_name="search", claim="One candidate ASR hit.", confidence=1.0)
+
+    assert workspace.observation_status(observation.observation_id) == "auto_acknowledged"
+
+
+def test_deferred_observations_are_prioritized_in_plan_view(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_deferred_view")
+    observation = workspace.write_observation(tool_name="read_clip", claim="Needs another anchor.", confidence=0.5)
+    workspace.defer_observation(
+        observation.observation_id,
+        until="after_event_anchor_resolved",
+        reason="Need the event anchor first.",
+    )
+
+    plan_view = workspace.render_plan_view(question="What does the shield mean?")
+
+    assert "## Deferred Observations" in plan_view
+    assert observation.observation_id in plan_view
+    assert "after_event_anchor_resolved" in plan_view
+
+
+def test_workspace_disposition_tools_and_read_workspace(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_disposition_tools")
+    reject_obs = workspace.write_observation(tool_name="read_clip", claim="Contradicted fact.", confidence=0.2)
+    defer_obs = workspace.write_observation(tool_name="read_clip", claim="Needs another anchor.", confidence=0.5)
+    ack_obs = workspace.write_observation(tool_name="list", claim="Listed segments only.", confidence=1.0)
+    registry = build_workspace_primitives_registry(workspace=workspace)
+
+    rejected = registry.execute(
+        "reject_observation",
+        {"observation_id": reject_obs.observation_id, "reason": "Contradicts committed ASR."},
+    )
+    deferred = registry.execute(
+        "defer_observation",
+        {
+            "observation_id": defer_obs.observation_id,
+            "until": "after_event_anchor_resolved",
+            "reason": "Need the event anchor first.",
+        },
+    )
+    acknowledged = registry.execute(
+        "no_commit_needed",
+        {"observation_id": ack_obs.observation_id, "reason": "No new evidence."},
+    )
+    workspace_read = registry.execute(
+        "read_workspace",
+        {"section": "observations_by_id", "filter": {"observation_id": reject_obs.observation_id}},
+    )
+
+    assert rejected["regions"][0]["disposition"] == "rejected"
+    assert deferred["regions"][0]["defer_count"] == 1
+    assert acknowledged["regions"][0]["disposition"] == "acknowledged"
+    assert workspace.observation_status(reject_obs.observation_id) == "rejected"
+    assert workspace.observation_status(defer_obs.observation_id) == "deferred"
+    assert workspace.observation_status(ack_obs.observation_id) == "acknowledged"
+    assert workspace_read["regions"][0]["observations"][0]["observation_id"] == reject_obs.observation_id

@@ -167,6 +167,8 @@ class EvidenceWorkspace:
         "inspect_segment",
         "vision_read",
         "verify_segment_anchors",
+        "read_clip",
+        "verify",
     }
     LOCAL_WORKER_EVIDENCE_TOOLS = {
         "caption_image",
@@ -199,6 +201,18 @@ class EvidenceWorkspace:
         "update_hypothesis_slot",
     }
     CONTEXT_ONLY_TOOLS = {"global_gist", "query_context"}
+    AUTO_ACKNOWLEDGED_TOOLS = {
+        "list",
+        "search",
+        "read_workspace",
+        "view_observation",
+        "read_observation_detail",
+        "grep_evidence",
+        "query_evidence_table",
+        "read_timeline_sorted",
+        "read_hypothesis",
+        "search_segments",
+    }
     ANSWER_EVIDENCE_TOOLS = (VISUAL_EVIDENCE_TOOLS - CONTEXT_ONLY_TOOLS) | {
         "caption_image",
         "caption_region",
@@ -228,6 +242,15 @@ class EvidenceWorkspace:
             root / "artifacts" / "crops",
             root / "artifacts" / "masks",
             root / "frame_sets",
+            root / "index",
+            root / "entities",
+            root / "events",
+            root / "relations",
+            root / "attributes",
+            root / "memory",
+            root / "notes",
+            root / "observations",
+            root / "pinned",
         ]:
             child.mkdir(parents=True, exist_ok=True)
 
@@ -239,6 +262,18 @@ class EvidenceWorkspace:
             "evidence.jsonl",
             "evidence_table.jsonl",
             "map_proposals.jsonl",
+            "index/coarse_segments.jsonl",
+            "index/asr.jsonl",
+            "index/shots.jsonl",
+            "index/captions.jsonl",
+            "entities/entities.jsonl",
+            "events/events.jsonl",
+            "relations/relations.jsonl",
+            "attributes/attributes.jsonl",
+            "memory/memory.jsonl",
+            "observations/observations.jsonl",
+            "observations/disposition.jsonl",
+            "pinned/pinned_anchors.jsonl",
         ]:
             (root / filename).touch(exist_ok=True)
         (root / "frame_sets" / "manifests.jsonl").touch(exist_ok=True)
@@ -255,6 +290,14 @@ class EvidenceWorkspace:
         hypothesis = root / "hypothesis.md"
         if not hypothesis.exists():
             hypothesis.write_text("# Hypothesis\n\n", encoding="utf-8")
+
+        plan = root / "notes" / "plan.md"
+        if not plan.exists():
+            plan.write_text("# Plan\n\n", encoding="utf-8")
+
+        open_questions = root / "notes" / "open_questions.md"
+        if not open_questions.exists():
+            open_questions.write_text("# Open Questions\n\n", encoding="utf-8")
 
         return cls(root=root)
 
@@ -293,6 +336,7 @@ class EvidenceWorkspace:
             frame_set_id=frame_set_id,
         )
         self._append_jsonl("observations.jsonl", asdict(observation))
+        self._append_jsonl("observations/observations.jsonl", asdict(observation))
         if produced_anchors:
             written_anchors = self.write_produced_anchors(produced_anchors)
             self.write_trace_event(
@@ -387,6 +431,7 @@ class EvidenceWorkspace:
             metadata=dict(metadata or {}),
         )
         self._append_jsonl("memory.jsonl", entry.to_dict())
+        self._append_jsonl("memory/memory.jsonl", entry.to_dict())
         self.write_trace_event(
             "memory_entry_written",
             {
@@ -420,6 +465,442 @@ class EvidenceWorkspace:
 
     def read_memory_by_id(self, entry_id: str) -> MemoryEntry | None:
         return self.get_memory(entry_id)
+
+    def note_entity(
+        self,
+        *,
+        kind: str,
+        name: str,
+        evidence_obs_ids: Sequence[str] = (),
+        attributes: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "entity_id": self._next_structured_id("entities/entities.jsonl", "e"),
+            "kind": str(kind or "entity"),
+            "name": str(name or "").strip(),
+            "evidence_obs_ids": self._validated_observation_ids(evidence_obs_ids),
+            "attributes": dict(attributes or {}),
+            "created_at": _utc_now(),
+        }
+        if not payload["name"]:
+            raise ValueError("entity_validation_failed: name must not be empty")
+        self._append_jsonl("entities/entities.jsonl", payload)
+        self.write_trace_event("workspace_entity_written", payload)
+        return payload
+
+    def note_event(
+        self,
+        *,
+        label: str,
+        time_range: Sequence[float] | None = None,
+        evidence_obs_ids: Sequence[str] = (),
+        attributes: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "event_id": self._next_structured_id("events/events.jsonl", "ev"),
+            "label": str(label or "").strip(),
+            "time_range": _normalize_optional_time_range(time_range),
+            "evidence_obs_ids": self._validated_observation_ids(evidence_obs_ids),
+            "attributes": dict(attributes or {}),
+            "created_at": _utc_now(),
+        }
+        if not payload["label"]:
+            raise ValueError("event_validation_failed: label must not be empty")
+        self._append_jsonl("events/events.jsonl", payload)
+        self.write_trace_event("workspace_event_written", payload)
+        return payload
+
+    def note_relation(
+        self,
+        *,
+        subject: str,
+        predicate: str,
+        objects: Sequence[str],
+        time_range: Sequence[float] | None = None,
+        evidence_obs_ids: Sequence[str] = (),
+        attributes: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        subject_text = str(subject or "").strip()
+        object_texts = [str(item).strip() for item in objects if str(item).strip()]
+        self._validate_relation_entities(subject_text, object_texts)
+        payload = {
+            "relation_id": self._next_structured_id("relations/relations.jsonl", "rel"),
+            "subject": subject_text,
+            "predicate": str(predicate or "").strip(),
+            "objects": object_texts,
+            "time_range": _normalize_optional_time_range(time_range),
+            "evidence_obs_ids": self._validated_observation_ids(evidence_obs_ids),
+            "attributes": dict(attributes or {}),
+            "created_at": _utc_now(),
+        }
+        if not payload["subject"] or not payload["predicate"] or not payload["objects"]:
+            raise ValueError("relation_validation_failed: subject, predicate, and objects are required")
+        self._append_jsonl("relations/relations.jsonl", payload)
+        self.write_trace_event("workspace_relation_written", payload)
+        return payload
+
+    def note_attribute(
+        self,
+        *,
+        target: str,
+        name: str,
+        value: Any,
+        evidence_obs_ids: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        payload = {
+            "attribute_id": self._next_structured_id("attributes/attributes.jsonl", "attr"),
+            "target": str(target or "").strip(),
+            "name": str(name or "").strip(),
+            "value": value,
+            "evidence_obs_ids": self._validated_observation_ids(evidence_obs_ids),
+            "created_at": _utc_now(),
+        }
+        if not payload["target"] or not payload["name"]:
+            raise ValueError("attribute_validation_failed: target and name are required")
+        self._append_jsonl("attributes/attributes.jsonl", payload)
+        self.write_trace_event("workspace_attribute_written", payload)
+        return payload
+
+    def pin_anchor(self, observation_id: str, anchor: Mapping[str, Any]) -> dict[str, Any]:
+        observation = self._require_observation(observation_id)
+        payload = dict(anchor)
+        anchor_id = str(
+            payload.get("anchor_id")
+            or payload.get("candidate_anchor_id")
+            or f"anch_{len(self.read_pinned_anchors()) + 1:04d}"
+        ).strip()
+        if not anchor_id:
+            raise ValueError("anchor_validation_failed: anchor_id must not be empty")
+        excerpt = str(payload.get("excerpt", "") or "").strip()
+        self._validate_excerpt_in_observation(observation, excerpt)
+        time_range = _normalize_optional_time_range(payload.get("time_range"))
+        start_sec = payload.get("start_sec")
+        end_sec = payload.get("end_sec")
+        if time_range is not None:
+            start_sec, end_sec = time_range
+        source_kind = str(payload.get("source_kind") or payload.get("kind") or "observation_fact")
+        source_anchor = SourceAnchor.from_mapping(
+            {
+                **payload,
+                "anchor_id": anchor_id,
+                "observation_id": observation.observation_id,
+                "source_kind": source_kind,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "excerpt": excerpt,
+            }
+        )
+        produced = self.read_produced_anchors_by_id()
+        if source_anchor.anchor_id not in produced:
+            self.write_produced_anchors([source_anchor])
+        pinned = {
+            **source_anchor.to_dict(),
+            "kind": str(payload.get("kind") or source_kind),
+            "time_range": time_range,
+            "created_at": _utc_now(),
+        }
+        if source_anchor.anchor_id not in {row.get("anchor_id") for row in self.read_pinned_anchors()}:
+            self._append_jsonl("pinned/pinned_anchors.jsonl", pinned)
+            self.write_trace_event(
+                "workspace_anchor_pinned",
+                {"observation_id": observation.observation_id, "anchor_id": source_anchor.anchor_id},
+            )
+        return pinned
+
+    def read_pinned_anchors(self) -> list[dict[str, Any]]:
+        return self._read_jsonl_dicts("pinned/pinned_anchors.jsonl")
+
+    def commit_observation(self, observation_id: str, *, writes: Mapping[str, Any]) -> dict[str, Any]:
+        observation = self._require_disposable_observation(observation_id)
+        normalized_writes = dict(writes or {})
+        self._validate_commit_writes(observation, normalized_writes)
+
+        snapshot = self._snapshot_transaction_files()
+        try:
+            pinned_anchors: list[dict[str, Any]] = []
+            for anchor_payload in _mapping_list(normalized_writes.get("pinned_anchors")):
+                pinned_anchors.append(self.pin_anchor(observation.observation_id, anchor_payload))
+
+            entities: list[dict[str, Any]] = []
+            for entity_payload in _mapping_list(normalized_writes.get("entities")):
+                entities.append(
+                    self.note_entity(
+                        kind=str(entity_payload.get("kind", "entity")),
+                        name=str(entity_payload.get("name", "")),
+                        evidence_obs_ids=_default_evidence_obs_ids(entity_payload, observation.observation_id),
+                        attributes=dict(entity_payload.get("attributes", {}) or {}),
+                    )
+                )
+
+            events: list[dict[str, Any]] = []
+            for event_payload in _mapping_list(normalized_writes.get("events")):
+                events.append(
+                    self.note_event(
+                        label=str(event_payload.get("label") or event_payload.get("name") or ""),
+                        time_range=event_payload.get("time_range"),
+                        evidence_obs_ids=_default_evidence_obs_ids(event_payload, observation.observation_id),
+                        attributes=dict(event_payload.get("attributes", {}) or {}),
+                    )
+                )
+
+            attributes: list[dict[str, Any]] = []
+            for attribute_payload in _mapping_list(normalized_writes.get("attributes")):
+                attributes.append(
+                    self.note_attribute(
+                        target=str(attribute_payload.get("target", "")),
+                        name=str(attribute_payload.get("name", "")),
+                        value=attribute_payload.get("value"),
+                        evidence_obs_ids=_default_evidence_obs_ids(attribute_payload, observation.observation_id),
+                    )
+                )
+
+            relations: list[dict[str, Any]] = []
+            for relation_payload in _mapping_list(normalized_writes.get("relations")):
+                relations.append(
+                    self.note_relation(
+                        subject=str(relation_payload.get("subject", "")),
+                        predicate=str(relation_payload.get("predicate", "")),
+                        objects=[str(item) for item in _sequence_items(relation_payload.get("objects"))],
+                        time_range=relation_payload.get("time_range"),
+                        evidence_obs_ids=_default_evidence_obs_ids(relation_payload, observation.observation_id),
+                        attributes=dict(relation_payload.get("attributes", {}) or {}),
+                    )
+                )
+
+            memory_entries: list[dict[str, Any]] = []
+            available_anchor_ids = [str(anchor.get("anchor_id")) for anchor in pinned_anchors if anchor.get("anchor_id")]
+            for memory_payload in _mapping_list(normalized_writes.get("memory")):
+                anchor_ids = [
+                    str(item).strip()
+                    for item in _sequence_items(memory_payload.get("anchor_ids"))
+                    if str(item).strip()
+                ] or available_anchor_ids
+                if not anchor_ids:
+                    raise ValueError("memory_validation_failed: commit memory requires anchor_ids")
+                entry = self.write_memory(
+                    kind=str(memory_payload.get("kind") or "support"),
+                    claim=str(memory_payload.get("claim", "")),
+                    anchors=[{"anchor_id": anchor_id} for anchor_id in anchor_ids],
+                    supports_option=str(memory_payload.get("supports_option", "")),
+                    confidence=str(memory_payload.get("confidence", "medium")),
+                    previous_memory_refs=[str(item) for item in _sequence_items(memory_payload.get("previous_memory_refs"))],
+                    tags=[str(item) for item in _sequence_items(memory_payload.get("tags"))],
+                    role=str(memory_payload.get("role", "") or ""),
+                    layer=str(memory_payload.get("layer", "") or ""),
+                    embedding_refs=[str(item) for item in _sequence_items(memory_payload.get("embedding_refs"))],
+                    metadata={
+                        **dict(memory_payload.get("metadata", {}) or {}),
+                        "evidence_obs_ids": _default_evidence_obs_ids(memory_payload, observation.observation_id),
+                        "disposition_observation_id": observation.observation_id,
+                    },
+                )
+                memory_entries.append(entry.to_dict())
+
+            plan_update = str(normalized_writes.get("plan_update", "") or "").strip()
+            if plan_update:
+                self._append_note_line("notes/plan.md", plan_update)
+            for question in _sequence_items(normalized_writes.get("open_questions_add")):
+                question_text = str(question).strip()
+                if question_text:
+                    self._append_note_line("notes/open_questions.md", question_text)
+
+            disposition = self._write_disposition(
+                observation.observation_id,
+                disposition="committed",
+                writes={
+                    "pinned_anchors": pinned_anchors,
+                    "entities": entities,
+                    "events": events,
+                    "relations": relations,
+                    "attributes": attributes,
+                    "memory": memory_entries,
+                    "plan_update": plan_update,
+                    "open_questions_add": [
+                        str(item).strip()
+                        for item in _sequence_items(normalized_writes.get("open_questions_add"))
+                        if str(item).strip()
+                    ],
+                    "open_questions_resolve": [
+                        str(item).strip()
+                        for item in _sequence_items(normalized_writes.get("open_questions_resolve"))
+                        if str(item).strip()
+                    ],
+                },
+            )
+            return disposition
+        except Exception:
+            self._restore_transaction_files(snapshot)
+            raise
+
+    def reject_observation(self, observation_id: str, *, reason: str) -> dict[str, Any]:
+        self._require_disposable_observation(observation_id)
+        return self._write_disposition(
+            observation_id,
+            disposition="rejected",
+            reason=str(reason or "").strip(),
+        )
+
+    def defer_observation(self, observation_id: str, *, until: str = "", reason: str = "") -> dict[str, Any]:
+        self._require_disposable_observation(observation_id)
+        defer_count = self._defer_count(observation_id) + 1
+        if defer_count > 3:
+            raise ValueError("disposition_validation_failed: defer limit exceeded")
+        return self._write_disposition(
+            observation_id,
+            disposition="deferred",
+            until=str(until or "").strip(),
+            reason=str(reason or "").strip(),
+            defer_count=defer_count,
+        )
+
+    def no_commit_needed(self, observation_id: str, *, reason: str) -> dict[str, Any]:
+        self._require_disposable_observation(observation_id)
+        return self._write_disposition(
+            observation_id,
+            disposition="acknowledged",
+            reason=str(reason or "").strip(),
+        )
+
+    def observation_dispositions(self) -> list[dict[str, Any]]:
+        return self._read_jsonl_dicts("observations/disposition.jsonl")
+
+    def observation_status(self, observation_id: str) -> str:
+        latest = self._latest_disposition(observation_id)
+        if latest is not None:
+            return str(latest.get("disposition", "uncommitted"))
+        if str(observation_id) in {
+            anchor.observation_id
+            for entry in self.memory_entries()
+            for anchor in entry.anchors
+        }:
+            return "committed"
+        observation = self.get_observation(observation_id)
+        if observation is not None and observation.tool in self.AUTO_ACKNOWLEDGED_TOOLS:
+            return "auto_acknowledged"
+        return "uncommitted"
+
+    def read_workspace_section(
+        self,
+        section: str,
+        filter: Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        section_name = str(section or "").strip()
+        expected = dict(filter or {})
+        if section_name == "memory":
+            rows = [entry.to_dict() for entry in self.memory_entries()]
+        elif section_name == "entities":
+            rows = self._read_jsonl_dicts("entities/entities.jsonl")
+        elif section_name == "events":
+            rows = self._read_jsonl_dicts("events/events.jsonl")
+        elif section_name == "relations":
+            rows = self._read_jsonl_dicts("relations/relations.jsonl")
+        elif section_name == "attributes":
+            rows = self._read_jsonl_dicts("attributes/attributes.jsonl")
+        elif section_name == "pinned_anchors":
+            rows = self.read_pinned_anchors()
+        elif section_name == "observations_by_id":
+            rows = [asdict(observation) for observation in self.read_observations()]
+        elif section_name == "plan":
+            rows = [{"text": self._read_note_text("notes/plan.md")}]
+        elif section_name == "open_questions":
+            rows = [{"text": self._read_note_text("notes/open_questions.md")}]
+        else:
+            raise ValueError(f"workspace_read_failed: unknown section={section_name}")
+        if expected:
+            rows = [row for row in rows if _row_matches_expected(row, expected)]
+        return rows
+
+    def render_plan_view(self, *, question: str, max_recent: int = 5) -> str:
+        lines = [
+            "# Workspace",
+            f"Question: {question}",
+            "",
+            "## Deferred Observations",
+        ]
+        deferred = self._deferred_observations()
+        if deferred:
+            for item in deferred:
+                lines.append(
+                    f"- {item.get('observation_id')} until={item.get('until') or '-'} reason={item.get('reason') or '-'}"
+                )
+        else:
+            lines.append("(none)")
+
+        lines.extend([
+            "",
+            "## Committed Memory",
+        ])
+        memory_entries = self.memory_entries()
+        if memory_entries:
+            for entry in memory_entries:
+                support = f" supports {entry.supports_option}" if entry.supports_option else ""
+                lines.append(f"- {entry.entry_id} [{entry.kind}{support}] {entry.claim}")
+        else:
+            lines.append("(none)")
+
+        lines.extend(["", "## Pinned Anchors"])
+        pinned_anchors = self.read_pinned_anchors()
+        if pinned_anchors:
+            for anchor in pinned_anchors:
+                time_range = _format_time_range(anchor.get("time_range") or [anchor.get("start_sec"), anchor.get("end_sec")])
+                excerpt = str(anchor.get("excerpt", "")).strip()
+                lines.append(f"- {anchor.get('anchor_id')} {time_range} {excerpt}".rstrip())
+        else:
+            lines.append("(none)")
+
+        lines.extend(["", "## Entities"])
+        entities = self.read_workspace_section("entities")
+        if entities:
+            for entity in entities:
+                lines.append(f"- {entity.get('entity_id')} {entity.get('kind')} {entity.get('name')}")
+        else:
+            lines.append("(none)")
+
+        lines.extend(["", "## Open Questions"])
+        open_questions = self._note_bullets("notes/open_questions.md")
+        if open_questions:
+            lines.extend(f"- {item}" for item in open_questions)
+        else:
+            lines.append("(none)")
+
+        lines.extend(["", "## Recent Activity"])
+        recent = self.observation_dispositions()[-max(0, int(max_recent)) :]
+        if recent:
+            for item in recent:
+                lines.append(
+                    f"- {item.get('observation_id')}: {item.get('disposition')}"
+                )
+        else:
+            lines.append("(none)")
+        lines.extend(["", "## Budget", "(not tracked in workspace view)"])
+        return "\n".join(lines)
+
+    def render_commit_view(self, *, question: str, observation_id: str) -> str:
+        observation = self._require_observation(observation_id)
+        lines = [
+            "# Pending Observation",
+            f"obs_id: {observation.observation_id}",
+            f"tool: {observation.tool}",
+            f"claim: {observation.claim}",
+            f"limitations: {observation.limitations or '-'}",
+            "",
+            "## Relevant Committed State",
+        ]
+        memory_entries = self.memory_entries()[-5:]
+        if memory_entries:
+            for entry in memory_entries:
+                lines.append(f"- {entry.entry_id}: {entry.claim}")
+        else:
+            lines.append("(none)")
+        lines.extend(
+            [
+                "",
+                "## Dispositions Available",
+                "commit_observation | reject_observation | defer_observation | no_commit_needed",
+            ]
+        )
+        del question
+        return "\n".join(lines)
 
     def current_round(self) -> int:
         rounds = [
@@ -456,6 +937,8 @@ class EvidenceWorkspace:
         for observation in self.read_observations():
             if observation.observation_id in committed_observation_ids:
                 continue
+            if self.observation_status(observation.observation_id) in {"committed", "rejected", "acknowledged", "auto_acknowledged"}:
+                continue
             anchors = self._anchors_for_observation(observation.observation_id)
             if not anchors:
                 continue
@@ -479,6 +962,8 @@ class EvidenceWorkspace:
         observations: list[dict[str, Any]] = []
         for observation in self.read_observations():
             if observation.observation_id in committed_observation_ids:
+                continue
+            if self.observation_status(observation.observation_id) in {"committed", "rejected", "acknowledged", "auto_acknowledged"}:
                 continue
             anchors = self._anchors_for_observation(observation.observation_id)
             if not anchors:
@@ -2032,6 +2517,233 @@ class EvidenceWorkspace:
         )
         return payload
 
+    def _require_observation(self, observation_id: str) -> Observation:
+        observation = self.get_observation(str(observation_id))
+        if observation is None:
+            raise ValueError(f"observation_validation_failed: unknown observation_id={observation_id}")
+        return observation
+
+    def _require_disposable_observation(self, observation_id: str) -> Observation:
+        observation = self._require_observation(observation_id)
+        status = self.observation_status(observation.observation_id)
+        if status in {"committed", "rejected", "acknowledged"}:
+            raise ValueError(f"disposition_validation_failed: observation already {status}")
+        return observation
+
+    def _validated_observation_ids(self, observation_ids: Sequence[str]) -> list[str]:
+        resolved: list[str] = []
+        for item in observation_ids:
+            obs_id = str(item or "").strip()
+            if not obs_id:
+                continue
+            self._require_observation(obs_id)
+            resolved.append(obs_id)
+        return resolved
+
+    def _validate_commit_writes(self, observation: Observation, writes: Mapping[str, Any]) -> None:
+        pending_anchor_ids = {
+            str(anchor.get("anchor_id") or anchor.get("candidate_anchor_id") or "").strip()
+            for anchor in _mapping_list(writes.get("pinned_anchors"))
+        }
+        pending_anchor_ids.discard("")
+        available_anchor_ids = set(self.read_produced_anchors_by_id()) | {
+            str(anchor.get("anchor_id", "")) for anchor in self.read_pinned_anchors()
+        } | pending_anchor_ids
+
+        for bucket in ("entities", "events", "relations", "attributes", "memory"):
+            for payload in _mapping_list(writes.get(bucket)):
+                self._validated_observation_ids(_default_evidence_obs_ids(payload, observation.observation_id))
+
+        for anchor_payload in _mapping_list(writes.get("pinned_anchors")):
+            excerpt = str(anchor_payload.get("excerpt", "") or "").strip()
+            self._validate_excerpt_in_observation(observation, excerpt)
+
+        for entity_payload in _mapping_list(writes.get("entities")):
+            if not str(entity_payload.get("name", "")).strip():
+                raise ValueError("entity_validation_failed: name must not be empty")
+
+        for event_payload in _mapping_list(writes.get("events")):
+            if not str(event_payload.get("label") or event_payload.get("name") or "").strip():
+                raise ValueError("event_validation_failed: label must not be empty")
+
+        for attribute_payload in _mapping_list(writes.get("attributes")):
+            if not str(attribute_payload.get("target", "")).strip() or not str(attribute_payload.get("name", "")).strip():
+                raise ValueError("attribute_validation_failed: target and name are required")
+
+        entity_names = self._entity_names() | {
+            str(payload.get("name", "")).strip()
+            for payload in _mapping_list(writes.get("entities"))
+            if str(payload.get("name", "")).strip()
+        }
+        for relation_payload in _mapping_list(writes.get("relations")):
+            subject = str(relation_payload.get("subject", "")).strip()
+            predicate = str(relation_payload.get("predicate", "")).strip()
+            objects = [str(item).strip() for item in _sequence_items(relation_payload.get("objects")) if str(item).strip()]
+            if not subject or not predicate or not objects:
+                raise ValueError("relation_validation_failed: subject, predicate, and objects are required")
+            missing = [item for item in [subject, *objects] if item not in entity_names]
+            if missing:
+                raise ValueError("relation_validation_failed: unknown entity reference " + ", ".join(missing))
+
+        for memory_payload in _mapping_list(writes.get("memory")):
+            _validate_memory_commit_payload(memory_payload)
+            anchor_ids = [
+                str(item).strip()
+                for item in _sequence_items(memory_payload.get("anchor_ids"))
+                if str(item).strip()
+            ]
+            for anchor_id in anchor_ids:
+                if anchor_id not in available_anchor_ids:
+                    raise ValueError(f"memory_validation_failed: unknown anchor_id={anchor_id}")
+            option_id = str(memory_payload.get("supports_option", "") or "").strip()
+            if option_id and self._known_option_ids() and option_id not in self._known_option_ids():
+                raise ValueError(f"memory_validation_failed: unknown option {option_id}")
+            for ref in _sequence_items(memory_payload.get("previous_memory_refs")):
+                ref_text = str(ref).strip()
+                if ref_text and self.get_memory(ref_text) is None:
+                    raise ValueError(f"memory_validation_failed: unknown memory ref={ref_text}")
+
+    def _validate_excerpt_in_observation(self, observation: Observation, excerpt: str) -> None:
+        if not excerpt:
+            return
+        haystack = _observation_text_for_excerpt_validation(observation)
+        if normalized_text(excerpt) not in normalized_text(haystack):
+            raise ValueError(
+                f"anchor_validation_failed: excerpt must appear in observation {observation.observation_id}"
+            )
+
+    def _validate_relation_entities(self, subject: str, objects: Sequence[str]) -> None:
+        names = self._entity_names()
+        missing = [item for item in [subject, *objects] if item and item not in names]
+        if missing:
+            raise ValueError("relation_validation_failed: unknown entity reference " + ", ".join(missing))
+
+    def _entity_names(self) -> set[str]:
+        return {
+            str(row.get("name", "")).strip()
+            for row in self._read_jsonl_dicts("entities/entities.jsonl")
+            if str(row.get("name", "")).strip()
+        }
+
+    def _write_disposition(
+        self,
+        observation_id: str,
+        *,
+        disposition: str,
+        reason: str = "",
+        until: str = "",
+        writes: Mapping[str, Any] | None = None,
+        defer_count: int | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "disposition_id": self._next_structured_id("observations/disposition.jsonl", "disp"),
+            "observation_id": str(observation_id),
+            "disposition": str(disposition),
+            "reason": str(reason or ""),
+            "until": str(until or ""),
+            "defer_count": defer_count if defer_count is not None else self._defer_count(observation_id),
+            "writes": dict(writes or {}),
+            "created_at": _utc_now(),
+        }
+        self._append_jsonl("observations/disposition.jsonl", payload)
+        self.write_trace_event(
+            "observation_disposition_recorded",
+            {
+                "observation_id": payload["observation_id"],
+                "disposition": payload["disposition"],
+                "disposition_id": payload["disposition_id"],
+            },
+        )
+        return payload
+
+    def _latest_disposition(self, observation_id: str) -> dict[str, Any] | None:
+        latest = None
+        for row in self.observation_dispositions():
+            if str(row.get("observation_id", "")) == str(observation_id):
+                latest = row
+        return latest
+
+    def _defer_count(self, observation_id: str) -> int:
+        return sum(
+            1
+            for row in self.observation_dispositions()
+            if str(row.get("observation_id", "")) == str(observation_id)
+            and str(row.get("disposition", "")) == "deferred"
+        )
+
+    def _deferred_observations(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for observation in self.read_observations():
+            latest = self._latest_disposition(observation.observation_id)
+            if latest is None or str(latest.get("disposition", "")) != "deferred":
+                continue
+            rows.append(
+                {
+                    **dict(latest),
+                    "tool": observation.tool,
+                    "claim": observation.claim,
+                }
+            )
+        return rows
+
+    def _transaction_files(self) -> tuple[str, ...]:
+        return (
+            "produced_anchors.jsonl",
+            "memory.jsonl",
+            "trace.jsonl",
+            "entities/entities.jsonl",
+            "events/events.jsonl",
+            "relations/relations.jsonl",
+            "attributes/attributes.jsonl",
+            "memory/memory.jsonl",
+            "observations/disposition.jsonl",
+            "pinned/pinned_anchors.jsonl",
+            "notes/plan.md",
+            "notes/open_questions.md",
+        )
+
+    def _snapshot_transaction_files(self) -> dict[str, bytes | None]:
+        snapshot: dict[str, bytes | None] = {}
+        for filename in self._transaction_files():
+            path = self.root / filename
+            snapshot[filename] = path.read_bytes() if path.exists() else None
+        return snapshot
+
+    def _restore_transaction_files(self, snapshot: Mapping[str, bytes | None]) -> None:
+        for filename, content in snapshot.items():
+            path = self.root / filename
+            if content is None:
+                if path.exists():
+                    path.unlink()
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+
+    def _append_note_line(self, filename: str, text: str) -> None:
+        path = self.root / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text("# Notes\n\n", encoding="utf-8")
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(f"- {text}\n")
+
+    def _read_note_text(self, filename: str) -> str:
+        path = self.root / filename
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8")
+
+    def _note_bullets(self, filename: str) -> list[str]:
+        lines = []
+        for line in self._read_note_text(filename).splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                lines.append(stripped[2:].strip())
+        return lines
+
+    def _next_structured_id(self, filename: str, prefix: str) -> str:
+        return f"{prefix}_{len(self._read_jsonl_dicts(filename)) + 1:04d}"
+
     def _append_jsonl(self, filename: str, payload: Mapping[str, Any]) -> None:
         path = self.root / filename
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2483,6 +3195,76 @@ def _mapping_list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     return [dict(item) for item in value if isinstance(item, Mapping)]
+
+
+def _sequence_items(value: Any) -> tuple[Any, ...]:
+    if value is None or isinstance(value, (str, bytes)):
+        return () if value is None else (value,)
+    if isinstance(value, Sequence):
+        return tuple(value)
+    return (value,)
+
+
+def _normalize_optional_time_range(value: Any) -> list[float] | None:
+    if value is None:
+        return None
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) >= 2:
+        try:
+            return [float(value[0]), float(value[1])]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _default_evidence_obs_ids(payload: Mapping[str, Any], default_observation_id: str) -> list[str]:
+    raw_ids = payload.get("evidence_obs_ids")
+    ids = [str(item).strip() for item in _sequence_items(raw_ids) if str(item).strip()]
+    return ids or [str(default_observation_id)]
+
+
+def _validate_memory_commit_payload(payload: Mapping[str, Any]) -> None:
+    kind = str(payload.get("kind") or "support")
+    if kind not in {
+        "note",
+        "support",
+        "answer_support",
+        "locator",
+        "conflict",
+        "contradicting",
+        "negation",
+        "reject",
+        "hypothesis",
+        "open_question",
+        "synthesized",
+    }:
+        raise ValueError(f"memory_validation_failed: unknown kind={kind}")
+    confidence = str(payload.get("confidence") or "medium")
+    if confidence not in {"high", "medium", "low"}:
+        raise ValueError(f"memory_validation_failed: unknown confidence={confidence}")
+
+
+def _row_matches_expected(row: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:
+    for key, value in expected.items():
+        if row.get(str(key)) != value:
+            return False
+    return True
+
+
+def _format_time_range(value: Any) -> str:
+    time_range = _normalize_optional_time_range(value)
+    if time_range is None:
+        return ""
+    return f"[{time_range[0]:.1f}-{time_range[1]:.1f}]"
+
+
+def _observation_text_for_excerpt_validation(observation: Observation) -> str:
+    parts = [
+        observation.claim,
+        observation.limitations,
+        json.dumps(observation.raw_output, ensure_ascii=False, sort_keys=True),
+        json.dumps(list(observation.regions), ensure_ascii=False, sort_keys=True),
+    ]
+    return "\n".join(str(part) for part in parts if str(part).strip())
 
 
 def _dedupe_mapping_rows(rows: Sequence[Mapping[str, Any]], *, keys: Sequence[str]) -> list[dict[str, Any]]:

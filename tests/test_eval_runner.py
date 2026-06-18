@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from visual_coding_agent_harness.agents.iterative_agent import AgentBudget, IterativeRound, IterativeRunResult
+from visual_coding_agent_harness.agents.budget import AgentBudget
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
 
@@ -58,10 +58,11 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr[:500])
         self.assertIn("Run reproducible VideoMME", completed.stdout)
 
-    def test_videomme_runner_only_accepts_agent_v2_strategy(self):
+    def test_videomme_runner_accepts_workspace_v2_strategy(self):
         from runs import eval_runner
 
-        self.assertEqual(eval_runner.parse_strategies(None), ("agent_v2",))
+        self.assertEqual(eval_runner.parse_strategies(None), ("workspace_v2",))
+        self.assertEqual(eval_runner.parse_strategies(("workspace_v2",)), ("workspace_v2",))
         with self.assertRaisesRegex(ValueError, "Unknown strategy: direct_full_video"):
             eval_runner.parse_strategies(("direct_full_video",))
 
@@ -137,7 +138,7 @@ class EvalRunnerTest(unittest.TestCase):
                 video_dir=Path("/dataset/video"),
                 subtitle_dir=Path("/dataset/subtitle"),
                 cases=("605-1",),
-                strategies=("agent_v2",),
+                strategies=("workspace_v2",),
                 window_sec=300.0,
                 budget=AgentBudget(max_rounds=8, max_tool_calls_per_round=2, default_nframes=12),
             )
@@ -171,9 +172,9 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(summary["per_case"], summary["cases"])
             case = summary["cases"][0]
             self.assertEqual(case["question_id"], "605-1")
-            self.assertEqual(case["strategies"]["agent_v2"]["choice"], "B")
-            self.assertTrue(case["strategies"]["agent_v2"]["correct"])
-            self.assertEqual(case["raw_artifacts"]["workspaces"]["agent_v2"], str(config.workspace_root / "runs" / captured["run_id"]))
+            self.assertEqual(case["strategies"]["workspace_v2"]["choice"], "B")
+            self.assertTrue(case["strategies"]["workspace_v2"]["correct"])
+            self.assertEqual(case["raw_artifacts"]["workspaces"]["workspace_v2"], str(config.workspace_root / "runs" / captured["run_id"]))
             self.assertEqual(captured["budget"].max_rounds, 8)
             self.assertEqual(captured["budget"].max_tool_calls_per_round, 2)
             self.assertEqual(captured["budget"].default_nframes, 12)
@@ -234,7 +235,7 @@ class EvalRunnerTest(unittest.TestCase):
                 video_dir=Path("/dataset/video"),
                 subtitle_dir=Path("/dataset/subtitle"),
                 cases=("605-1",),
-                strategies=("agent_v2",),
+                strategies=("workspace_v2",),
                 window_sec=300.0,
                 budget=AgentBudget(max_rounds=8),
             )
@@ -302,7 +303,7 @@ class EvalRunnerTest(unittest.TestCase):
                 "\n".join(
                     [
                         "cases: [605-1, 611-2]",
-                        "strategies: [agent_v2]",
+                        "strategies: [workspace_v2]",
                         f"run_root: {run_root}",
                         "model_path: /models/vl",
                         "planner_model_path: /models/planner",
@@ -336,7 +337,7 @@ class EvalRunnerTest(unittest.TestCase):
             config = eval_runner.config_from_args(args)
 
             self.assertEqual(config.cases, ("605-1",))
-            self.assertEqual(config.strategies, ("agent_v2",))
+            self.assertEqual(config.strategies, ("workspace_v2",))
             self.assertEqual(config.run_root, run_root)
             self.assertEqual(config.model_path, "/models/vl")
             self.assertEqual(config.planner_model_path, "/models/planner")
@@ -362,7 +363,7 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertTrue(resolved_path.exists())
             resolved = json.loads(resolved_path.read_text(encoding="utf-8"))
             self.assertEqual(resolved["cases"], ["605-1"])
-            self.assertEqual(resolved["strategies"], ["agent_v2"])
+            self.assertEqual(resolved["strategies"], ["workspace_v2"])
             self.assertEqual(resolved["budget"]["default_nframes"], 6)
             self.assertEqual(resolved["budget"]["max_rounds"], 7)
             self.assertEqual(resolved["frame_cache_fps"], 1.5)
@@ -383,8 +384,8 @@ class EvalRunnerTest(unittest.TestCase):
                 results=[
                     {
                         "question_id": "case_001",
-                        "strategies": {"agent_v2": {"status": "need_more_evidence", "correct": False}},
-                        "raw_artifacts": {"workspaces": {"agent_v2": str(workspace.root)}},
+                        "strategies": {"workspace_v2": {"status": "need_more_evidence", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"workspace_v2": str(workspace.root)}},
                     }
                 ],
             )
@@ -413,13 +414,13 @@ class EvalRunnerTest(unittest.TestCase):
                 results=[
                     {
                         "question_id": "case_001",
-                        "strategies": {"agent_v2": {"status": "final", "correct": True}},
-                        "raw_artifacts": {"workspaces": {"agent_v2": str(success_workspace.root)}},
+                        "strategies": {"workspace_v2": {"status": "final", "correct": True}},
+                        "raw_artifacts": {"workspaces": {"workspace_v2": str(success_workspace.root)}},
                     },
                     {
                         "question_id": "case_002",
-                        "strategies": {"agent_v2": {"status": "max_rounds_reached", "correct": False}},
-                        "raw_artifacts": {"workspaces": {"agent_v2": str(handoff_workspace.root)}},
+                        "strategies": {"workspace_v2": {"status": "max_rounds_reached", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"workspace_v2": str(handoff_workspace.root)}},
                     },
                 ],
             )
@@ -443,8 +444,8 @@ class EvalRunnerTest(unittest.TestCase):
                 results=[
                     {
                         "question_id": "case_001",
-                        "strategies": {"agent_v2": {"status": "low_confidence_final", "correct": False}},
-                        "raw_artifacts": {"workspaces": {"agent_v2": str(workspace.root)}},
+                        "strategies": {"workspace_v2": {"status": "low_confidence_final", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"workspace_v2": str(workspace.root)}},
                     }
                 ],
             )
@@ -482,8 +483,8 @@ class EvalRunnerTest(unittest.TestCase):
                 results=[
                     {
                         "question_id": "case_001",
-                        "strategies": {"agent_v2": {"status": "need_more_evidence", "correct": False}},
-                        "raw_artifacts": {"workspaces": {"agent_v2": str(workspace.root)}},
+                        "strategies": {"workspace_v2": {"status": "need_more_evidence", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"workspace_v2": str(workspace.root)}},
                     }
                 ],
             )
@@ -543,20 +544,20 @@ class EvalRunnerTest(unittest.TestCase):
                 results=[
                     {
                         "question_id": "case_001",
-                        "strategies": {"agent_v2": {"status": "final", "correct": True}},
-                        "raw_artifacts": {"workspaces": {"agent_v2": str(complete_workspace.root)}},
+                        "strategies": {"workspace_v2": {"status": "final", "correct": True}},
+                        "raw_artifacts": {"workspaces": {"workspace_v2": str(complete_workspace.root)}},
                     },
                     {
                         "question_id": "case_002",
-                        "strategies": {"agent_v2": {"status": "need_more_evidence", "correct": False}},
-                        "raw_artifacts": {"workspaces": {"agent_v2": str(empty_workspace.root)}},
+                        "strategies": {"workspace_v2": {"status": "need_more_evidence", "correct": False}},
+                        "raw_artifacts": {"workspaces": {"workspace_v2": str(empty_workspace.root)}},
                     },
                 ],
             )
 
             self.assertEqual(summary["evidence_provenance_completeness"], 0.5)
 
-    def test_agent_v2_dual_source_scene_index_uses_builder_and_cache_root(self):
+    def test_workspace_v2_dual_source_scene_index_uses_builder_and_cache_root(self):
         from runs import eval_runner
 
         captured = {}
@@ -628,7 +629,7 @@ class EvalRunnerTest(unittest.TestCase):
                 video_dir=Path("/dataset/video"),
                 subtitle_dir=subtitle_dir,
                 cases=("611-2",),
-                strategies=("agent_v2",),
+                strategies=("workspace_v2",),
                 window_sec=300.0,
                 scene_index_cache_dir=cache_dir,
                 budget=AgentBudget(),
@@ -657,7 +658,7 @@ class EvalRunnerTest(unittest.TestCase):
         args = parser.parse_args(
             [
                 "--strategy",
-                "agent_v2",
+                "workspace_v2",
                 "--cases",
                 "611-2",
                 "--run-root",
@@ -673,32 +674,22 @@ class EvalRunnerTest(unittest.TestCase):
 
         config = eval_runner.config_from_args(args)
 
-        self.assertEqual(config.strategies, ("agent_v2",))
+        self.assertEqual(config.strategies, ("workspace_v2",))
         self.assertEqual(config.cases, ("611-2",))
         self.assertEqual(config.budget.max_rounds, 24)
         self.assertEqual(config.budget.max_tool_calls_per_round, 4)
         self.assertFalse(config.budget.reserve_final_round)
         self.assertTrue(config.budget.hard_skill_runtime)
 
-    def test_disable_global_gist_route_cli_sets_budget_flag(self):
+    def test_workspace_v2_does_not_enable_legacy_skill_runtime_by_default(self):
         from runs import eval_runner
 
         parser = eval_runner.build_arg_parser()
-        args = parser.parse_args(["--disable-global-gist-route"])
+        args = parser.parse_args(["--strategy", "workspace_v2", "--cases", "611-2", "--run-root", "/tmp/vcah-default"])
 
         config = eval_runner.config_from_args(args)
 
-        self.assertTrue(config.budget.disable_global_gist_route)
-
-    def test_agent_v2_enables_effective_skill_runtime_by_default(self):
-        from runs import eval_runner
-
-        parser = eval_runner.build_arg_parser()
-        args = parser.parse_args(["--strategy", "agent_v2", "--cases", "611-2", "--run-root", "/tmp/vcah-default"])
-
-        config = eval_runner.config_from_args(args)
-
-        self.assertTrue(config.budget.hard_skill_runtime)
+        self.assertFalse(config.budget.hard_skill_runtime)
 
     def test_videomme_runner_disables_global_mcq_rewrite_by_default(self):
         from runs import eval_runner
@@ -744,22 +735,22 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.budget.max_rounds, 20)
         self.assertEqual(config.budget.max_repeated_programs, 20)
 
-    def test_agent_v2_enables_planner_owned_grounding_by_default(self):
+    def test_workspace_v2_does_not_enable_planner_owned_grounding_by_default(self):
         from runs import eval_runner
 
         parser = eval_runner.build_arg_parser()
-        args = parser.parse_args(["--strategy", "agent_v2"])
+        args = parser.parse_args(["--strategy", "workspace_v2"])
 
         config = eval_runner.config_from_args(args)
 
-        self.assertTrue(config.budget.planner_owned_grounding)
-        self.assertTrue(config.ablation_flags["planner_owned_grounding"])
+        self.assertFalse(config.budget.planner_owned_grounding)
+        self.assertFalse(config.ablation_flags["planner_owned_grounding"])
 
     def test_planner_owned_grounding_can_be_disabled(self):
         from runs import eval_runner
 
         parser = eval_runner.build_arg_parser()
-        args = parser.parse_args(["--strategy", "agent_v2", "--disable-planner-owned-grounding"])
+        args = parser.parse_args(["--strategy", "workspace_v2", "--disable-planner-owned-grounding"])
 
         config = eval_runner.config_from_args(args)
 
@@ -784,7 +775,7 @@ class EvalRunnerTest(unittest.TestCase):
         args = parser.parse_args(
             [
                 "--strategy",
-                "agent_v2",
+                "workspace_v2",
                 "--cases",
                 "611-2",
                 "--run-root",
@@ -883,7 +874,7 @@ class EvalRunnerTest(unittest.TestCase):
             video_dir=Path("/dataset/video"),
             subtitle_dir=Path("/dataset/subtitle"),
             cases=("605-1",),
-            strategies=("agent_v2",),
+            strategies=("workspace_v2",),
         )
 
         with patch("visual_coding_agent_harness.backends.qwen_vl.QwenVLBackend.from_pretrained", return_value="vl") as vl_load:
@@ -950,7 +941,7 @@ class EvalRunnerTest(unittest.TestCase):
             video_dir=Path("/dataset/video"),
             subtitle_dir=Path("/dataset/subtitle"),
             cases=("605-1",),
-            strategies=("agent_v2",),
+            strategies=("workspace_v2",),
         )
 
         with patch("visual_coding_agent_harness.backends.qwen_vl.QwenVLBackend.from_pretrained", return_value="vl") as vl_load:
@@ -976,7 +967,7 @@ class EvalRunnerTest(unittest.TestCase):
         args = parser.parse_args(
             [
                 "--strategy",
-                "agent_v2",
+                "workspace_v2",
                 "--cases",
                 "611-2",
                 "--run-root",
@@ -1006,70 +997,31 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertFalse(hasattr(config.budget, "cheap_tool_budget"))
         self.assertFalse(config.budget.hard_skill_runtime)
 
-    def test_run_loop_exports_longvideoagent_trajectory(self):
+    def test_run_loop_workspace_v2_uses_workspace_agent_and_registry(self):
         from runs import eval_runner
+        from visual_coding_agent_harness.agents.workspace_agent import WorkspaceRunResult
 
-        class FakeIterativeVisualAgent:
-            def __init__(self, *, backend, registry, workspace, scene_index, budget):
+        class FakeWorkspaceVisualAgent:
+            def __init__(self, *, backend, registry, workspace, max_rounds, video_path):
                 self.backend = backend
                 self.registry = registry
                 self.workspace = workspace
-                self.scene_index = scene_index
-                self.budget = budget
+                self.max_rounds = max_rounds
+                self.video_path = video_path
+                agents.append(self)
 
-            def run(self, *, question, video_path):
-                workspace = self.workspace
-                workspace.write_trace_event(
-                    "tool_use",
-                    {"step": 1, "tool": "vision_read", "arguments": {"segment_id": "seg_0001"}},
-                )
-                observation = workspace.write_observation(
-                    tool_name="vision_read",
-                    claim="The localized window shows a red car.",
-                    confidence=0.9,
-                    regions=[{"segment_id": "seg_0001", "start_sec": 0.0, "end_sec": 12.0}],
-                    raw_output={
-                        "grounding_quality": "visually_confirmed",
-                        "candidate_option_relations": [{"option": "B", "relation": "support", "strength": 0.9}],
-                    },
-                )
-                distilled = EvidenceRecord(
-                    evidence_id=workspace.next_evidence_id("distilled"),
-                    stage="distilled",
-                    parent_id=None,
-                    tool="vision_read",
-                    observation_id=observation.observation_id,
-                    frame_set_id=None,
-                    content={"claim": observation.claim},
-                    grounding_quality="visually_confirmed",
-                    confidence=0.9,
-                    created_at=1.0,
-                )
-                workspace.write_evidence(distilled)
-                workspace.write_ledger_entry(observation, parent_records=[distilled])
-                workspace.write_trace_event(
-                    "tool_result",
-                    {"step": 1, "tool": "vision_read", "observation_id": observation.observation_id},
-                )
-                return IterativeRunResult(
-                    question=question,
-                    video_path=video_path,
-                    answer="B. red car",
-                    status="final",
-                    citations=[observation.observation_id],
-                    confidence=0.9,
-                    rounds=[
-                        IterativeRound(
-                            round_number=1,
-                            status="final",
-                            planner_text="",
-                            program=[{"tool": "vision_read", "args": {"segment_id": "seg_0001"}}],
-                            observation_ids=[observation.observation_id],
-                        )
-                    ],
+            def run(self, question):
+                self.workspace.write_trace_event("workspace_plan_model_io", {"round": 1, "question": question})
+                return WorkspaceRunResult(
+                    answer="B. workspace answer",
+                    citations=(),
+                    confidence="0.8",
+                    rounds=2,
+                    metadata={"status": "final"},
                 )
 
         registry_calls = []
+        agents = []
 
         def fake_build_registry(**kwargs):
             registry_calls.append(kwargs)
@@ -1082,32 +1034,31 @@ class EvalRunnerTest(unittest.TestCase):
                 duration_sec=12.0,
                 segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
             )
-            with patch.object(eval_runner, "build_video_exploration_registry", side_effect=fake_build_registry):
-                with patch.object(eval_runner, "IterativeVisualAgent", FakeIterativeVisualAgent):
+            with patch.object(eval_runner, "build_workspace_v2_registry", side_effect=fake_build_registry, create=True):
+                with patch.object(eval_runner, "WorkspaceVisualAgent", FakeWorkspaceVisualAgent, create=True):
                     raw = eval_runner.run_loop(
                         backend=object(),
                         video_path="/videos/demo.mp4",
                         question="Which object is visible?\nA. blue car\nB. red car",
                         duration_sec=12.0,
-                        run_id="case_agent_v2",
+                        run_id="case_workspace_v2",
                         scene_index=scene_index,
                         workspace_root=workspace_root,
-                        budget=AgentBudget(),
+                        budget=AgentBudget(max_rounds=5),
                         extract_clips=False,
+                        strategy="workspace_v2",
                     )
 
             self.assertEqual(len(registry_calls), 1)
-            self.assertFalse(registry_calls[0]["extract_clips"])
-            self.assertIsNone(registry_calls[0]["frame_sampler"])
-
-            trajectory_path = Path(raw["trajectory_path"])
-            self.assertTrue(trajectory_path.exists())
-            evidence_chains_path = Path(raw["evidence_chains_path"])
-            self.assertTrue(evidence_chains_path.exists())
-            self.assertEqual(raw["evidence_chain_count"], 1)
-            self.assertEqual(raw["planner_prompt_count"], 0)
-            self.assertIn("non_navigation_visual_citation", raw["reward_tags"])
-            self.assertIn("final", raw["reward_tags"])
+            self.assertIn("workspace", registry_calls[0])
+            self.assertEqual(len(agents), 1)
+            self.assertEqual(agents[0].max_rounds, 5)
+            self.assertEqual(agents[0].video_path, "/videos/demo.mp4")
+            self.assertEqual(raw["answer"], "B. workspace answer")
+            self.assertEqual(raw["choice"], "B")
+            self.assertEqual(raw["status"], "final")
+            self.assertEqual(raw["rounds"], 2)
+            self.assertEqual(raw["tools"], [])
 
     def test_run_eval_cases_exports_training_trajectory_when_enabled(self):
         from runs import eval_runner
@@ -1150,7 +1101,7 @@ class EvalRunnerTest(unittest.TestCase):
                 video_dir=Path("/dataset/video"),
                 subtitle_dir=Path("/dataset/subtitle"),
                 cases=("605-1",),
-                strategies=("agent_v2",),
+                strategies=("workspace_v2",),
                 window_sec=300.0,
                 budget=AgentBudget(),
                 export_training=True,
@@ -1167,12 +1118,12 @@ class EvalRunnerTest(unittest.TestCase):
                         )
 
             case = summary["cases"][0]
-            trajectory_path = Path(case["raw_artifacts"]["training_trajectories"]["agent_v2"])
-            markdown_path = Path(case["raw_artifacts"]["training_trajectory_markdown"]["agent_v2"])
+            trajectory_path = Path(case["raw_artifacts"]["training_trajectories"]["workspace_v2"])
+            markdown_path = Path(case["raw_artifacts"]["training_trajectory_markdown"]["workspace_v2"])
             self.assertTrue(trajectory_path.exists())
             self.assertTrue(markdown_path.exists())
             self.assertEqual(markdown_path, trajectory_path.with_suffix(".md"))
-            self.assertEqual(case["strategies"]["agent_v2"]["training_trajectory_markdown_path"], str(markdown_path))
+            self.assertEqual(case["strategies"]["workspace_v2"]["training_trajectory_markdown_path"], str(markdown_path))
             self.assertTrue(summary["training_trajectory_exported"])
             payload = json.loads(trajectory_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["schema_version"], "TrainingTrajectoryV1")
@@ -1184,7 +1135,7 @@ class EvalRunnerTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace_root = Path(tmp) / "workspaces"
-            workspace = _make_training_workspace(workspace_root, "case_agent_v2")
+            workspace = _make_training_workspace(workspace_root, "case_workspace_v2")
             old_cwd = Path.cwd()
             try:
                 os.chdir(tmp)
@@ -1192,7 +1143,7 @@ class EvalRunnerTest(unittest.TestCase):
                     workspace_path=workspace.root,
                     run_root=Path("eval"),
                     case_id="605-1",
-                    strategy="agent_v2",
+                    strategy="workspace_v2",
                     question="What is shown?",
                     options=["A. one", "B. two"],
                     gt="B",

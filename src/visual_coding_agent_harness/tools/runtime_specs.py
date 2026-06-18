@@ -25,6 +25,17 @@ _CORE_RUNTIME_SPEC_TOOLS = (
     "caption_segment",
     "read_timeline_sorted",
     "write_memory",
+    "read_workspace",
+    "commit_observation",
+    "reject_observation",
+    "defer_observation",
+    "no_commit_needed",
+    "read_clip",
+    "search",
+    "list",
+    "verify",
+    "synthesize_memory",
+    "answer",
 )
 
 
@@ -79,6 +90,7 @@ def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = Fals
         argument_normalizer=_normalize_vision_read,
         semantic_key_builder=_key_from_normalizer("vision_read", _normalize_vision_read),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+        commit_required=True,
     )
     _replace(
         registry,
@@ -87,6 +99,7 @@ def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = Fals
         argument_normalizer=_normalize_verify_segment_anchors,
         semantic_key_builder=_key_from_normalizer("verify_segment_anchors", _normalize_verify_segment_anchors),
         duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+        commit_required=True,
     )
     _replace(
         registry,
@@ -134,6 +147,96 @@ def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = Fals
         missing=missing,
         argument_normalizer=_normalize_write_memory,
         semantic_key_builder=_key_from_normalizer("write_memory", _normalize_write_memory),
+        duplicate_guard_policy=DuplicateGuardPolicy.OFF,
+    )
+    _replace(
+        registry,
+        "read_workspace",
+        missing=missing,
+        argument_normalizer=_normalize_read_workspace,
+        semantic_key_builder=_key_from_normalizer("read_workspace", _normalize_read_workspace),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
+        "commit_observation",
+        missing=missing,
+        argument_normalizer=_normalize_commit_observation,
+        semantic_key_builder=_key_from_normalizer("commit_observation", _normalize_commit_observation),
+        duplicate_guard_policy=DuplicateGuardPolicy.OFF,
+    )
+    _replace(
+        registry,
+        "reject_observation",
+        missing=missing,
+        argument_normalizer=_normalize_observation_reason_disposition,
+        semantic_key_builder=_key_from_normalizer("reject_observation", _normalize_observation_reason_disposition),
+        duplicate_guard_policy=DuplicateGuardPolicy.OFF,
+    )
+    _replace(
+        registry,
+        "defer_observation",
+        missing=missing,
+        argument_normalizer=_normalize_defer_observation,
+        semantic_key_builder=_key_from_normalizer("defer_observation", _normalize_defer_observation),
+        duplicate_guard_policy=DuplicateGuardPolicy.OFF,
+    )
+    _replace(
+        registry,
+        "no_commit_needed",
+        missing=missing,
+        argument_normalizer=_normalize_observation_reason_disposition,
+        semantic_key_builder=_key_from_normalizer("no_commit_needed", _normalize_observation_reason_disposition),
+        duplicate_guard_policy=DuplicateGuardPolicy.OFF,
+    )
+    _replace(
+        registry,
+        "read_clip",
+        missing=missing,
+        argument_normalizer=_normalize_read_clip,
+        semantic_key_builder=_key_from_normalizer("read_clip", _normalize_read_clip),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+        commit_required=True,
+    )
+    _replace(
+        registry,
+        "search",
+        missing=missing,
+        argument_normalizer=_normalize_workspace_v2_search,
+        semantic_key_builder=_key_from_normalizer("search", _normalize_workspace_v2_search),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
+        "list",
+        missing=missing,
+        argument_normalizer=_normalize_workspace_v2_list,
+        semantic_key_builder=_key_from_normalizer("list", _normalize_workspace_v2_list),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
+        "verify",
+        missing=missing,
+        argument_normalizer=_normalize_workspace_v2_verify,
+        semantic_key_builder=_key_from_normalizer("verify", _normalize_workspace_v2_verify),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+        commit_required=True,
+    )
+    _replace(
+        registry,
+        "synthesize_memory",
+        missing=missing,
+        argument_normalizer=_normalize_workspace_v2_synthesize_memory,
+        semantic_key_builder=_key_from_normalizer("synthesize_memory", _normalize_workspace_v2_synthesize_memory),
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+    )
+    _replace(
+        registry,
+        "answer",
+        missing=missing,
+        argument_normalizer=_normalize_workspace_v2_answer,
+        semantic_key_builder=_key_from_normalizer("answer", _normalize_workspace_v2_answer),
         duplicate_guard_policy=DuplicateGuardPolicy.OFF,
     )
     if required:
@@ -296,6 +399,101 @@ def _normalize_write_memory(_ctx: RunContext, request: ToolRequest) -> Mapping[s
         "layer": _text(args.get("layer")),
         "embedding_refs": _string_list(args.get("embedding_refs")),
         "metadata": _canonical_value(args.get("metadata")) if isinstance(args.get("metadata"), Mapping) else {},
+    }
+
+
+def _normalize_read_workspace(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "section": _text(args.get("section")),
+        "filter": _canonical_value(args.get("filter")) if isinstance(args.get("filter"), Mapping) else {},
+    }
+
+
+def _normalize_commit_observation(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "observation_id": _text(args.get("observation_id")),
+        "writes": _canonical_value(args.get("writes")) if isinstance(args.get("writes"), Mapping) else {},
+    }
+
+
+def _normalize_observation_reason_disposition(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "observation_id": _text(args.get("observation_id")),
+        "reason": _text(args.get("reason")),
+    }
+
+
+def _normalize_defer_observation(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "observation_id": _text(args.get("observation_id")),
+        "until": _text(args.get("until")),
+        "reason": _text(args.get("reason")),
+    }
+
+
+def _normalize_read_clip(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    scope = args.get("scope") if isinstance(args.get("scope"), Mapping) else {}
+    sampling = args.get("sampling") if isinstance(args.get("sampling"), Mapping) else {}
+    return {
+        "scope": _canonical_value(scope),
+        "focus": _string_list(args.get("focus")),
+        "sampling": _canonical_value(sampling),
+    }
+
+
+def _normalize_workspace_v2_search(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    scope = args.get("scope") if isinstance(args.get("scope"), Mapping) else {}
+    return {
+        "query": _text(args.get("query")),
+        "modality": _string_list(args.get("modality")),
+        "scope": _canonical_value(scope),
+        "top_k": _positive_int(args.get("top_k"), default=5),
+    }
+
+
+def _normalize_workspace_v2_list(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    filter_payload = args.get("filter") if isinstance(args.get("filter"), Mapping) else {}
+    return {
+        "kind": _text(args.get("kind")),
+        "filter": _canonical_value(filter_payload),
+    }
+
+
+def _normalize_workspace_v2_verify(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    against = args.get("against") if isinstance(args.get("against"), Mapping) else {}
+    return {
+        "claim": _text(args.get("claim")),
+        "against": _canonical_value(against),
+    }
+
+
+def _normalize_workspace_v2_synthesize_memory(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "claim": _text(args.get("claim")),
+        "supports": _string_list(args.get("supports")),
+        "derived_from": _string_list(args.get("derived_from")),
+        "evidence_obs_ids": _string_list(args.get("evidence_obs_ids")),
+        "confidence": _text(args.get("confidence")) or "medium",
+        "supports_option": _text(args.get("supports_option")),
+        "tags": _string_list(args.get("tags")),
+    }
+
+
+def _normalize_workspace_v2_answer(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "text": _text(args.get("text")),
+        "citations": _string_list(args.get("citations")),
+        "confidence": _text(args.get("confidence")) or "medium",
     }
 
 

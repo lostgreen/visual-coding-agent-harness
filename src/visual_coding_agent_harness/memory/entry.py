@@ -8,7 +8,19 @@ from typing import Any, Literal, Mapping
 from .anchor import SourceAnchor
 
 
-MemoryKind = Literal["note", "support", "conflict", "reject", "hypothesis", "open_question"]
+MemoryKind = Literal[
+    "note",
+    "support",
+    "answer_support",
+    "locator",
+    "conflict",
+    "contradicting",
+    "negation",
+    "reject",
+    "hypothesis",
+    "open_question",
+    "synthesized",
+]
 MemoryConfidence = Literal["high", "medium", "low"]
 
 
@@ -89,7 +101,19 @@ class MemoryEntry:
 
 def _memory_kind(value: Any) -> MemoryKind:
     text = str(value or "note")
-    if text in {"note", "support", "conflict", "reject", "hypothesis", "open_question"}:
+    if text in {
+        "note",
+        "support",
+        "answer_support",
+        "locator",
+        "conflict",
+        "contradicting",
+        "negation",
+        "reject",
+        "hypothesis",
+        "open_question",
+        "synthesized",
+    }:
         return text  # type: ignore[return-value]
     raise ValueError(f"memory_validation_failed: unknown kind={text}")
 
