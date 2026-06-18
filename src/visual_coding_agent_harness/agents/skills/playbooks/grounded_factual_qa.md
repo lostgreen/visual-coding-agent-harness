@@ -2,7 +2,7 @@
 name: grounded_factual_qa
 version: 1
 description: Localized factual question answering for visible or directly inspectable facts.
-when_to_use: Use when the question asks which, what, where, or who and needs localized answer-grade evidence.
+when_to_use: Use when the question asks which, what, where, or who and needs localized anchor-backed memory.
 default_claim_modality: visual_fact
 recovery_rules:
   insufficient:
@@ -21,7 +21,7 @@ Use this playbook for localized factual questions that are not mainly timeline, 
 Planner playbook:
 - Localize the target fact with search or navigation tools before reading expensive details.
 - Ask visual readers for neutral factual descriptions, not option votes.
-- Final answers need cited answer-grade evidence for the selected claim.
+- Final answers need memory citations backed by real anchors for the selected claim.
 
 Final check:
 - decision.citations all visually_confirmed

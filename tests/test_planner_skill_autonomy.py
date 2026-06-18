@@ -380,7 +380,8 @@ def test_base_identity_explains_ownership() -> None:
     )
 
     assert "Skill selection is your choice" in prompt
-    assert "Evidence policy is the harness's responsibility" in prompt
+    assert "When a tool returns useful anchors, write memory" in prompt
+    assert "The harness checks citation integrity, not semantic support" in prompt
     assert "skill_locked: true" not in prompt
     assert "To switch skill: set" in prompt
     assert "general_exploration" in prompt

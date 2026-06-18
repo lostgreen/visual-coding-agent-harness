@@ -89,7 +89,8 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertLess(prompt.index("# Uncommitted Observations"), prompt.index("# Tool Schema"))
         self.assertLess(prompt.index("# Compact Scene Index"), prompt.index("# Tool Schema"))
         self.assertNotIn("# Evidence Snapshot", prompt)
-        self.assertIn("Allowed ReAct actions: ground_question, vision_read, answer_agent, verify", prompt)
+        self.assertIn("When a tool returns useful anchors, write memory", prompt)
+        self.assertIn("The harness checks citation integrity, not semantic support", prompt)
         self.assertIn("Available skills:", prompt)
         self.assertIn('"skill": string', prompt)
         self.assertIn('"hypothesis"', prompt)
@@ -100,7 +101,7 @@ class PromptStackAndSkillRuntimeTest(unittest.TestCase):
         self.assertIn("visual_timeline_qa@v1", prompt)
         self.assertNotIn("timeline_ordering@v1", prompt)
         self.assertIn("confirm every event timestamp", prompt)
-        self.assertIn("Final answers require at least one citation to a real memory id", prompt)
+        self.assertIn("Final answers must cite mem_ ids", prompt)
 
     def test_memory_snapshot_and_uncommitted_observations_are_evidence_blocks(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
@@ -200,8 +201,8 @@ The prose says recovery_rules: this sentence must not define metadata.
         self.assertIn("read_segment_detail(segment_id", prompt)
         self.assertNotIn("video_ls(query", prompt)
         self.assertNotIn("caption_segments(segment_ids", prompt)
-        self.assertIn("verify_ledger_answer(answer: str, question: str", prompt)
-        self.assertNotIn("verify_ledger_answer(answer: str, ledger_text", prompt)
+        self.assertNotIn("verify_ledger_answer(answer: str, question: str", prompt)
+        self.assertIn('"citations": [memory_id]', prompt)
 
     def test_compose_slots_are_derived_from_canonical_blocks(self):
         scene_index = fixed_window_scene_index(video_path="/videos/demo.mp4", duration_sec=60.0, window_sec=30.0)
@@ -429,12 +430,13 @@ The prose says recovery_rules: this sentence must not define metadata.
         for skill_id in ("main_idea@v1", "narration_timeline_qa@v1", "mixed_asr_visual_qa@v1"):
             self.assertIn("bind_asr_claim", allowed_actions_for_skill(skill_id))
 
-        rendered = _tool_schema_block(
-            option_blind=True,
-            active_skill="narration_timeline_qa@v1",
-            exhausted=frozenset(),
-            target_ref_descriptions=("T1: Goya came from a humble background",),
-        )
+        with patch.dict("os.environ", {"HARNESS_LEGACY_PROMPT_TOOLS": "1"}):
+            rendered = _tool_schema_block(
+                option_blind=True,
+                active_skill="narration_timeline_qa@v1",
+                exhausted=frozenset(),
+                target_ref_descriptions=("T1: Goya came from a humble background",),
+            )
 
         self.assertIn("bind_asr_claim(segment_id: str, target_refs: list)", rendered)
         self.assertIn("Use bind_asr_claim", rendered)

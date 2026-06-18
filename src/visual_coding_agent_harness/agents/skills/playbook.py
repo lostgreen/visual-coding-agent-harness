@@ -177,28 +177,28 @@ def _causal_bind_playbook() -> Playbook:
         answer_operator="causal_bind",
         decomposition=(
             "Identify the asked effect or relationship. Create one causal target per option. Use transcript or ASR "
-            "binding to decide which cause is narrated as the reason."
+            "anchors to write memory for the narrated cause."
         ),
         evidence_shape_target=(
-            "selected option has binding-sourced support",
+            "selected option has memory citing ASR, OCR, or visual anchors",
             "topic overlap alone is insufficient",
-            "if two causes bind, use primacy or tie-breaking cues",
+            "if two causes have anchors, use primacy or tie-breaking cues",
         ),
         investigation_hints=(
-            "Reason and why questions need a cause binding, not just co-occurrence.",
+            "Reason and why questions need anchor-backed memory for the cause, not just co-occurrence.",
             "Negative wording inside a reason question is still causal unless the answer asks for an absent item.",
-            "Use ASR or transcript binding when narrator wording carries the reason.",
+            "Use exact ASR or transcript cue anchors when narrator wording carries the reason.",
         ),
         unsafe_final_conditions=(
             "only topical overlap supports the cause",
-            "cause target is not bound to an observation",
+            "cause target lacks an anchored observation",
         ),
         stop_diagnostics=(
-            StopDiagnostic("causal_binding_missing", "cause lacks binding evidence", "run bind_asr_claim for option cause targets"),
-            StopDiagnostic("topic_overlap_only", "support is topical overlap only", "bind transcript cue instead of using overlap"),
-            StopDiagnostic("two_causes_supported", "multiple causes bind", "inspect narrator primacy markers"),
+            StopDiagnostic("causal_binding_missing", "cause lacks anchor-backed memory", "write memory from exact ASR cue anchors"),
+            StopDiagnostic("topic_overlap_only", "support is topical overlap only", "cite exact transcript cue anchors instead"),
+            StopDiagnostic("two_causes_supported", "multiple causes have anchored memory", "inspect narrator primacy markers"),
         ),
-        suggested_actions=("search_segments", "read_segment_detail", "bind_asr_claim", "verify_ledger_answer"),
+        suggested_actions=("search_segments", "read_segment_detail", "write_memory"),
     )
 
 

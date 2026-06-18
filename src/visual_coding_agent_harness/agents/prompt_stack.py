@@ -436,11 +436,10 @@ def compose_replanning_prompt_blocks(
             title="Base Identity",
             body=(
                 "You are an autonomous visual agent exploring a long video with tools.\n"
-                "Planner input mode: text-only. Use the scene index and evidence ledger; tools inspect pixels/video.\n"
-                "Use a short ReAct shell: pick the next action, observe tool output, then decide whether evidence is sufficient.\n"
-                "Allowed ReAct actions: ground_question, vision_read, answer_agent, verify.\n"
+                "Planner input mode: text-only. Use the scene index, memory, and uncommitted observations; tools inspect pixels/video.\n"
+                "Use tools to inspect the video and transcript. When a tool returns useful anchors, write memory citing those anchors.\n"
+                "Final answers must cite memory ids. The harness checks citation integrity, not semantic support.\n"
                 "Skill selection is your choice; read each skill description and when_to_use guidance to pick.\n"
-                "Evidence policy is the harness's responsibility; it does not change automatically with your skill choice.\n"
                 "Do not include step-by-step private reasoning in the JSON response."
             ),
         ),
@@ -569,12 +568,12 @@ def compose_replanning_prompt_blocks(
                 title="Tool Schema",
                 body=_tool_schema_block(
                     option_blind=option_blind,
-                active_skill=active_skill,
-                exhausted=exhausted_tools or frozenset(),
-                target_ref_descriptions=target_ref_descriptions,
-                requested_tool_names=requested_tool_names,
+                    active_skill=active_skill,
+                    exhausted=exhausted_tools or frozenset(),
+                    target_ref_descriptions=target_ref_descriptions,
+                    requested_tool_names=requested_tool_names,
+                ),
             ),
-        ),
             PromptBlock(
                 name="final_gate",
                 title="Final Gate",
@@ -593,7 +592,7 @@ def compose_replanning_prompt_blocks(
                     '{"status": "continue", "skill": string, "rationale": string, '
                     '"hypothesis": {"option": "A|B|C|D", "why": string, "missing": [string]}, '
                     '"program": [{"tool": string, "args": object, "assign": string}]}\n'
-                    '{"status": "final", "skill": string, "answer": string, "citations": [observation_id], "confidence": number}'
+                    '{"status": "final", "skill": string, "answer": string, "citations": [memory_id], "confidence": number}'
                 ),
             ),
         ]
@@ -610,7 +609,14 @@ def _tool_schema_block(
     requested_tool_names: Sequence[str] = (),
 ) -> str:
     has_registered_refs = bool([item for item in target_ref_descriptions if str(item).strip()])
-    all_signatures = list(_tool_schema_signatures(option_blind=option_blind, include_target_refs=has_registered_refs))
+    legacy_tools_enabled = _legacy_prompt_tools_enabled()
+    all_signatures = list(
+        _tool_schema_signatures(
+            option_blind=option_blind,
+            include_target_refs=has_registered_refs,
+            include_legacy_tools=legacy_tools_enabled,
+        )
+    )
     signatures = list(all_signatures)
     allowed = allowed_actions_for_skill(active_skill or "") if active_skill else frozenset()
     if allowed:
@@ -633,7 +639,7 @@ def _tool_schema_block(
         _target_registry_contract_block(target_ref_descriptions),
         "Available tools:",
     ]
-    if any(_tool_name_from_signature(signature) == "bind_asr_claim" for signature in signatures):
+    if legacy_tools_enabled and any(_tool_name_from_signature(signature) == "bind_asr_claim" for signature in signatures):
         lines.append(
             "Use bind_asr_claim to promote indexed ASR cue_ids into supported evidence for registered target_refs."
         )
@@ -652,6 +658,14 @@ _GLOBAL_PROMPT_TOOL_NAMES = frozenset(
         "grep_evidence",
         "read_timeline_sorted",
         "write_memory",
+    }
+)
+
+_LEGACY_PROMPT_TOOL_NAMES = frozenset(
+    {
+        "bind_asr_claim",
+        "verify_ledger_answer",
+        "query_evidence_table",
     }
 )
 
@@ -675,7 +689,12 @@ def _requested_tool_signatures(
     return selected
 
 
-def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: bool = False) -> tuple[str, ...]:
+def _tool_schema_signatures(
+    *,
+    option_blind: bool = False,
+    include_target_refs: bool = False,
+    include_legacy_tools: bool = False,
+) -> tuple[str, ...]:
     inspect_schema = "inspect_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)"
     target_coverage_schema = (
         "target_coverage(targets: list = [], target_refs: list = [], top_k: int = 3, modalities: list = [], group_by_option: bool = False)"
@@ -697,13 +716,7 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         if include_target_refs
         else "verify_segment_anchors(segment_id: str, anchors: list, question: str = '', targets: list = [])"
     )
-    bind_asr_claim_schema = "bind_asr_claim(segment_id: str, target_refs: list)" if include_target_refs else ""
-    verifier_schema = (
-        "verify_ledger_answer(answer: str, question: str = '', min_score: float = 0.6, required_citations: list = [])"
-        if option_blind
-        else "verify_ledger_answer(answer: str, question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])"
-    )
-    return (
+    signatures = [
         "ground_question(query: str, top_k: int = 5, modalities: list = [])",
         target_coverage_schema,
         "search_segments(query: str, top_k: int = 5, modalities: list[caption|asr|ocr|entities] = [], additional_targets: list = [])",
@@ -711,14 +724,11 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         read_segment_detail_schema,
         locate_targets_schema,
         verify_anchors_schema,
-        *([bind_asr_claim_schema] if bind_asr_claim_schema else []),
         "global_gist(video_path: str, question: str, duration_sec: float, nframes: int = 128, max_pixels: int = 151200, sample_offset_sec: float = 0.0)",
         "summarize_ledger_evidence(max_claims: int = 5)",
-        verifier_schema,
         "view_observation(obs_id: str, line_range: tuple | None = None)",
         "read_observation_detail(obs_id: str, line_range: tuple | None = None)",
         "grep_evidence(pattern: str, in_field: str = 'claim')",
-        "query_evidence_table(filter: dict)",
         "read_timeline_sorted()",
         "read_hypothesis()",
         "update_hypothesis_slot(slot_name: str, status: str, evidence_obs_id: str = '')",
@@ -727,11 +737,30 @@ def _tool_schema_signatures(*, option_blind: bool = False, include_target_refs: 
         inspect_schema,
         "caption_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, additional_targets: list = [], nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
         "qa_segment(video_path: str, segment_id: str, start_sec: float, end_sec: float, question: str, nframes: int = 128, max_pixels: int = 151200, fps: float = 0.0)",
-    )
+    ]
+    if include_legacy_tools:
+        bind_asr_claim_schema = "bind_asr_claim(segment_id: str, target_refs: list)" if include_target_refs else ""
+        verifier_schema = (
+            "verify_ledger_answer(answer: str, question: str = '', min_score: float = 0.6, required_citations: list = [])"
+            if option_blind
+            else "verify_ledger_answer(answer: str, question: str = '', candidate_options: list = [], min_score: float = 0.6, required_citations: list = [])"
+        )
+        legacy_signatures = [
+            *([bind_asr_claim_schema] if bind_asr_claim_schema else []),
+            verifier_schema,
+            "query_evidence_table(filter: dict)",
+        ]
+        insert_at = signatures.index("summarize_ledger_evidence(max_claims: int = 5)") + 1
+        signatures[insert_at:insert_at] = legacy_signatures
+    return tuple(signatures)
 
 
 def _legacy_prompt_evidence_snapshot_enabled() -> bool:
     return os.environ.get("HARNESS_LEGACY_PROMPT_EVIDENCE_SNAPSHOT", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _legacy_prompt_tools_enabled() -> bool:
+    return os.environ.get("HARNESS_LEGACY_PROMPT_TOOLS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _skill_catalog_block(
@@ -743,7 +772,14 @@ def _skill_catalog_block(
     projection_status: Mapping[str, Any] | None = None,
     diagnostic_repair_hint: str | None = None,
 ) -> str:
-    lines = [skill_catalog_prompt(exhausted_tools=exhausted_tools, active_skill_id=active_skill or "")]
+    hidden_tool_names = frozenset() if _legacy_prompt_tools_enabled() else _LEGACY_PROMPT_TOOL_NAMES
+    lines = [
+        skill_catalog_prompt(
+            exhausted_tools=exhausted_tools,
+            active_skill_id=active_skill or "",
+            hidden_tool_names=hidden_tool_names,
+        )
+    ]
     if active_skill:
         playbook_block = render_skill_playbook_for_prompt(
             active_skill,
@@ -751,6 +787,7 @@ def _skill_catalog_block(
             central_subjects=target_hints,
             projection_status=projection_status,
             diagnostic_repair_hint=diagnostic_repair_hint,
+            hidden_tool_names=hidden_tool_names,
         )
         if playbook_block:
             lines.extend(["", playbook_block])
@@ -891,7 +928,7 @@ def _budget_snapshot_block(
     final_round_reserved: bool,
 ) -> str:
     final_round_line = (
-        "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
+        "Reserved final round is active: return final now if memory citations are ready; otherwise write memory before finalizing.\n"
         if final_round_reserved
         else ""
     )
@@ -1068,7 +1105,6 @@ _ROUTE_AGNOSTIC_FINAL_RULES = (
     "- Prefer segment_id references; the harness binds video_path/start_sec/end_sec.",
     "- Do not repeat already inspected segments unless the ledger says the prior observation was unusable.",
     "- Continue when evidence is missing, ambiguous, or too coarse.",
-    "- Use verify_ledger_answer only as a diagnostic when answer support is uncertain.",
     "- Final answers must cite memory ids written with real anchor ids.",
 )
 
@@ -1076,7 +1112,7 @@ _TARGET_REF_FINAL_RULES = (
     "- target_refs accepts only exact known registry ids like T1; option letters, Q<n> rows, lowercase ids, canonical text, and free text hard-reject the tool call.",
     "- When both target_refs and targets are present, target_refs are source of truth and targets is audit-only free text.",
     "- additional_targets is allowed only on discovery calls: search_segments(query), vision_read(ask_for), and caption_segment(question).",
-    "- additional_targets is banned on target_coverage, read_segment_detail, verify_ledger_answer, verify_segment_anchors, and locate_targets_in_segment.",
+    "- additional_targets is banned on target_coverage, read_segment_detail, verify_segment_anchors, and locate_targets_in_segment.",
 )
 
 _NO_TARGET_REF_FINAL_RULES = (
@@ -1127,7 +1163,7 @@ def _final_gate_block(
     include_target_refs: bool = False,
 ) -> str:
     final_round_line = (
-        "Reserved final round is active: return final now, or call verify_ledger_answer only if essential.\n"
+        "Reserved final round is active: return final now if memory citations are ready; otherwise write memory before finalizing.\n"
         if final_round_reserved
         else ""
     )
@@ -1139,7 +1175,7 @@ def _final_gate_block(
         "- Use Memory as your working notebook: when tool output has useful ASR/OCR/visual/caption/retrieval content, call write_memory with real anchor ids."
     )
     lines.append(
-        "- Final answers require at least one citation to a real memory id; raw observation citations are rejected unless an explicit fallback env flag is enabled."
+        "- Final answers must cite mem_ ids. If you have only obs_ ids, first write_memory citing the relevant anchors, then cite the returned mem_ id."
     )
     if final_round_line:
         lines.append(final_round_line.strip())

@@ -2439,8 +2439,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("inspect_segment(video_path", prompt)
             self.assertNotIn("caption_segments(segment_ids", prompt)
             self.assertNotIn("ingest_segment_metadata(segment_id", prompt)
-            self.assertIn("verify_ledger_answer(answer", prompt)
-            self.assertNotIn("verify_ledger_answer(answer: str, ledger_text", prompt)
+            self.assertNotIn("verify_ledger_answer(answer", prompt)
             self.assertIn("summarize_ledger_evidence", prompt)
             self.assertIn("vision_read(video_path", prompt)
             self.assertIn("max_pixels", prompt)
@@ -2449,7 +2448,7 @@ class IterativeAgentTest(unittest.TestCase):
             self.assertIn("Do not spend every round on navigation-only tools", prompt)
             self.assertIn("Local VLM tools must receive neutral factual prompts", prompt)
             self.assertIn("Use Memory as your working notebook", prompt)
-            self.assertIn("real memory id", prompt)
+            self.assertIn("Final answers must cite mem_ ids", prompt)
 
     def test_option_blind_mcq_seeds_target_coverage_before_first_planner_round(self):
         class RewriteThenPlanBackend(ScriptedPlannerBackend):
@@ -2730,7 +2729,9 @@ class IterativeAgentTest(unittest.TestCase):
 
             prompt = backend.requests[0].prompt
             self.assertIn("Task playbook: multiple_choice", prompt)
-            self.assertIn("candidate_options", prompt)
+            self.assertNotIn("candidate_options", prompt)
+            self.assertIn("Multiple-choice answers may use original options for planning", prompt)
+            self.assertIn("Final answers must cite mem_ ids", prompt)
             self.assertIn("verify option consistency", prompt)
 
     def test_iterative_agent_prompt_includes_workspace_evidence_status_summary(self):

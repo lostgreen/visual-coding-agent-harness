@@ -364,17 +364,19 @@ def skill_catalog_prompt(
     exhausted_tools: frozenset[str] | None = None,
     include_legacy: bool = False,
     active_skill_id: str = "",
+    hidden_tool_names: frozenset[str] | None = None,
 ) -> str:
     resolved_registry = registry or builtin_skill_registry()
     blocked = frozenset(exhausted_tools or ())
+    hidden = frozenset(hidden_tool_names or ())
     active_name = str(active_skill_id or "").split("@", 1)[0].strip()
     lines = ["Available skills:"]
     for skill in resolved_registry.list():
         if not include_legacy and skill.name in _LEGACY_CATALOG_SKILLS:
             continue
         suggested = tuple(skill.playbook.suggested_actions) if skill.playbook is not None else tuple(skill.allowed_actions)
-        remaining = sorted(action for action in suggested if action not in blocked)
-        spent = sorted(action for action in suggested if action in blocked)
+        remaining = sorted(action for action in suggested if action not in blocked and action not in hidden)
+        spent = sorted(action for action in suggested if action in blocked and action not in hidden)
         suffix = f" ({', '.join(f'{tool}=exhausted' for tool in spent)})" if spent else ""
         if active_name and skill.name != active_name:
             lines.append(f"- {skill.guide.name}@v{skill.guide.version}: {_bounded_text(skill.guide.description, max_chars=80)}")
@@ -433,13 +435,21 @@ def render_skill_playbook_for_prompt(
     central_subjects: Sequence[str] = (),
     projection_status: Mapping[str, Any] | None = None,
     diagnostic_repair_hint: str | None = None,
+    hidden_tool_names: frozenset[str] | None = None,
     max_chars: int = 4000,
 ) -> str:
     skill = skill_for_id(skill_id)
     if skill is None or skill.playbook is None:
         return ""
+    playbook = skill.playbook
+    hidden = frozenset(hidden_tool_names or ())
+    if hidden and playbook.suggested_actions:
+        playbook = with_suggested_actions(
+            playbook,
+            tuple(action for action in playbook.suggested_actions if action not in hidden),
+        )
     return render_playbook_block(
-        skill.playbook,
+        playbook,
         option_labels=option_labels,
         central_subjects=central_subjects,
         projection_status=projection_status,

@@ -7,7 +7,7 @@ default_claim_modality: mixed
 recovery_rules:
   insufficient:
     action: need_more_evidence
-    target: missing answer-grade evidence
+    target: missing anchor-backed memory
 ---
 # General Exploration
 
@@ -15,5 +15,5 @@ Use this playbook only when no specialized skill clearly matches the question.
 
 Planner playbook:
 - Localize likely evidence with conservative search or coverage tools.
-- Collect answer-grade visual, narrated, OCR, or QA evidence before finalizing.
+- Collect visual, narrated, OCR, or QA anchors and write memory before finalizing.
 - Prefer switching to a specialized skill when the question clearly matches one.
