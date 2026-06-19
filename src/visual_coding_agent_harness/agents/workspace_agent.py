@@ -327,7 +327,11 @@ class WorkspaceVisualAgent:
         if not fact_text and anchors:
             retrieval_writes = _retrieval_candidate_writes(raw_output, anchors=anchors, reason=reason)
             if retrieval_writes:
-                self.workspace.commit_observation(observation.observation_id, writes=retrieval_writes)
+                try:
+                    self.workspace.commit_observation(observation.observation_id, writes=retrieval_writes)
+                except (ToolError, ValueError) as exc:
+                    self._defer_auto_pin_failure(observation.observation_id, reason=reason, error=str(exc))
+                    return
                 self.workspace.write_trace_event(
                     "commit_auto_pinned",
                     {
@@ -365,35 +369,55 @@ class WorkspaceVisualAgent:
             return
 
         source_kind = str(anchor.get("source_kind") or "visual_fact")
-        excerpt = fact_text[:500]
-        self.workspace.commit_observation(
-            observation.observation_id,
-            writes={
-                "pinned_anchors": [
-                    {
-                        "anchor_id": anchor_id,
-                        "kind": str(anchor.get("modality") or source_kind),
-                        "source_kind": source_kind,
-                        "excerpt": excerpt,
-                    }
-                ],
-                "memory": [
-                    {
-                        "kind": "unverified_capture",
-                        "claim": fact_text,
-                        "anchor_ids": [anchor_id],
-                        "confidence": "low",
-                        "metadata": {
-                            "auto_pinned": True,
-                            "auto_pin_reason": reason,
+        excerpt = str(anchor.get("excerpt") or "").strip() or fact_text[:500]
+        try:
+            self.workspace.commit_observation(
+                observation.observation_id,
+                writes={
+                    "pinned_anchors": [
+                        {
+                            "anchor_id": anchor_id,
+                            "kind": str(anchor.get("modality") or source_kind),
+                            "source_kind": source_kind,
+                            "excerpt": excerpt,
+                        }
+                    ],
+                    "memory": [
+                        {
+                            "kind": "unverified_capture",
+                            "claim": fact_text,
+                            "anchor_ids": [anchor_id],
+                            "confidence": "low",
+                            "metadata": {
+                                "auto_pinned": True,
+                                "auto_pin_reason": reason,
+                            },
                         },
-                    }
-                ],
-            },
-        )
+                    ],
+                },
+            )
+        except (ToolError, ValueError) as exc:
+            self._defer_auto_pin_failure(observation.observation_id, reason=reason, error=str(exc))
+            return
         self.workspace.write_trace_event(
             "commit_auto_pinned",
             {"observation_id": observation.observation_id, "reason": reason, "anchor_id": anchor_id},
+        )
+
+    def _defer_auto_pin_failure(self, observation_id: str, *, reason: str, error: str) -> None:
+        self.workspace.defer_observation(
+            observation_id,
+            until="manual_review",
+            reason=f"{reason}; auto_pin_failed: {error}",
+        )
+        self.workspace.write_trace_event(
+            "commit_auto_deferred",
+            {
+                "observation_id": observation_id,
+                "reason": reason,
+                "auto_pin_failed": True,
+                "auto_pin_error": error,
+            },
         )
 
     def _execute_plan_action(

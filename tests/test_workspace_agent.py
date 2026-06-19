@@ -793,6 +793,50 @@ def test_workspace_agent_auto_pins_after_commit_retry_exhaustion(tmp_path: Path)
     assert any(event["type"] == "commit_auto_pinned" for event in workspace._read_jsonl_dicts("trace.jsonl"))
 
 
+def test_workspace_agent_auto_pin_failure_defers_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_auto_pin_failure_defers")
+    observation = workspace.write_observation(
+        tool_name="read_clip",
+        claim="The model summarized an option-relevant visual cue.",
+        confidence=0.7,
+        raw_output={
+            "facts": [{"text": "The visual summary points toward option C."}],
+            "produced_anchors": [
+                {
+                    "anchor_id": "anch_clip_seg_0001_001",
+                    "observation_id": "__pending__",
+                    "source_kind": "visual_fact",
+                    "segment_id": "seg_0001",
+                    "field_path": "facts[0].text",
+                    "excerpt": "visible source snippet",
+                    "modality": "visual",
+                }
+            ],
+        },
+    )
+    backend = ScriptedWorkspaceV2Backend(plan_responses=[], commit_responses=[])
+    agent = WorkspaceVisualAgent(
+        backend=backend,
+        registry=build_workspace_primitives_registry(workspace=workspace),
+        workspace=workspace,
+    )
+
+    def reject_commit(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise ValueError("anchor_validation_failed: excerpt must appear in observation obs_0001")
+
+    monkeypatch.setattr(workspace, "commit_observation", reject_commit)
+
+    agent._auto_pin_observation(observation, reason="commit_format_failure: bad model commit")
+
+    assert workspace.observation_status(observation.observation_id) == "deferred"
+    trace_events = workspace._read_jsonl_dicts("trace.jsonl")
+    deferred = [event for event in trace_events if event["type"] == "commit_auto_deferred"]
+    assert deferred[-1]["payload"]["auto_pin_failed"] is True
+    assert "anchor_validation_failed" in deferred[-1]["payload"]["auto_pin_error"]
+
+
 def test_workspace_agent_auto_pins_after_malformed_disposition_args(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_auto_pin_tool_error")
     backend = ScriptedWorkspaceV2Backend(
