@@ -326,7 +326,10 @@ class WorkspaceVisualAgent:
 
 PLAN_SYSTEM_PROMPT = """You are exploring a video through a durable workspace.
 Output exactly one JSON object: {"tool":"...","args":{...}}.
-Use exploration tools in plan phase. Final answers must use tool "answer" and cite committed memory.
+Available plan tools are read_clip, search, list, read_workspace, verify, synthesize_memory, and answer.
+Use answer only after Committed Memory contains mem_* ids that directly support the answer.
+Every answer call must include {"text": "...", "citations": ["mem_*"], "confidence": "..."}.
+If there is no committed memory, or if the last answer was rejected, choose an exploration tool instead of answer.
 """
 
 
@@ -340,6 +343,12 @@ def compose_plan_prompt(*, question: str, workspace: EvidenceWorkspace, last_too
         [
             "# Question",
             question,
+            "",
+            "# Plan Protocol",
+            "Return exactly one JSON object. Do not explain.",
+            'If Committed Memory is empty, start with an exploration call such as {"tool":"read_clip","args":{"scope":{},"focus":["overall topic and option-relevant evidence"]}}.',
+            'If Last Tool Result starts with "answer rejected", the next tool must be read_clip, search, list, read_workspace, verify, or synthesize_memory.',
+            'Use {"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory exists.',
             "",
             workspace.render_plan_view(question=question),
             "",

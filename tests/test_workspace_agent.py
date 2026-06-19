@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from visual_coding_agent_harness.agents.workspace_agent import WorkspaceVisualAgent, compose_commit_prompt
+from visual_coding_agent_harness.agents.workspace_agent import (
+    PLAN_SYSTEM_PROMPT,
+    WorkspaceVisualAgent,
+    compose_commit_prompt,
+    compose_plan_prompt,
+)
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.registry import ToolRegistry, ToolRuntimeSpec, tool
 from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
@@ -371,6 +376,23 @@ def test_compose_commit_prompt_includes_full_view_on_minimal_retry(tmp_path: Pat
     assert "anch_clip_seg_0001_001" in prompt
     assert "# Validation Error From Previous Attempt" in prompt
     assert "# Minimal Commit Mode" in prompt
+
+
+def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_plan_protocol")
+
+    prompt = compose_plan_prompt(
+        question="What's the main idea?",
+        workspace=workspace,
+        last_tool_result="answer rejected: final answer requires at least one planner-authored memory citation",
+    )
+
+    assert "Available plan tools" in PLAN_SYSTEM_PROMPT
+    assert "Every answer call must include" in PLAN_SYSTEM_PROMPT
+    assert "If Committed Memory is empty" in prompt
+    assert "the next tool must be read_clip, search, list, read_workspace, verify, or synthesize_memory" in prompt
+    assert '{"tool":"read_clip"' in prompt
+    assert '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}' in prompt
 
 
 def test_workspace_agent_commits_search_hit_with_evidence_excerpt(tmp_path: Path) -> None:
