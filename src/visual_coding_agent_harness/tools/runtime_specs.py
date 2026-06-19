@@ -491,9 +491,20 @@ def _normalize_workspace_v2_list(_ctx: RunContext, request: ToolRequest) -> Mapp
 
 def _normalize_workspace_v2_verify(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
-    against = args.get("against") if isinstance(args.get("against"), Mapping) else {}
+    against = dict(args.get("against")) if isinstance(args.get("against"), Mapping) else {}
+    citations = _string_list(
+        against.get("citations")
+        or args.get("citations")
+        or args.get("citation_ids")
+        or args.get("memory_ids")
+        or args.get("evidence_ids")
+    )
+    if citations:
+        against["citations"] = citations
+    if "final" not in against and args.get("final") is not None:
+        against["final"] = _bool(args.get("final"))
     return {
-        "claim": _text(args.get("claim")),
+        "claim": _text(args.get("claim") or args.get("answer") or args.get("text") or args.get("choice")),
         "against": _canonical_value(against),
     }
 

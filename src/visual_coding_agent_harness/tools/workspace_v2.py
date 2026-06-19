@@ -9,7 +9,14 @@ from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
 from ..video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_modalities, search_modality_limitations
 from ..workspace import EvidenceWorkspace
-from .runtime_specs import _normalize_workspace_v2_answer
+from .runtime_specs import (
+    _normalize_read_clip,
+    _normalize_workspace_v2_answer,
+    _normalize_workspace_v2_list,
+    _normalize_workspace_v2_search,
+    _normalize_workspace_v2_synthesize_memory,
+    _normalize_workspace_v2_verify,
+)
 from .workspace_primitives import build_workspace_primitives_registry
 
 
@@ -305,6 +312,7 @@ def build_workspace_v2_registry(
     registry.register(
         ToolRuntimeSpec(
             tool_spec=read_clip,
+            argument_normalizer=_normalize_read_clip,
             semantic_key_builder=_static_key("read_clip"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
             commit_required=True,
@@ -313,6 +321,7 @@ def build_workspace_v2_registry(
     registry.register(
         ToolRuntimeSpec(
             tool_spec=search,
+            argument_normalizer=_normalize_workspace_v2_search,
             semantic_key_builder=_static_key("search"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
             commit_required_predicate=_search_has_evidence,
@@ -321,6 +330,7 @@ def build_workspace_v2_registry(
     registry.register(
         ToolRuntimeSpec(
             tool_spec=list_tool,
+            argument_normalizer=_normalize_workspace_v2_list,
             semantic_key_builder=_static_key("list"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
         )
@@ -328,6 +338,7 @@ def build_workspace_v2_registry(
     registry.register(
         ToolRuntimeSpec(
             tool_spec=verify,
+            argument_normalizer=_normalize_workspace_v2_verify,
             semantic_key_builder=_static_key("verify"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
             commit_required_predicate=_verify_has_rejection_evidence,
@@ -336,6 +347,7 @@ def build_workspace_v2_registry(
     registry.register(
         ToolRuntimeSpec(
             tool_spec=synthesize_memory,
+            argument_normalizer=_normalize_workspace_v2_synthesize_memory,
             semantic_key_builder=_static_key("synthesize_memory"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
         )

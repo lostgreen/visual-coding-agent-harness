@@ -2,8 +2,11 @@ from pathlib import Path
 
 import pytest
 
+from visual_coding_agent_harness.agents.runtime.lifecycle import RunContext
+from visual_coding_agent_harness.agents.runtime.program_normalizer import ProgramNormalizer
+from visual_coding_agent_harness.agents.runtime.state import RoundState, RunState
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
-from visual_coding_agent_harness.registry import ToolError
+from visual_coding_agent_harness.registry import ToolError, ToolRegistry
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
 from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -41,6 +44,17 @@ def _video_map() -> VideoMap:
                 asr_text="The story moves to another topic.",
             ),
         ],
+    )
+
+
+def _runtime_context(workspace: EvidenceWorkspace, registry: ToolRegistry) -> RunContext:
+    return RunContext(
+        workspace=workspace,
+        scene_index=None,
+        budget=None,
+        run_state=RunState(question="q", video_path="/videos/demo.mp4"),
+        round_state=RoundState(round_number=1),
+        registry=registry,
     )
 
 
@@ -87,6 +101,29 @@ def test_workspace_v2_list_reads_segments_and_workspace_sections(tmp_path: Path)
 
     assert segments["items"][0]["segment_id"] == "seg_0001"
     assert entities["items"][0]["name"] == "Austria-Hungary"
+
+
+def test_workspace_v2_registry_installs_runtime_normalizers(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_runtime_specs")
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    for tool_name in ("read_clip", "search", "list", "verify", "synthesize_memory", "answer"):
+        assert registry.get_runtime_spec(tool_name).argument_normalizer is not None, tool_name
+
+
+def test_workspace_v2_verify_normalizer_accepts_legacy_citation_args(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_legacy_args")
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    requests = ProgramNormalizer(registry).normalize(
+        [{"tool": "verify", "args": {"answer": "D", "citations": ["mem_0001"], "final": True}}],
+        ctx=_runtime_context(workspace, registry),
+    )
+
+    assert requests[0].arguments == {
+        "claim": "D",
+        "against": {"citations": ["mem_0001"], "final": True},
+    }
 
 
 def test_workspace_v2_plan_phase_tool_surface_is_exact(tmp_path: Path) -> None:
