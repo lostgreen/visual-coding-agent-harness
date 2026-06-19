@@ -126,6 +126,32 @@ def test_workspace_agent_parse_action_accepts_fenced_json_with_tail_text() -> No
     assert action == {"tool": "read_clip", "args": {"scope": {}, "focus": ["overall evidence"]}}
 
 
+def test_workspace_agent_recovers_from_rejected_plan_tool(tmp_path: Path) -> None:
+    @tool(name="bad_tool", description="Always reject.")
+    def bad_tool() -> dict[str, object]:
+        raise ValueError("bad_tool_failed: invalid planner args")
+
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_tool_rejected")
+    registry = ToolRegistry()
+    registry.register(ToolRuntimeSpec(tool_spec=bad_tool))
+    backend = ScriptedWorkspaceBackend(
+        [
+            '{"tool":"bad_tool","args":{}}',
+            '{"tool":"answer","args":{"text":"done","citations":[],"confidence":"low"}}',
+        ]
+    )
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=2)
+
+    result = agent.run("Question: demo")
+
+    assert result.answer == "done"
+    assert result.rounds == 2
+    trace_events = workspace._read_jsonl_dicts("trace.jsonl")
+    rejected = [event for event in trace_events if event["type"] == "workspace_tool_rejected"]
+    assert rejected[0]["payload"]["tool"] == "bad_tool"
+    assert "bad_tool_failed" in rejected[0]["payload"]["error"]
+
+
 def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_commit")
     registry = ToolRegistry()

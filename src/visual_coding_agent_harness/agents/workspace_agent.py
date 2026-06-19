@@ -83,7 +83,20 @@ class WorkspaceVisualAgent:
             if _tool_name(plan_action) in DISPOSITION_TOOLS:
                 raise ValueError("plan phase does not accept disposition tools")
 
-            obs_ids = self._execute_plan_action(plan_action, question=question, round_number=round_number)
+            try:
+                obs_ids = self._execute_plan_action(plan_action, question=question, round_number=round_number)
+            except (ToolError, ValueError) as exc:
+                last_tool_result = f"tool rejected: {exc}"
+                self.workspace.write_trace_event(
+                    "workspace_tool_rejected",
+                    {
+                        "round": round_number,
+                        "tool": _tool_name(plan_action),
+                        "args": _action_args(plan_action),
+                        "error": str(exc),
+                    },
+                )
+                continue
             observation_id = obs_ids[-1] if obs_ids else ""
             observation = self.workspace.get_observation(observation_id) if observation_id else None
             if observation is not None:
