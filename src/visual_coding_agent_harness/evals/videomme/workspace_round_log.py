@@ -229,6 +229,31 @@ def _render_round_events(
         for event in validation_errors:
             payload = event.get("payload", {}) if isinstance(event.get("payload", {}), Mapping) else {}
             lines.extend([f"- attempt {payload.get('attempt', '?')}", *_fenced(_json(payload), info="json"), ""])
+    final_events = [event for event in events if str(event.get("type", "")) == "workspace_final_model_io"]
+    if final_events:
+        lines.extend(["#### Forced Final IO", ""])
+        for event in final_events:
+            payload = event.get("payload", {}) if isinstance(event.get("payload", {}), Mapping) else {}
+            round_number = int(payload.get("round", 0) or 0)
+            prompt = planner_io.get(f"round_{round_number:03d}_final_prompt.txt")
+            response = planner_io.get(f"round_{round_number:03d}_final_response.txt")
+            lines.extend(
+                [
+                    f"- prompt: {_relative_or_text(log_root, prompt)}",
+                    f"- response: {_relative_or_text(log_root, response)}",
+                    "",
+                ]
+            )
+            if prompt is not None and prompt.exists():
+                lines.extend(["Final prompt:", *_fenced(prompt.read_text(encoding="utf-8", errors="replace"), info="text"), ""])
+            if response is not None and response.exists():
+                lines.extend(
+                    [
+                        "Final response:",
+                        *_fenced(response.read_text(encoding="utf-8", errors="replace"), info="json"),
+                        "",
+                    ]
+                )
     return lines
 
 

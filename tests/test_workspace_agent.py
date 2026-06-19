@@ -611,6 +611,35 @@ def test_workspace_agent_exports_downloadable_round_log(tmp_path: Path) -> None:
     assert any(event["type"] == "workspace_round_log_export" for event in trace_events)
 
 
+def test_workspace_agent_round_log_includes_forced_final_io(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_forced_final_round_log")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"search","args":{"query":"does-not-exist","modality":"asr"}}',
+        ],
+        commit_responses=[],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+    artifact = export_workspace_round_log(
+        workspace,
+        question="Why was Austria-Hungary shown between Russia and Western Europe?",
+        video_path="/videos/demo.mp4",
+        final={"answer": result.answer, "status": "final", "citations": list(result.citations)},
+    )
+
+    markdown = Path(str(artifact["path"])).read_text(encoding="utf-8")
+    assert "#### Forced Final IO" in markdown
+    assert "round_001_final_prompt.txt" in markdown
+    assert "round_001_final_response.txt" in markdown
+    assert "Final prompt:" in markdown
+    assert "# Forced Final Protocol" in markdown
+    assert "Final response:" in markdown
+    assert '"tool":"answer"' in markdown
+
+
 def test_workspace_agent_commits_search_hit_with_evidence_excerpt(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_search_commit")
     backend = ScriptedWorkspaceV2Backend(
