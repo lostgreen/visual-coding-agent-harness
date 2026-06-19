@@ -152,6 +152,39 @@ def test_workspace_agent_recovers_from_rejected_plan_tool(tmp_path: Path) -> Non
     assert "bad_tool_failed" in rejected[0]["payload"]["error"]
 
 
+def test_workspace_agent_duplicate_guard_persists_across_rounds(tmp_path: Path) -> None:
+    @tool(name="probe", description="Probe once.")
+    def probe(target: str) -> dict[str, object]:
+        return {"claim": f"found {target}", "confidence": 0.9}
+
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_cross_round_duplicate_guard")
+    registry = ToolRegistry()
+    registry.register(
+        ToolRuntimeSpec(
+            tool_spec=probe,
+            semantic_key_builder=lambda _ctx, request: f"probe:{request.arguments['target']}",
+        )
+    )
+    backend = ScriptedWorkspaceBackend(
+        [
+            '{"tool":"probe","args":{"target":"same"}}',
+            '{"tool":"probe","args":{"target":"same"}}',
+            '{"tool":"answer","args":{"text":"done","citations":[],"confidence":"low"}}',
+        ]
+    )
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=3)
+
+    result = agent.run("Question: demo")
+
+    assert result.answer == "done"
+    assert result.rounds == 3
+    observations = workspace.read_observations()
+    assert len(observations) == 1
+    trace_events = workspace._read_jsonl_dicts("trace.jsonl")
+    rejected = [event for event in trace_events if event["type"] == "workspace_tool_rejected"]
+    assert rejected[0]["payload"]["error"] == "duplicate_tool_call: probe repeats semantic key probe:same."
+
+
 def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_commit")
     registry = ToolRegistry()

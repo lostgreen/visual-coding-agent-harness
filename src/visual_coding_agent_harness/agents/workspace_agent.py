@@ -54,12 +54,11 @@ class WorkspaceVisualAgent:
         self.runtime_host = ToolRuntimeHost(
             registry=registry,
             workspace=workspace,
-            pre_tool_hooks=(),
-            post_tool_hooks=(),
         )
 
     def run(self, question: str) -> WorkspaceRunResult:
         last_tool_result = ""
+        run_state = RunState(question=question, video_path=self.video_path)
         for round_number in range(1, self.max_rounds + 1):
             plan_action = self._decide_plan(
                 question=question,
@@ -68,7 +67,12 @@ class WorkspaceVisualAgent:
             )
             if _tool_name(plan_action) == "answer":
                 try:
-                    return self._finalize_answer(plan_action, question=question, rounds=round_number)
+                    return self._finalize_answer(
+                        plan_action,
+                        question=question,
+                        rounds=round_number,
+                        run_state=run_state,
+                    )
                 except (ToolError, ValueError) as exc:
                     last_tool_result = f"answer rejected: {exc}"
                     self.workspace.write_trace_event(
@@ -84,7 +88,12 @@ class WorkspaceVisualAgent:
                 raise ValueError("plan phase does not accept disposition tools")
 
             try:
-                obs_ids = self._execute_plan_action(plan_action, question=question, round_number=round_number)
+                obs_ids = self._execute_plan_action(
+                    plan_action,
+                    question=question,
+                    round_number=round_number,
+                    run_state=run_state,
+                )
             except (ToolError, ValueError) as exc:
                 last_tool_result = f"tool rejected: {exc}"
                 self.workspace.write_trace_event(
@@ -119,12 +128,12 @@ class WorkspaceVisualAgent:
             metadata={"reason": "max_rounds_reached"},
         )
 
-    def _runtime_context(self, *, question: str, round_number: int) -> RunContext:
+    def _runtime_context(self, *, question: str, round_number: int, run_state: RunState | None = None) -> RunContext:
         return RunContext(
             workspace=self.workspace,
             scene_index=None,
             budget=None,
-            run_state=RunState(question=question, video_path=self.video_path),
+            run_state=run_state or RunState(question=question, video_path=self.video_path),
             round_state=RoundState(round_number=round_number),
             registry=self.registry,
             record_trace=self.workspace.write_trace_event,
@@ -342,12 +351,18 @@ class WorkspaceVisualAgent:
         *,
         question: str,
         round_number: int,
+        run_state: RunState | None = None,
     ) -> tuple[str, ...]:
-        ctx = self._runtime_context(question=question, round_number=round_number)
+        ctx = self._runtime_context(question=question, round_number=round_number, run_state=run_state)
         result = self.runtime_host.run(
             [{"tool": _tool_name(action), "args": _action_args(action)}],
             ctx=ctx,
         )
+        if not result.observation_ids and result.rejections:
+            rejection = result.rejections[-1]
+            reason = str(rejection.get("reason") or "tool_call_rejected").strip()
+            message = str(rejection.get("message") or "").strip()
+            raise ValueError(reason + (f": {message}" if message else ""))
         return tuple(str(item) for item in result.observation_ids)
 
     def _commit_required(self, tool_name: str, observation: Any | None = None) -> bool:
@@ -359,7 +374,14 @@ class WorkspaceVisualAgent:
             return False
         return bool(spec.commit_required_predicate(observation.raw_output or {}))
 
-    def _finalize_answer(self, action: Mapping[str, Any], *, question: str, rounds: int) -> WorkspaceRunResult:
+    def _finalize_answer(
+        self,
+        action: Mapping[str, Any],
+        *,
+        question: str,
+        rounds: int,
+        run_state: RunState | None = None,
+    ) -> WorkspaceRunResult:
         args = _action_args(action)
         try:
             self.registry.get_runtime_spec("answer")
@@ -367,7 +389,7 @@ class WorkspaceVisualAgent:
             return _answer_result(action, rounds=rounds)
         normalized = self.runtime_host.normalize_program(
             [{"tool": "answer", "args": args}],
-            ctx=self._runtime_context(question=question, round_number=rounds),
+            ctx=self._runtime_context(question=question, round_number=rounds, run_state=run_state),
         )
         normalized_args = dict(normalized[0].get("args", {})) if normalized else args
         output = self.registry.execute("answer", normalized_args)

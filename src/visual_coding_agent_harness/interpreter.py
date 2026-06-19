@@ -32,6 +32,7 @@ class ProgramResult:
     observation_ids: Sequence[str]
     assignments: Mapping[str, str] = field(default_factory=dict)
     stopped_by_sufficiency: bool = False
+    rejections: Sequence[Mapping[str, Any]] = field(default_factory=tuple)
 
 
 class ProgramInterpreter:
@@ -60,6 +61,7 @@ class ProgramInterpreter:
         sufficiency_predicate: Callable[[EvidenceWorkspace, Mapping[str, str]], bool] | None = None,
     ) -> ProgramResult:
         observation_ids = []
+        rejections = []
         assignments: Dict[str, str] = {}
         slot_values = dict(slots or {})
         stopped_by_sufficiency = False
@@ -71,6 +73,7 @@ class ProgramInterpreter:
                     step_index=index,
                     step=expanded_step,
                     assignments=assignments,
+                    rejections=rejections,
                 )
                 if not step_observation_ids:
                     continue
@@ -103,12 +106,14 @@ class ProgramInterpreter:
                             observation_ids=observation_ids,
                             assignments=assignments,
                             stopped_by_sufficiency=stopped_by_sufficiency,
+                            rejections=tuple(rejections),
                         )
 
         return ProgramResult(
             observation_ids=observation_ids,
             assignments=assignments,
             stopped_by_sufficiency=stopped_by_sufficiency,
+            rejections=tuple(rejections),
         )
 
     def _run_step(
@@ -117,6 +122,7 @@ class ProgramInterpreter:
         step_index: int,
         step: Mapping[str, Any],
         assignments: Dict[str, str],
+        rejections: list[Mapping[str, Any]],
     ) -> Sequence[str]:
         if "tool" not in step and "op" not in step:
             raise ValueError(f"Program step {step_index} is missing required 'tool'")
@@ -130,15 +136,17 @@ class ProgramInterpreter:
         if self.lifecycle_context is not None and self.pre_tool_hooks:
             decision = evaluate_pre_tool_chain(self.pre_tool_hooks, self.lifecycle_context, request)
             if decision.rejected:
+                rejection = {
+                    "step": step_index,
+                    "tool": tool_name,
+                    "reason": decision.reason,
+                    "message": decision.message,
+                    "payload": dict(decision.payload),
+                }
+                rejections.append(rejection)
                 self.workspace.write_trace_event(
                     "tool_call_rejected",
-                    {
-                        "step": step_index,
-                        "tool": tool_name,
-                        "reason": decision.reason,
-                        "message": decision.message,
-                        "payload": dict(decision.payload),
-                    },
+                    rejection,
                 )
                 return ()
 
