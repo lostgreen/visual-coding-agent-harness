@@ -512,9 +512,14 @@ def _normalize_workspace_v2_synthesize_memory(_ctx: RunContext, request: ToolReq
 
 def _normalize_workspace_v2_answer(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
+    text = _text(args.get("text"))
+    if not text:
+        text = _text(args.get("answer"))
     return {
-        "text": _text(args.get("text")),
-        "citations": _string_list(args.get("citations")),
+        "text": text,
+        "citations": _string_list(
+            args.get("citations") or args.get("citation_ids") or args.get("memory_ids") or args.get("evidence_ids")
+        ),
         "confidence": _text(args.get("confidence")) or "medium",
     }
 

@@ -9,6 +9,7 @@ from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
 from ..video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_modalities, search_modality_limitations
 from ..workspace import EvidenceWorkspace
+from .runtime_specs import _normalize_workspace_v2_answer
 from .workspace_primitives import build_workspace_primitives_registry
 
 
@@ -339,7 +340,13 @@ def build_workspace_v2_registry(
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
         )
     )
-    registry.register(ToolRuntimeSpec(tool_spec=answer, duplicate_guard_policy=DuplicateGuardPolicy.OFF))
+    registry.register(
+        ToolRuntimeSpec(
+            tool_spec=answer,
+            argument_normalizer=_normalize_workspace_v2_answer,
+            duplicate_guard_policy=DuplicateGuardPolicy.OFF,
+        )
+    )
     if include_workspace_primitives:
         registry.extend(build_workspace_primitives_registry(workspace=workspace))
     return registry

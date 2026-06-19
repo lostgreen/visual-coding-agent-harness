@@ -64,7 +64,19 @@ class WorkspaceVisualAgent:
                 last_tool_result=last_tool_result,
             )
             if _tool_name(plan_action) == "answer":
-                return self._finalize_answer(plan_action, rounds=round_number)
+                try:
+                    return self._finalize_answer(plan_action, question=question, rounds=round_number)
+                except (ToolError, ValueError) as exc:
+                    last_tool_result = f"answer rejected: {exc}"
+                    self.workspace.write_trace_event(
+                        "workspace_answer_rejected",
+                        {
+                            "round": round_number,
+                            "error": str(exc),
+                            "action": {"tool": _tool_name(plan_action), "args": _action_args(plan_action)},
+                        },
+                    )
+                    continue
             if _tool_name(plan_action) in DISPOSITION_TOOLS:
                 raise ValueError("plan phase does not accept disposition tools")
 
@@ -89,6 +101,17 @@ class WorkspaceVisualAgent:
             confidence="low",
             rounds=self.max_rounds,
             metadata={"reason": "max_rounds_reached"},
+        )
+
+    def _runtime_context(self, *, question: str, round_number: int) -> RunContext:
+        return RunContext(
+            workspace=self.workspace,
+            scene_index=None,
+            budget=None,
+            run_state=RunState(question=question, video_path=self.video_path),
+            round_state=RoundState(round_number=round_number),
+            registry=self.registry,
+            record_trace=self.workspace.write_trace_event,
         )
 
     def _decide_plan(self, *, question: str, round_number: int, last_tool_result: str) -> Mapping[str, Any]:
@@ -262,15 +285,7 @@ class WorkspaceVisualAgent:
         question: str,
         round_number: int,
     ) -> tuple[str, ...]:
-        ctx = RunContext(
-            workspace=self.workspace,
-            scene_index=None,
-            budget=None,
-            run_state=RunState(question=question, video_path=self.video_path),
-            round_state=RoundState(round_number=round_number),
-            registry=self.registry,
-            record_trace=self.workspace.write_trace_event,
-        )
+        ctx = self._runtime_context(question=question, round_number=round_number)
         result = self.runtime_host.run(
             [{"tool": _tool_name(action), "args": _action_args(action)}],
             ctx=ctx,
@@ -286,19 +301,24 @@ class WorkspaceVisualAgent:
             return False
         return bool(spec.commit_required_predicate(observation.raw_output or {}))
 
-    def _finalize_answer(self, action: Mapping[str, Any], *, rounds: int) -> WorkspaceRunResult:
+    def _finalize_answer(self, action: Mapping[str, Any], *, question: str, rounds: int) -> WorkspaceRunResult:
         args = _action_args(action)
         try:
             self.registry.get_runtime_spec("answer")
         except ToolError:
             return _answer_result(action, rounds=rounds)
-        output = self.registry.execute("answer", args)
+        normalized = self.runtime_host.normalize_program(
+            [{"tool": "answer", "args": args}],
+            ctx=self._runtime_context(question=question, round_number=rounds),
+        )
+        normalized_args = dict(normalized[0].get("args", {})) if normalized else args
+        output = self.registry.execute("answer", normalized_args)
         citations = output.get("citations", ())
         citation_values = citations if isinstance(citations, Sequence) and not isinstance(citations, str) else ()
         return WorkspaceRunResult(
-            answer=str(output.get("answer") or output.get("claim") or args.get("text") or ""),
+            answer=str(output.get("answer") or output.get("claim") or normalized_args.get("text") or ""),
             citations=tuple(str(item) for item in citation_values if str(item)),
-            confidence=str(output.get("answer_confidence") or args.get("confidence") or ""),
+            confidence=str(output.get("answer_confidence") or normalized_args.get("confidence") or ""),
             rounds=rounds,
             metadata={"raw_output": dict(output)},
         )

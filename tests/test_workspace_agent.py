@@ -239,6 +239,102 @@ def test_workspace_agent_retries_commit_and_validates_final_answer(tmp_path: Pat
     assert "not in observation produced_anchors" in commit_prompts[1]
 
 
+def test_workspace_agent_accepts_legacy_answer_field_after_commit(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_legacy_answer_arg")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"answer","args":{"answer":"D","citations":["mem_0001"],"confidence":"high"}}',
+        ],
+        commit_responses=[
+            """
+            {
+              "tool": "commit_observation",
+              "args": {
+                "observation_id": "obs_0001",
+                "writes": {
+                  "pinned_anchors": [{
+                    "anchor_id":"clip_anch_seg_0001_00000000_00060000",
+                    "kind":"visual",
+                    "source_kind":"visual_fact",
+                    "excerpt":"buffer between Russia and Western Europe"
+                  }],
+                  "memory": [{
+                    "kind":"answer_support",
+                    "claim":"Narration says Austria-Hungary was a buffer.",
+                    "supports_option":"D",
+                    "anchor_ids":["clip_anch_seg_0001_00000000_00060000"],
+                    "evidence_obs_ids":["obs_0001"],
+                    "confidence":"high"
+                  }]
+                }
+              }
+            }
+            """,
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=2)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    assert result.answer == "D"
+    assert result.citations == ("mem_0001",)
+    assert workspace.observation_status("obs_0001") == "committed"
+
+
+def test_workspace_agent_rejects_uncited_answer_and_continues(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_reject_uncited_answer")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"answer","args":{"answer":"B. Why the Austro-Hungarian Empire was divided."}}',
+            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"answer","args":{"answer":"D","citations":["mem_0001"],"confidence":"high"}}',
+        ],
+        commit_responses=[
+            """
+            {
+              "tool": "commit_observation",
+              "args": {
+                "observation_id": "obs_0001",
+                "writes": {
+                  "pinned_anchors": [{
+                    "anchor_id":"clip_anch_seg_0001_00000000_00060000",
+                    "kind":"visual",
+                    "source_kind":"visual_fact",
+                    "excerpt":"buffer between Russia and Western Europe"
+                  }],
+                  "memory": [{
+                    "kind":"answer_support",
+                    "claim":"Narration says Austria-Hungary was a buffer.",
+                    "supports_option":"D",
+                    "anchor_ids":["clip_anch_seg_0001_00000000_00060000"],
+                    "evidence_obs_ids":["obs_0001"],
+                    "confidence":"high"
+                  }]
+                }
+              }
+            }
+            """,
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=3)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    assert result.answer == "D"
+    assert result.citations == ("mem_0001",)
+    assert [request.task for request in backend.requests] == [
+        "workspace_plan",
+        "workspace_plan",
+        "vision_read",
+        "workspace_commit",
+        "workspace_plan",
+    ]
+    assert any(event["type"] == "workspace_answer_rejected" for event in workspace._read_jsonl_dicts("trace.jsonl"))
+
+
 def test_compose_commit_prompt_includes_full_view_on_minimal_retry(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_commit_prompt_retry")
     observation = workspace.write_observation(
