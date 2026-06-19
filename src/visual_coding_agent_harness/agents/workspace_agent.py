@@ -166,7 +166,13 @@ class WorkspaceVisualAgent:
         )
         self.workspace.write_trace_event(
             "workspace_commit_model_io",
-            {"round": round_number, "observation_id": observation_id, "response": response.text[:2000]},
+            {
+                "round": round_number,
+                "attempt": attempt,
+                "prompt_mode": prompt_mode,
+                "observation_id": observation_id,
+                "response": response.text[:2000],
+            },
         )
         return _parse_action(response.text)
 
@@ -174,14 +180,27 @@ class WorkspaceVisualAgent:
         validation_error = ""
         for attempt in range(1, 4):
             prompt_mode = "minimal" if attempt == 3 else "full"
-            commit_action = self._decide_commit(
-                question=question,
-                observation_id=observation_id,
-                round_number=round_number,
-                validation_error=validation_error,
-                attempt=attempt,
-                prompt_mode=prompt_mode,
-            )
+            try:
+                commit_action = self._decide_commit(
+                    question=question,
+                    observation_id=observation_id,
+                    round_number=round_number,
+                    validation_error=validation_error,
+                    attempt=attempt,
+                    prompt_mode=prompt_mode,
+                )
+            except ValueError as exc:
+                validation_error = str(exc)
+                self.workspace.write_trace_event(
+                    "workspace_commit_validation_error",
+                    {
+                        "round": round_number,
+                        "attempt": attempt,
+                        "observation_id": observation_id,
+                        "error": validation_error,
+                    },
+                )
+                continue
             if _tool_name(commit_action) not in DISPOSITION_TOOLS:
                 validation_error = "commit phase only accepts disposition tools"
                 self.workspace.write_trace_event(
