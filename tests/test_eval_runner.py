@@ -1002,12 +1002,13 @@ class EvalRunnerTest(unittest.TestCase):
         from visual_coding_agent_harness.agents.workspace_agent import WorkspaceRunResult
 
         class FakeWorkspaceVisualAgent:
-            def __init__(self, *, backend, registry, workspace, max_rounds, video_path):
+            def __init__(self, *, backend, registry, workspace, max_rounds, video_path, log_root):
                 self.backend = backend
                 self.registry = registry
                 self.workspace = workspace
                 self.max_rounds = max_rounds
                 self.video_path = video_path
+                self.log_root = log_root
                 agents.append(self)
 
             def run(self, question):
@@ -1054,11 +1055,14 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(len(agents), 1)
             self.assertEqual(agents[0].max_rounds, 5)
             self.assertEqual(agents[0].video_path, "/videos/demo.mp4")
+            self.assertEqual(agents[0].log_root, workspace_root.parent / "workspace_logs" / "case_workspace_v2")
             self.assertEqual(raw["answer"], "B. workspace answer")
             self.assertEqual(raw["choice"], "B")
             self.assertEqual(raw["status"], "final")
             self.assertEqual(raw["rounds"], 2)
             self.assertEqual(raw["tools"], [])
+            self.assertEqual(raw["workspace_log_dir"], str(workspace_root.parent / "workspace_logs" / "case_workspace_v2"))
+            self.assertEqual(raw["planner_io_dir"], str(workspace_root.parent / "workspace_logs" / "case_workspace_v2"))
 
     def test_run_eval_cases_exports_training_trajectory_when_enabled(self):
         from runs import eval_runner

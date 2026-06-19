@@ -448,7 +448,7 @@ def test_workspace_agent_exports_downloadable_round_log(tmp_path: Path) -> None:
     assert "round_001_plan_prompt.txt" in markdown
     assert "round_001_commit_attempt_01_prompt.txt" in markdown
     assert "mem_0001 [answer_support]" in markdown
-    plan_prompt = workspace.root / "artifacts/planner_io/round_001_plan_prompt.txt"
+    plan_prompt = workspace.root / "workspace_logs/round_001_plan_prompt.txt"
     assert plan_prompt.exists()
     assert "# Workspace" in plan_prompt.read_text(encoding="utf-8")
     trace_events = workspace._read_jsonl_dicts("trace.jsonl")

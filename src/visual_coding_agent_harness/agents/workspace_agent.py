@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
@@ -42,12 +43,14 @@ class WorkspaceVisualAgent:
         workspace: EvidenceWorkspace,
         max_rounds: int = 8,
         video_path: str = "",
+        log_root: str | Path | None = None,
     ) -> None:
         self.backend = backend
         self.registry = registry
         self.workspace = workspace
         self.max_rounds = int(max_rounds)
         self.video_path = video_path
+        self.log_root = Path(log_root) if log_root is not None else workspace.root / "workspace_logs"
         self.runtime_host = ToolRuntimeHost(
             registry=registry,
             workspace=workspace,
@@ -129,7 +132,7 @@ class WorkspaceVisualAgent:
             )
         )
         planner_io = _write_model_io_artifacts(
-            self.workspace,
+            self.log_root,
             phase="plan",
             round_number=round_number,
             prompt=prompt,
@@ -178,7 +181,7 @@ class WorkspaceVisualAgent:
             )
         )
         planner_io = _write_model_io_artifacts(
-            self.workspace,
+            self.log_root,
             phase="commit",
             round_number=round_number,
             prompt=prompt,
@@ -471,7 +474,7 @@ def _action_args(action: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _write_model_io_artifacts(
-    workspace: EvidenceWorkspace,
+    log_root: Path,
     *,
     phase: str,
     round_number: int,
@@ -483,14 +486,20 @@ def _write_model_io_artifacts(
         stem = f"round_{int(round_number):03d}_commit_attempt_{int(attempt or 1):02d}"
     else:
         stem = f"round_{int(round_number):03d}_plan"
-    prompt_meta = workspace.write_text_artifact(f"artifacts/planner_io/{stem}_prompt.txt", prompt)
-    response_meta = workspace.write_text_artifact(f"artifacts/planner_io/{stem}_response.txt", response)
+    prompt_meta = _write_log_text(log_root / f"{stem}_prompt.txt", prompt)
+    response_meta = _write_log_text(log_root / f"{stem}_response.txt", response)
     return {
         "prompt_path": str(prompt_meta["path"]),
         "response_path": str(response_meta["path"]),
         "prompt_chars": int(prompt_meta["chars"]),
         "response_chars": int(response_meta["chars"]),
     }
+
+
+def _write_log_text(path: Path, text: str) -> Mapping[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(text or ""), encoding="utf-8")
+    return {"path": path.as_posix(), "chars": len(str(text or ""))}
 
 
 def _normalized_disposition_args(

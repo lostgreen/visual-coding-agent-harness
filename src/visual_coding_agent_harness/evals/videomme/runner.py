@@ -205,6 +205,7 @@ def run_loop(
 ) -> dict[str, Any]:
     start = time.perf_counter()
     workspace = EvidenceWorkspace.create(base_dir=workspace_root, run_id=run_id)
+    workspace_log_dir = workspace_root.parent / "workspace_logs" / run_id
     video_map = VideoMap.from_scene_index(scene_index)
     if strategy == WORKSPACE_V2_STRATEGY:
         agent = WorkspaceVisualAgent(
@@ -213,6 +214,7 @@ def run_loop(
             workspace=workspace,
             max_rounds=budget.max_rounds,
             video_path=video_path,
+            log_root=workspace_log_dir,
         )
         result = agent.run(question)
     else:
@@ -250,8 +252,9 @@ def run_loop(
         },
         trajectory_path=trajectory_path,
         evidence_chains_path=evidence_chains_path,
+        log_root=workspace_log_dir,
     )
-    planner_io_dir = workspace.root / "artifacts" / "planner_io"
+    planner_io_dir = workspace_log_dir
     tools, segments = _result_tools_and_segments(result)
     return {
         "answer": answer,
@@ -267,6 +270,7 @@ def run_loop(
         "trajectory_action_count": len(trajectory_payload.get("actions", [])),
         "evidence_chains_path": str(evidence_chains_path),
         "evidence_chain_count": int(evidence_chains_payload.get("chain_count", 0) or 0),
+        "workspace_log_dir": str(workspace_log_dir),
         "workspace_round_log_path": workspace_round_log["path"],
         "workspace_round_log_round_count": workspace_round_log["round_count"],
         "planner_io_dir": str(planner_io_dir),
@@ -341,6 +345,7 @@ def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
         "trajectory_action_count",
         "evidence_chains_path",
         "evidence_chain_count",
+        "workspace_log_dir",
         "workspace_round_log_path",
         "workspace_round_log_round_count",
         "planner_io_dir",

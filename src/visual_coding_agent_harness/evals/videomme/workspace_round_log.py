@@ -1,4 +1,4 @@
-"""Readable workspace round-log export for demo analysis."""
+"""Readable full workspace round-log export for demo analysis."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
-DEFAULT_WORKSPACE_ROUND_LOG_PATH = "artifacts/workspace_round_log/workspace_round_log.md"
+DEFAULT_WORKSPACE_ROUND_LOG_FILENAME = "workspace_round_log.md"
 
 
 def export_workspace_round_log(
@@ -21,78 +21,93 @@ def export_workspace_round_log(
     final: Mapping[str, Any] | None = None,
     trajectory_path: str | Path | None = None,
     evidence_chains_path: str | Path | None = None,
-    output_path: str | Path = DEFAULT_WORKSPACE_ROUND_LOG_PATH,
+    log_root: str | Path | None = None,
+    output_path: str | Path = DEFAULT_WORKSPACE_ROUND_LOG_FILENAME,
 ) -> Mapping[str, Any]:
-    """Export a human-readable per-round workspace trace for demos."""
+    """Export a full, self-contained per-round workspace trace for demos."""
 
-    root = workspace.root
-    trace_events = _read_jsonl(root / "trace.jsonl")
+    workspace_root = workspace.root
+    output_root = Path(log_root) if log_root is not None else workspace_root / "workspace_logs"
+    output = Path(output_path)
+    output_file = output if output.is_absolute() else output_root / output
+    planner_io = _planner_io_files(output_root)
+
+    trace_events = _read_jsonl(workspace_root / "trace.jsonl")
     observations_by_id = {
         str(item.get("observation_id", "")): item
-        for item in _read_jsonl(root / "observations.jsonl")
+        for item in _read_jsonl(workspace_root / "observations.jsonl")
         if item.get("observation_id")
     }
-    memory_rows = _read_jsonl(root / "memory.jsonl")
-    dispositions = _read_jsonl(root / "observations" / "disposition.jsonl")
-    planner_io = _planner_io_files(root)
+    memory_rows = _read_jsonl(workspace_root / "memory.jsonl")
+    dispositions = _read_jsonl(workspace_root / "observations" / "disposition.jsonl")
     rounds = _events_by_round(trace_events)
 
     lines: list[str] = [
         "# Workspace Round Log",
         "",
         "## Summary",
-        f"- workspace_root: {root.as_posix()}",
-        f"- question: {_compact_text(question, limit=500)}",
+        f"- workspace_root: {workspace_root.as_posix()}",
+        f"- log_root: {output_root.as_posix()}",
+        f"- question: {_text(question)}",
         f"- video_path: {video_path}",
         f"- final_status: {_text((final or {}).get('status'))}",
-        f"- final_answer: {_compact_text(_text((final or {}).get('answer')), limit=300)}",
+        f"- final_answer: {_text((final or {}).get('answer'))}",
         f"- final_citations: {', '.join(_string_items((final or {}).get('citations'))) or '(none)'}",
-        f"- trajectory_json: {_relative_or_text(root, trajectory_path)}",
-        f"- evidence_chains_json: {_relative_or_text(root, evidence_chains_path)}",
-        f"- planner_io_dir: artifacts/planner_io",
+        f"- trajectory_json: {_relative_or_text(output_root, trajectory_path)}",
+        f"- evidence_chains_json: {_relative_or_text(output_root, evidence_chains_path)}",
+        f"- planner_io_dir: {output_root.as_posix()}",
         "",
     ]
-    lines.extend(_render_first_workspace_view(root, planner_io))
-    lines.extend(_render_rounds(root, rounds=rounds, observations_by_id=observations_by_id, planner_io=planner_io))
+    lines.extend(_render_first_workspace_view(output_root, planner_io))
+    lines.extend(
+        _render_rounds(
+            output_root,
+            rounds=rounds,
+            observations_by_id=observations_by_id,
+            planner_io=planner_io,
+        )
+    )
     lines.extend(_render_workspace_writes(memory_rows=memory_rows, dispositions=dispositions))
+    lines.extend(_render_raw_trace(trace_events))
 
     text = "\n".join(lines).rstrip() + "\n"
-    meta = workspace.write_text_artifact(output_path, text)
+    meta = _write_text_file(output_file, text)
     workspace.write_trace_event(
         "workspace_round_log_export",
         {
-            "path": meta["path"],
+            "path": output_file.as_posix(),
             "round_count": len(rounds),
             "planner_prompt_count": len([path for path in planner_io if path.endswith("_prompt.txt")]),
             "chars": meta["chars"],
         },
     )
     return {
-        "path": str(root / Path(str(meta["path"]))),
-        "relative_path": str(meta["path"]),
+        "path": output_file.as_posix(),
+        "relative_path": _relative_or_text(output_root, output_file),
+        "log_root": output_root.as_posix(),
         "round_count": len(rounds),
         "planner_prompt_count": len([path for path in planner_io if path.endswith("_prompt.txt")]),
     }
 
 
-def _render_first_workspace_view(root: Path, planner_io: Mapping[str, Path]) -> list[str]:
+def _render_first_workspace_view(log_root: Path, planner_io: Mapping[str, Path]) -> list[str]:
     prompt = planner_io.get("round_001_plan_prompt.txt")
     lines = [
         "## First Planner Workspace View",
-        f"- source: {_relative_or_text(root, prompt)}",
+        f"- source: {_relative_or_text(log_root, prompt)}",
         "",
     ]
     if prompt is None or not prompt.exists():
         return [*lines, "(missing first planner prompt)", ""]
     text = prompt.read_text(encoding="utf-8", errors="replace")
     workspace_view = _extract_between(text, "# Workspace", "# Last Tool Result") or text
-    lines.extend(_fenced(_compact_text(workspace_view, limit=8000), info="text"))
+    lines.extend(_fenced(workspace_view, info="text"))
     lines.append("")
     return lines
 
 
 def _render_rounds(
-    root: Path,
+    log_root: Path,
     *,
     rounds: Mapping[int, Sequence[Mapping[str, Any]]],
     observations_by_id: Mapping[str, Mapping[str, Any]],
@@ -103,36 +118,42 @@ def _render_rounds(
         return [*lines, "(no round events recorded)", ""]
     for round_number in sorted(rounds):
         lines.extend([f"### Round {round_number}", ""])
-        lines.extend(_render_planner_io(root, round_number=round_number, planner_io=planner_io))
-        lines.extend(_render_round_events(
-            root,
-            events=rounds[round_number],
-            observations_by_id=observations_by_id,
-            planner_io=planner_io,
-        ))
+        lines.extend(_render_planner_io(log_root, round_number=round_number, planner_io=planner_io))
+        lines.extend(
+            _render_round_events(
+                log_root,
+                events=rounds[round_number],
+                observations_by_id=observations_by_id,
+                planner_io=planner_io,
+            )
+        )
     return lines
 
 
-def _render_planner_io(root: Path, *, round_number: int, planner_io: Mapping[str, Path]) -> list[str]:
-    lines: list[str] = []
+def _render_planner_io(log_root: Path, *, round_number: int, planner_io: Mapping[str, Path]) -> list[str]:
     prompt = planner_io.get(f"round_{round_number:03d}_plan_prompt.txt")
     response = planner_io.get(f"round_{round_number:03d}_plan_response.txt")
-    lines.extend(
-        [
-            "#### Planner IO",
-            f"- prompt: {_relative_or_text(root, prompt)}",
-            f"- response: {_relative_or_text(root, response)}",
-        ]
-    )
+    lines = [
+        "#### Planner IO",
+        f"- prompt: {_relative_or_text(log_root, prompt)}",
+        f"- response: {_relative_or_text(log_root, response)}",
+        "",
+    ]
+    if prompt is not None and prompt.exists():
+        lines.extend(["Plan prompt:", *_fenced(prompt.read_text(encoding="utf-8", errors="replace"), info="text"), ""])
     if response is not None and response.exists():
-        lines.extend(["", "Planner response excerpt:"])
-        lines.extend(_fenced(_compact_text(response.read_text(encoding="utf-8", errors="replace"), limit=1200), info="json"))
-    lines.append("")
+        lines.extend(
+            [
+                "Plan response:",
+                *_fenced(response.read_text(encoding="utf-8", errors="replace"), info="json"),
+                "",
+            ]
+        )
     return lines
 
 
 def _render_round_events(
-    root: Path,
+    log_root: Path,
     *,
     events: Sequence[Mapping[str, Any]],
     observations_by_id: Mapping[str, Mapping[str, Any]],
@@ -145,40 +166,58 @@ def _render_round_events(
         payload = event.get("payload", {}) if isinstance(event.get("payload", {}), Mapping) else {}
         if event_type == "tool_use":
             wrote_action = True
-            tool = _text(payload.get("tool"))
-            args = _compact_json(payload.get("arguments", {}), limit=500)
-            lines.append(f"- tool_call: {tool} args={args}")
+            lines.extend(
+                [
+                    f"- tool_call: {_text(payload.get('tool'))}",
+                    *_fenced(_json(payload.get("arguments", {})), info="json"),
+                    "",
+                ]
+            )
         elif event_type == "tool_result":
             wrote_action = True
             observation_id = _text(payload.get("observation_id"))
             observation = observations_by_id.get(observation_id, {})
-            claim = _compact_text(_text(observation.get("claim")), limit=500)
-            lines.append(f"- tool_result: {_text(payload.get('tool'))} -> {observation_id} claim={claim}")
+            lines.extend(
+                [
+                    f"- tool_result: {_text(payload.get('tool'))} -> {observation_id}",
+                    *_fenced(_json(observation), info="json"),
+                    "",
+                ]
+            )
         elif event_type == "workspace_answer_rejected":
             wrote_action = True
-            lines.append(f"- answer_rejected: {_compact_text(_text(payload.get('error')), limit=500)}")
+            lines.extend(["- answer_rejected", *_fenced(_json(payload), info="json"), ""])
     if not wrote_action:
         lines.append("(none)")
-    lines.append("")
+        lines.append("")
 
     commit_events = [event for event in events if str(event.get("type", "")) == "workspace_commit_model_io"]
     if commit_events:
         lines.extend(["#### Commit Attempts", ""])
         for event in commit_events:
             payload = event.get("payload", {}) if isinstance(event.get("payload", {}), Mapping) else {}
+            round_number = int(payload.get("round", 0) or 0)
             attempt = int(payload.get("attempt", 1) or 1)
-            prompt = planner_io.get(
-                f"round_{int(payload.get('round', 0) or 0):03d}_commit_attempt_{attempt:02d}_prompt.txt"
+            prompt = planner_io.get(f"round_{round_number:03d}_commit_attempt_{attempt:02d}_prompt.txt")
+            response = planner_io.get(f"round_{round_number:03d}_commit_attempt_{attempt:02d}_response.txt")
+            lines.extend(
+                [
+                    f"- attempt {attempt}",
+                    f"  - prompt: {_relative_or_text(log_root, prompt)}",
+                    f"  - response: {_relative_or_text(log_root, response)}",
+                    "",
+                ]
             )
-            response = planner_io.get(
-                f"round_{int(payload.get('round', 0) or 0):03d}_commit_attempt_{attempt:02d}_response.txt"
-            )
-            lines.append(
-                f"- attempt {attempt}: prompt={_relative_or_text(root, prompt)} response={_relative_or_text(root, response)}"
-            )
+            if prompt is not None and prompt.exists():
+                lines.extend(["Commit prompt:", *_fenced(prompt.read_text(encoding="utf-8", errors="replace"), info="text"), ""])
             if response is not None and response.exists():
-                lines.extend(_fenced(_compact_text(response.read_text(encoding="utf-8", errors="replace"), limit=900), info="json"))
-        lines.append("")
+                lines.extend(
+                    [
+                        "Commit response:",
+                        *_fenced(response.read_text(encoding="utf-8", errors="replace"), info="json"),
+                        "",
+                    ]
+                )
 
     validation_errors = [
         event
@@ -189,10 +228,7 @@ def _render_round_events(
         lines.extend(["#### Validation Feedback", ""])
         for event in validation_errors:
             payload = event.get("payload", {}) if isinstance(event.get("payload", {}), Mapping) else {}
-            lines.append(
-                f"- attempt {payload.get('attempt', '?')}: {_compact_text(_text(payload.get('error')), limit=700)}"
-            )
-        lines.append("")
+            lines.extend([f"- attempt {payload.get('attempt', '?')}", *_fenced(_json(payload), info="json"), ""])
     return lines
 
 
@@ -200,29 +236,26 @@ def _render_workspace_writes(*, memory_rows: Sequence[Mapping[str, Any]], dispos
     lines = ["## Workspace Writes", "", "### Memory"]
     if memory_rows:
         for row in memory_rows:
-            anchors = [
-                _text(anchor.get("anchor_id"))
-                for anchor in row.get("anchors", [])
-                if isinstance(anchor, Mapping) and _text(anchor.get("anchor_id"))
-            ]
-            lines.append(
-                f"- {_text(row.get('entry_id'))} [{_text(row.get('kind'))}] "
-                f"supports={_text(row.get('supports_option')) or '-'} anchors={', '.join(anchors) or '-'} "
-                f"claim={_compact_text(_text(row.get('claim')), limit=500)}"
-            )
+            lines.extend([f"- {_text(row.get('entry_id'))} [{_text(row.get('kind'))}]", *_fenced(_json(row), info="json"), ""])
     else:
         lines.append("(none)")
 
     lines.extend(["", "### Dispositions"])
     if dispositions:
         for row in dispositions:
-            lines.append(
-                f"- {_text(row.get('observation_id'))}: {_text(row.get('disposition'))} "
-                f"reason={_compact_text(_text(row.get('reason')), limit=300)}"
-            )
+            lines.extend([f"- {_text(row.get('observation_id'))}: {_text(row.get('disposition'))}", *_fenced(_json(row), info="json"), ""])
     else:
         lines.append("(none)")
     lines.append("")
+    return lines
+
+
+def _render_raw_trace(trace_events: Sequence[Mapping[str, Any]]) -> list[str]:
+    lines = ["## Raw Trace Events", ""]
+    if not trace_events:
+        return [*lines, "(none)", ""]
+    for index, event in enumerate(trace_events, start=1):
+        lines.extend([f"### Trace Event {index}: {_text(event.get('type'))}", *_fenced(_json(event), info="json"), ""])
     return lines
 
 
@@ -245,11 +278,10 @@ def _events_by_round(trace_events: Sequence[Mapping[str, Any]]) -> Mapping[int, 
     return dict(rounds)
 
 
-def _planner_io_files(root: Path) -> Mapping[str, Path]:
-    planner_dir = root / "artifacts" / "planner_io"
-    if not planner_dir.exists():
+def _planner_io_files(log_root: Path) -> Mapping[str, Path]:
+    if not log_root.exists():
         return {}
-    return {path.name: path for path in sorted(planner_dir.glob("*.txt"))}
+    return {path.name: path for path in sorted(log_root.glob("*.txt"))}
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -279,31 +311,33 @@ def _extract_between(text: str, start_marker: str, end_marker: str) -> str:
 
 
 def _fenced(text: str, *, info: str = "") -> list[str]:
-    fence = "```" + info
-    return [fence, text.rstrip(), "```"]
+    body = str(text or "").rstrip()
+    ticks = 3
+    while "`" * ticks in body:
+        ticks += 1
+    fence = "`" * ticks
+    return [fence + info, body, fence]
 
 
-def _compact_json(value: Any, *, limit: int) -> str:
+def _write_text_file(path: Path, text: str) -> Mapping[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return {"path": path.as_posix(), "chars": len(text)}
+
+
+def _json(value: Any) -> str:
     try:
-        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True, default=str)
     except TypeError:
-        text = str(value)
-    return _compact_text(text, limit=limit)
+        return str(value)
 
 
-def _compact_text(text: str, *, limit: int) -> str:
-    normalized = str(text or "").strip()
-    if len(normalized) <= limit:
-        return normalized
-    return normalized[:limit].rstrip() + f"\n...[truncated {len(normalized) - limit} chars]"
-
-
-def _relative_or_text(root: Path, value: str | Path | None) -> str:
+def _relative_or_text(base: Path, value: str | Path | None) -> str:
     if value is None:
         return "(none)"
     path = Path(value)
     try:
-        return path.relative_to(root).as_posix()
+        return path.relative_to(base).as_posix()
     except ValueError:
         return path.as_posix()
 
