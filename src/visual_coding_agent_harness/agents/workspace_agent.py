@@ -482,6 +482,10 @@ def _parse_action(text: str) -> Mapping[str, Any]:
         payload = json.loads(raw)
     except json.JSONDecodeError:
         payload = _first_action_object(raw)
+    if isinstance(payload, Mapping) and not (_tool_name(payload) or str(payload.get("disposition") or "").strip()):
+        nested = _action_from_nested_value(payload)
+        if nested is not None:
+            payload = nested
     if not isinstance(payload, Mapping):
         raise ValueError("workspace_agent_parse_failed: action must be a JSON object")
     if not _tool_name(payload):
@@ -513,6 +517,22 @@ def _first_action_object(raw: str) -> Mapping[str, Any]:
     if first_object is not None:
         return first_object
     raise ValueError("workspace_agent_parse_failed: no JSON object found")
+
+
+def _action_from_nested_value(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        if _tool_name(value) or str(value.get("disposition") or "").strip():
+            return value
+        for child in value.values():
+            action = _action_from_nested_value(child)
+            if action is not None:
+                return action
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for child in value:
+            action = _action_from_nested_value(child)
+            if action is not None:
+                return action
+    return None
 
 
 def _tool_name(action: Mapping[str, Any]) -> str:

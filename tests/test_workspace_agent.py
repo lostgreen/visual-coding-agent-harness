@@ -126,6 +126,15 @@ def test_workspace_agent_parse_action_accepts_fenced_json_with_tail_text() -> No
     assert action == {"tool": "read_clip", "args": {"scope": {}, "focus": ["overall evidence"]}}
 
 
+def test_workspace_agent_parse_action_accepts_nested_action_json() -> None:
+    action = _parse_action(
+        '{"analysis":"need one more check",'
+        '"action":{"tool":"verify","args":{"claim":"D","against":{"citations":["mem_0001"]}}}}'
+    )
+
+    assert action == {"tool": "verify", "args": {"claim": "D", "against": {"citations": ["mem_0001"]}}}
+
+
 def test_workspace_agent_recovers_from_rejected_plan_tool(tmp_path: Path) -> None:
     @tool(name="bad_tool", description="Always reject.")
     def bad_tool() -> dict[str, object]:
