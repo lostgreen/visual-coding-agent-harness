@@ -25,6 +25,7 @@ from visual_coding_agent_harness.workspace import EvidenceWorkspace
 from .summary_schema import RunSummary, validate as validate_run_summary
 from .training_trajectory import TrainingTrajectory
 from .trajectory_markdown import write_trajectory_markdown
+from .workspace_round_log import export_workspace_round_log
 
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
@@ -237,6 +238,19 @@ def run_loop(
     evidence_chains_payload = workspace.export_evidence_chains()
     trajectory_path = workspace.root / "artifacts" / "trajectories" / "longvideoagent_trajectory.json"
     evidence_chains_path = workspace.root / "artifacts" / "evidence_chains" / "evidence_chains.json"
+    workspace_round_log = export_workspace_round_log(
+        workspace,
+        question=question,
+        video_path=video_path,
+        final={
+            "answer": answer,
+            "status": status,
+            "citations": list(citations),
+            "confidence": confidence,
+        },
+        trajectory_path=trajectory_path,
+        evidence_chains_path=evidence_chains_path,
+    )
     planner_io_dir = workspace.root / "artifacts" / "planner_io"
     tools, segments = _result_tools_and_segments(result)
     return {
@@ -253,6 +267,8 @@ def run_loop(
         "trajectory_action_count": len(trajectory_payload.get("actions", [])),
         "evidence_chains_path": str(evidence_chains_path),
         "evidence_chain_count": int(evidence_chains_payload.get("chain_count", 0) or 0),
+        "workspace_round_log_path": workspace_round_log["path"],
+        "workspace_round_log_round_count": workspace_round_log["round_count"],
         "planner_io_dir": str(planner_io_dir),
         "planner_prompt_count": len(list(planner_io_dir.glob("*_prompt.txt"))) if planner_io_dir.exists() else 0,
         "reward_tags": reward_tags,
@@ -325,6 +341,8 @@ def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
         "trajectory_action_count",
         "evidence_chains_path",
         "evidence_chain_count",
+        "workspace_round_log_path",
+        "workspace_round_log_round_count",
         "planner_io_dir",
         "planner_prompt_count",
         "reward_tags",

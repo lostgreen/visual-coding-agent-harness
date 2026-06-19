@@ -9,6 +9,7 @@ from visual_coding_agent_harness.agents.workspace_agent import (
     compose_plan_prompt,
 )
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
+from visual_coding_agent_harness.evals.videomme.workspace_round_log import export_workspace_round_log
 from visual_coding_agent_harness.registry import ToolRegistry, ToolRuntimeSpec, tool
 from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
@@ -415,6 +416,43 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert "the next tool must be read_clip, search, list, read_workspace, verify, or synthesize_memory" in prompt
     assert '{"tool":"read_clip"' in prompt
     assert '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}' in prompt
+
+
+def test_workspace_agent_exports_downloadable_round_log(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_round_log")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}',
+        ],
+        commit_responses=[
+            '{"tool":"commit_observation","args":{"claim":"Narration says Austria-Hungary was a buffer."}}',
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=2)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+    artifact = export_workspace_round_log(
+        workspace,
+        question="Why was Austria-Hungary shown between Russia and Western Europe?",
+        video_path="/videos/demo.mp4",
+        final={"answer": result.answer, "status": "final", "citations": list(result.citations)},
+    )
+
+    log_path = Path(str(artifact["path"]))
+    assert log_path.exists()
+    markdown = log_path.read_text(encoding="utf-8")
+    assert "## First Planner Workspace View" in markdown
+    assert "### Round 1" in markdown
+    assert "round_001_plan_prompt.txt" in markdown
+    assert "round_001_commit_attempt_01_prompt.txt" in markdown
+    assert "mem_0001 [answer_support]" in markdown
+    plan_prompt = workspace.root / "artifacts/planner_io/round_001_plan_prompt.txt"
+    assert plan_prompt.exists()
+    assert "# Workspace" in plan_prompt.read_text(encoding="utf-8")
+    trace_events = workspace._read_jsonl_dicts("trace.jsonl")
+    assert any(event["type"] == "workspace_round_log_export" for event in trace_events)
 
 
 def test_workspace_agent_commits_search_hit_with_evidence_excerpt(tmp_path: Path) -> None:

@@ -115,21 +115,33 @@ class WorkspaceVisualAgent:
         )
 
     def _decide_plan(self, *, question: str, round_number: int, last_tool_result: str) -> Mapping[str, Any]:
+        prompt = compose_plan_prompt(
+            question=question,
+            workspace=self.workspace,
+            last_tool_result=last_tool_result,
+        )
         response = self.backend.generate(
             BackendRequest(
                 task="workspace_plan",
                 system_prompt=PLAN_SYSTEM_PROMPT,
-                prompt=compose_plan_prompt(
-                    question=question,
-                    workspace=self.workspace,
-                    last_tool_result=last_tool_result,
-                ),
+                prompt=prompt,
                 metadata={"round": round_number, "phase": "plan"},
             )
         )
+        planner_io = _write_model_io_artifacts(
+            self.workspace,
+            phase="plan",
+            round_number=round_number,
+            prompt=prompt,
+            response=response.text,
+        )
         self.workspace.write_trace_event(
             "workspace_plan_model_io",
-            {"round": round_number, "response": response.text[:2000]},
+            {
+                "round": round_number,
+                "response": response.text[:2000],
+                **planner_io,
+            },
         )
         return _parse_action(response.text)
 
@@ -143,18 +155,19 @@ class WorkspaceVisualAgent:
         attempt: int = 1,
         prompt_mode: str = "full",
     ) -> Mapping[str, Any]:
+        prompt = compose_commit_prompt(
+            question=question,
+            workspace=self.workspace,
+            observation_id=observation_id,
+            validation_error=validation_error,
+            attempt=attempt,
+            prompt_mode=prompt_mode,
+        )
         response = self.backend.generate(
             BackendRequest(
                 task="workspace_commit",
                 system_prompt=COMMIT_SYSTEM_PROMPT,
-                prompt=compose_commit_prompt(
-                    question=question,
-                    workspace=self.workspace,
-                    observation_id=observation_id,
-                    validation_error=validation_error,
-                    attempt=attempt,
-                    prompt_mode=prompt_mode,
-                ),
+                prompt=prompt,
                 metadata={
                     "round": round_number,
                     "phase": "commit",
@@ -164,6 +177,14 @@ class WorkspaceVisualAgent:
                 },
             )
         )
+        planner_io = _write_model_io_artifacts(
+            self.workspace,
+            phase="commit",
+            round_number=round_number,
+            prompt=prompt,
+            response=response.text,
+            attempt=attempt,
+        )
         self.workspace.write_trace_event(
             "workspace_commit_model_io",
             {
@@ -172,6 +193,7 @@ class WorkspaceVisualAgent:
                 "prompt_mode": prompt_mode,
                 "observation_id": observation_id,
                 "response": response.text[:2000],
+                **planner_io,
             },
         )
         return _parse_action(response.text)
@@ -446,6 +468,29 @@ def _tool_name(action: Mapping[str, Any]) -> str:
 def _action_args(action: Mapping[str, Any]) -> dict[str, Any]:
     args = action.get("args", {})
     return dict(args) if isinstance(args, Mapping) else {}
+
+
+def _write_model_io_artifacts(
+    workspace: EvidenceWorkspace,
+    *,
+    phase: str,
+    round_number: int,
+    prompt: str,
+    response: str,
+    attempt: int | None = None,
+) -> dict[str, Any]:
+    if phase == "commit":
+        stem = f"round_{int(round_number):03d}_commit_attempt_{int(attempt or 1):02d}"
+    else:
+        stem = f"round_{int(round_number):03d}_plan"
+    prompt_meta = workspace.write_text_artifact(f"artifacts/planner_io/{stem}_prompt.txt", prompt)
+    response_meta = workspace.write_text_artifact(f"artifacts/planner_io/{stem}_response.txt", response)
+    return {
+        "prompt_path": str(prompt_meta["path"]),
+        "response_path": str(response_meta["path"]),
+        "prompt_chars": int(prompt_meta["chars"]),
+        "response_chars": int(response_meta["chars"]),
+    }
 
 
 def _normalized_disposition_args(
