@@ -335,6 +335,7 @@ If there is no committed memory, or if the last answer was rejected, choose an e
 
 COMMIT_SYSTEM_PROMPT = """The previous tool produced an observation that requires disposition.
 Output exactly one JSON object using only commit_observation, reject_observation, defer_observation, or no_commit_needed.
+The JSON object must include a "tool" field and an "args" object.
 """
 
 
@@ -407,6 +408,12 @@ def _parse_action(text: str) -> Mapping[str, Any]:
         payload = json.loads(raw[start : end + 1])
     if not isinstance(payload, Mapping):
         raise ValueError("workspace_agent_parse_failed: action must be a JSON object")
+    if not _tool_name(payload):
+        disposition = str(payload.get("disposition") or "").strip()
+        if disposition:
+            payload = dict(payload)
+            payload["tool"] = disposition
+            payload.setdefault("args", {})
     if not _tool_name(payload):
         raise ValueError("workspace_agent_parse_failed: action missing tool")
     return dict(payload)

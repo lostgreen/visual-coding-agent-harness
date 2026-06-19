@@ -508,6 +508,28 @@ def test_workspace_agent_auto_pins_after_malformed_disposition_args(tmp_path: Pa
     assert workspace.memory_entries()[0].kind == "unverified_capture"
 
 
+def test_workspace_agent_treats_disposition_field_as_commit_tool(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_disposition_field")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+        ],
+        commit_responses=[
+            '{"disposition":"defer_observation"}',
+            '{"disposition":"defer_observation"}',
+            '{"disposition":"defer_observation"}',
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    assert result.metadata == {"reason": "max_rounds_reached"}
+    assert workspace.observation_status("obs_0001") == "committed"
+    assert workspace.memory_entries()[0].kind == "unverified_capture"
+
+
 def test_workspace_agent_defers_after_retry_exhaustion_without_pin_material(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_auto_defer")
     registry = _empty_commit_required_registry(workspace)
