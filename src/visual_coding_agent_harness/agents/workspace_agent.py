@@ -527,6 +527,7 @@ def compose_plan_prompt(*, question: str, workspace: EvidenceWorkspace, last_too
             "Return exactly one JSON object. Do not explain.",
             'If Committed Memory is empty, start with an exploration call such as {"tool":"read_clip","args":{"scope":{},"focus":["overall topic and option-relevant evidence"]}}.',
             'If Last Tool Result starts with "answer rejected", the next tool must be read_clip, search, list, read_workspace, or verify.',
+            'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',
             _synthesize_memory_availability(workspace),
             'Use {"tool":"answer","args":{"text":"<selected option>","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory exists.',
             "",

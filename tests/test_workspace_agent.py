@@ -567,6 +567,8 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert '"text":"D"' not in PLAN_SYSTEM_PROMPT
     assert "If Committed Memory is empty" in prompt
     assert "synthesize_memory is unavailable until committed memory exists" in prompt
+    assert "duplicate_tool_call" in prompt
+    assert "do not repeat the same semantic request" in prompt
     assert '{"tool":"read_clip"' in prompt
     assert '"text":"D"' not in prompt
     assert '"text":"<selected option>"' in prompt
