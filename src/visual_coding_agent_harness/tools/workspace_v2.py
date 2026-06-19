@@ -149,7 +149,11 @@ def build_workspace_v2_registry(
                 "matched_terms": list(match.get("matched_terms", [])),
                 "candidate_anchor_id": anchor_id,
                 "support_status": "candidate_only",
-                "needs_local_read": False,
+                "needs_local_read": True,
+                "must_commit_as": "retrieval_candidate",
+                "cannot_final_cite": True,
+                "recommended_next_tool": "read_clip",
+                "recommended_scope": {"time_range": time_range},
                 "score": result.score,
             }
             results.append(row)

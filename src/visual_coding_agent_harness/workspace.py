@@ -857,6 +857,13 @@ class EvidenceWorkspace:
         )
 
         render_section(
+            "Plan Notes",
+            self._note_bullets("notes/plan.md"),
+            lambda item: str(item),
+            hint='read_workspace(section="plan")',
+        )
+
+        render_section(
             "Entities",
             self.read_workspace_section("entities"),
             lambda entity: f"{entity.get('entity_id')} {entity.get('kind')} {entity.get('name')}",
@@ -3324,6 +3331,7 @@ def _validate_memory_commit_payload(payload: Mapping[str, Any]) -> None:
         "synthesized_support",
         "answer_conflict_resolved",
         "unverified_capture",
+        "retrieval_candidate",
     }:
         raise ValueError(f"memory_validation_failed: unknown kind={kind}")
     confidence = str(payload.get("confidence") or "medium")

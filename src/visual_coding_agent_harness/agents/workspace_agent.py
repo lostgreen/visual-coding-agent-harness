@@ -120,12 +120,10 @@ class WorkspaceVisualAgent:
             elif observation_id and self.workspace.observation_status(observation_id) == "uncommitted":
                 self.workspace.no_commit_needed(observation_id, reason="tool output did not require durable commit")
 
-        return WorkspaceRunResult(
-            answer="need_more_evidence",
-            citations=(),
-            confidence="low",
+        return self._force_final_answer(
+            question=question,
             rounds=self.max_rounds,
-            metadata={"reason": "max_rounds_reached"},
+            run_state=run_state,
         )
 
     def _runtime_context(self, *, question: str, round_number: int, run_state: RunState | None = None) -> RunContext:
@@ -223,6 +221,41 @@ class WorkspaceVisualAgent:
         )
         return _parse_action(response.text)
 
+    def _decide_final(self, *, question: str, round_number: int) -> Mapping[str, Any]:
+        prompt = compose_final_prompt(question=question, workspace=self.workspace)
+        response = self.backend.generate(
+            BackendRequest(
+                task="workspace_final",
+                system_prompt=FINAL_SYSTEM_PROMPT,
+                prompt=prompt,
+                metadata={"round": round_number, "phase": "final", "forced": True},
+            )
+        )
+        planner_io = _write_model_io_artifacts(
+            self.log_root,
+            phase="final",
+            round_number=round_number,
+            prompt=prompt,
+            response=response.text,
+        )
+        self.workspace.write_trace_event(
+            "workspace_final_model_io",
+            {
+                "round": round_number,
+                "forced": True,
+                "response": response.text[:2000],
+                **planner_io,
+            },
+        )
+        try:
+            return _parse_action(response.text)
+        except ValueError as exc:
+            self.workspace.write_trace_event(
+                "workspace_final_parse_error",
+                {"round": round_number, "error": str(exc), "response": response.text[:2000]},
+            )
+            return {"tool": "answer", "args": {"text": str(response.text or "").strip(), "citations": [], "confidence": "low"}}
+
     def _run_commit_phase(self, *, question: str, observation_id: str, round_number: int) -> None:
         validation_error = ""
         for attempt in range(1, 4):
@@ -260,8 +293,12 @@ class WorkspaceVisualAgent:
                     },
                 )
                 continue
-            args = _normalized_disposition_args(commit_action, workspace=self.workspace, observation_id=observation_id)
             try:
+                args = _normalized_disposition_args(
+                    commit_action,
+                    workspace=self.workspace,
+                    observation_id=observation_id,
+                )
                 self.registry.execute(_tool_name(commit_action), args)
                 return
             except (ToolError, ValueError) as exc:
@@ -287,6 +324,20 @@ class WorkspaceVisualAgent:
         raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
         fact_text = _first_fact_text(raw_output.get("facts"))
         anchors = _mapping_items(raw_output.get("produced_anchors"))
+        if not fact_text and anchors:
+            retrieval_writes = _retrieval_candidate_writes(raw_output, anchors=anchors, reason=reason)
+            if retrieval_writes:
+                self.workspace.commit_observation(observation.observation_id, writes=retrieval_writes)
+                self.workspace.write_trace_event(
+                    "commit_auto_pinned",
+                    {
+                        "observation_id": observation.observation_id,
+                        "reason": reason,
+                        "anchor_id": retrieval_writes["pinned_anchors"][0]["anchor_id"],
+                        "kind": "retrieval_candidate",
+                    },
+                )
+                return
         if not fact_text or not anchors:
             self.workspace.defer_observation(
                 observation.observation_id,
@@ -403,11 +454,52 @@ class WorkspaceVisualAgent:
             metadata={"raw_output": dict(output)},
         )
 
+    def _force_final_answer(self, *, question: str, rounds: int, run_state: RunState) -> WorkspaceRunResult:
+        action = _coerce_answer_action(self._decide_final(question=question, round_number=rounds))
+        try:
+            result = self._finalize_answer(action, question=question, rounds=rounds, run_state=run_state)
+        except (ToolError, ValueError) as exc:
+            result = _answer_result(action, rounds=rounds)
+            metadata = dict(result.metadata or {})
+            metadata.update(
+                {
+                    "forced_final": True,
+                    "reason": "max_rounds_reached",
+                    "validated": False,
+                    "validation_error": str(exc),
+                }
+            )
+            self.workspace.write_trace_event(
+                "workspace_forced_answer_unvalidated",
+                {
+                    "round": rounds,
+                    "error": str(exc),
+                    "action": {"tool": _tool_name(action), "args": _action_args(action)},
+                },
+            )
+            return WorkspaceRunResult(
+                answer=result.answer,
+                citations=result.citations,
+                confidence=result.confidence or "low",
+                rounds=result.rounds,
+                metadata=metadata,
+            )
+        metadata = dict(result.metadata or {})
+        metadata.update({"forced_final": True, "reason": "max_rounds_reached", "validated": True})
+        return WorkspaceRunResult(
+            answer=result.answer,
+            citations=result.citations,
+            confidence=result.confidence,
+            rounds=result.rounds,
+            metadata=metadata,
+        )
+
 
 PLAN_SYSTEM_PROMPT = """You are exploring a video through a durable workspace.
 Output exactly one JSON object: {"tool":"...","args":{...}}.
 Available plan tools are read_clip, search, list, read_workspace, verify, synthesize_memory, and answer.
-Use answer only after Committed Memory contains mem_* ids that directly support the answer.
+Use synthesize_memory only after Committed Memory contains answer-support mem_* ids.
+Use answer only after Committed Memory contains mem_* ids that directly support the answer, except forced final requests.
 Every answer call must include {"text": "...", "citations": ["mem_*"], "confidence": "..."}.
 If there is no committed memory, or if the last answer was rejected, choose an exploration tool instead of answer.
 """
@@ -416,6 +508,12 @@ If there is no committed memory, or if the last answer was rejected, choose an e
 COMMIT_SYSTEM_PROMPT = """The previous tool produced an observation that requires disposition.
 Output exactly one JSON object using only commit_observation, reject_observation, defer_observation, or no_commit_needed.
 The JSON object must include a "tool" field and an "args" object.
+"""
+
+FINAL_SYSTEM_PROMPT = """The exploration budget is exhausted.
+You must answer now from the current workspace evidence, even when evidence is weak.
+Output exactly one JSON object using only {"tool":"answer","args":{"text":"...","citations":[],"confidence":"low|medium|high"}}.
+Do not output need_more_evidence.
 """
 
 
@@ -428,8 +526,9 @@ def compose_plan_prompt(*, question: str, workspace: EvidenceWorkspace, last_too
             "# Plan Protocol",
             "Return exactly one JSON object. Do not explain.",
             'If Committed Memory is empty, start with an exploration call such as {"tool":"read_clip","args":{"scope":{},"focus":["overall topic and option-relevant evidence"]}}.',
-            'If Last Tool Result starts with "answer rejected", the next tool must be read_clip, search, list, read_workspace, verify, or synthesize_memory.',
-            'Use {"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory exists.',
+            'If Last Tool Result starts with "answer rejected", the next tool must be read_clip, search, list, read_workspace, or verify.',
+            _synthesize_memory_availability(workspace),
+            'Use {"tool":"answer","args":{"text":"<selected option>","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory exists.',
             "",
             workspace.render_plan_view(question=question),
             "",
@@ -437,6 +536,13 @@ def compose_plan_prompt(*, question: str, workspace: EvidenceWorkspace, last_too
             last_tool_result or "(none)",
         ]
     )
+
+
+def _synthesize_memory_availability(workspace: EvidenceWorkspace) -> str:
+    answer_supporting = {"answer_support", "synthesized_support", "answer_conflict_resolved"}
+    if any(entry.kind in answer_supporting for entry in workspace.memory_entries()):
+        return "synthesize_memory is available only for deriving from cited committed answer-support memory."
+    return "synthesize_memory is unavailable until committed memory exists; first commit answer-support memory from local reads."
 
 
 def compose_commit_prompt(
@@ -469,11 +575,66 @@ def compose_commit_prompt(
         sections.extend(
             [
                 "",
-                "# Minimal Commit Mode",
-                "Pin exactly one anchor from Candidate Anchors and write exactly one memory entry. Do not write entities, events, relations, or attributes in this attempt.",
-            ]
-        )
+            "# Minimal Commit Mode",
+            "Pin exactly one anchor from Candidate Anchors and write exactly one memory entry. Do not write entities, events, relations, or attributes in this attempt.",
+            "",
+            "# Valid Commit Examples",
+            "Full form:",
+            """{
+  "tool": "commit_observation",
+  "args": {
+    "writes": {
+      "pinned_anchors": [
+        {
+          "anchor_id": "<candidate_anchor_id>",
+          "kind": "retrieval_hit",
+          "source_kind": "retrieval_hit",
+          "excerpt": "<verbatim candidate excerpt>"
+        }
+      ],
+      "memory": [
+        {
+          "kind": "retrieval_candidate",
+          "claim": "<what this candidate may help verify>",
+          "anchor_ids": ["<candidate_anchor_id>"],
+          "confidence": "low",
+          "metadata": {"requires_local_read": true}
+        }
+      ],
+      "plan_update": "Next: read_clip the pinned candidate time range before final answer."
+    }
+  }
+}""",
+            "Shorthand form accepted by the harness:",
+            """{
+  "tool": "commit_observation",
+  "args": {
+    "anchor_id": "<candidate_anchor_id>",
+    "claim": "<what this candidate may help verify>",
+    "kind": "retrieval_candidate",
+    "confidence": "low"
+  }
+}""",
+        ]
+    )
     return "\n".join(sections)
+
+
+def compose_final_prompt(*, question: str, workspace: EvidenceWorkspace) -> str:
+    return "\n".join(
+        [
+            "# Question",
+            question,
+            "",
+            "# Forced Final Protocol",
+            "The maximum round count has been reached. You must answer now.",
+            "Return exactly one JSON object using the answer tool.",
+            'Use {"tool":"answer","args":{"text":"<selected option>","citations":["mem_0001"],"confidence":"low"}}.',
+            "Prefer committed mem_* citations. If no valid citation supports the answer, use citations: [] and confidence: low.",
+            "",
+            workspace.render_plan_view(question=question),
+        ]
+    )
 
 
 def _parse_action(text: str) -> Mapping[str, Any]:
@@ -544,6 +705,34 @@ def _action_args(action: Mapping[str, Any]) -> dict[str, Any]:
     return dict(args) if isinstance(args, Mapping) else {}
 
 
+def _coerce_answer_action(action: Mapping[str, Any]) -> Mapping[str, Any]:
+    if _tool_name(action) == "answer":
+        return action
+    args = _action_args(action)
+    text = (
+        args.get("text")
+        or args.get("answer")
+        or args.get("claim")
+        or args.get("choice")
+        or action.get("text")
+        or action.get("answer")
+        or action.get("claim")
+        or action.get("choice")
+    )
+    if text is None:
+        text = json.dumps(action, ensure_ascii=True, sort_keys=True, default=str)
+    citations = args.get("citations") or args.get("citation_ids") or args.get("memory_ids") or ()
+    confidence = args.get("confidence") or action.get("confidence") or "low"
+    return {
+        "tool": "answer",
+        "args": {
+            "text": str(text),
+            "citations": citations,
+            "confidence": str(confidence),
+        },
+    }
+
+
 def _write_model_io_artifacts(
     log_root: Path,
     *,
@@ -555,6 +744,8 @@ def _write_model_io_artifacts(
 ) -> dict[str, Any]:
     if phase == "commit":
         stem = f"round_{int(round_number):03d}_commit_attempt_{int(attempt or 1):02d}"
+    elif phase == "final":
+        stem = f"round_{int(round_number):03d}_final"
     else:
         stem = f"round_{int(round_number):03d}_plan"
     prompt_meta = _write_log_text(log_root / f"{stem}_prompt.txt", prompt)
@@ -591,13 +782,23 @@ def _normalized_disposition_args(
         return args
 
     writes = args.get("writes")
+    if "writes" in args and not isinstance(writes, Mapping):
+        raise ValueError(_commit_writes_schema_error())
     if isinstance(writes, Mapping):
         return {"observation_id": str(args.get("observation_id") or observation_id), "writes": dict(writes)}
 
     legacy_writes = _legacy_commit_writes(args, workspace=workspace, observation_id=observation_id)
     if not legacy_writes:
-        return {"observation_id": str(args.get("observation_id") or observation_id)}
+        raise ValueError(_commit_writes_schema_error())
     return {"observation_id": str(args.get("observation_id") or observation_id), "writes": legacy_writes}
+
+
+def _commit_writes_schema_error() -> str:
+    return (
+        "commit_observation writes must be an object with pinned_anchors and/or memory lists; "
+        'for shorthand use {"tool":"commit_observation","args":{"anchor_id":"<candidate_anchor_id>",'
+        '"claim":"<claim>","kind":"retrieval_candidate","confidence":"low"}}'
+    )
 
 
 def _legacy_commit_writes(
@@ -620,7 +821,7 @@ def _legacy_commit_writes(
     pinned_anchors = _legacy_anchor_payloads(args, workspace=workspace, observation_id=observation_id)
     claim = explicit_claim or str(observation.claim if observation is not None else "").strip()
     memory_kind = str(args.get("kind") or args.get("output_type") or "answer_support").strip()
-    if memory_kind not in {"answer_support", "synthesized_support", "answer_conflict_resolved"}:
+    if memory_kind not in {"answer_support", "synthesized_support", "answer_conflict_resolved", "retrieval_candidate"}:
         memory_kind = "answer_support"
 
     writes: dict[str, Any] = {}
@@ -639,8 +840,33 @@ def _legacy_commit_writes(
         supports_option = str(args.get("supports_option") or args.get("option") or "").strip()
         if supports_option:
             memory["supports_option"] = supports_option
+        if memory_kind == "retrieval_candidate":
+            time_range = _first_anchor_time_range(pinned_anchors)
+            memory["tags"] = ["retrieval_candidate", "requires_local_read"]
+            memory["metadata"] = {
+                "requires_local_read": True,
+                "cannot_final_cite": True,
+                "recommended_next_tool": "read_clip",
+                "recommended_scope": {"time_range": time_range} if time_range is not None else {},
+            }
+            if anchor_ids:
+                writes["plan_update"] = (
+                    f"Next: read_clip candidate {anchor_ids[0]} at {_format_scope_for_plan(time_range)} before final answer."
+                )
         writes["memory"] = [memory]
     return writes
+
+
+def _first_anchor_time_range(anchors: Sequence[Mapping[str, Any]]) -> Any:
+    for anchor in anchors:
+        time_range = anchor.get("time_range")
+        if time_range is not None:
+            return time_range
+        start_sec = anchor.get("start_sec")
+        end_sec = anchor.get("end_sec")
+        if start_sec is not None and end_sec is not None:
+            return [start_sec, end_sec]
+    return None
 
 
 def _legacy_anchor_payloads(
@@ -697,6 +923,71 @@ def _first_fact_text(value: Any) -> str:
                 if text:
                     return text
     return ""
+
+
+def _retrieval_candidate_writes(
+    raw_output: Mapping[str, Any],
+    *,
+    anchors: Sequence[Mapping[str, Any]],
+    reason: str,
+) -> dict[str, Any]:
+    results = _mapping_items(raw_output.get("results"))
+    if not results:
+        return {}
+    anchor = dict(anchors[0])
+    anchor_id = str(anchor.get("anchor_id") or anchor.get("candidate_anchor_id") or "").strip()
+    if not anchor_id:
+        return {}
+    result = next(
+        (
+            item
+            for item in results
+            if str(item.get("candidate_anchor_id") or "").strip() == anchor_id
+        ),
+        results[0],
+    )
+    excerpt = str(anchor.get("excerpt") or result.get("excerpt") or "").strip()
+    time_range = result.get("time_range") or anchor.get("time_range") or [anchor.get("start_sec"), anchor.get("end_sec")]
+    segment_id = str(result.get("segment_id") or anchor.get("segment_id") or "").strip()
+    claim = (
+        f"Candidate retrieval hit in {segment_id or 'unknown segment'} may help answer the question: {excerpt}"
+        if excerpt
+        else f"Candidate retrieval hit in {segment_id or 'unknown segment'} requires local read before answer."
+    )
+    pinned_anchor = {
+        **anchor,
+        "anchor_id": anchor_id,
+        "kind": str(anchor.get("kind") or anchor.get("source_kind") or "retrieval_hit"),
+        "source_kind": str(anchor.get("source_kind") or "retrieval_hit"),
+        "excerpt": excerpt,
+    }
+    return {
+        "pinned_anchors": [pinned_anchor],
+        "memory": [
+            {
+                "kind": "retrieval_candidate",
+                "claim": claim,
+                "anchor_ids": [anchor_id],
+                "confidence": "low",
+                "tags": ["retrieval_candidate", "requires_local_read"],
+                "metadata": {
+                    "requires_local_read": True,
+                    "cannot_final_cite": True,
+                    "auto_pinned": True,
+                    "auto_pin_reason": reason,
+                    "recommended_next_tool": "read_clip",
+                    "recommended_scope": {"time_range": time_range},
+                },
+            }
+        ],
+        "plan_update": f"Next: read_clip candidate {anchor_id} at {_format_scope_for_plan(time_range)} before final answer.",
+    }
+
+
+def _format_scope_for_plan(time_range: Any) -> str:
+    if isinstance(time_range, Sequence) and not isinstance(time_range, (str, bytes)) and len(time_range) >= 2:
+        return f"time_range=[{time_range[0]}, {time_range[1]}]"
+    return "its candidate time range"
 
 
 def _mapping_items(value: Any) -> list[Mapping[str, Any]]:

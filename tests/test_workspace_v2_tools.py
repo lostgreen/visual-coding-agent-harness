@@ -66,6 +66,9 @@ def test_workspace_v2_search_returns_candidate_only_hits(tmp_path: Path) -> None
 
     assert result["results"][0]["segment_id"] == "seg_0001"
     assert result["results"][0]["support_status"] == "candidate_only"
+    assert result["results"][0]["needs_local_read"] is True
+    assert result["results"][0]["recommended_next_tool"] == "read_clip"
+    assert result["results"][0]["recommended_scope"] == {"time_range": [0.0, 60.0]}
     assert result["produced_anchors"][0]["observation_id"] == "__pending__"
     assert "candidate_only" in result["limitations"]
 
@@ -257,7 +260,7 @@ def test_workspace_v2_verify_final_requires_memory_citation(tmp_path: Path) -> N
         registry.execute("answer", {"text": "D", "citations": ["obs_0001"], "confidence": "high"})
 
 
-@pytest.mark.parametrize("kind", ["locator", "unverified_capture"])
+@pytest.mark.parametrize("kind", ["locator", "unverified_capture", "retrieval_candidate"])
 def test_workspace_v2_answer_rejects_non_answer_supporting_memory_kinds(tmp_path: Path, kind: str) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, f"workspace_v2_answer_rejects_{kind}")
     observation = workspace.write_observation(

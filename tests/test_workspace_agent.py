@@ -42,6 +42,8 @@ class ScriptedWorkspaceV2Backend(VisionLanguageBackend):
             return BackendResponse(text="Austria-Hungary was seen as a buffer between Russia and Western Europe.")
         if request.task == "workspace_commit":
             return BackendResponse(text=self.commit_responses.pop(0))
+        if request.task == "workspace_final" and not self.plan_responses:
+            return BackendResponse(text='{"tool":"answer","args":{"text":"D","citations":[],"confidence":"low"}}')
         return BackendResponse(text=self.plan_responses.pop(0))
 
 
@@ -52,6 +54,8 @@ class EmptyCommitRequiredBackend(VisionLanguageBackend):
 
     def generate(self, request: BackendRequest) -> BackendResponse:
         self.requests.append(request)
+        if request.task == "workspace_final" and not self.responses:
+            return BackendResponse(text='{"tool":"answer","args":{"text":"D","citations":[],"confidence":"low"}}')
         return BackendResponse(text=self.responses.pop(0))
 
 
@@ -69,6 +73,14 @@ def _video_map() -> VideoMap:
             )
         ],
     )
+
+
+def _assert_forced_final_metadata(result: object) -> None:
+    metadata = getattr(result, "metadata", None)
+    assert metadata is not None
+    assert metadata["reason"] == "max_rounds_reached"
+    assert metadata["forced_final"] is True
+    assert "validated" in metadata
 
 
 def _workspace_registry() -> ToolRegistry:
@@ -194,6 +206,55 @@ def test_workspace_agent_duplicate_guard_persists_across_rounds(tmp_path: Path) 
     assert rejected[0]["payload"]["error"] == "duplicate_tool_call: probe repeats semantic key probe:same."
 
 
+def test_workspace_agent_forces_answer_at_max_rounds(tmp_path: Path) -> None:
+    @tool(name="probe", description="Gather one clue.")
+    def probe() -> dict[str, object]:
+        return {"claim": "The only clue points to option B.", "confidence": 0.7}
+
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_forced_final")
+    registry = ToolRegistry()
+    registry.register(ToolRuntimeSpec(tool_spec=probe))
+    backend = ScriptedWorkspaceBackend(
+        [
+            '{"tool":"probe","args":{}}',
+            '{"tool":"answer","args":{"text":"B","citations":[],"confidence":"low"}}',
+        ]
+    )
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Question: demo")
+
+    assert result.answer == "B"
+    assert result.rounds == 1
+    assert [request.task for request in backend.requests] == ["workspace_plan", "workspace_final"]
+    trace_events = workspace._read_jsonl_dicts("trace.jsonl")
+    assert any(event["type"] == "workspace_final_model_io" for event in trace_events)
+
+
+def test_workspace_agent_forced_answer_survives_answer_validation_rejection(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_forced_final_unvalidated")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"list","args":{"kind":"memory"}}',
+            '{"tool":"answer","args":{"text":"C","citations":[],"confidence":"low"}}',
+        ],
+        commit_responses=[],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Question: demo")
+
+    assert result.answer == "C"
+    assert result.confidence == "low"
+    assert result.metadata is not None
+    assert result.metadata["forced_final"] is True
+    assert result.metadata["validated"] is False
+    assert "answer_validation_failed" in str(result.metadata["validation_error"])
+    trace_events = workspace._read_jsonl_dicts("trace.jsonl")
+    assert any(event["type"] == "workspace_forced_answer_unvalidated" for event in trace_events)
+
+
 def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_commit")
     registry = ToolRegistry()
@@ -261,7 +322,7 @@ def test_workspace_agent_rejects_exploration_tool_during_commit_phase_then_auto_
 
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
-    assert result.metadata == {"reason": "max_rounds_reached"}
+    _assert_forced_final_metadata(result)
     assert workspace.observation_status("obs_0001") == "committed"
     assert workspace.memory_entries()[0].kind == "unverified_capture"
     assert [request.task for request in backend.requests] == [
@@ -270,6 +331,7 @@ def test_workspace_agent_rejects_exploration_tool_during_commit_phase_then_auto_
         "workspace_commit",
         "workspace_commit",
         "workspace_commit",
+        "workspace_final",
     ]
 
 
@@ -485,6 +547,10 @@ def test_compose_commit_prompt_includes_full_view_on_minimal_retry(tmp_path: Pat
     assert "anch_clip_seg_0001_001" in prompt
     assert "# Validation Error From Previous Attempt" in prompt
     assert "# Minimal Commit Mode" in prompt
+    assert '"tool": "commit_observation"' in prompt
+    assert '"pinned_anchors"' in prompt
+    assert '"memory"' in prompt
+    assert '"anchor_id": "<candidate_anchor_id>"' in prompt
 
 
 def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Path) -> None:
@@ -498,10 +564,12 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
 
     assert "Available plan tools" in PLAN_SYSTEM_PROMPT
     assert "Every answer call must include" in PLAN_SYSTEM_PROMPT
+    assert '"text":"D"' not in PLAN_SYSTEM_PROMPT
     assert "If Committed Memory is empty" in prompt
-    assert "the next tool must be read_clip, search, list, read_workspace, verify, or synthesize_memory" in prompt
+    assert "synthesize_memory is unavailable until committed memory exists" in prompt
     assert '{"tool":"read_clip"' in prompt
-    assert '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}' in prompt
+    assert '"text":"D"' not in prompt
+    assert '"text":"<selected option>"' in prompt
 
 
 def test_workspace_agent_exports_downloadable_round_log(tmp_path: Path) -> None:
@@ -602,9 +670,71 @@ def test_workspace_agent_acknowledges_search_without_evidence_excerpt(tmp_path: 
 
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
-    assert result.metadata == {"reason": "max_rounds_reached"}
+    _assert_forced_final_metadata(result)
     assert workspace.observation_status("obs_0001") == "acknowledged"
-    assert [request.task for request in backend.requests] == ["workspace_plan"]
+    assert [request.task for request in backend.requests] == ["workspace_plan", "workspace_final"]
+
+
+def test_workspace_agent_auto_pins_retrieval_candidate_after_bad_commit_schema(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_search_candidate_auto_pin")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"search","args":{"query":"buffer Russia","modality":"asr"}}',
+        ],
+        commit_responses=[
+            '{"tool":"commit_observation","args":{"observation_id":"obs_0001","writes":"anch_search_seg_0001_001"}}',
+            '{"tool":"commit_observation","args":{"observation_id":"obs_0001","writes":"still invalid"}}',
+            '{"tool":"commit_observation","args":{"observation_id":"obs_0001"}}',
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    _assert_forced_final_metadata(result)
+    assert workspace.observation_status("obs_0001") == "committed"
+    memory = workspace.memory_entries()
+    assert memory[0].kind == "retrieval_candidate"
+    assert memory[0].metadata["requires_local_read"] is True
+    assert "read_clip" in workspace.render_plan_view(question="Why?")
+    validation_errors = [
+        event["payload"]["error"]
+        for event in workspace._read_jsonl_dicts("trace.jsonl")
+        if event["type"] == "workspace_commit_validation_error"
+    ]
+    assert any("writes must be an object" in error for error in validation_errors)
+
+
+def test_workspace_agent_commit_shorthand_preserves_retrieval_candidate_kind(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_search_candidate_shorthand")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"search","args":{"query":"buffer Russia","modality":"asr"}}',
+        ],
+        commit_responses=[
+            (
+                '{"tool":"commit_observation","args":{'
+                '"anchor_id":"anch_search_seg_0001_001",'
+                '"claim":"Candidate search hit requires local read before answer.",'
+                '"kind":"retrieval_candidate",'
+                '"confidence":"low"'
+                "}}"
+            ),
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    _assert_forced_final_metadata(result)
+    memory = workspace.memory_entries()
+    assert memory[0].kind == "retrieval_candidate"
+    assert memory[0].metadata["requires_local_read"] is True
+    assert memory[0].metadata["cannot_final_cite"] is True
+    assert memory[0].metadata["recommended_next_tool"] == "read_clip"
+    assert "read_clip candidate anch_search_seg_0001_001" in workspace.render_plan_view(question="Why?")
 
 
 def test_workspace_agent_auto_pins_after_commit_retry_exhaustion(tmp_path: Path) -> None:
@@ -624,7 +754,7 @@ def test_workspace_agent_auto_pins_after_commit_retry_exhaustion(tmp_path: Path)
 
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
-    assert result.metadata == {"reason": "max_rounds_reached"}
+    _assert_forced_final_metadata(result)
     assert workspace.observation_status("obs_0001") == "committed"
     memory = workspace.memory_entries()
     assert memory[0].kind == "unverified_capture"
@@ -649,7 +779,7 @@ def test_workspace_agent_auto_pins_after_malformed_disposition_args(tmp_path: Pa
 
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
-    assert result.metadata == {"reason": "max_rounds_reached"}
+    _assert_forced_final_metadata(result)
     assert workspace.observation_status("obs_0001") == "committed"
     assert workspace.memory_entries()[0].kind == "unverified_capture"
 
@@ -671,7 +801,7 @@ def test_workspace_agent_treats_disposition_field_as_commit_tool(tmp_path: Path)
 
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
-    assert result.metadata == {"reason": "max_rounds_reached"}
+    _assert_forced_final_metadata(result)
     assert workspace.observation_status("obs_0001") == "deferred"
     assert workspace.memory_entries() == []
 
@@ -693,7 +823,7 @@ def test_workspace_agent_auto_pins_after_unparseable_commit_response(tmp_path: P
 
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
-    assert result.metadata == {"reason": "max_rounds_reached"}
+    _assert_forced_final_metadata(result)
     assert workspace.observation_status("obs_0001") == "committed"
     assert workspace.memory_entries()[0].kind == "unverified_capture"
     validation_errors = [
@@ -719,7 +849,7 @@ def test_workspace_agent_defers_after_retry_exhaustion_without_pin_material(tmp_
 
     result = agent.run("Why?")
 
-    assert result.metadata == {"reason": "max_rounds_reached"}
+    _assert_forced_final_metadata(result)
     assert workspace.observation_status("obs_0001") == "deferred"
     disposition = workspace.observation_dispositions()[-1]
     assert disposition["until"] == "manual_review"
