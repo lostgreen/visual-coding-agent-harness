@@ -288,6 +288,28 @@ def test_workspace_agent_accepts_legacy_answer_field_after_commit(tmp_path: Path
     assert workspace.observation_status("obs_0001") == "committed"
 
 
+def test_workspace_agent_normalizes_legacy_commit_claim_to_answer_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_legacy_commit_claim")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}',
+        ],
+        commit_responses=[
+            '{"tool":"commit_observation","args":{"claim":"Narration says Austria-Hungary was a buffer."}}',
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=2)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    assert result.answer == "D"
+    assert result.citations == ("mem_0001",)
+    assert workspace.observation_status("obs_0001") == "committed"
+    assert workspace.memory_entries()[0].kind == "answer_support"
+
+
 def test_workspace_agent_rejects_uncited_answer_and_continues(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_reject_uncited_answer")
     backend = ScriptedWorkspaceV2Backend(
@@ -526,8 +548,8 @@ def test_workspace_agent_treats_disposition_field_as_commit_tool(tmp_path: Path)
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
     assert result.metadata == {"reason": "max_rounds_reached"}
-    assert workspace.observation_status("obs_0001") == "committed"
-    assert workspace.memory_entries()[0].kind == "unverified_capture"
+    assert workspace.observation_status("obs_0001") == "deferred"
+    assert workspace.memory_entries() == []
 
 
 def test_workspace_agent_auto_pins_after_unparseable_commit_response(tmp_path: Path) -> None:

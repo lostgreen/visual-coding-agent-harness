@@ -213,8 +213,9 @@ class WorkspaceVisualAgent:
                     },
                 )
                 continue
+            args = _normalized_disposition_args(commit_action, workspace=self.workspace, observation_id=observation_id)
             try:
-                self.registry.execute(_tool_name(commit_action), _action_args(commit_action))
+                self.registry.execute(_tool_name(commit_action), args)
                 return
             except (ToolError, ValueError) as exc:
                 validation_error = str(exc)
@@ -445,6 +446,118 @@ def _tool_name(action: Mapping[str, Any]) -> str:
 def _action_args(action: Mapping[str, Any]) -> dict[str, Any]:
     args = action.get("args", {})
     return dict(args) if isinstance(args, Mapping) else {}
+
+
+def _normalized_disposition_args(
+    action: Mapping[str, Any],
+    *,
+    workspace: EvidenceWorkspace,
+    observation_id: str,
+) -> dict[str, Any]:
+    tool_name = _tool_name(action)
+    args = _action_args(action)
+    args.setdefault("observation_id", observation_id)
+    if tool_name != "commit_observation":
+        if tool_name in {"reject_observation", "no_commit_needed"}:
+            args.setdefault("reason", "")
+        if tool_name == "defer_observation":
+            args.setdefault("until", "more_evidence")
+            args.setdefault("reason", "")
+        return args
+
+    writes = args.get("writes")
+    if isinstance(writes, Mapping):
+        return {"observation_id": str(args.get("observation_id") or observation_id), "writes": dict(writes)}
+
+    legacy_writes = _legacy_commit_writes(args, workspace=workspace, observation_id=observation_id)
+    if not legacy_writes:
+        return {"observation_id": str(args.get("observation_id") or observation_id)}
+    return {"observation_id": str(args.get("observation_id") or observation_id), "writes": legacy_writes}
+
+
+def _legacy_commit_writes(
+    args: Mapping[str, Any],
+    *,
+    workspace: EvidenceWorkspace,
+    observation_id: str,
+) -> dict[str, Any]:
+    observation = workspace.get_observation(observation_id)
+    explicit_claim = str(
+        args.get("claim")
+        or args.get("memory")
+        or args.get("summary")
+        or args.get("text")
+        or ""
+    ).strip()
+    has_anchor_hint = any(key in args for key in ("pinned_anchors", "anchors", "anchor_ids", "anchor_id"))
+    if not explicit_claim and not has_anchor_hint:
+        return {}
+    pinned_anchors = _legacy_anchor_payloads(args, workspace=workspace, observation_id=observation_id)
+    claim = explicit_claim or str(observation.claim if observation is not None else "").strip()
+    memory_kind = str(args.get("kind") or args.get("output_type") or "answer_support").strip()
+    if memory_kind not in {"answer_support", "synthesized_support", "answer_conflict_resolved"}:
+        memory_kind = "answer_support"
+
+    writes: dict[str, Any] = {}
+    if pinned_anchors:
+        writes["pinned_anchors"] = pinned_anchors
+    if claim:
+        memory: dict[str, Any] = {
+            "kind": memory_kind,
+            "claim": claim,
+            "confidence": str(args.get("confidence") or "medium"),
+        }
+        anchor_ids = [str(anchor.get("anchor_id") or "").strip() for anchor in pinned_anchors]
+        anchor_ids = [anchor_id for anchor_id in anchor_ids if anchor_id]
+        if anchor_ids:
+            memory["anchor_ids"] = anchor_ids
+        supports_option = str(args.get("supports_option") or args.get("option") or "").strip()
+        if supports_option:
+            memory["supports_option"] = supports_option
+        writes["memory"] = [memory]
+    return writes
+
+
+def _legacy_anchor_payloads(
+    args: Mapping[str, Any],
+    *,
+    workspace: EvidenceWorkspace,
+    observation_id: str,
+) -> list[dict[str, Any]]:
+    produced = {
+        anchor.anchor_id: anchor.to_dict()
+        for anchor in workspace.observation_anchors(observation_id)
+        if anchor.anchor_id
+    }
+    raw_anchors = (
+        args.get("pinned_anchors")
+        or args.get("anchors")
+        or args.get("anchor_ids")
+        or args.get("anchor_id")
+    )
+    if raw_anchors is None and produced:
+        raw_items: Sequence[Any] = (next(iter(produced)),)
+    elif isinstance(raw_anchors, Mapping):
+        raw_items = (raw_anchors,)
+    elif isinstance(raw_anchors, Sequence) and not isinstance(raw_anchors, (str, bytes)):
+        raw_items = raw_anchors
+    elif raw_anchors is None:
+        raw_items = ()
+    else:
+        raw_items = (raw_anchors,)
+
+    anchors: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        payload = dict(item) if isinstance(item, Mapping) else {"anchor_id": str(item)}
+        anchor_id = str(payload.get("anchor_id") or payload.get("candidate_anchor_id") or "").strip()
+        if not anchor_id or anchor_id in seen:
+            continue
+        produced_payload = dict(produced.get(anchor_id, {}))
+        merged = {**produced_payload, **payload, "anchor_id": anchor_id}
+        anchors.append(merged)
+        seen.add(anchor_id)
+    return anchors
 
 
 def _first_fact_text(value: Any) -> str:
