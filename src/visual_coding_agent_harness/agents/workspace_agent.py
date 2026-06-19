@@ -446,11 +446,7 @@ def _parse_action(text: str) -> Mapping[str, Any]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end <= start:
-            raise ValueError("workspace_agent_parse_failed: no JSON object found")
-        payload = json.loads(raw[start : end + 1])
+        payload = _first_action_object(raw)
     if not isinstance(payload, Mapping):
         raise ValueError("workspace_agent_parse_failed: action must be a JSON object")
     if not _tool_name(payload):
@@ -462,6 +458,26 @@ def _parse_action(text: str) -> Mapping[str, Any]:
     if not _tool_name(payload):
         raise ValueError("workspace_agent_parse_failed: action missing tool")
     return dict(payload)
+
+
+def _first_action_object(raw: str) -> Mapping[str, Any]:
+    decoder = json.JSONDecoder()
+    first_object: Mapping[str, Any] | None = None
+    for index, char in enumerate(raw):
+        if char != "{":
+            continue
+        try:
+            payload, _end = decoder.raw_decode(raw[index:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        first_object = first_object or payload
+        if _tool_name(payload) or str(payload.get("disposition") or "").strip():
+            return payload
+    if first_object is not None:
+        return first_object
+    raise ValueError("workspace_agent_parse_failed: no JSON object found")
 
 
 def _tool_name(action: Mapping[str, Any]) -> str:

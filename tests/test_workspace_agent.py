@@ -7,6 +7,7 @@ from visual_coding_agent_harness.agents.workspace_agent import (
     WorkspaceVisualAgent,
     compose_commit_prompt,
     compose_plan_prompt,
+    _parse_action,
 )
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.evals.videomme.workspace_round_log import export_workspace_round_log
@@ -106,6 +107,23 @@ def _empty_commit_required_registry(workspace: EvidenceWorkspace) -> ToolRegistr
     registry.register(ToolRuntimeSpec(tool_spec=read_empty, commit_required=True))
     registry.extend(build_workspace_primitives_registry(workspace=workspace))
     return registry
+
+
+def test_workspace_agent_parse_action_accepts_trailing_json_object() -> None:
+    action = _parse_action(
+        '{"tool":"verify","args":{"answer":"D","citations":["mem_0001"]}}\n'
+        '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}'
+    )
+
+    assert action == {"tool": "verify", "args": {"answer": "D", "citations": ["mem_0001"]}}
+
+
+def test_workspace_agent_parse_action_accepts_fenced_json_with_tail_text() -> None:
+    action = _parse_action(
+        '```json\n{"tool":"read_clip","args":{"scope":{},"focus":["overall evidence"]}}\n```\nDone.'
+    )
+
+    assert action == {"tool": "read_clip", "args": {"scope": {}, "focus": ["overall evidence"]}}
 
 
 def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> None:
