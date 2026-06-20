@@ -206,7 +206,14 @@ class SceneIndexBuilder:
         )
         data = _parse_lenient_json(response.text)
         if not data:
-            raise ValueError(f"Root DVC response for {segment.segment_id} was not valid JSON")
+            summary = _clean_generated_text(response.text, "root_summary")
+            if not summary:
+                raise ValueError(f"Root DVC response for {segment.segment_id} was not valid JSON")
+            return {
+                "root_summary": summary,
+                "beats": (),
+                "limitations": ["root_dvc_non_json_response"],
+            }
         return data
 
     def _root_media(

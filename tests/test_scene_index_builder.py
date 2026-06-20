@@ -326,6 +326,34 @@ def test_root_dvc_tolerates_beat_summary_aliases_and_drops_unusable_beats() -> N
     ]
 
 
+def test_root_dvc_uses_plain_text_response_as_degraded_root_summary() -> None:
+    class PlainTextBackend(RecordingBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            return BackendResponse(text="The clip shows a presenter walking through a city square.")
+
+    backend = PlainTextBackend()
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    )
+
+    scene_index = builder.build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=[],
+    )
+
+    segment = scene_index.segments[0]
+    assert segment.map_summary == "The clip shows a presenter walking through a city square."
+    assert segment.timeline_beats == ()
+    assert segment.limitations == ("root_dvc_non_json_response",)
+
+
 def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
     backend = RecordingBackend()
     builder = SceneIndexBuilder(
