@@ -163,11 +163,25 @@ class SceneIndexBuilder:
                     "You are building a navigation-only index for a five-minute video interval.\n\n"
                     "You receive chronologically ordered video frames sampled at 1 FPS when available, "
                     "and timestamped subtitle / ASR cues for the same interval.\n\n"
-                    "Return JSON with root_summary, 1 to MAX_BEATS chronological non-overlapping timeline beats, "
-                    "optional entity_hints, topic_tags, modality_hints, and limitations. For each beat, provide "
-                    "start_offset_sec and end_offset_sec relative to this interval. Summarize only visible or spoken "
-                    "content. Mark useful cues as visual, asr, ocr, or temporal. Do not answer a downstream question. "
-                    "This is a navigation index, not final evidence.\n\n"
+                    "Return only JSON using this schema:\n"
+                    "{\n"
+                    '  "root_summary": "one sentence navigation summary",\n'
+                    '  "beats": [\n'
+                    "    {\n"
+                    '      "start_offset_sec": 0.0,\n'
+                    '      "end_offset_sec": 10.0,\n'
+                    '      "summary": "visible or spoken content in this beat",\n'
+                    '      "entity_hints": ["optional"],\n'
+                    '      "modality_hints": ["visual|asr|ocr|temporal"]\n'
+                    "    }\n"
+                    "  ],\n"
+                    '  "topic_tags": ["optional"],\n'
+                    '  "limitations": ["optional"]\n'
+                    "}\n"
+                    "Use 1 to MAX_BEATS chronological non-overlapping beats. For each beat, provide "
+                    "start_offset_sec, end_offset_sec, and summary relative to this interval. Summarize only visible "
+                    "or spoken content. Mark useful cues as visual, asr, ocr, or temporal. Do not answer a downstream "
+                    "question. This is a navigation index, not final evidence.\n\n"
                     f"MAX_BEATS: {self.root_policy.max_beats_per_root}\n"
                     f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s\n"
                     f"Subtitles / ASR cues:\n{cue_text}"
@@ -249,7 +263,7 @@ def _merge_root_segment(
     )
     beats = _normalize_root_beats(
         segment=segment,
-        beats=root_data.get("beats") or (),
+        beats=root_data.get("beats") or root_data.get("timeline_beats") or (),
         max_beats=max_beats,
     )
     if not root_summary and beats:
@@ -317,9 +331,10 @@ def _normalize_root_beats(
             raise ValueError(f"Root DVC beat {index} for {segment.segment_id} has empty duration")
         if start < last_end:
             raise ValueError(f"Root DVC beats for {segment.segment_id} must be chronological and non-overlapping")
-        summary = _clean_generated_text(item.get("summary") or "", "summary")
+        summary = _beat_summary(item)
         if not summary:
-            raise ValueError(f"Root DVC beat {index} for {segment.segment_id} is missing summary")
+            last_end = end
+            continue
         normalized.append(
             TimelineBeat(
                 beat_id=_clean_text(item.get("beat_id") or f"{segment.segment_id}_b{index:02d}"),
@@ -335,6 +350,14 @@ def _normalize_root_beats(
         )
         last_end = end
     return tuple(normalized)
+
+
+def _beat_summary(item: Mapping[str, Any]) -> str:
+    for key in ("summary", "description", "caption", "text", "event", "content"):
+        summary = _clean_generated_text(item.get(key) or "", key)
+        if summary:
+            return summary
+    return ""
 
 
 def _beat_abs_time(*, segment: VideoSegment, item: Mapping[str, Any], key: str) -> float:

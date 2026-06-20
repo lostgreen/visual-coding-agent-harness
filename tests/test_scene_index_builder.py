@@ -280,6 +280,52 @@ def test_root_dvc_policy_caps_timeline_beats() -> None:
     assert len(scene_index.segments[0].timeline_beats) == 1
 
 
+def test_root_dvc_tolerates_beat_summary_aliases_and_drops_unusable_beats() -> None:
+    class AliasBackend(RecordingBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            return BackendResponse(
+                text=json.dumps(
+                    {
+                        "root_summary": "A city street scene unfolds.",
+                        "timeline_beats": [
+                            {
+                                "start_offset_sec": 0.0,
+                                "end_offset_sec": 8.0,
+                                "description": "People cross a busy intersection.",
+                                "modality_hints": ["visual"],
+                            },
+                            {
+                                "start_offset_sec": 8.0,
+                                "end_offset_sec": 12.0,
+                                "entity_hints": ["traffic light"],
+                            },
+                        ],
+                    }
+                )
+            )
+
+    backend = AliasBackend()
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    )
+
+    scene_index = builder.build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=[],
+    )
+
+    assert [beat.summary for beat in scene_index.segments[0].timeline_beats] == [
+        "People cross a busy intersection."
+    ]
+
+
 def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
     backend = RecordingBackend()
     builder = SceneIndexBuilder(
