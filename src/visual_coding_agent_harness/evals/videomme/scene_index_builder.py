@@ -35,6 +35,7 @@ class RootIndexPolicy:
     frame_cache_fps: float = 1.0
     max_pixels_per_frame: int = 360 * 420
     max_beats_per_root: int = 8
+    max_new_tokens: int = 2048
 
 
 class SceneIndexBuilder:
@@ -82,7 +83,7 @@ class SceneIndexBuilder:
         )
         if self.cache is not None:
             cached = self.cache.load(cache_key)
-            if cached is not None:
+            if cached is not None and _usable_root_dvc_cache(cached):
                 return cached
 
         base = fixed_window_scene_index(
@@ -183,13 +184,14 @@ class SceneIndexBuilder:
                     "or spoken content. Mark useful cues as visual, asr, ocr, or temporal. Do not answer a downstream "
                     "question. This is a navigation index, not final evidence.\n\n"
                     f"MAX_BEATS: {self.root_policy.max_beats_per_root}\n"
+                    "Keep the whole JSON short enough to complete. Each summary must be one concise sentence.\n"
                     f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s\n"
                     f"Subtitles / ASR cues:\n{cue_text}"
                 ),
                 media_path=media_path,
                 media_type=media_type,
                 frames=frame_paths,
-                max_new_tokens=512,
+                max_new_tokens=int(self.root_policy.max_new_tokens),
                 metadata={
                     **metadata,
                     "schema_version": self.schema_version,
@@ -200,20 +202,16 @@ class SceneIndexBuilder:
                     "model_id": self.vl_model_id,
                     "frame_cache_fps": self.root_policy.frame_cache_fps,
                     "max_pixels_per_frame": self.root_policy.max_pixels_per_frame,
+                    "max_pixels": self.root_policy.max_pixels_per_frame,
+                    "fps": self.root_policy.frame_cache_fps,
+                    "nframes": len(frame_paths),
                     "max_beats_per_root": self.root_policy.max_beats_per_root,
                 },
             )
         )
         data = _parse_lenient_json(response.text)
         if not data:
-            summary = _clean_generated_text(response.text, "root_summary")
-            if not summary:
-                raise ValueError(f"Root DVC response for {segment.segment_id} was not valid JSON")
-            return {
-                "root_summary": summary,
-                "beats": (),
-                "limitations": ["root_dvc_non_json_response"],
-            }
+            return _fallback_root_data_from_unparseable_response(segment=segment, text=response.text)
         return data
 
     def _root_media(
@@ -263,11 +261,7 @@ def _merge_root_segment(
     root_source: str,
     max_beats: int,
 ) -> VideoSegment:
-    root_summary = _clean_generated_text(
-        root_data.get("root_summary") or root_data.get("summary") or "",
-        "root_summary",
-        "summary",
-    )
+    root_summary = _root_summary(root_data)
     beats = _normalize_root_beats(
         segment=segment,
         beats=root_data.get("beats") or root_data.get("timeline_beats") or (),
@@ -310,6 +304,23 @@ def _merge_root_segment(
             "navigation_only": True,
         },
     )
+
+
+def _root_summary(root_data: Mapping[str, Any]) -> str:
+    for key in ("root_summary", "summary", "caption", "description", "overview", "text"):
+        summary = _clean_generated_text(
+            root_data.get(key) or "",
+            key,
+            "root_summary",
+            "summary",
+            "caption",
+            "description",
+            "overview",
+            "text",
+        )
+        if summary:
+            return summary
+    return ""
 
 
 def _normalize_root_beats(
@@ -365,6 +376,74 @@ def _beat_summary(item: Mapping[str, Any]) -> str:
         if summary:
             return summary
     return ""
+
+
+def _fallback_root_data_from_unparseable_response(*, segment: VideoSegment, text: str) -> Mapping[str, Any]:
+    extracted_summary = _extract_json_string_field(
+        text,
+        keys=("root_summary", "caption", "description", "overview", "text"),
+    )
+    if extracted_summary:
+        return {
+            "root_summary": extracted_summary,
+            "beats": (),
+            "limitations": ["root_dvc_truncated_json_response"],
+        }
+
+    if _looks_jsonish(text):
+        raise ValueError(f"Root DVC response for {segment.segment_id} was not valid JSON")
+
+    summary = _clean_generated_text(text, "root_summary")
+    if not summary:
+        raise ValueError(f"Root DVC response for {segment.segment_id} was not valid JSON")
+    return {
+        "root_summary": summary,
+        "beats": (),
+        "limitations": ["root_dvc_non_json_response"],
+    }
+
+
+def _extract_json_string_field(text: str, *, keys: Sequence[str]) -> str:
+    if not text:
+        return ""
+    decoder = json.JSONDecoder()
+    key_pattern = "|".join(re.escape(key) for key in keys)
+    for match in re.finditer(rf'"(?:{key_pattern})"\s*:', text):
+        value_start = match.end()
+        while value_start < len(text) and text[value_start].isspace():
+            value_start += 1
+        try:
+            value, _ = decoder.raw_decode(text[value_start:])
+        except json.JSONDecodeError:
+            continue
+        summary = _clean_generated_text(value, "root_summary")
+        if summary:
+            return summary
+    return ""
+
+
+def _looks_jsonish(text: str) -> bool:
+    stripped = (text or "").lstrip()
+    return stripped.startswith("{") or stripped.startswith("[") or stripped.startswith("```json")
+
+
+def _usable_root_dvc_cache(scene_index: SceneIndex) -> bool:
+    if not scene_index.segments:
+        return False
+    for segment in scene_index.segments:
+        summary = segment.map_summary or segment.low_fps_caption
+        if not summary or _damaged_root_caption(summary):
+            return False
+        if getattr(segment, "source", "") != "dvc_root_v1":
+            return False
+        if getattr(segment, "index_level", "root") != "root":
+            return False
+    return True
+
+
+def _damaged_root_caption(summary: str) -> bool:
+    stripped = (summary or "").lstrip()
+    return stripped.startswith("{") and '"root_summary"' in stripped
 
 
 def _beat_abs_time(*, segment: VideoSegment, item: Mapping[str, Any], key: str) -> float:

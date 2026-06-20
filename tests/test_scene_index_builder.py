@@ -94,6 +94,10 @@ def test_builder_creates_single_call_root_dvc_manifest() -> None:
     assert backend.requests[0].metadata["schema_version"] == "dvc_root_v1"
     assert backend.requests[0].metadata["frame_cache_fps"] == 1.0
     assert backend.requests[0].metadata["max_pixels_per_frame"] == 360 * 420
+    assert backend.requests[0].metadata["max_pixels"] == 360 * 420
+    assert backend.requests[0].metadata["fps"] == 1.0
+    assert backend.requests[0].metadata["nframes"] == 2
+    assert backend.requests[0].max_new_tokens == 2048
     segment = scene_index.segments[0]
     assert segment.source_segment_id == "seg_0001"
     assert segment.map_summary == "Museum aircraft intro with a silver plane in a hangar."
@@ -259,6 +263,41 @@ def test_scene_index_cache_avoids_duplicate_backend_calls(tmp_path) -> None:
     assert first.to_dict() == second.to_dict()
 
 
+def test_scene_index_cache_rebuilds_damaged_root_dvc_caption(tmp_path) -> None:
+    cache = SceneIndexCache(tmp_path)
+    builder = SceneIndexBuilder(
+        backend=RecordingBackend(),
+        cache=cache,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    )
+    cues = [SubtitleCue(start_sec=0.0, end_sec=1.0, text="Museum aircraft.", cue_id="cue-1")]
+    cache_key = builder.cache_key(video_id="video-1", video_path="/tmp/video-1.mp4", duration_sec=30.0, subtitle_cues=cues)
+    damaged = SceneIndex(
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        segments=[
+            VideoSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=30.0,
+                map_summary='{ "root_summary": "truncated caption',
+                low_fps_caption='{ "root_summary": "truncated caption',
+                source="dvc_root_v1",
+                index_level="root",
+            )
+        ],
+    )
+    cache.store(cache_key, damaged)
+
+    rebuilt = builder.build(video_id="video-1", video_path="/tmp/video-1.mp4", duration_sec=30.0, subtitle_cues=cues)
+
+    assert len(builder.backend.requests) == 1
+    assert rebuilt.segments[0].map_summary == "Museum aircraft intro with a silver plane in a hangar."
+
+
 def test_root_dvc_policy_caps_timeline_beats() -> None:
     backend = RecordingBackend()
     builder = SceneIndexBuilder(
@@ -352,6 +391,85 @@ def test_root_dvc_uses_plain_text_response_as_degraded_root_summary() -> None:
     assert segment.map_summary == "The clip shows a presenter walking through a city square."
     assert segment.timeline_beats == ()
     assert segment.limitations == ("root_dvc_non_json_response",)
+
+
+def test_root_dvc_extracts_caption_from_truncated_json_without_polluting_map_summary() -> None:
+    class TruncatedJsonBackend(RecordingBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            return BackendResponse(
+                text=(
+                    '{ "root_summary": "The clip surveys the empire collapse with maps and narration.", '
+                    '"beats": [ { "start_offset_sec": 0, "end_offset_sec": 30, "summary": "opening map'
+                )
+            )
+
+    backend = TruncatedJsonBackend()
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    )
+
+    scene_index = builder.build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=[],
+    )
+
+    segment = scene_index.segments[0]
+    assert segment.map_summary == "The clip surveys the empire collapse with maps and narration."
+    assert not segment.map_summary.lstrip().startswith("{")
+    assert segment.timeline_beats == ()
+    assert segment.limitations == ("root_dvc_truncated_json_response",)
+
+
+def test_root_dvc_rejects_unusable_jsonish_response_instead_of_using_it_as_caption() -> None:
+    class BadJsonBackend(RecordingBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            return BackendResponse(text='{ "beats": [ { "summary": "opening map" ')
+
+    builder = SceneIndexBuilder(
+        backend=BadJsonBackend(),
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    )
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        builder.build(
+            video_id="video-1",
+            video_path="/tmp/video-1.mp4",
+            duration_sec=30.0,
+            subtitle_cues=[],
+        )
+
+
+def test_root_dvc_uses_root_caption_alias_when_root_summary_is_missing() -> None:
+    class CaptionAliasBackend(RecordingBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            return BackendResponse(text=json.dumps({"caption": "A complete root caption from the model."}))
+
+    scene_index = SceneIndexBuilder(
+        backend=CaptionAliasBackend(),
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    ).build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=[],
+    )
+
+    assert scene_index.segments[0].map_summary == "A complete root caption from the model."
 
 
 def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
