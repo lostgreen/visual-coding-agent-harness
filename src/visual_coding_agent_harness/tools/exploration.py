@@ -6,7 +6,7 @@ from typing import Optional
 
 from ..backends.base import VisionLanguageBackend
 from ..registry import ToolRegistry
-from ..video_map import VideoMap, VideoMapStore
+from ..video_map import IndexRefiner, VideoMap, VideoMapStore
 from ..workspace import EvidenceWorkspace
 from .asr_binding import build_asr_binding_registry
 from .enrichment import build_video_enrichment_registry
@@ -34,7 +34,11 @@ def build_video_exploration_registry(
 ) -> ToolRegistry:
     video_map_store = video_map if isinstance(video_map, VideoMapStore) else VideoMapStore(video_map)
     registry = ToolRegistry()
-    registry.extend(build_video_navigation_registry(video_map_store, workspace=workspace))
+    _extend_without(
+        registry,
+        build_video_navigation_registry(video_map_store, workspace=workspace),
+        names={"read_segment"},
+    )
     registry.extend(build_query_context_registry(video_map=video_map_store, backend=backend, frame_sampler=frame_sampler))
     registry.extend(build_global_view_registry(backend, frame_sampler=frame_sampler))
     registry.extend(
@@ -54,6 +58,7 @@ def build_video_exploration_registry(
             video_map=video_map_store,
             backend=backend,
             workspace=workspace,
+            index_refiner=IndexRefiner(backend=backend, frame_sampler=frame_sampler),
             include_workspace_primitives=False,
         )
     )
@@ -78,3 +83,10 @@ def build_video_exploration_registry(
         )
     )
     return install_video_runtime_specs(registry, required=True)
+
+
+def _extend_without(registry: ToolRegistry, other: ToolRegistry, *, names: set[str]) -> None:
+    for runtime_spec in other.list_runtime_specs():
+        if runtime_spec.tool_spec.name in names:
+            continue
+        registry.register(runtime_spec)

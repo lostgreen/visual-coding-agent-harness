@@ -19,7 +19,7 @@ from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIn
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
 from visual_coding_agent_harness.video_index import SceneIndex
-from visual_coding_agent_harness.video_map import VideoMap
+from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 from .summary_schema import RunSummary, validate as validate_run_summary
@@ -208,12 +208,19 @@ def run_loop(
     workspace_log_dir = workspace_root.parent / "workspace_logs" / run_id
     video_map = VideoMap.from_scene_index(scene_index)
     if strategy == WORKSPACE_V2_STRATEGY:
+        index_refiner = IndexRefiner(backend=backend, frame_sampler=frame_sampler)
         agent = WorkspaceVisualAgent(
             backend=backend,
-            registry=build_workspace_v2_registry(video_map=video_map, backend=backend, workspace=workspace),
+            registry=build_workspace_v2_registry(
+                video_map=video_map,
+                backend=backend,
+                workspace=workspace,
+                index_refiner=index_refiner,
+            ),
             workspace=workspace,
             max_rounds=budget.max_rounds,
             video_path=video_path,
+            video_map=video_map,
             log_root=workspace_log_dir,
         )
         result = agent.run(question)
@@ -256,6 +263,7 @@ def run_loop(
     )
     planner_io_dir = workspace_log_dir
     tools, segments = _result_tools_and_segments(result)
+    backend_call_counters = _backend_call_counters(workspace=workspace, scene_index=scene_index)
     return {
         "answer": answer,
         "choice": extract_choice(answer),
@@ -275,6 +283,8 @@ def run_loop(
         "workspace_round_log_round_count": workspace_round_log["round_count"],
         "planner_io_dir": str(planner_io_dir),
         "planner_prompt_count": len(list(planner_io_dir.glob("*_prompt.txt"))) if planner_io_dir.exists() else 0,
+        "backend_call_counters": backend_call_counters,
+        **backend_call_counters,
         "reward_tags": reward_tags,
     }
 
@@ -328,6 +338,17 @@ def _result_tools_and_segments(result: Any) -> tuple[list[str], list[str]]:
     return tools, segments
 
 
+def _backend_call_counters(*, workspace: EvidenceWorkspace, scene_index: SceneIndex) -> dict[str, int]:
+    events = _load_trace_events(workspace)
+    return {
+        "root_index_backend_calls": sum(
+            1 for segment in scene_index.segments if getattr(segment, "index_level", "root") == "root"
+        ),
+        "refinement_backend_calls": sum(1 for event in events if _event_type(event) == "index_refinement_created"),
+        "verify_backend_calls": sum(1 for event in events if _event_type(event) == "segment_verify_dispatched"),
+    }
+
+
 def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
     summary = {
         "choice": raw.get("choice", ""),
@@ -350,6 +371,10 @@ def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
         "workspace_round_log_round_count",
         "planner_io_dir",
         "planner_prompt_count",
+        "backend_call_counters",
+        "root_index_backend_calls",
+        "refinement_backend_calls",
+        "verify_backend_calls",
         "reward_tags",
     ]:
         if key in raw:

@@ -14,7 +14,8 @@ from visual_coding_agent_harness.evals.videomme.workspace_round_log import expor
 from visual_coding_agent_harness.registry import ToolRegistry, ToolRuntimeSpec, tool
 from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
-from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
+from visual_coding_agent_harness.video_index import TimelineBeat
+from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -40,6 +41,16 @@ class ScriptedWorkspaceV2Backend(VisionLanguageBackend):
         self.requests.append(request)
         if request.task == "vision_read":
             return BackendResponse(text="Austria-Hungary was seen as a buffer between Russia and Western Europe.")
+        if request.task == "refine_segment_index":
+            return BackendResponse(
+                text=(
+                    '{"children":[{"start_sec":5,"end_sec":20,'
+                    '"summary":"Fresh refined map view with Austria-Hungary between Russia and Western Europe.",'
+                    '"beats":[{"start_sec":5,"end_sec":20,"summary":"Austria-Hungary is shown as the buffer.",'
+                    '"modality_hints":["visual"]}],'
+                    '"entity_hints":["Austria-Hungary","Russia","Western Europe"]}]}'
+                )
+            )
         if request.task == "workspace_commit":
             return BackendResponse(text=self.commit_responses.pop(0))
         if request.task == "workspace_final" and not self.plan_responses:
@@ -70,6 +81,15 @@ def _video_map() -> VideoMap:
                 end_sec=60.0,
                 low_fps_caption="A Central Europe map with a shield.",
                 asr_text="Austria-Hungary was seen as a buffer between Russia and Western Europe.",
+                timeline_beats=(
+                    TimelineBeat(
+                        beat_id="seg_0001_b01",
+                        start_sec=0.0,
+                        end_sec=60.0,
+                        summary="A map introduces Austria-Hungary as a buffer region.",
+                        modality_hints=("visual", "asr"),
+                    ),
+                ),
             )
         ],
     )
@@ -300,6 +320,82 @@ def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> N
     assert workspace.memory_entries()[0].entry_id == "mem_0001"
     assert [request.task for request in backend.requests] == [
         "workspace_plan",
+        "workspace_commit",
+        "workspace_plan",
+    ]
+
+
+def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_read_segment_progressive")
+    sampled = []
+
+    def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
+        sampled.append((video_path, start_sec, end_sec, max_frames))
+        return ["/frames/demo/00005.jpg"]
+
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"index"}}',
+            '{"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"refine","sub_window":{"start_sec":5,"end_sec":20},"resolution":"medium","focus":["buffer"]}}',
+            '{"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"verify","sub_window":{"start_sec":5,"end_sec":20},"evidence_mode":"visual","focus":["buffer"]}}',
+            '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}',
+        ],
+        commit_responses=[
+            """
+            {
+              "tool": "commit_observation",
+              "args": {
+                "observation_id": "obs_0003",
+                "writes": {
+                  "pinned_anchors": [{
+                    "anchor_id": "clip_anch_seg_0001_00005000_00020000",
+                    "kind": "visual",
+                    "source_kind": "visual_fact",
+                    "excerpt": "Austria-Hungary was seen as a buffer between Russia and Western Europe."
+                  }],
+                  "memory": [{
+                    "kind": "answer_support",
+                    "claim": "Austria-Hungary is identified as the buffer.",
+                    "supports_option": "D",
+                    "anchor_ids": ["clip_anch_seg_0001_00005000_00020000"],
+                    "evidence_obs_ids": ["obs_0003"],
+                    "confidence": "high"
+                  }]
+                }
+              }
+            }
+            """
+        ],
+    )
+    video_map = _video_map()
+    registry = build_workspace_v2_registry(
+        video_map=video_map,
+        backend=backend,
+        workspace=workspace,
+        index_refiner=IndexRefiner(backend=backend, frame_sampler=fake_frame_sampler),
+    )
+    agent = WorkspaceVisualAgent(
+        backend=backend,
+        registry=registry,
+        workspace=workspace,
+        max_rounds=4,
+        video_map=video_map,
+    )
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    assert result.answer == "D"
+    assert workspace.observation_status("obs_0001") == "acknowledged"
+    assert workspace.observation_status("obs_0002") == "acknowledged"
+    assert workspace.observation_status("obs_0003") == "committed"
+    assert workspace.memory_entries()[0].kind == "answer_support"
+    assert sampled == [("/videos/demo.mp4", 5.0, 20.0, 15)]
+    assert [request.task for request in backend.requests] == [
+        "workspace_plan",
+        "workspace_plan",
+        "refine_segment_index",
+        "workspace_plan",
+        "vision_read",
         "workspace_commit",
         "workspace_plan",
     ]
@@ -569,7 +665,7 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert "synthesize_memory is unavailable until committed memory exists" in prompt
     assert "duplicate_tool_call" in prompt
     assert "do not repeat the same semantic request" in prompt
-    assert '{"tool":"read_clip"' in prompt
+    assert '{"tool":"read_segment"' in prompt
     assert '"text":"D"' not in prompt
     assert '"text":"<selected option>"' in prompt
 

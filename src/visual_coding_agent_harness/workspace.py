@@ -809,7 +809,14 @@ class EvidenceWorkspace:
             rows = [row for row in rows if _row_matches_expected(row, expected)]
         return rows
 
-    def render_plan_view(self, *, question: str, max_recent: int = 5, max_per_section: int = 10) -> str:
+    def render_plan_view(
+        self,
+        *,
+        question: str,
+        max_recent: int = 5,
+        max_per_section: int = 10,
+        video_map: Any | None = None,
+    ) -> str:
         lines = [
             "# Workspace",
             f"Question: {question}",
@@ -826,6 +833,26 @@ class EvidenceWorkspace:
                 lines.append(f"- {formatter(item)}")
             if total > len(shown):
                 lines.append(f"... shown {len(shown)}/{total}; use {hint} to see more")
+
+        if video_map is not None:
+            root_segments = [
+                segment for segment in getattr(video_map, "segments", ()) if getattr(segment, "index_level", "root") == "root"
+            ]
+            render_section(
+                "Root Index",
+                root_segments,
+                lambda segment: (
+                    f"{segment.segment_id} [{segment.start_sec:.1f}-{segment.end_sec:.1f}s] "
+                    f"{_bounded_inline(segment.low_fps_caption or segment.compact_text(), 140)}"
+                ),
+                hint='read_segment(mode="index")',
+            )
+            lines.extend(["", "## Index Coverage"])
+            lines.extend(_index_coverage_lines(video_map))
+            lines.append("Index coverage != evidence coverage")
+
+            lines.extend(["", "## Evidence Coverage"])
+            lines.extend(_evidence_coverage_lines(self))
 
         render_section(
             "Deferred Observations",
@@ -3344,6 +3371,59 @@ def _row_matches_expected(row: Mapping[str, Any], expected: Mapping[str, Any]) -
         if row.get(str(key)) != value:
             return False
     return True
+
+
+def _bounded_inline(value: Any, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _index_coverage_lines(video_map: Any) -> list[str]:
+    segments = list(getattr(video_map, "segments", ()) or ())
+    roots = [segment for segment in segments if getattr(segment, "index_level", "root") == "root"]
+    refined = [segment for segment in segments if getattr(segment, "index_level", "root") == "refined"]
+    lines = []
+    if roots:
+        lines.append(f"root indexed: {_segment_range_summary(roots)} ({len(roots)} roots)")
+    else:
+        lines.append("root indexed: none")
+    if refined:
+        refined_ranges = ", ".join(f"{segment.start_sec:.1f}-{segment.end_sec:.1f}s" for segment in refined[:6])
+        if len(refined) > 6:
+            refined_ranges += f", ... {len(refined) - 6} more"
+        lines.append(f"refined: {refined_ranges}")
+    else:
+        lines.append("refined: none")
+    lines.append(f"index cache: root={len(roots)} / refinement={len(refined)}")
+    return lines
+
+
+def _evidence_coverage_lines(workspace: "EvidenceWorkspace") -> list[str]:
+    anchors = workspace.read_pinned_anchors()
+    by_modality: dict[str, list[str]] = {}
+    for anchor in anchors:
+        modality = str(anchor.get("modality") or anchor.get("kind") or anchor.get("source_kind") or "unknown")
+        time_text = _format_time_range(anchor.get("time_range") or [anchor.get("start_sec"), anchor.get("end_sec")])
+        if time_text:
+            by_modality.setdefault(modality, []).append(time_text)
+    lines = []
+    for modality in ("visual", "ocr", "asr", "audio_fact", "visual_fact", "temporal"):
+        if modality in by_modality:
+            lines.append(f"verified {modality}: {', '.join(by_modality[modality][:6])}")
+    if not lines:
+        lines.append("verified visual: none")
+        lines.append("verified OCR: none")
+    answer_support_count = sum(1 for entry in workspace.memory_entries() if entry.kind in {"answer_support", "synthesized_support", "answer_conflict_resolved"})
+    lines.append(f"committed answer-support memories: {answer_support_count}")
+    return lines
+
+
+def _segment_range_summary(segments: Sequence[Any]) -> str:
+    starts = [float(segment.start_sec) for segment in segments]
+    ends = [float(segment.end_sec) for segment in segments]
+    return f"{min(starts):.1f}-{max(ends):.1f}s"
 
 
 def _format_time_range(value: Any) -> str:

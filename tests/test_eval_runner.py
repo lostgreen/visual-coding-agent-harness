@@ -1002,12 +1002,13 @@ class EvalRunnerTest(unittest.TestCase):
         from visual_coding_agent_harness.agents.workspace_agent import WorkspaceRunResult
 
         class FakeWorkspaceVisualAgent:
-            def __init__(self, *, backend, registry, workspace, max_rounds, video_path, log_root):
+            def __init__(self, *, backend, registry, workspace, max_rounds, video_path, video_map=None, log_root):
                 self.backend = backend
                 self.registry = registry
                 self.workspace = workspace
                 self.max_rounds = max_rounds
                 self.video_path = video_path
+                self.video_map = video_map
                 self.log_root = log_root
                 agents.append(self)
 

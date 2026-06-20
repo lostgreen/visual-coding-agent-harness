@@ -43,6 +43,7 @@ class WorkspaceVisualAgent:
         workspace: EvidenceWorkspace,
         max_rounds: int = 8,
         video_path: str = "",
+        video_map: Any | None = None,
         log_root: str | Path | None = None,
     ) -> None:
         self.backend = backend
@@ -50,6 +51,7 @@ class WorkspaceVisualAgent:
         self.workspace = workspace
         self.max_rounds = int(max_rounds)
         self.video_path = video_path
+        self.video_map = video_map
         self.log_root = Path(log_root) if log_root is not None else workspace.root / "workspace_logs"
         self.runtime_host = ToolRuntimeHost(
             registry=registry,
@@ -142,6 +144,7 @@ class WorkspaceVisualAgent:
             question=question,
             workspace=self.workspace,
             last_tool_result=last_tool_result,
+            video_map=self.video_map,
         )
         response = self.backend.generate(
             BackendRequest(
@@ -521,7 +524,11 @@ class WorkspaceVisualAgent:
 
 PLAN_SYSTEM_PROMPT = """You are exploring a video through a durable workspace.
 Output exactly one JSON object: {"tool":"...","args":{...}}.
-Available plan tools are read_clip, search, list, read_workspace, verify, synthesize_memory, and answer.
+Available plan tools are read_segment, search, list, read_workspace, verify, synthesize_memory, and answer.
+Use read_segment(index) to inspect a root segment timeline; index output is navigation only and cannot be a final citation.
+Use read_segment(refine) only when a root interval is too broad or ambiguous; never refine a refined child.
+Use read_segment(verify) for answer-grade evidence; only committed memory from verify-capable observations may support an answer.
+Do not refine an already-refined root range at the same resolution.
 Use synthesize_memory only after Committed Memory contains answer-support mem_* ids.
 Use answer only after Committed Memory contains mem_* ids that directly support the answer, except forced final requests.
 Every answer call must include {"text": "...", "citations": ["mem_*"], "confidence": "..."}.
@@ -541,7 +548,13 @@ Do not output need_more_evidence.
 """
 
 
-def compose_plan_prompt(*, question: str, workspace: EvidenceWorkspace, last_tool_result: str = "") -> str:
+def compose_plan_prompt(
+    *,
+    question: str,
+    workspace: EvidenceWorkspace,
+    last_tool_result: str = "",
+    video_map: Any | None = None,
+) -> str:
     return "\n".join(
         [
             "# Question",
@@ -549,13 +562,13 @@ def compose_plan_prompt(*, question: str, workspace: EvidenceWorkspace, last_too
             "",
             "# Plan Protocol",
             "Return exactly one JSON object. Do not explain.",
-            'If Committed Memory is empty, start with an exploration call such as {"tool":"read_clip","args":{"scope":{},"focus":["overall topic and option-relevant evidence"]}}.',
-            'If Last Tool Result starts with "answer rejected", the next tool must be read_clip, search, list, read_workspace, or verify.',
+            'If Committed Memory is empty, start with {"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"index"}} unless a better root segment is already known.',
+            'If Last Tool Result starts with "answer rejected", the next tool must be read_segment, search, list, read_workspace, or verify.',
             'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',
             _synthesize_memory_availability(workspace),
             'Use {"tool":"answer","args":{"text":"<selected option>","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory exists.',
             "",
-            workspace.render_plan_view(question=question),
+            workspace.render_plan_view(question=question, video_map=video_map),
             "",
             "# Last Tool Result",
             last_tool_result or "(none)",

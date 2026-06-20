@@ -31,6 +31,7 @@ _CORE_RUNTIME_SPEC_TOOLS = (
     "defer_observation",
     "no_commit_needed",
     "read_clip",
+    "read_segment",
     "search",
     "list",
     "verify",
@@ -200,6 +201,15 @@ def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = Fals
     )
     _replace(
         registry,
+        "read_segment",
+        missing=missing,
+        argument_normalizer=_normalize_read_segment,
+        semantic_key_builder=_read_segment_semantic_key,
+        duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+        commit_required_predicate=_read_segment_verify_has_evidence,
+    )
+    _replace(
+        registry,
         "search",
         missing=missing,
         argument_normalizer=_normalize_workspace_v2_search,
@@ -277,12 +287,45 @@ def _verify_has_rejection_evidence(output: Mapping[str, Any]) -> bool:
     return bool(reason or citations)
 
 
+def _read_segment_verify_has_evidence(output: Mapping[str, Any]) -> bool:
+    if _text(output.get("mode")) != "verify":
+        return False
+    anchors = output.get("produced_anchors") or ()
+    return isinstance(anchors, Sequence) and not isinstance(anchors, (str, bytes)) and bool(anchors)
+
+
 def _key_from_normalizer(tool_name: str, normalizer: Any):
     def build(ctx: RunContext, request: ToolRequest) -> str:
         normalized = normalizer(ctx, request)
         return f"{tool_name}:{_canonical_json(normalized)}"
 
     return build
+
+
+def _read_segment_semantic_key(ctx: RunContext, request: ToolRequest) -> str:
+    normalized = _normalize_read_segment(ctx, request)
+    mode = _text(normalized.get("mode")) or "index"
+    sub_window = normalized.get("sub_window") if isinstance(normalized.get("sub_window"), Mapping) else {}
+    if mode == "index":
+        key = {"segment_id": normalized.get("segment_id")}
+    elif mode == "refine":
+        key = {
+            "root_segment_id": normalized.get("segment_id"),
+            "sub_window": _canonical_value(sub_window),
+            "resolution": normalized.get("resolution"),
+        }
+    elif mode == "verify":
+        sampling = dict(request.arguments.get("sampling")) if isinstance(request.arguments.get("sampling"), Mapping) else {}
+        key = {
+            "root_segment_id": normalized.get("segment_id"),
+            "sub_window": _canonical_value(sub_window),
+            "evidence_mode": normalized.get("evidence_mode"),
+            "sampling": _canonical_value(sampling),
+            "focus": normalized.get("focus"),
+        }
+    else:
+        key = normalized
+    return f"read_segment:{mode}:{_canonical_json(key)}"
 
 
 def _normalize_bind_asr_claim(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
@@ -466,6 +509,19 @@ def _normalize_read_clip(_ctx: RunContext, request: ToolRequest) -> Mapping[str,
         "scope": _canonical_value(scope),
         "focus": _string_list(args.get("focus")),
         "sampling": _canonical_value(sampling),
+    }
+
+
+def _normalize_read_segment(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    sub_window = args.get("sub_window") if isinstance(args.get("sub_window"), Mapping) else None
+    return {
+        "segment_id": _text(args.get("segment_id")),
+        "mode": _text(args.get("mode")) or "index",
+        "sub_window": _canonical_value(sub_window) if sub_window is not None else None,
+        "resolution": _text(args.get("resolution")) or "medium",
+        "evidence_mode": _text(args.get("evidence_mode")) or "visual",
+        "focus": _string_list(args.get("focus")),
     }
 
 

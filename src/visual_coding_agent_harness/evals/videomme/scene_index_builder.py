@@ -1,4 +1,4 @@
-"""Dual-source SceneIndex builder for VideoMME subtitles and video captions."""
+"""Root DVC SceneIndex builder for VideoMME navigation indexes."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ...backends.base import BackendRequest, VisionLanguageBackend
 from ...tools.frame_cache import FrameSampler
-from ...video_index import SceneIndex, VideoSegment, fixed_window_scene_index
+from ...video_index import SceneIndex, TimelineBeat, VideoSegment, fixed_window_scene_index
 from .scene_index_cache import SceneIndexCache
 
 
-SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dual_source_scene_index_v4"
+SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dvc_root_v1"
 
 ClipExtractor = Callable[[str, str, float, float], str]
 
@@ -29,6 +29,14 @@ class SubtitleCue:
     cue_id: str = ""
 
 
+@dataclass(frozen=True)
+class RootIndexPolicy:
+    root_window_sec: float = 300.0
+    frame_cache_fps: float = 1.0
+    max_pixels_per_frame: int = 360 * 420
+    max_beats_per_root: int = 8
+
+
 class SceneIndexBuilder:
     def __init__(
         self,
@@ -36,8 +44,9 @@ class SceneIndexBuilder:
         backend: VisionLanguageBackend,
         text_model_id: str,
         vl_model_id: str,
-        window_sec: float = 30.0,
+        window_sec: float = 300.0,
         caption_nframes: int = 8,
+        root_policy: Optional[RootIndexPolicy] = None,
         cache: Optional[SceneIndexCache] = None,
         clip_root: Optional[Path | str] = None,
         clip_extractor: Optional[ClipExtractor] = None,
@@ -47,7 +56,8 @@ class SceneIndexBuilder:
         self.backend = backend
         self.text_model_id = text_model_id
         self.vl_model_id = vl_model_id
-        self.window_sec = window_sec
+        self.root_policy = root_policy or RootIndexPolicy(root_window_sec=float(window_sec))
+        self.window_sec = self.root_policy.root_window_sec
         self.caption_nframes = caption_nframes
         self.cache = cache
         self.clip_root = Path(clip_root) if clip_root is not None else None
@@ -79,22 +89,24 @@ class SceneIndexBuilder:
             video_path=video_path,
             duration_sec=duration_sec,
             window_sec=self.window_sec,
-            source="dual_source_scene_index",
+            source="dvc_root_v1",
         )
         segments = []
         for segment in base.segments:
             segment_cues = _cues_for_segment(cues, segment)
-            asr_data = self._summarize_subtitles(segment=segment, cues=segment_cues)
-            visual_data = self._caption_scene(video_id=video_id, video_path=video_path, segment=segment)
-            map_summary = self._summarize_scene_map(segment=segment, asr_data=asr_data, visual_data=visual_data)
+            root_data = self._build_root_dvc(
+                video_id=video_id,
+                video_path=video_path,
+                segment=segment,
+                cues=segment_cues,
+            )
             segments.append(
-                _merge_segment(
+                _merge_root_segment(
                     segment,
-                    asr_data=asr_data,
-                    visual_data=visual_data,
-                    map_summary=map_summary,
-                    asr_source=f"summarize_subtitle_segment:{self.text_model_id}",
-                    visual_source=f"caption_scene_segment:{self.vl_model_id}",
+                    root_data=root_data,
+                    cues=segment_cues,
+                    root_source=f"build_root_dvc_index:{self.vl_model_id}",
+                    max_beats=self.root_policy.max_beats_per_root,
                 )
             )
 
@@ -116,17 +128,10 @@ class SceneIndexBuilder:
             "video_id": video_id,
             "video_path": video_path,
             "duration_sec": round(float(duration_sec), 3),
-            "window_sec": round(float(self.window_sec), 3),
-            "caption_nframes": int(self.caption_nframes),
-            "visual_clip_policy": (
-                "precomputed_2fps_frames"
-                if self.frame_sampler is not None
-                else "physical_clip"
-                if self.clip_root is not None
-                else "whole_video_metadata"
-            ),
+            "root_window_sec": round(float(self.root_policy.root_window_sec), 3),
+            "frame_cache_fps": round(float(self.root_policy.frame_cache_fps), 3),
+            "max_pixels_per_frame": int(self.root_policy.max_pixels_per_frame),
             "subtitle_hash": subtitle_hash(subtitle_cues),
-            "text_model_id": self.text_model_id,
             "vl_model_id": self.vl_model_id,
         }
         if self.cache is not None:
@@ -134,126 +139,86 @@ class SceneIndexBuilder:
         payload = json.dumps(parts, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def _summarize_subtitles(self, *, segment: VideoSegment, cues: Sequence[SubtitleCue]) -> Mapping[str, Any]:
-        cue_text = "\n".join(f"{cue.cue_id or idx}: {cue.text}" for idx, cue in enumerate(cues, start=1))
-        response = self.backend.generate(
-            BackendRequest(
-                task="summarize_subtitle_segment",
-                prompt=(
-                    "Summarize only the subtitle/ASR content for this fixed video segment. "
-                    "Return JSON with summary, entities, topic_tags, confidence, raw_asr_ref. "
-                    "Do not include answer options or candidate option relations.\n"
-                    f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s\n"
-                    f"Subtitles:\n{cue_text}"
-                ),
-                max_new_tokens=256,
-                metadata={
-                    "segment_id": segment.segment_id,
-                    "start_sec": segment.start_sec,
-                    "end_sec": segment.end_sec,
-                    "cue_ids": [cue.cue_id for cue in cues if cue.cue_id],
-                    "model_id": self.text_model_id,
-                },
-            )
+    def _build_root_dvc(
+        self,
+        *,
+        video_id: str,
+        video_path: str,
+        segment: VideoSegment,
+        cues: Sequence[SubtitleCue],
+    ) -> Mapping[str, Any]:
+        media_path, media_type, frame_paths, metadata = self._root_media(
+            video_id=video_id,
+            video_path=video_path,
+            segment=segment,
         )
-        data = _parse_lenient_json(response.text)
-        if not data:
-            data = {"summary": response.text}
-        return {
-            "summary": _clean_generated_text(data.get("summary") or data.get("asr_summary") or "", "summary", "asr_summary"),
-            "entities": _clean_list(data.get("entities")),
-            "topic_tags": _clean_list(data.get("topic_tags") or data.get("tags")),
-            "confidence": _clean_float(data.get("confidence")),
-            "raw_asr_ref": _clean_text(
-                data.get("raw_asr_ref") or ",".join(cue.cue_id for cue in cues if cue.cue_id)
-            ),
-            "asr_sentences": _cue_sentence_rows(cues),
-        }
-
-    def _caption_scene(self, *, video_id: str, video_path: str, segment: VideoSegment) -> Mapping[str, Any]:
-        media_path: str | None = video_path
-        media_type = "video"
-        frame_paths: tuple[str, ...] = ()
-        metadata: dict[str, Any] = {
-            "segment_id": segment.segment_id,
-            "start_sec": segment.start_sec,
-            "end_sec": segment.end_sec,
-            "nframes": int(self.caption_nframes),
-            "model_id": self.vl_model_id,
-        }
-        if self.frame_sampler is not None:
-            frame_paths = tuple(
-                self.frame_sampler(video_path, float(segment.start_sec), float(segment.end_sec), int(self.caption_nframes))
-            )
-            if frame_paths:
-                media_path = None
-                media_type = "video"
-                metadata["source_video_path"] = video_path
-                metadata["frame_cache_policy"] = "precomputed_2fps"
-                metadata["frame_count"] = len(frame_paths)
-        if not frame_paths and self.clip_root is not None:
-            clip_path = _clip_output_path(clip_root=self.clip_root, video_id=video_id, segment=segment)
-            media_path = self.clip_extractor(video_path, str(clip_path), segment.start_sec, segment.end_sec)
-            metadata["source_video_path"] = video_path
-            metadata["clip_path"] = media_path
+        cue_text = "\n".join(
+            f"{cue.cue_id or idx} [{cue.start_sec:.3f}-{cue.end_sec:.3f}s]: {cue.text}"
+            for idx, cue in enumerate(cues, start=1)
+        )
         response = self.backend.generate(
             BackendRequest(
-                task="caption_scene_segment",
+                task="build_root_dvc_index",
                 prompt=(
-                    "Caption only the visual content in this fixed video segment. "
-                    "Return JSON with caption, stage_tags, entities, grounding_quality. "
-                    "Do not include answer options or candidate option relations.\n"
-                    f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s"
+                    "You are building a navigation-only index for a five-minute video interval.\n\n"
+                    "You receive chronologically ordered video frames sampled at 1 FPS when available, "
+                    "and timestamped subtitle / ASR cues for the same interval.\n\n"
+                    "Return JSON with root_summary, 1 to MAX_BEATS chronological non-overlapping timeline beats, "
+                    "optional entity_hints, topic_tags, modality_hints, and limitations. For each beat, provide "
+                    "start_offset_sec and end_offset_sec relative to this interval. Summarize only visible or spoken "
+                    "content. Mark useful cues as visual, asr, ocr, or temporal. Do not answer a downstream question. "
+                    "This is a navigation index, not final evidence.\n\n"
+                    f"MAX_BEATS: {self.root_policy.max_beats_per_root}\n"
+                    f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s\n"
+                    f"Subtitles / ASR cues:\n{cue_text}"
                 ),
                 media_path=media_path,
                 media_type=media_type,
                 frames=frame_paths,
-                max_new_tokens=256,
-                metadata=metadata,
-            )
-        )
-        data = _parse_lenient_json(response.text)
-        if not data:
-            data = {"caption": response.text}
-        return {
-            "caption": _clean_generated_text(data.get("caption") or data.get("visual_caption") or "", "caption", "visual_caption"),
-            "stage_tags": _clean_list(data.get("stage_tags")),
-            "entities": _clean_list(data.get("entities")),
-            "grounding_quality": _clean_text(data.get("grounding_quality") or ""),
-        }
-
-    def _summarize_scene_map(
-        self,
-        *,
-        segment: VideoSegment,
-        asr_data: Mapping[str, Any],
-        visual_data: Mapping[str, Any],
-    ) -> str:
-        response = self.backend.generate(
-            BackendRequest(
-                task="summarize_scene_map_segment",
-                prompt=(
-                    "Create one short planner map line for this fixed video segment. "
-                    "Use the visual caption as the primary signal and subtitle/ASR only as supplementary context. "
-                    "Return JSON with summary only. The summary must be one sentence, under 22 words, "
-                    "and must not mention answer options, candidate answers, Tags, Entities, Visual, or ASR labels.\n"
-                    f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s\n"
-                    f"Visual caption: {_clean_text(visual_data.get('caption') or '')}\n"
-                    f"Subtitle/ASR summary: {_clean_text(asr_data.get('summary') or '')}"
-                ),
-                max_new_tokens=96,
+                max_new_tokens=512,
                 metadata={
+                    **metadata,
+                    "schema_version": self.schema_version,
                     "segment_id": segment.segment_id,
                     "start_sec": segment.start_sec,
                     "end_sec": segment.end_sec,
-                    "model_id": self.text_model_id,
+                    "cue_ids": [cue.cue_id for cue in cues if cue.cue_id],
+                    "model_id": self.vl_model_id,
+                    "frame_cache_fps": self.root_policy.frame_cache_fps,
+                    "max_pixels_per_frame": self.root_policy.max_pixels_per_frame,
+                    "max_beats_per_root": self.root_policy.max_beats_per_root,
                 },
             )
         )
         data = _parse_lenient_json(response.text)
-        summary = _clean_generated_text(data.get("summary") if data else response.text, "summary", "map_summary")
-        return summary or _fallback_map_summary(asr_data=asr_data, visual_data=visual_data)
+        if not data:
+            raise ValueError(f"Root DVC response for {segment.segment_id} was not valid JSON")
+        return data
 
+    def _root_media(
+        self,
+        *,
+        video_id: str,
+        video_path: str,
+        segment: VideoSegment,
+    ) -> tuple[str | None, str, tuple[str, ...], dict[str, Any]]:
+        media_path: str | None = video_path
+        media_type = "video"
+        frame_paths: tuple[str, ...] = ()
+        metadata: dict[str, Any] = {
+            "source_video_path": video_path,
+            "root_window_sec": self.root_policy.root_window_sec,
+        }
+        if self.frame_sampler is None:
+            raise ValueError("Root DVC requires a precomputed frame cache frame_sampler")
+        max_frames = int(round(max(1.0, segment.end_sec - segment.start_sec) * self.root_policy.frame_cache_fps))
+        frame_paths = tuple(self.frame_sampler(video_path, float(segment.start_sec), float(segment.end_sec), max_frames))
+        if not frame_paths:
+            raise ValueError("Root DVC requires non-empty cached frames from frame_sampler")
+        media_path = None
+        metadata["frame_cache_policy"] = "precomputed_2fps"
+        metadata["frame_count"] = len(frame_paths)
+        return media_path, media_type, frame_paths, metadata
 
 def subtitle_hash(cues: Sequence[SubtitleCue]) -> str:
     normalized = [
@@ -269,41 +234,115 @@ def subtitle_hash(cues: Sequence[SubtitleCue]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _merge_segment(
+def _merge_root_segment(
     segment: VideoSegment,
     *,
-    asr_data: Mapping[str, Any],
-    visual_data: Mapping[str, Any],
-    map_summary: str,
-    asr_source: str,
-    visual_source: str,
+    root_data: Mapping[str, Any],
+    cues: Sequence[SubtitleCue],
+    root_source: str,
+    max_beats: int,
 ) -> VideoSegment:
-    visual_caption = _clean_generated_text(visual_data.get("caption") or "", "caption", "visual_caption")
-    asr_summary = _clean_generated_text(asr_data.get("summary") or "", "summary", "asr_summary")
+    root_summary = _clean_generated_text(
+        root_data.get("root_summary") or root_data.get("summary") or "",
+        "root_summary",
+        "summary",
+    )
+    beats = _normalize_root_beats(
+        segment=segment,
+        beats=root_data.get("beats") or (),
+        max_beats=max_beats,
+    )
+    if not root_summary and beats:
+        root_summary = beats[0].summary
+    if not root_summary:
+        raise ValueError(f"Root DVC response for {segment.segment_id} did not include root_summary")
+
+    beat_entities = [hint for beat in beats for hint in beat.entity_hints]
+    root_entities = _clean_list(root_data.get("entities") or root_data.get("entity_hints"))
     return VideoSegment(
         segment_id=segment.segment_id,
         start_sec=segment.start_sec,
         end_sec=segment.end_sec,
         keyframe_path=segment.keyframe_path,
-        low_fps_caption=visual_caption,
-        source="dual_source_scene_index",
+        low_fps_caption=root_summary,
+        source="dvc_root_v1",
         source_segment_id=segment.segment_id,
-        visual_caption=visual_caption,
-        visual_caption_source=visual_source,
-        asr_summary=asr_summary,
-        asr_summary_source=asr_source,
-        map_summary=_clean_generated_text(map_summary, "summary", "map_summary"),
-        raw_asr_ref=_clean_text(asr_data.get("raw_asr_ref") or ""),
-        stage_tags=tuple(_clean_list(visual_data.get("stage_tags"))),
-        entities=tuple(
-            _unique([*_clean_list(asr_data.get("entities")), *_clean_list(visual_data.get("entities"))])
-        ),
-        topic_tags=tuple(_clean_list(asr_data.get("topic_tags"))),
-        confidence=_clean_float(asr_data.get("confidence")),
-        grounding_quality=_clean_text(visual_data.get("grounding_quality") or ""),
-        citation_provenance={"asr": "subtitle", "visual": "video"},
-        asr_sentences=tuple(dict(item) for item in asr_data.get("asr_sentences") or ()),
+        visual_caption=root_summary,
+        visual_caption_source=root_source,
+        asr_summary="",
+        asr_summary_source="subtitle_cues",
+        map_summary=root_summary,
+        raw_asr_ref=_clean_text(root_data.get("raw_asr_ref") or ",".join(cue.cue_id for cue in cues if cue.cue_id)),
+        entities=tuple(_unique([*root_entities, *beat_entities])),
+        topic_tags=tuple(_clean_list(root_data.get("topic_tags") or root_data.get("tags"))),
+        confidence=_clean_float(root_data.get("confidence")),
+        citation_provenance={"index": "navigation_only", "asr": "subtitle", "visual": "video"},
+        asr_sentences=_cue_sentence_rows(cues),
+        limitations=tuple(_clean_list(root_data.get("limitations"))),
+        index_level="root",
+        root_segment_id=segment.segment_id,
+        timeline_beats=beats,
+        refinement_state="coarse",
+        index_provenance={
+            "schema_version": "dvc_root_v1",
+            "source": root_source,
+            "navigation_only": True,
+        },
     )
+
+
+def _normalize_root_beats(
+    *,
+    segment: VideoSegment,
+    beats: Any,
+    max_beats: int | None = None,
+) -> tuple[TimelineBeat, ...]:
+    try:
+        raw_beats = list(beats)
+    except TypeError as exc:
+        raise ValueError(f"Root DVC beats for {segment.segment_id} must be a list") from exc
+    if max_beats is not None:
+        raw_beats = raw_beats[:max_beats]
+
+    normalized: list[TimelineBeat] = []
+    last_end = segment.start_sec
+    for index, item in enumerate(raw_beats, start=1):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"Root DVC beat {index} for {segment.segment_id} must be an object")
+        start = _beat_abs_time(segment=segment, item=item, key="start")
+        end = _beat_abs_time(segment=segment, item=item, key="end")
+        start = max(segment.start_sec, min(segment.end_sec, start))
+        end = max(segment.start_sec, min(segment.end_sec, end))
+        if end <= start:
+            raise ValueError(f"Root DVC beat {index} for {segment.segment_id} has empty duration")
+        if start < last_end:
+            raise ValueError(f"Root DVC beats for {segment.segment_id} must be chronological and non-overlapping")
+        summary = _clean_generated_text(item.get("summary") or "", "summary")
+        if not summary:
+            raise ValueError(f"Root DVC beat {index} for {segment.segment_id} is missing summary")
+        normalized.append(
+            TimelineBeat(
+                beat_id=_clean_text(item.get("beat_id") or f"{segment.segment_id}_b{index:02d}"),
+                start_sec=round(start, 3),
+                end_sec=round(end, 3),
+                summary=summary,
+                entity_hints=tuple(_clean_list(item.get("entity_hints"))),
+                modality_hints=tuple(_clean_modalities(item.get("modality_hints"))),
+                confidence=_clean_float(item.get("confidence")),
+                frame_refs=tuple(_clean_list(item.get("frame_refs"))),
+                limitations=tuple(_clean_list(item.get("limitations"))),
+            )
+        )
+        last_end = end
+    return tuple(normalized)
+
+
+def _beat_abs_time(*, segment: VideoSegment, item: Mapping[str, Any], key: str) -> float:
+    absolute_key = f"{key}_sec"
+    offset_key = f"{key}_offset_sec"
+    if offset_key in item:
+        return segment.start_sec + float(item[offset_key])
+    return float(item[absolute_key])
 
 
 def _clip_output_path(*, clip_root: Path, video_id: str, segment: VideoSegment) -> Path:
@@ -426,12 +465,6 @@ def _clean_generated_text(value: Any, *preferred_keys: str) -> str:
     return text
 
 
-def _fallback_map_summary(*, asr_data: Mapping[str, Any], visual_data: Mapping[str, Any]) -> str:
-    visual = _clean_generated_text(visual_data.get("caption") or "", "caption", "visual_caption")
-    asr = _clean_generated_text(asr_data.get("summary") or "", "summary", "asr_summary")
-    return _clean_text(visual or asr or "no coarse caption yet")
-
-
 def _clean_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -443,6 +476,11 @@ def _clean_list(value: Any) -> list[str]:
         except TypeError:
             items = [value]
     return _unique(_clean_text(item) for item in items)
+
+
+def _clean_modalities(value: Any) -> list[str]:
+    allowed = {"visual", "asr", "ocr", "temporal"}
+    return [item for item in _clean_list(value) if item in allowed]
 
 
 def _clean_float(value: Any) -> Optional[float]:

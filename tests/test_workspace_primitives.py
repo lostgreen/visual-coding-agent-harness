@@ -4,6 +4,8 @@ import pytest
 
 from visual_coding_agent_harness.memory import SourceAnchor
 from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
+from visual_coding_agent_harness.video_index import TimelineBeat
+from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -465,6 +467,81 @@ def test_plan_view_folds_large_sections_and_shows_read_workspace_hint(tmp_path: 
     assert "obs_0001 (search -> acknowledged): Search found a candidate buffer cue." in plan_view
     assert "## Budget" in plan_view
     assert "workspace tokens ~" in plan_view
+
+
+def test_plan_view_renders_compact_root_ledger_and_index_evidence_coverage(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_plan_view_index_coverage")
+    video_map = VideoMap(
+        video_path="/videos/demo.mp4",
+        duration_sec=90.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=60.0,
+                low_fps_caption="Root overview of a Central Europe map.",
+                timeline_beats=(
+                    TimelineBeat(
+                        beat_id="seg_0001_b01",
+                        start_sec=0.0,
+                        end_sec=20.0,
+                        summary="This beat should only appear through read_segment(index).",
+                    ),
+                ),
+            ),
+            VideoMapSegment(
+                segment_id="seg_0001_r_medium_0010000_0020000",
+                start_sec=10.0,
+                end_sec=20.0,
+                low_fps_caption="Fresh refined local map view.",
+                index_level="refined",
+                parent_segment_id="seg_0001",
+                root_segment_id="seg_0001",
+                refinement_state="refined",
+            ),
+        ],
+    )
+    observation = workspace.write_observation(
+        tool_name="read_segment",
+        claim="The shield remains visible.",
+        confidence=0.8,
+    )
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": "clip_anch_seg_0001",
+                    "kind": "visual",
+                    "source_kind": "visual_fact",
+                    "excerpt": "shield remains visible",
+                    "segment_id": "seg_0001",
+                    "start_sec": 10.0,
+                    "end_sec": 20.0,
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "answer_support",
+                    "claim": "The shield remains visible.",
+                    "anchor_ids": ["clip_anch_seg_0001"],
+                    "confidence": "high",
+                }
+            ],
+        },
+    )
+
+    plan_view = workspace.render_plan_view(question="Why?", video_map=video_map)
+
+    assert "## Root Index" in plan_view
+    assert "seg_0001 [0.0-60.0s] Root overview" in plan_view
+    assert "This beat should only appear" not in plan_view
+    assert "## Index Coverage" in plan_view
+    assert "root indexed: 0.0-60.0s (1 roots)" in plan_view
+    assert "refined: 10.0-20.0s" in plan_view
+    assert "Index coverage != evidence coverage" in plan_view
+    assert "## Evidence Coverage" in plan_view
+    assert "committed answer-support memories: 1" in plan_view
 
 
 def test_workspace_disposition_tools_and_read_workspace(tmp_path: Path):

@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field, replace
-from typing import Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
+from .backends.base import BackendRequest, VisionLanguageBackend
 from .text_norm import unique_tokens
-from .video_index import SceneIndex
+from .video_index import SceneIndex, TimelineBeat
+
+FrameSampler = Callable[[str, float, float, int], Sequence[str]]
 
 
 _CANONICAL_SEARCH_MODALITIES = ("caption", "asr", "ocr", "entities")
@@ -51,6 +55,12 @@ class VideoMapSegment:
     asr_sentences: Sequence[Mapping[str, object]] = field(default_factory=tuple)
     ocr_frames: Sequence[Mapping[str, object]] = field(default_factory=tuple)
     limitations: Sequence[str] = field(default_factory=tuple)
+    index_level: Literal["root", "refined"] = "root"
+    parent_segment_id: str | None = None
+    root_segment_id: str | None = None
+    timeline_beats: Sequence[TimelineBeat] = field(default_factory=tuple)
+    refinement_state: Literal["coarse", "refined"] = "coarse"
+    index_provenance: Mapping[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -67,6 +77,12 @@ class VideoMapSegment:
             "asr_sentences": [dict(item) for item in self.asr_sentences],
             "ocr_frames": [dict(item) for item in self.ocr_frames],
             "limitations": list(self.limitations),
+            "index_level": self.index_level,
+            "parent_segment_id": self.parent_segment_id,
+            "root_segment_id": self.root_segment_id,
+            "timeline_beats": [beat.to_dict() for beat in self.timeline_beats],
+            "refinement_state": self.refinement_state,
+            "index_provenance": dict(self.index_provenance),
         }
 
     def compact_text(self) -> str:
@@ -101,6 +117,32 @@ class VideoSearchResult:
 
 
 @dataclass(frozen=True)
+class IndexRefinementPatch:
+    patch_id: str
+    parent_segment_id: str
+    requested_start_sec: float
+    requested_end_sec: float
+    resolution: Literal["coarse", "medium", "dense"]
+    children: Sequence[VideoMapSegment]
+    cache_hit: bool
+    cost: Mapping[str, object] = field(default_factory=dict)
+    provenance: Mapping[str, object] = field(default_factory=dict)
+
+    def to_dict(self) -> Mapping[str, object]:
+        return {
+            "patch_id": self.patch_id,
+            "parent_segment_id": self.parent_segment_id,
+            "requested_start_sec": self.requested_start_sec,
+            "requested_end_sec": self.requested_end_sec,
+            "resolution": self.resolution,
+            "children": [child.to_dict() for child in self.children],
+            "cache_hit": self.cache_hit,
+            "cost": dict(self.cost),
+            "provenance": dict(self.provenance),
+        }
+
+
+@dataclass(frozen=True)
 class VideoMap:
     video_path: str
     duration_sec: float
@@ -123,6 +165,12 @@ class VideoMap:
                     asr_sentences=tuple(dict(item) for item in segment.asr_sentences),
                     ocr_frames=tuple(dict(item) for item in segment.ocr_frames),
                     limitations=tuple(str(item) for item in segment.limitations),
+                    index_level=segment.index_level,
+                    parent_segment_id=segment.parent_segment_id,
+                    root_segment_id=segment.root_segment_id,
+                    timeline_beats=tuple(segment.timeline_beats),
+                    refinement_state=segment.refinement_state,
+                    index_provenance=dict(segment.index_provenance),
                     entities=_unique_texts([*segment.entities, *segment.topic_tags, *segment.stage_tags]),
                 )
                 for segment in scene_index.segments
@@ -456,6 +504,7 @@ class VideoMapStore:
 
     def __init__(self, video_map: VideoMap) -> None:
         self.current = video_map
+        self._refinement_registry: dict[tuple[str, float, float, str], IndexRefinementPatch] = {}
 
     def update_segment(
         self,
@@ -508,13 +557,19 @@ class VideoMapStore:
                     segment_id=f"{parent.segment_id}_z{child_index:02d}",
                     start_sec=round(child_start, 3),
                     end_sec=round(child_end, 3),
-                    source=f"zoom:{parent.segment_id}",
+                    source=f"structural_zoom:{parent.segment_id}",
                     keyframe_paths=list(parent.keyframe_paths),
                     low_fps_caption=parent.low_fps_caption,
                     asr_text=parent.asr_text,
                     ocr_text=parent.ocr_text,
                     entities=list(parent.entities),
                     embedding_refs=list(parent.embedding_refs),
+                    index_level=parent.index_level,
+                    parent_segment_id=parent.segment_id,
+                    root_segment_id=parent.root_segment_id or parent.segment_id,
+                    limitations=(
+                        "structural child only; no local perception was performed",
+                    ),
                 )
             )
             child_start = child_end
@@ -531,3 +586,297 @@ class VideoMapStore:
                 updated_segments.append(child)
         self.current = replace(self.current, segments=updated_segments)
         return children
+
+    def apply_refinement(
+        self,
+        *,
+        parent_segment_id: str,
+        requested_start_sec: float,
+        requested_end_sec: float,
+        resolution: Literal["coarse", "medium", "dense"],
+        children: Sequence[VideoMapSegment],
+        provenance: Mapping[str, object],
+    ) -> IndexRefinementPatch:
+        parent = self.current.get(parent_segment_id)
+        if parent.index_level != "root":
+            raise ValueError("Index refinement requires a root parent")
+        start = round(float(requested_start_sec), 3)
+        end = round(float(requested_end_sec), 3)
+        if end <= start:
+            raise ValueError("requested refinement range must be non-empty")
+        if start < float(parent.start_sec) or end > float(parent.end_sec):
+            raise ValueError("requested refinement range must stay within parent segment")
+        key = (parent.segment_id, start, end, str(resolution))
+        cached = self._refinement_registry.get(key)
+        if cached is not None:
+            return replace(cached, cache_hit=True)
+
+        normalized_children = []
+        last_end = start
+        for child in children:
+            if child.index_level != "refined":
+                raise ValueError("refinement children must have index_level='refined'")
+            if child.end_sec <= child.start_sec:
+                raise ValueError("refinement children must have non-empty duration")
+            if child.start_sec < last_end:
+                raise ValueError("refinement children must be chronological and non-overlapping")
+            if child.start_sec < parent.start_sec or child.end_sec > parent.end_sec:
+                raise ValueError("refinement children must stay within parent segment")
+            if child.start_sec < start or child.end_sec > end:
+                raise ValueError("refinement children must stay within requested range")
+            if child.low_fps_caption and child.low_fps_caption == parent.low_fps_caption:
+                raise ValueError("refinement child must not copy parent caption")
+            normalized_children.append(
+                replace(
+                    child,
+                    parent_segment_id=parent.segment_id,
+                    root_segment_id=parent.root_segment_id or parent.segment_id,
+                    refinement_state="refined",
+                    index_level="refined",
+                )
+            )
+            last_end = child.end_sec
+        patch = IndexRefinementPatch(
+            patch_id=_refinement_patch_id(parent.segment_id, start, end, str(resolution)),
+            parent_segment_id=parent.segment_id,
+            requested_start_sec=start,
+            requested_end_sec=end,
+            resolution=resolution,
+            children=tuple(normalized_children),
+            cache_hit=False,
+            provenance=dict(provenance),
+        )
+        existing_by_id = {segment.segment_id: segment for segment in self.current.segments}
+        updated_segments = list(self.current.segments)
+        for child in normalized_children:
+            if child.segment_id in existing_by_id:
+                updated_segments = [
+                    child if segment.segment_id == child.segment_id else segment for segment in updated_segments
+                ]
+            else:
+                updated_segments.append(child)
+        self.current = replace(self.current, segments=updated_segments)
+        self._refinement_registry[key] = patch
+        return patch
+
+
+class IndexRefiner:
+    """Fresh local perception for one root range, using only an existing frame sampler."""
+
+    def __init__(
+        self,
+        *,
+        backend: VisionLanguageBackend,
+        frame_sampler: FrameSampler | None = None,
+    ) -> None:
+        self.backend = backend
+        self.frame_sampler = frame_sampler
+
+    def refine(
+        self,
+        store: VideoMapStore,
+        *,
+        parent_segment_id: str,
+        requested_start_sec: float,
+        requested_end_sec: float,
+        resolution: Literal["coarse", "medium", "dense"] = "medium",
+        focus: Sequence[str] = (),
+    ) -> IndexRefinementPatch:
+        parent = store.current.get(parent_segment_id)
+        if parent.index_level != "root":
+            raise ValueError("Index refinement requires a root parent")
+        start = float(requested_start_sec)
+        end = float(requested_end_sec)
+        max_frames = max(1, int(round(end - start)))
+        frames = tuple(self.frame_sampler(store.current.video_path, start, end, max_frames)) if self.frame_sampler else ()
+        response = self.backend.generate(
+            BackendRequest(
+                task="refine_segment_index",
+                prompt=(
+                    "Create a navigation-only local DVC index for this root video range. "
+                    "Return JSON with children. Each child needs start_sec, end_sec, summary, optional beats, "
+                    "entity_hints, modality_hints, and limitations. Do not answer the question; this is not evidence.\n"
+                    f"Parent: {parent.segment_id} [{parent.start_sec:.3f}, {parent.end_sec:.3f}]\n"
+                    f"Requested: [{start:.3f}, {end:.3f}], resolution={resolution}\n"
+                    f"Focus: {', '.join(str(item) for item in focus)}"
+                ),
+                media_type="video",
+                frames=frames,
+                max_new_tokens=512,
+                metadata={
+                    "tool": "read_segment",
+                    "mode": "refine",
+                    "parent_segment_id": parent.segment_id,
+                    "start_sec": start,
+                    "end_sec": end,
+                    "resolution": resolution,
+                    "frame_cache_policy": "existing_cache_only",
+                    "frame_count": len(frames),
+                },
+            )
+        )
+        data = _parse_json_mapping(response.text)
+        children = _refinement_children_from_payload(
+            payload=data,
+            parent=parent,
+            requested_start_sec=start,
+            requested_end_sec=end,
+            resolution=resolution,
+        )
+        return store.apply_refinement(
+            parent_segment_id=parent.segment_id,
+            requested_start_sec=start,
+            requested_end_sec=end,
+            resolution=resolution,
+            children=children,
+            provenance={
+                "backend_task": "refine_segment_index",
+                "fresh_local_perception": True,
+                "frame_cache_only": True,
+                "frame_count": len(frames),
+            },
+        )
+
+
+def _refinement_children_from_payload(
+    *,
+    payload: Mapping[str, Any],
+    parent: VideoMapSegment,
+    requested_start_sec: float,
+    requested_end_sec: float,
+    resolution: str,
+) -> tuple[VideoMapSegment, ...]:
+    raw_children = payload.get("children") if isinstance(payload.get("children"), Sequence) else ()
+    children = []
+    for index, item in enumerate(raw_children, start=1):
+        if not isinstance(item, Mapping):
+            continue
+        start = float(item.get("start_sec", requested_start_sec))
+        end = float(item.get("end_sec", requested_end_sec))
+        summary = _clean_text(item.get("summary") or item.get("caption") or "")
+        if not summary:
+            continue
+        child_id = _refined_child_id(parent.segment_id, str(resolution), start, end)
+        children.append(
+            VideoMapSegment(
+                segment_id=child_id,
+                start_sec=round(start, 3),
+                end_sec=round(end, 3),
+                source="dvc_refined_v1",
+                low_fps_caption=summary,
+                asr_text=str(item.get("asr_text") or ""),
+                ocr_text=str(item.get("ocr_text") or ""),
+                entities=_unique_texts(
+                    [*_clean_list(item.get("entities")), *_clean_list(item.get("entity_hints"))]
+                ),
+                asr_sentences=_rows_in_range(parent.asr_sentences, start, end),
+                ocr_frames=_rows_in_range(parent.ocr_frames, start, end),
+                limitations=tuple(_clean_list(item.get("limitations"))),
+                index_level="refined",
+                parent_segment_id=parent.segment_id,
+                root_segment_id=parent.root_segment_id or parent.segment_id,
+                timeline_beats=_beats_from_payload(item.get("beats") or (), segment_id=child_id),
+                refinement_state="refined",
+                index_provenance={
+                    "schema_version": "dvc_refined_v1",
+                    "fresh_local_perception": True,
+                    "resolution": str(resolution),
+                },
+            )
+        )
+    if children:
+        return tuple(children)
+    return (
+        VideoMapSegment(
+            segment_id=_refined_child_id(parent.segment_id, str(resolution), requested_start_sec, requested_end_sec),
+            start_sec=round(requested_start_sec, 3),
+            end_sec=round(requested_end_sec, 3),
+            source="dvc_refined_v1",
+            low_fps_caption=_clean_text(payload.get("summary") or "local refined index"),
+            index_level="refined",
+            parent_segment_id=parent.segment_id,
+            root_segment_id=parent.root_segment_id or parent.segment_id,
+            refinement_state="refined",
+            index_provenance={"schema_version": "dvc_refined_v1", "fresh_local_perception": True},
+        ),
+    )
+
+
+def _beats_from_payload(value: Any, *, segment_id: str) -> tuple[TimelineBeat, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    beats = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, Mapping):
+            continue
+        beats.append(
+            TimelineBeat(
+                beat_id=str(item.get("beat_id") or f"{segment_id}_b{index:02d}"),
+                start_sec=float(item.get("start_sec", 0.0)),
+                end_sec=float(item.get("end_sec", 0.0)),
+                summary=_clean_text(item.get("summary") or ""),
+                entity_hints=tuple(_clean_list(item.get("entity_hints"))),
+                modality_hints=tuple(
+                    modality
+                    for modality in _clean_list(item.get("modality_hints"))
+                    if modality in {"visual", "asr", "ocr", "temporal"}
+                ),
+                confidence=float(item["confidence"]) if item.get("confidence") is not None else None,
+                frame_refs=tuple(_clean_list(item.get("frame_refs"))),
+                limitations=tuple(_clean_list(item.get("limitations"))),
+            )
+        )
+    return tuple(beats)
+
+
+def _refinement_patch_id(parent_segment_id: str, start_sec: float, end_sec: float, resolution: str) -> str:
+    return f"{parent_segment_id}_patch_{resolution}_{_sec_id(start_sec)}_{_sec_id(end_sec)}"
+
+
+def _refined_child_id(parent_segment_id: str, resolution: str, start_sec: float, end_sec: float) -> str:
+    return f"{parent_segment_id}_r_{resolution}_{_sec_id(start_sec)}_{_sec_id(end_sec)}"
+
+
+def _sec_id(value: float) -> str:
+    return f"{int(round(float(value) * 1000)):07d}"
+
+
+def _parse_json_mapping(text: str) -> Mapping[str, Any]:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text or "", flags=re.DOTALL)
+        if not match:
+            return {}
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {}
+    return parsed if isinstance(parsed, Mapping) else {}
+
+
+def _clean_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _clean_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [value]
+    else:
+        try:
+            items = list(value)
+        except TypeError:
+            items = [value]
+    return _unique_texts([_clean_text(item) for item in items])
+
+
+def _rows_in_range(rows: Sequence[Mapping[str, object]], start_sec: float, end_sec: float) -> tuple[Mapping[str, object], ...]:
+    filtered = []
+    for row in rows:
+        row_start = float(row.get("start_sec", start_sec) or start_sec)
+        row_end = float(row.get("end_sec", row_start) or row_start)
+        if row_start < end_sec and row_end > start_sec:
+            filtered.append(dict(row))
+    return tuple(filtered)

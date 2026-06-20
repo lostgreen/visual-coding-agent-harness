@@ -148,6 +148,7 @@ def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
         "defer_observation",
         "no_commit_needed",
         "read_clip",
+        "read_segment",
         "search",
         "list",
         "verify",
@@ -162,6 +163,8 @@ def test_video_exploration_registry_installs_runtime_specs(tmp_path) -> None:
     assert registry.get_runtime_spec("vision_read").commit_required is True
     assert registry.get_runtime_spec("verify_segment_anchors").commit_required is True
     assert registry.get_runtime_spec("read_clip").commit_required is True
+    assert registry.get_runtime_spec("read_segment").commit_required is False
+    assert registry.get_runtime_spec("read_segment").commit_required_predicate is not None
     assert registry.get_runtime_spec("verify").commit_required is False
     assert registry.get_runtime_spec("verify").commit_required_predicate is not None
     assert registry.get_runtime_spec("synthesize_memory").commit_required is False

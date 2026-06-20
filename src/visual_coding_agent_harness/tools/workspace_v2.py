@@ -7,10 +7,19 @@ from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
-from ..video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_modalities, search_modality_limitations
+from ..video_map import (
+    IndexRefiner,
+    VideoMap,
+    VideoMapSegment,
+    VideoMapStore,
+    _resolve_search_modalities,
+    search_modality_limitations,
+)
 from ..workspace import EvidenceWorkspace
 from .runtime_specs import (
     _normalize_read_clip,
+    _normalize_read_segment,
+    _read_segment_semantic_key,
     _normalize_workspace_v2_answer,
     _normalize_workspace_v2_list,
     _normalize_workspace_v2_search,
@@ -29,11 +38,45 @@ def build_workspace_v2_registry(
     backend: VisionLanguageBackend,
     workspace: Optional[EvidenceWorkspace] = None,
     include_workspace_primitives: bool = True,
+    index_refiner: IndexRefiner | None = None,
 ) -> ToolRegistry:
     """Build the compact v2 registry: read_clip/search/list/verify/answer plus dispositions."""
 
     video_map_store = video_map if isinstance(video_map, VideoMapStore) else VideoMapStore(video_map)
+    segment_read_service = SegmentReadService(
+        video_map_store=video_map_store,
+        backend=backend,
+        index_refiner=index_refiner or IndexRefiner(backend=backend),
+        workspace=workspace,
+    )
     registry = ToolRegistry()
+
+    @tool(name="read_segment", description="Progressively read a video segment index, refinement, or verified evidence.")
+    def read_segment(
+        segment_id: str,
+        mode: str = "index",
+        sub_window: Mapping[str, float] | None = None,
+        resolution: str = "medium",
+        evidence_mode: str = "visual",
+        focus: Sequence[str] = (),
+    ) -> Mapping[str, object]:
+        if mode == "index":
+            return segment_read_service.read_index(segment_id=segment_id)
+        if mode == "refine":
+            return segment_read_service.refine_index(
+                segment_id=segment_id,
+                sub_window=sub_window,
+                resolution=resolution,
+                focus=focus,
+            )
+        if mode == "verify":
+            return segment_read_service.verify_evidence(
+                segment_id=segment_id,
+                sub_window=sub_window,
+                evidence_mode=evidence_mode,
+                focus=focus,
+            )
+        raise ValueError(f"read_segment_failed: unknown mode={mode}")
 
     @tool(name="read_clip", description="Read facts from a video clip without choosing an answer option.")
     def read_clip(
@@ -41,80 +84,14 @@ def build_workspace_v2_registry(
         focus: Sequence[str] = (),
         sampling: Mapping[str, Any] | None = None,
     ) -> Mapping[str, object]:
-        current = video_map_store.current
-        segment = _segment_from_scope(current, scope)
-        start_sec, end_sec = _time_range_from_scope(scope, segment)
-        focus_items = [str(item).strip() for item in focus if str(item).strip()]
-        ask_for = "; ".join(focus_items) or "Return concise visible/audio/OCR facts from this clip."
-        sampling_payload = dict(sampling or {})
-        response = backend.generate(
-            BackendRequest(
-                task="vision_read",
-                prompt=_read_clip_prompt(
-                    segment_id=segment.segment_id,
-                    start_sec=start_sec,
-                    end_sec=end_sec,
-                    focus=ask_for,
-                ),
-                media_path=current.video_path,
-                media_type="video",
-                max_new_tokens=384,
-                metadata={
-                    "tool": "read_clip",
-                    "segment_id": segment.segment_id,
-                    "start_sec": start_sec,
-                    "end_sec": end_sec,
-                    "focus": focus_items,
-                    "sampling": sampling_payload,
-                },
-            )
+        return _read_clip_evidence(
+            video_map_store=video_map_store,
+            backend=backend,
+            scope=scope,
+            focus=focus,
+            sampling=sampling,
+            tool_name="read_clip",
         )
-        fact_text = str(response.text or "").strip()
-        raw_backend = dict(response.raw or {})
-        fallback_source_kind = _source_kind_from_backend(raw_backend, focus_items)
-        facts = _facts_from_backend_response(
-            text=fact_text,
-            raw_backend=raw_backend,
-            fallback_source_kind=fallback_source_kind,
-            time_range=[start_sec, end_sec],
-        )
-        base_anchor_id = f"clip_anch_{segment.segment_id}_{int(start_sec * 1000):08d}_{int(end_sec * 1000):08d}"
-        produced_anchors = []
-        for index, fact in enumerate(facts):
-            source_kind = str(fact.get("source_kind") or fallback_source_kind)
-            anchor_id = base_anchor_id if len(facts) == 1 else f"{base_anchor_id}_{index + 1:02d}"
-            produced_anchors.append(
-                {
-                    "anchor_id": anchor_id,
-                    "observation_id": "__pending__",
-                    "source_kind": source_kind,
-                    "segment_id": segment.segment_id,
-                    "start_sec": start_sec,
-                    "end_sec": end_sec,
-                    "field_path": f"facts[{index}].text",
-                    "excerpt": str(fact.get("text") or ""),
-                    "frame_refs": list(fact.get("frames_used") or []),
-                    "modality": _anchor_modality(source_kind),
-                }
-            )
-        return {
-            "claim": fact_text,
-            "confidence": 0.74,
-            "facts": facts,
-            "regions": [
-                {
-                    "segment_id": segment.segment_id,
-                    "start_sec": start_sec,
-                    "end_sec": end_sec,
-                    "focus": focus_items,
-                }
-            ],
-            "time_range": [start_sec, end_sec],
-            "candidate_anchor_ids": [str(anchor["anchor_id"]) for anchor in produced_anchors],
-            "produced_anchors": produced_anchors,
-            "limitations": "Facts-only clip read; no answer option vote is emitted.",
-            "raw_backend": raw_backend,
-        }
 
     @tool(name="search", description="Search substrate indexes and return candidate-only hits.")
     def search(
@@ -152,8 +129,9 @@ def build_workspace_v2_registry(
                 "needs_local_read": True,
                 "must_commit_as": "retrieval_candidate",
                 "cannot_final_cite": True,
-                "recommended_next_tool": "read_clip",
-                "recommended_scope": {"time_range": time_range},
+                "recommended_next_tool": "read_segment",
+                "recommended_mode": "verify",
+                "recommended_scope": {"segment_id": result.segment.segment_id, "sub_window": {"start_sec": time_range[0], "end_sec": time_range[1]}},
                 "score": result.score,
             }
             results.append(row)
@@ -315,6 +293,15 @@ def build_workspace_v2_registry(
 
     registry.register(
         ToolRuntimeSpec(
+            tool_spec=read_segment,
+            argument_normalizer=_normalize_read_segment,
+            semantic_key_builder=_read_segment_semantic_key,
+            duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+            commit_required_predicate=_read_segment_verify_has_evidence,
+        )
+    )
+    registry.register(
+        ToolRuntimeSpec(
             tool_spec=read_clip,
             argument_normalizer=_normalize_read_clip,
             semantic_key_builder=_static_key("read_clip"),
@@ -366,6 +353,218 @@ def build_workspace_v2_registry(
     if include_workspace_primitives:
         registry.extend(build_workspace_primitives_registry(workspace=workspace))
     return registry
+
+
+class SegmentReadService:
+    def __init__(
+        self,
+        *,
+        video_map_store: VideoMapStore,
+        backend: VisionLanguageBackend,
+        index_refiner: IndexRefiner,
+        workspace: EvidenceWorkspace | None = None,
+    ) -> None:
+        self.video_map_store = video_map_store
+        self.backend = backend
+        self.index_refiner = index_refiner
+        self.workspace = workspace
+
+    def read_index(self, *, segment_id: str) -> Mapping[str, object]:
+        current = self.video_map_store.current
+        segment = current.get(segment_id)
+        children = [
+            child
+            for child in current.segments
+            if child.parent_segment_id == segment.segment_id and child.index_level == "refined"
+        ]
+        return {
+            "claim": f"Read navigation index for {segment.segment_id}.",
+            "confidence": 1.0,
+            "mode": "index",
+            "segment_id": segment.segment_id,
+            "index_level": segment.index_level,
+            "root_summary": segment.low_fps_caption,
+            "timeline_beats": [beat.to_dict() for beat in segment.timeline_beats],
+            "asr_cue_count": len(segment.asr_sentences),
+            "ocr_hint_count": len(segment.ocr_frames),
+            "children": [child.segment_id for child in children],
+            "regions": [segment.to_dict()],
+            "produced_anchors": [],
+            "commit_required": False,
+            "limitations": ["navigation only; not answer evidence"],
+        }
+
+    def refine_index(
+        self,
+        *,
+        segment_id: str,
+        sub_window: Mapping[str, float] | None,
+        resolution: str,
+        focus: Sequence[str],
+    ) -> Mapping[str, object]:
+        parent = self.video_map_store.current.get(segment_id)
+        start_sec, end_sec = _sub_window_range(sub_window, parent)
+        patch = self.index_refiner.refine(
+            self.video_map_store,
+            parent_segment_id=segment_id,
+            requested_start_sec=start_sec,
+            requested_end_sec=end_sec,
+            resolution=_resolution(resolution),
+            focus=focus,
+        )
+        if self.workspace is not None:
+            self.workspace.write_trace_event(
+                "index_refinement_cache_hit" if patch.cache_hit else "index_refinement_created",
+                {
+                    "patch_id": patch.patch_id,
+                    "parent_segment_id": segment_id,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "resolution": resolution,
+                },
+            )
+        return {
+            "claim": f"Refined navigation index for {segment_id} [{start_sec:.1f}, {end_sec:.1f}]s.",
+            "confidence": 1.0,
+            "mode": "refine",
+            "patch": patch.to_dict(),
+            "regions": [child.to_dict() for child in patch.children],
+            "produced_anchors": [],
+            "commit_required": False,
+            "limitations": ["navigation only; not answer evidence"],
+        }
+
+    def verify_evidence(
+        self,
+        *,
+        segment_id: str,
+        sub_window: Mapping[str, float] | None,
+        evidence_mode: str,
+        focus: Sequence[str],
+    ) -> Mapping[str, object]:
+        parent = self.video_map_store.current.get(segment_id)
+        start_sec, end_sec = _sub_window_range(sub_window, parent)
+        if self.workspace is not None:
+            self.workspace.write_trace_event(
+                "segment_verify_dispatched",
+                {
+                    "segment_id": segment_id,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "evidence_mode": evidence_mode,
+                },
+            )
+        focus_items = [str(evidence_mode).strip(), *[str(item).strip() for item in focus if str(item).strip()]]
+        result = _read_clip_evidence(
+            video_map_store=self.video_map_store,
+            backend=self.backend,
+            scope={"segment_id": segment_id, "time_range": [start_sec, end_sec]},
+            focus=focus_items,
+            sampling={},
+            tool_name="read_segment",
+        )
+        return {**result, "mode": "verify", "evidence_mode": evidence_mode}
+
+
+def _read_clip_evidence(
+    *,
+    video_map_store: VideoMapStore,
+    backend: VisionLanguageBackend,
+    scope: Mapping[str, Any],
+    focus: Sequence[str],
+    sampling: Mapping[str, Any] | None,
+    tool_name: str,
+) -> Mapping[str, object]:
+    current = video_map_store.current
+    segment = _segment_from_scope(current, scope)
+    start_sec, end_sec = _time_range_from_scope(scope, segment)
+    focus_items = [str(item).strip() for item in focus if str(item).strip()]
+    ask_for = "; ".join(focus_items) or "Return concise visible/audio/OCR facts from this clip."
+    sampling_payload = dict(sampling or {})
+    response = backend.generate(
+        BackendRequest(
+            task="vision_read",
+            prompt=_read_clip_prompt(
+                segment_id=segment.segment_id,
+                start_sec=start_sec,
+                end_sec=end_sec,
+                focus=ask_for,
+            ),
+            media_path=current.video_path,
+            media_type="video",
+            max_new_tokens=384,
+            metadata={
+                "tool": tool_name,
+                "segment_id": segment.segment_id,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "focus": focus_items,
+                "sampling": sampling_payload,
+            },
+        )
+    )
+    fact_text = str(response.text or "").strip()
+    raw_backend = dict(response.raw or {})
+    fallback_source_kind = _source_kind_from_backend(raw_backend, focus_items)
+    facts = _facts_from_backend_response(
+        text=fact_text,
+        raw_backend=raw_backend,
+        fallback_source_kind=fallback_source_kind,
+        time_range=[start_sec, end_sec],
+    )
+    base_anchor_id = f"clip_anch_{segment.segment_id}_{int(start_sec * 1000):08d}_{int(end_sec * 1000):08d}"
+    produced_anchors = []
+    for index, fact in enumerate(facts):
+        source_kind = str(fact.get("source_kind") or fallback_source_kind)
+        anchor_id = base_anchor_id if len(facts) == 1 else f"{base_anchor_id}_{index + 1:02d}"
+        produced_anchors.append(
+            {
+                "anchor_id": anchor_id,
+                "observation_id": "__pending__",
+                "source_kind": source_kind,
+                "segment_id": segment.segment_id,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "field_path": f"facts[{index}].text",
+                "excerpt": str(fact.get("text") or ""),
+                "frame_refs": list(fact.get("frames_used") or []),
+                "modality": _anchor_modality(source_kind),
+            }
+        )
+    return {
+        "claim": fact_text,
+        "confidence": 0.74,
+        "facts": facts,
+        "regions": [
+            {
+                "segment_id": segment.segment_id,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "focus": focus_items,
+            }
+        ],
+        "time_range": [start_sec, end_sec],
+        "candidate_anchor_ids": [str(anchor["anchor_id"]) for anchor in produced_anchors],
+        "produced_anchors": produced_anchors,
+        "limitations": "Facts-only clip read; no answer option vote is emitted.",
+        "raw_backend": raw_backend,
+    }
+
+
+def _sub_window_range(sub_window: Mapping[str, float] | None, segment: VideoMapSegment) -> tuple[float, float]:
+    payload = dict(sub_window or {})
+    start_sec = float(payload.get("start_sec", segment.start_sec))
+    end_sec = float(payload.get("end_sec", segment.end_sec))
+    if start_sec < segment.start_sec or end_sec > segment.end_sec or end_sec <= start_sec:
+        raise ValueError("read_segment_failed: sub_window must be non-empty and within the root segment")
+    return start_sec, end_sec
+
+
+def _resolution(value: str) -> Any:
+    text = str(value or "medium").strip()
+    if text not in {"coarse", "medium", "dense"}:
+        raise ValueError("read_segment_failed: resolution must be coarse, medium, or dense")
+    return text
 
 
 def _segment_from_scope(video_map: VideoMap, scope: Mapping[str, Any]) -> VideoMapSegment:
@@ -534,6 +733,13 @@ def _search_has_evidence(output: Mapping[str, Any]) -> bool:
         if excerpt and excerpt != segment_id:
             return True
     return False
+
+
+def _read_segment_verify_has_evidence(output: Mapping[str, Any]) -> bool:
+    if str(output.get("mode") or "") != "verify":
+        return False
+    anchors = output.get("produced_anchors") or ()
+    return isinstance(anchors, Sequence) and not isinstance(anchors, (str, bytes)) and bool(anchors)
 
 
 def _verify_has_rejection_evidence(output: Mapping[str, Any]) -> bool:
