@@ -114,11 +114,13 @@ class WorkspaceVisualAgent:
                 last_tool_result = f"{observation.observation_id}: {observation.claim}"
 
             if observation_id and self._commit_required(_tool_name(plan_action), observation):
-                self._run_commit_phase(
+                commit_result = self._run_commit_phase(
                     question=question,
                     observation_id=observation_id,
                     round_number=round_number,
                 )
+                if commit_result:
+                    last_tool_result = commit_result
             elif observation_id and self.workspace.observation_status(observation_id) == "uncommitted":
                 self.workspace.no_commit_needed(observation_id, reason="tool output did not require durable commit")
 
@@ -259,7 +261,7 @@ class WorkspaceVisualAgent:
             )
             return {"tool": "answer", "args": {"text": str(response.text or "").strip(), "citations": [], "confidence": "low"}}
 
-    def _run_commit_phase(self, *, question: str, observation_id: str, round_number: int) -> None:
+    def _run_commit_phase(self, *, question: str, observation_id: str, round_number: int) -> str:
         validation_error = ""
         for attempt in range(1, 4):
             prompt_mode = "minimal" if attempt == 3 else "full"
@@ -303,7 +305,7 @@ class WorkspaceVisualAgent:
                     observation_id=observation_id,
                 )
                 self.registry.execute(_tool_name(commit_action), args)
-                return
+                return _latest_disposition_summary(self.workspace, observation_id)
             except (ToolError, ValueError) as exc:
                 validation_error = str(exc)
                 self.workspace.write_trace_event(
@@ -322,6 +324,7 @@ class WorkspaceVisualAgent:
             observation,
             reason=f"commit_format_failure: {validation_error}",
         )
+        return _latest_disposition_summary(self.workspace, observation_id)
 
     def _auto_pin_observation(self, observation: Any, *, reason: str) -> None:
         raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
@@ -564,6 +567,7 @@ def compose_plan_prompt(
             "Return exactly one JSON object. Do not explain.",
             'If Committed Memory is empty, start with {"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"index"}} unless a better root segment is already known.',
             'If Last Tool Result starts with "answer rejected", the next tool must be read_segment, search, list, read_workspace, or verify.',
+            'If Last Tool Result starts with "observation rejected", change segment, sub_window, evidence_mode, or focus; do not repeat the same verify.',
             'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',
             _synthesize_memory_availability(workspace),
             'Use {"tool":"answer","args":{"text":"<selected option>","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory exists.',
@@ -810,6 +814,9 @@ def _normalized_disposition_args(
 ) -> dict[str, Any]:
     tool_name = _tool_name(action)
     args = _action_args(action)
+    if "observation_id" not in args and args.get("obs_id"):
+        args["observation_id"] = args["obs_id"]
+    args.pop("obs_id", None)
     args.setdefault("observation_id", observation_id)
     if tool_name != "commit_observation":
         if tool_name in {"reject_observation", "no_commit_needed"}:
@@ -829,6 +836,22 @@ def _normalized_disposition_args(
     if not legacy_writes:
         raise ValueError(_commit_writes_schema_error())
     return {"observation_id": str(args.get("observation_id") or observation_id), "writes": legacy_writes}
+
+
+def _latest_disposition_summary(workspace: EvidenceWorkspace, observation_id: str) -> str:
+    status = workspace.observation_status(observation_id)
+    details = ""
+    for item in reversed(workspace.observation_dispositions()):
+        if str(item.get("observation_id") or "") != str(observation_id):
+            continue
+        reason = str(item.get("reason") or "").strip()
+        until = str(item.get("until") or "").strip()
+        if reason:
+            details = f": {reason}"
+        elif until:
+            details = f": until={until}"
+        break
+    return f"observation {status}: {observation_id}{details}"
 
 
 def _commit_writes_schema_error() -> str:

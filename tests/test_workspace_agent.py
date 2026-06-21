@@ -1022,6 +1022,34 @@ def test_workspace_agent_treats_disposition_field_as_commit_tool(tmp_path: Path)
     assert workspace.memory_entries() == []
 
 
+def test_workspace_agent_accepts_obs_id_alias_and_surfaces_rejection_to_next_plan(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_commit_obs_id_alias")
+    backend = ScriptedWorkspaceV2Backend(
+        plan_responses=[
+            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"answer","args":{"text":"D","citations":[],"confidence":"low"}}',
+        ],
+        commit_responses=[
+            '{"tool":"reject_observation","args":{"obs_id":"obs_0001","reason":"not answer support yet"}}',
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=2)
+
+    agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    assert workspace.observation_status("obs_0001") == "rejected"
+    validation_errors = [
+        event
+        for event in workspace._read_jsonl_dicts("trace.jsonl")
+        if event["type"] == "workspace_commit_validation_error"
+    ]
+    assert validation_errors == []
+    second_plan = [request for request in backend.requests if request.task == "workspace_plan"][1]
+    assert "observation rejected: obs_0001" in second_plan.prompt
+    assert "not answer support yet" in second_plan.prompt
+
+
 def test_workspace_agent_auto_pins_after_unparseable_commit_response(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_unparseable_commit")
     backend = ScriptedWorkspaceV2Backend(
