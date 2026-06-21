@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import urllib.error
 
 import pytest
@@ -251,6 +252,31 @@ def test_openai_chat_backend_gemini_gateway_reads_headers_from_env(monkeypatch):
     assert response.raw["api_base_set"] is True
     assert response.raw["api_key_set"] is True
     assert response.raw["user_key_set"] is True
+
+
+def test_openai_chat_backend_applies_proxy_env_only_during_request(monkeypatch):
+    captured = {}
+    monkeypatch.delenv("http_proxy", raising=False)
+
+    def fake_urlopen(request, timeout):
+        del request, timeout
+        captured["http_proxy"] = os.environ.get("http_proxy")
+        return FakeHTTPResponse({"choices": [{"message": {"content": '{"answer":"A"}'}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(
+        api_base="http://planner-host:8000/v1",
+        model="Qwen3.5-9B",
+        proxy_env={"http_proxy": "http://proxy.internal:11080"},
+    )
+
+    backend.generate(BackendRequest(task="answer_from_evidence", prompt="Answer."))
+
+    assert captured["http_proxy"] == "http://proxy.internal:11080"
+    assert "http_proxy" not in os.environ
 
 
 def test_openai_chat_backend_media_video_requires_sampled_frames_when_enabled(monkeypatch):

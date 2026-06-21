@@ -76,6 +76,7 @@ class EvalConfig:
     planner_api_user_key_env: str = ""
     planner_api_biz_scene_env: str = ""
     planner_api_use_for_tools: bool = False
+    planner_api_proxy_env: Mapping[str, str] | None = None
     planner_api_timeout: float = 180.0
     planner_thinking_token_budget: int | None = None
     planner_enable_thinking: bool | None = None
@@ -459,6 +460,8 @@ def run_eval_cases(
         "planner_api_user_key_env": config.planner_api_user_key_env,
         "planner_api_biz_scene_env": config.planner_api_biz_scene_env,
         "planner_api_use_for_tools": config.planner_api_use_for_tools,
+        "planner_api_proxy_env_keys": sorted((config.planner_api_proxy_env or {}).keys()),
+        "planner_api_proxy_env_set": bool(config.planner_api_proxy_env),
         "planner_api_timeout": config.planner_api_timeout,
         "planner_thinking_token_budget": config.planner_thinking_token_budget,
         "planner_enable_thinking": config.planner_enable_thinking,
@@ -1254,6 +1257,14 @@ def _as_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _as_str_mapping(value: Any) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError("Expected a mapping for planner API proxy env")
+    return {str(key): str(item) for key, item in value.items() if str(key).strip() and str(item).strip()}
+
+
 def _as_sequence_args(value: Any) -> Sequence[str] | None:
     if value is None:
         return None
@@ -1497,6 +1508,14 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         "planner_api.use_for_tools",
         default=False,
     )
+    planner_api_proxy_env = _arg_or_config(
+        args,
+        config_data,
+        "planner_api_proxy_env",
+        "planner.proxy_env",
+        "planner_api.proxy_env",
+        default=None,
+    )
     return EvalConfig(
         run_root=run_root,
         workspace_root=workspace_root,
@@ -1602,6 +1621,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             )
         ),
         planner_api_use_for_tools=_as_bool(planner_api_use_for_tools),
+        planner_api_proxy_env=_as_str_mapping(planner_api_proxy_env),
         planner_api_timeout=float(
             _arg_or_config(args, config_data, "planner_api_timeout", "planner.api_timeout", "planner_api.timeout", default=180.0)
         ),
@@ -1667,6 +1687,7 @@ def build_backend(config: EvalConfig) -> Any:
             biz_scene_env=config.planner_api_biz_scene_env,
             user_key=config.planner_api_user_key,
             biz_scene=config.planner_api_biz_scene,
+            proxy_env=dict(config.planner_api_proxy_env or {}),
             allow_media=config.planner_api_use_for_tools,
             timeout=config.planner_api_timeout,
             thinking_token_budget=config.planner_thinking_token_budget,

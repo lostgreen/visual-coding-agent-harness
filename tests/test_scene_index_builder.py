@@ -195,6 +195,34 @@ def test_builder_prefers_frame_cache_over_physical_clips(tmp_path) -> None:
     assert visual_requests[1].metadata["frame_cache_policy"] == "precomputed_2fps"
 
 
+def test_builder_caps_root_dvc_frame_sampling_with_caption_nframes() -> None:
+    backend = RecordingBackend()
+    sampled = []
+
+    def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
+        sampled.append((video_path, start_sec, end_sec, max_frames))
+        return [f"/frames/video-1/{index:03d}.jpg" for index in range(max_frames)]
+
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=10.0,
+        caption_nframes=3,
+        frame_sampler=fake_frame_sampler,
+    )
+
+    builder.build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=10.0,
+        subtitle_cues=[],
+    )
+
+    assert sampled == [("/tmp/video-1.mp4", 0.0, 10.0, 3)]
+    assert backend.requests[0].metadata["nframes"] == 3
+
+
 def test_summary_uses_one_line_map_not_full_dual_source_detail() -> None:
     backend = RecordingBackend()
     builder = SceneIndexBuilder(backend=backend, text_model_id="text-mini", vl_model_id="vl-mini")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import json
 import mimetypes
@@ -38,6 +39,7 @@ class OpenAIChatTextBackend:
     allow_media: bool = False
     thinking_token_budget: int | None = None
     enable_thinking: bool | None = False
+    proxy_env: Mapping[str, str] = field(default_factory=dict)
     extra_body: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -161,8 +163,9 @@ class OpenAIChatTextBackend:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=float(self.timeout)) as response:
-                payload_bytes = response.read()
+            with _temporary_environ(self.proxy_env):
+                with urllib.request.urlopen(request, timeout=float(self.timeout)) as response:
+                    payload_bytes = response.read()
         except urllib.error.HTTPError as exc:
             raise RuntimeError(_format_http_error(exc)) from exc
         except urllib.error.URLError as exc:
@@ -342,6 +345,26 @@ def _data_url_for_file(path: str) -> str:
     mime_type = mimetypes.guess_type(str(file_path))[0] or "image/jpeg"
     encoded = base64.b64encode(file_path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
+
+
+@contextmanager
+def _temporary_environ(values: Mapping[str, str]):
+    if not values:
+        yield
+        return
+    previous: dict[str, str | None] = {}
+    try:
+        for key, value in values.items():
+            env_key = str(key)
+            previous[env_key] = os.environ.get(env_key)
+            os.environ[env_key] = str(value)
+        yield
+    finally:
+        for key, old_value in previous.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
 
 
 def _extract_message_text(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:

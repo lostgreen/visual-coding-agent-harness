@@ -1012,6 +1012,10 @@ class EvalRunnerTest(unittest.TestCase):
                         "  user_key: team-user-key",
                         "  biz_scene: offline",
                         "  use_for_tools: true",
+                        "  proxy_env:",
+                        "    http_proxy: http://oversea-squid1.jp.txyun:11080",
+                        "    https_proxy: http://oversea-squid1.jp.txyun:11080",
+                        "    no_proxy: localhost,127.0.0.1",
                     ]
                 ),
                 encoding="utf-8",
@@ -1077,12 +1081,18 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.planner_api_user_key, "team-user-key")
         self.assertEqual(config.planner_api_biz_scene, "offline")
         self.assertTrue(config.planner_api_use_for_tools)
+        self.assertEqual(config.planner_api_proxy_env["http_proxy"], "http://oversea-squid1.jp.txyun:11080")
         serialized = json.dumps(run_config, ensure_ascii=False)
         self.assertNotIn("private-api-key", serialized)
         self.assertNotIn("team-user-key", serialized)
+        self.assertNotIn("oversea-squid1", serialized)
         self.assertEqual(run_config["planner_api_key_set"], True)
         self.assertEqual(run_config["planner_api_user_key_set"], True)
         self.assertEqual(run_config["planner_api_biz_scene_set"], True)
+        self.assertEqual(
+            run_config["planner_api_proxy_env_keys"],
+            ["http_proxy", "https_proxy", "no_proxy"],
+        )
 
     def test_build_backend_uses_openai_chat_text_backend_for_planner_api(self):
         from runs import eval_runner
@@ -1264,6 +1274,7 @@ class EvalRunnerTest(unittest.TestCase):
             planner_api_user_key="team-user-key",
             planner_api_biz_scene="offline",
             planner_api_use_for_tools=True,
+            planner_api_proxy_env={"http_proxy": "http://oversea-squid1.jp.txyun:11080"},
             data_root=Path("/dataset"),
             parquet_path=Path("/dataset/test.parquet"),
             video_dir=Path("/dataset/video"),
@@ -1284,6 +1295,7 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(backend.text_backend.api_key, "private-api-key")
         self.assertEqual(backend.text_backend.user_key, "team-user-key")
         self.assertEqual(backend.text_backend.biz_scene, "offline")
+        self.assertEqual(backend.text_backend.proxy_env["http_proxy"], "http://oversea-squid1.jp.txyun:11080")
 
     def test_ablation_cli_flags_serialized_to_config(self):
         from runs import eval_runner

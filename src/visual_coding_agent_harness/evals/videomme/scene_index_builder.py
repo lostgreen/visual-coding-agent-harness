@@ -235,7 +235,8 @@ class SceneIndexBuilder:
         }
         if self.frame_sampler is None:
             raise ValueError("Root DVC requires a precomputed frame cache frame_sampler")
-        max_frames = int(round(max(1.0, segment.end_sec - segment.start_sec) * self.root_policy.frame_cache_fps))
+        window_frames = int(round(max(1.0, segment.end_sec - segment.start_sec) * self.root_policy.frame_cache_fps))
+        max_frames = max(1, min(window_frames, int(self.caption_nframes)))
         frame_paths = tuple(self.frame_sampler(video_path, float(segment.start_sec), float(segment.end_sec), max_frames))
         if not frame_paths:
             raise ValueError("Root DVC requires non-empty cached frames from frame_sampler")
