@@ -262,7 +262,7 @@ def _merge_root_segment(
     max_beats: int,
 ) -> VideoSegment:
     root_summary = _root_summary(root_data)
-    beats = _normalize_root_beats(
+    beats, dropped_invalid_beats = _normalize_root_beats_with_diagnostics(
         segment=segment,
         beats=root_data.get("beats") or root_data.get("timeline_beats") or (),
         max_beats=max_beats,
@@ -274,6 +274,9 @@ def _merge_root_segment(
 
     beat_entities = [hint for beat in beats for hint in beat.entity_hints]
     root_entities = _clean_list(root_data.get("entities") or root_data.get("entity_hints"))
+    limitations = _clean_list(root_data.get("limitations"))
+    if dropped_invalid_beats:
+        limitations.append("root_dvc_dropped_invalid_beats")
     return VideoSegment(
         segment_id=segment.segment_id,
         start_sec=segment.start_sec,
@@ -293,7 +296,7 @@ def _merge_root_segment(
         confidence=_clean_float(root_data.get("confidence")),
         citation_provenance={"index": "navigation_only", "asr": "subtitle", "visual": "video"},
         asr_sentences=_cue_sentence_rows(cues),
-        limitations=tuple(_clean_list(root_data.get("limitations"))),
+        limitations=tuple(_unique(limitations)),
         index_level="root",
         root_segment_id=segment.segment_id,
         timeline_beats=beats,
@@ -329,6 +332,16 @@ def _normalize_root_beats(
     beats: Any,
     max_beats: int | None = None,
 ) -> tuple[TimelineBeat, ...]:
+    normalized, _ = _normalize_root_beats_with_diagnostics(segment=segment, beats=beats, max_beats=max_beats)
+    return normalized
+
+
+def _normalize_root_beats_with_diagnostics(
+    *,
+    segment: VideoSegment,
+    beats: Any,
+    max_beats: int | None = None,
+) -> tuple[tuple[TimelineBeat, ...], int]:
     try:
         raw_beats = list(beats)
     except TypeError as exc:
@@ -337,20 +350,29 @@ def _normalize_root_beats(
         raw_beats = raw_beats[:max_beats]
 
     normalized: list[TimelineBeat] = []
+    dropped_invalid_beats = 0
     last_end = segment.start_sec
     for index, item in enumerate(raw_beats, start=1):
         if not isinstance(item, Mapping):
-            raise ValueError(f"Root DVC beat {index} for {segment.segment_id} must be an object")
-        start = _beat_abs_time(segment=segment, item=item, key="start")
-        end = _beat_abs_time(segment=segment, item=item, key="end")
+            dropped_invalid_beats += 1
+            continue
+        try:
+            start = _beat_abs_time(segment=segment, item=item, key="start")
+            end = _beat_abs_time(segment=segment, item=item, key="end")
+        except (KeyError, TypeError, ValueError):
+            dropped_invalid_beats += 1
+            continue
         start = max(segment.start_sec, min(segment.end_sec, start))
         end = max(segment.start_sec, min(segment.end_sec, end))
         if end <= start:
-            raise ValueError(f"Root DVC beat {index} for {segment.segment_id} has empty duration")
+            dropped_invalid_beats += 1
+            continue
         if start < last_end:
-            raise ValueError(f"Root DVC beats for {segment.segment_id} must be chronological and non-overlapping")
+            dropped_invalid_beats += 1
+            continue
         summary = _beat_summary(item)
         if not summary:
+            dropped_invalid_beats += 1
             last_end = end
             continue
         normalized.append(
@@ -367,7 +389,7 @@ def _normalize_root_beats(
             )
         )
         last_end = end
-    return tuple(normalized)
+    return tuple(normalized), dropped_invalid_beats
 
 
 def _beat_summary(item: Mapping[str, Any]) -> str:

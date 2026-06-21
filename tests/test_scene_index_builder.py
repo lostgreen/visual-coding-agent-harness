@@ -365,6 +365,49 @@ def test_root_dvc_tolerates_beat_summary_aliases_and_drops_unusable_beats() -> N
     ]
 
 
+def test_root_dvc_drops_empty_duration_beat_instead_of_failing_root_caption() -> None:
+    class EmptyBeatBackend(RecordingBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            return BackendResponse(
+                text=json.dumps(
+                    {
+                        "root_summary": "The root interval has a complete caption.",
+                        "beats": [
+                            {
+                                "start_offset_sec": 30.0,
+                                "end_offset_sec": 30.0,
+                                "summary": "This malformed beat has no duration.",
+                            },
+                            {
+                                "start_offset_sec": 30.0,
+                                "end_offset_sec": 40.0,
+                                "summary": "A valid follow-up beat remains usable.",
+                            },
+                        ],
+                    }
+                )
+            )
+
+    scene_index = SceneIndexBuilder(
+        backend=EmptyBeatBackend(),
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=60.0,
+        frame_sampler=_frame_sampler,
+    ).build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=60.0,
+        subtitle_cues=[],
+    )
+
+    segment = scene_index.segments[0]
+    assert segment.map_summary == "The root interval has a complete caption."
+    assert [beat.summary for beat in segment.timeline_beats] == ["A valid follow-up beat remains usable."]
+    assert "root_dvc_dropped_invalid_beats" in segment.limitations
+
+
 def test_root_dvc_uses_plain_text_response_as_degraded_root_summary() -> None:
     class PlainTextBackend(RecordingBackend):
         def generate(self, request: BackendRequest) -> BackendResponse:
