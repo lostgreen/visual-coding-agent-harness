@@ -191,6 +191,17 @@ def build_workspace_v2_registry(
     def verify(claim: str, against: Mapping[str, Any]) -> Mapping[str, object]:
         del claim
         citations = [str(item).strip() for item in _sequence_items(against.get("citations")) if str(item).strip()]
+        if not citations:
+            reason = "verify requires at least one citation"
+            return {
+                "claim": f"Provenance gate rejected: {reason}",
+                "confidence": 0.0,
+                "accepted": False,
+                "phase": "provenance_gate",
+                "reason": reason,
+                "citations": [],
+                "limitations": "Phase 1 checks provenance only; semantic entailment is not judged.",
+            }
         accepted, reason = _verify_citations(
             workspace,
             citations,

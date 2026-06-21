@@ -622,14 +622,18 @@ class WorkspaceVisualAgent:
                 seen_tool_semantic_keys=seen_tool_semantic_keys,
             )
         except (ToolError, ValueError) as exc:
-            result = _answer_result(action, rounds=rounds)
-            metadata = dict(result.metadata or {})
+            attempted_args = _action_args(action)
+            attempted_answer = str(attempted_args.get("text", ""))
+            metadata: dict[str, Any] = {}
             metadata.update(
                 {
+                    "status": "low_confidence_final",
                     "forced_final": True,
                     "reason": "max_rounds_reached",
                     "validated": False,
                     "validation_error": str(exc),
+                    "attempted_answer": attempted_answer,
+                    "attempted_citations": _string_sequence(attempted_args.get("citations", []) or []),
                 }
             )
             self.workspace.write_trace_event(
@@ -641,10 +645,10 @@ class WorkspaceVisualAgent:
                 },
             )
             return WorkspaceRunResult(
-                answer=result.answer,
-                citations=result.citations,
-                confidence=result.confidence or "low",
-                rounds=result.rounds,
+                answer=attempted_answer,
+                citations=(),
+                confidence="low",
+                rounds=rounds,
                 metadata=metadata,
             )
         metadata = dict(result.metadata or {})
@@ -660,16 +664,18 @@ class WorkspaceVisualAgent:
 
 PLAN_SYSTEM_PROMPT = """You are exploring a video through a durable workspace.
 Output exactly one JSON object: {"tool":"...","args":{...}}.
-Available plan tools are read_segment, search, list, read_workspace, verify, synthesize_memory, and answer.
+Available plan tools are read_segment, search, list, read_workspace, synthesize_memory, and answer.
 The Root Index already shows the initial Dense Video Caption timeline; do not call read_segment(index) just to reread visible DVC beats.
 Use read_segment(index) only when you need the raw structured index payload for a specific root segment.
 Use read_segment(refine) only when a DVC beat or root interval is too broad or ambiguous; always include an explicit sub_window from the DVC timeline and never refine a refined child.
 Use read_segment(verify) for answer-grade evidence; always include an explicit sub_window from a DVC beat. Only committed memory from verify-capable observations may support an answer.
+Do not call the standalone verify tool during planning; it is a provenance gate, not a video-reading action. Use read_segment with mode="verify" instead.
 Do not refine an already-refined root range at the same resolution.
 Use synthesize_memory only after Committed Memory contains answer-support mem_* ids.
-Use answer only after Committed Memory contains mem_* ids that directly support the answer, except forced final requests.
+Use answer only after Committed Memory contains mem_* ids that directly support the answer.
 For whole-video or main-idea questions, collect coverage across early, middle, and late root segments before final answer.
-Every answer call must include {"text": "...", "citations": ["mem_*"], "confidence": "..."}.
+For multiple-choice questions, answer text must be exactly one option letter: "A", "B", "C", or "D".
+Every answer call must include {"text": "A|B|C|D", "citations": ["mem_*"], "confidence": "..."}.
 If there is no committed memory, or if the last answer was rejected, choose an exploration tool instead of answer.
 """
 
@@ -680,9 +686,10 @@ The JSON object must include a "tool" field and an "args" object.
 """
 
 FINAL_SYSTEM_PROMPT = """The exploration budget is exhausted.
-You must answer now from the current workspace evidence, even when evidence is weak.
-Output exactly one JSON object using only {"tool":"answer","args":{"text":"...","citations":[],"confidence":"low|medium|high"}}.
-Do not output need_more_evidence.
+Answer only from committed workspace memory. Do not invent citations.
+For multiple-choice questions, the answer text must be exactly one option letter: "A", "B", "C", or "D".
+Output exactly one JSON object using only {"tool":"answer","args":{"text":"A|B|C|D","citations":["mem_*"],"confidence":"low|medium|high"}}.
+If no committed memory directly supports an option, still output the best option letter but leave citations empty; the framework will mark it unvalidated.
 """
 
 
@@ -702,13 +709,16 @@ def compose_plan_prompt(
             "Return exactly one JSON object. Do not explain.",
             "Use the visible Root Index / dense_video_caption beats as the starting navigation state; do not spend a turn on read_segment(index) unless the structured payload is missing from the prompt.",
             'For answer-grade evidence, call {"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"verify","sub_window":{"start_sec":<beat_start>,"end_sec":<beat_end>},"evidence_mode":"visual","focus":["..."]}} using a narrow DVC beat window.',
+            'Do not call {"tool":"verify"} as a standalone planning action; use read_segment with mode="verify" for video evidence.',
             'If a root beat is too broad or ambiguous, call read_segment(refine) with an explicit sub_window before verify.',
             "For a whole-video or main-idea question, verify coverage across early, middle, and late DVC beat windows; if one root's evidence was rejected or insufficient, move to another root or sub_window.",
-            'If Last Tool Result starts with "answer rejected", the next tool must be read_segment, search, list, read_workspace, or verify.',
+            "After search returns candidate hits, inspect a concrete segment with read_segment(verify); do not answer directly from search candidates.",
+            'If Last Tool Result starts with "answer rejected", the next tool must be read_segment, search, list, or read_workspace.',
             'If Last Tool Result starts with "observation rejected", change segment, sub_window, evidence_mode, or focus; do not repeat the same verify.',
             'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',
+            'If Last Tool Result contains "refinement_output_invalid", switch to read_segment mode="verify" on that same sub_window or choose a different DVC beat; do not repeat refine.',
             _synthesize_memory_availability(workspace),
-            'Use {"tool":"answer","args":{"text":"<selected option>","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory exists.',
+            'Use {"tool":"answer","args":{"text":"A","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory directly supports that option.',
             "",
             workspace.render_plan_view(question=question, video_map=video_map),
             "",
@@ -814,8 +824,9 @@ def compose_final_prompt(*, question: str, workspace: EvidenceWorkspace, video_m
             "# Forced Final Protocol",
             "The maximum round count has been reached. You must answer now.",
             "Return exactly one JSON object using the answer tool.",
-            'Use {"tool":"answer","args":{"text":"<selected option>","citations":["mem_0001"],"confidence":"low"}}.',
-            "Prefer committed mem_* citations. If no valid citation supports the answer, use citations: [] and confidence: low.",
+            'Use {"tool":"answer","args":{"text":"A","citations":["mem_0001"],"confidence":"low"}}.',
+            "For multiple-choice questions, text must be exactly one option letter: A, B, C, or D.",
+            "Prefer committed mem_* citations. If no valid citation supports the answer, use citations: [] and confidence: low; the framework will mark the answer unvalidated.",
             "",
             workspace.render_plan_view(question=question, video_map=video_map),
         ]
@@ -888,6 +899,15 @@ def _tool_name(action: Mapping[str, Any]) -> str:
 def _action_args(action: Mapping[str, Any]) -> dict[str, Any]:
     args = action.get("args", {})
     return dict(args) if isinstance(args, Mapping) else {}
+
+
+def _string_sequence(value: Any) -> list[str]:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    if isinstance(value, Sequence):
+        return [str(item) for item in value if str(item)]
+    return []
 
 
 def _coerce_answer_action(action: Mapping[str, Any]) -> Mapping[str, Any]:

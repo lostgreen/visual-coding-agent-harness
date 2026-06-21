@@ -132,6 +132,16 @@ def test_workspace_v2_verify_commit_required_predicate_tracks_rejections(tmp_pat
     assert predicate({"accepted": False, "reason": "unknown citation: mem_x"}) is True
 
 
+def test_workspace_v2_verify_rejects_empty_citations(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_empty")
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    result = registry.execute("verify", {"claim": "", "against": {}})
+
+    assert result["accepted"] is False
+    assert result["reason"] == "verify requires at least one citation"
+
+
 def test_workspace_v2_list_reads_segments_and_workspace_sections(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_list")
     workspace.note_entity(kind="concept", name="Austria-Hungary")

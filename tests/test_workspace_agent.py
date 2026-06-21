@@ -252,7 +252,7 @@ def test_workspace_agent_forces_answer_at_max_rounds(tmp_path: Path) -> None:
     assert any(event["type"] == "workspace_final_model_io" for event in trace_events)
 
 
-def test_workspace_agent_forced_answer_survives_answer_validation_rejection(tmp_path: Path) -> None:
+def test_workspace_agent_forced_answer_validation_rejection_returns_unvalidated_answer(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_forced_final_unvalidated")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
@@ -268,9 +268,13 @@ def test_workspace_agent_forced_answer_survives_answer_validation_rejection(tmp_
 
     assert result.answer == "C"
     assert result.confidence == "low"
+    assert result.citations == ()
     assert result.metadata is not None
+    assert result.metadata["status"] == "low_confidence_final"
     assert result.metadata["forced_final"] is True
     assert result.metadata["validated"] is False
+    assert result.metadata["attempted_answer"] == "C"
+    assert result.metadata["attempted_citations"] == []
     assert "answer_validation_failed" in str(result.metadata["validation_error"])
     trace_events = workspace._read_jsonl_dicts("trace.jsonl")
     assert any(event["type"] == "workspace_forced_answer_unvalidated" for event in trace_events)
@@ -743,6 +747,7 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     )
 
     assert "Available plan tools" in PLAN_SYSTEM_PROMPT
+    assert "standalone verify" in PLAN_SYSTEM_PROMPT
     assert "Every answer call must include" in PLAN_SYSTEM_PROMPT
     assert '"text":"D"' not in PLAN_SYSTEM_PROMPT
     assert "Use the visible Root Index / dense_video_caption beats as the starting navigation state" in prompt
@@ -751,9 +756,10 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert "synthesize_memory is unavailable until committed memory exists" in prompt
     assert "duplicate_tool_call" in prompt
     assert "do not repeat the same semantic request" in prompt
+    assert "refinement_output_invalid" in prompt
     assert '{"tool":"read_segment"' in prompt
     assert '"text":"D"' not in prompt
-    assert '"text":"<selected option>"' in prompt
+    assert '"text":"A"' in prompt
 
 
 def test_workspace_agent_exports_downloadable_round_log(tmp_path: Path) -> None:
