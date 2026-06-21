@@ -262,6 +262,87 @@ def test_planner_turns_show_context_growth_without_inlining_prompts(tmp_path):
     assert "## Evidence" not in json.dumps(payload)
 
 
+def test_training_trajectory_supports_workspace_v2_model_io_events(tmp_path):
+    workspace = EvidenceWorkspace.create(tmp_path / "workspace", run_id="workspace_v2_case")
+    observation = workspace.write_observation(
+        tool_name="read_segment",
+        claim="The selected window shows a doctor explaining visceral fat research with chart evidence.",
+        confidence=0.82,
+        regions=[{"segment_id": "seg_0003", "start_sec": 870.0, "end_sec": 900.0}],
+        raw_output={
+            "mode": "verify",
+            "evidence_mode": "verify",
+            "time_range": {"start_sec": 870.0, "end_sec": 900.0},
+            "facts": [
+                {
+                    "time_range": {"start_sec": 872.0, "end_sec": 884.0},
+                    "claim": "The speaker discusses visceral fat and cites chart evidence.",
+                }
+            ],
+        },
+    )
+    log_root = tmp_path / "workspace_logs"
+    prompt_1 = _write_log(log_root / "round_001_plan_prompt.txt", "## Evidence\n(none)\n## Feedback\nnone")
+    response_1 = _write_log(
+        log_root / "round_001_plan_response.txt",
+        '{"tool":"read_segment","args":{"segment_id":"seg_0003","mode":"verify"}}',
+    )
+    prompt_2 = _write_log(
+        log_root / "round_002_plan_prompt.txt",
+        "## Evidence\nobs_0001 | claim: doctor explains visceral fat\n## Feedback\nnone",
+    )
+    response_2 = _write_log(
+        log_root / "round_002_plan_response.txt",
+        '{"tool":"answer","args":{"text":"C","citations":["mem_0001"],"confidence":"high"}}',
+    )
+    workspace.write_trace_event(
+        "workspace_plan_model_io",
+        {
+            "round": 1,
+            "prompt_path": prompt_1.as_posix(),
+            "response_path": response_1.as_posix(),
+            "prompt_chars": prompt_1.stat().st_size,
+            "response_chars": response_1.stat().st_size,
+            "response": response_1.read_text(encoding="utf-8"),
+        },
+    )
+    workspace.write_trace_event("tool_use", {"step": 1, "tool": "read_segment", "arguments": {"segment_id": "seg_0003"}})
+    workspace.write_trace_event(
+        "tool_result",
+        {"step": 1, "tool": "read_segment", "observation_id": observation.observation_id},
+    )
+    workspace.write_trace_event(
+        "workspace_plan_model_io",
+        {
+            "round": 2,
+            "prompt_path": prompt_2.as_posix(),
+            "response_path": response_2.as_posix(),
+            "prompt_chars": prompt_2.stat().st_size,
+            "response_chars": response_2.stat().st_size,
+            "response": response_2.read_text(encoding="utf-8"),
+        },
+    )
+
+    trajectory = TrainingTrajectory.from_workspace(
+        workspace,
+        case_id="case_001",
+        question="What evidence is shown?",
+        output_path="artifacts/training/case_001.json",
+    )
+
+    assert [turn["round"] for turn in trajectory.planner_turns] == [1, 2]
+    assert trajectory.planner_turns[0]["response_excerpt"] == (
+        '{"args":{"mode":"verify","segment_id":"seg_0003"},"tool":"read_segment"}'
+    )
+    assert trajectory.planner_plans[0]["round"] == 1
+    assert trajectory.planner_plans[0]["program"][0]["tool"] == "read_segment"
+    assert trajectory.tool_calls[0]["source_round"] == 1
+    assert trajectory.tool_results[0]["source_round"] == 1
+    assert trajectory.tool_results[0]["visible_in_planner_rounds"] == [2]
+    assert trajectory.tool_results[0]["time_range"] == {"start_sec": 870.0, "end_sec": 900.0}
+    assert trajectory.tool_results[0]["facts"][0]["claim"] == "The speaker discusses visceral fat and cites chart evidence."
+
+
 def _workspace_with_chain(
     tmp_path,
     *,
@@ -319,3 +400,9 @@ def _chain_records(workspace: EvidenceWorkspace, observation_id: str = "obs_0001
         created_at=1.0,
     )
     return [distilled, ledger, mapped]
+
+
+def _write_log(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path

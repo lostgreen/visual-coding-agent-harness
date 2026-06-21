@@ -170,13 +170,29 @@ def _render_tool_results(results: Sequence[Mapping[str, Any]]) -> list[str]:
                 f"  - confidence: {_text(result.get('confidence', ''))}",
                 f"  - grounding_quality: {_text(result.get('grounding_quality', ''))}",
                 f"  - limitations: {_text(result.get('limitations', ''))}",
+                f"  - time_range: {_text(result.get('time_range', ''))}",
+                f"  - mode: {_text(result.get('mode', ''))}",
+                f"  - evidence_mode: {_text(result.get('evidence_mode', ''))}",
+                f"  - evidence_record_ids: {_text(result.get('evidence_record_ids', []))}",
                 f"  - visible_in_planner_rounds: {_text(result.get('visible_in_planner_rounds', []))}",
             ]
         )
+        facts = result.get("facts", [])
+        if isinstance(facts, Sequence) and not isinstance(facts, (str, bytes)) and facts:
+            lines.append("  - facts:")
+            lines.extend(_indented_json_lines(facts, indent="    "))
         relations = result.get("candidate_option_relations", [])
         if isinstance(relations, Sequence) and not isinstance(relations, (str, bytes)) and relations:
             lines.append("  - candidate_option_relations:")
             lines.extend(_indented_json_lines(relations, indent="    "))
+        produced_anchors = result.get("produced_anchors", [])
+        if isinstance(produced_anchors, Sequence) and not isinstance(produced_anchors, (str, bytes)) and produced_anchors:
+            lines.append("  - produced_anchors:")
+            lines.extend(_indented_json_lines(produced_anchors, indent="    "))
+        candidate_anchor_ids = result.get("candidate_anchor_ids", [])
+        if isinstance(candidate_anchor_ids, Sequence) and not isinstance(candidate_anchor_ids, (str, bytes)) and candidate_anchor_ids:
+            lines.append("  - candidate_anchor_ids:")
+            lines.extend(_indented_json_lines(candidate_anchor_ids, indent="    "))
         regions = result.get("regions", [])
         if isinstance(regions, Sequence) and not isinstance(regions, (str, bytes)) and regions:
             lines.append("  - regions:")

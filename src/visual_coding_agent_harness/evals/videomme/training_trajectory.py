@@ -134,6 +134,12 @@ def _planner_action_summary(payload: Mapping[str, Any]) -> dict[str, Any]:
     for key in ("status", "skill"):
         if key in payload:
             summary[key] = payload.get(key)
+    if "tool" in payload:
+        summary["tool"] = payload.get("tool")
+        if isinstance(payload.get("args"), Mapping):
+            summary["args"] = dict(payload["args"])
+        elif isinstance(payload.get("arguments"), Mapping):
+            summary["args"] = dict(payload["arguments"])
     if "program" in payload:
         summary["program"] = _bounded_sequence(payload.get("program", []), max_items=8)
     if "Actions" in payload:
@@ -361,13 +367,14 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _planner_turns(events: Sequence[Mapping[str, Any]], *, workspace: EvidenceWorkspace) -> list[dict[str, Any]]:
     turns: list[dict[str, Any]] = []
     for event in events:
-        if str(event.get("type", "")) != "planner_io":
+        event_type = str(event.get("type", ""))
+        if event_type not in {"planner_io", "workspace_plan_model_io", "workspace_final_model_io"}:
             continue
         payload = event.get("payload", {})
         if not isinstance(payload, Mapping):
             continue
-        prompt_artifact = _artifact_summary(workspace.root, payload.get("prompt", {}))
-        response_artifact = _artifact_summary(workspace.root, payload.get("response", {}))
+        prompt_artifact = _artifact_summary(workspace.root, _io_artifact_payload(payload, "prompt"))
+        response_artifact = _artifact_summary(workspace.root, _io_artifact_payload(payload, "response"))
         prompt_text = _artifact_text(workspace.root, prompt_artifact)
         response_text = _artifact_text(workspace.root, response_artifact) or str(payload.get("response_excerpt", ""))
         evidence_section = _evidence_section(prompt_text)
@@ -375,6 +382,7 @@ def _planner_turns(events: Sequence[Mapping[str, Any]], *, workspace: EvidenceWo
             {
                 "round": int(payload.get("round", len(turns) + 1) or len(turns) + 1),
                 "planner_input_mode": str(payload.get("planner_input_mode", "")),
+                "phase": "final" if event_type == "workspace_final_model_io" else "plan",
                 "prompt_artifact": prompt_artifact,
                 "response_artifact": response_artifact,
                 "response_excerpt": _planner_response_excerpt(response_text),
@@ -393,7 +401,7 @@ def _tool_calls(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     for event in events:
         event_type = str(event.get("type", ""))
         payload = event.get("payload", {})
-        if event_type == "iterative_plan" and isinstance(payload, Mapping):
+        if event_type in {"iterative_plan", "workspace_plan_model_io", "workspace_final_model_io"} and isinstance(payload, Mapping):
             current_source_round = int(payload.get("round", current_source_round) or current_source_round)
             continue
         if event_type != "tool_use":
@@ -427,7 +435,7 @@ def _tool_results(
     for event in events:
         event_type = str(event.get("type", ""))
         payload = event.get("payload", {})
-        if event_type == "iterative_plan" and isinstance(payload, Mapping):
+        if event_type in {"iterative_plan", "workspace_plan_model_io", "workspace_final_model_io"} and isinstance(payload, Mapping):
             current_source_round = int(payload.get("round", current_source_round) or current_source_round)
             continue
         if event_type != "tool_result":
@@ -438,9 +446,9 @@ def _tool_results(
         observation = observations.get(observation_id, {})
         raw_output = observation.get("raw_output", {})
         raw_mapping = raw_output if isinstance(raw_output, Mapping) else {}
-        claim, claim_redacted = _sanitize_public_text(str(observation.get("claim", "")), max_chars=1000)
+        claim, claim_redacted = _sanitize_public_text(str(observation.get("claim", "")), max_chars=4000)
         limitations, limitations_redacted = _sanitize_public_text(
-            str(observation.get("limitations", "")), max_chars=1000
+            str(observation.get("limitations", "")), max_chars=4000
         )
         result = {
             "step": int(payload.get("step", len(results) + 1) or len(results) + 1),
@@ -461,6 +469,16 @@ def _tool_results(
             "source_round": current_source_round,
             "created_at": str(event.get("created_at", "")),
         }
+        for key in (
+            "mode",
+            "evidence_mode",
+            "time_range",
+            "facts",
+            "produced_anchors",
+            "candidate_anchor_ids",
+        ):
+            if key in raw_mapping:
+                result[key] = _public_bounded_value(raw_mapping.get(key), max_items=12, max_chars=4000)
         relations = raw_mapping.get("candidate_option_relations")
         if isinstance(relations, Sequence) and not isinstance(relations, (str, bytes)):
             result["candidate_option_relations"] = _bounded_sequence(relations, max_items=8)
@@ -475,13 +493,22 @@ def _tool_results(
 def _planner_plans(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     plans: list[dict[str, Any]] = []
     for event in events:
-        if str(event.get("type", "")) != "iterative_plan":
+        event_type = str(event.get("type", ""))
+        if event_type not in {"iterative_plan", "workspace_plan_model_io"}:
             continue
         payload = event.get("payload", {})
         if not isinstance(payload, Mapping):
             continue
         program = payload.get("program", [])
-        rationale, rationale_redacted = _sanitize_public_text(str(payload.get("rationale", "")), max_chars=400)
+        rationale_text = str(payload.get("rationale", ""))
+        if event_type == "workspace_plan_model_io":
+            action = _json_object_from_text(_model_io_response_text(payload))
+            if action is None:
+                program = []
+            else:
+                program = _program_from_workspace_action(action)
+                rationale_text = str(action.get("rationale", ""))
+        rationale, rationale_redacted = _sanitize_public_text(rationale_text, max_chars=400)
         plan = {
             "round": int(payload.get("round", len(plans) + 1) or len(plans) + 1),
             "rationale": rationale,
@@ -502,7 +529,7 @@ def _route_repairs(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     for event in events:
         event_type = str(event.get("type", ""))
         payload = event.get("payload", {})
-        if event_type in {"planner_io", "iterative_round_start"} and isinstance(payload, Mapping):
+        if event_type in {"planner_io", "workspace_plan_model_io", "iterative_round_start"} and isinstance(payload, Mapping):
             current_planner_round = int(payload.get("round", current_planner_round) or current_planner_round)
             continue
         if event_type != "route_tool_repaired" or not isinstance(payload, Mapping):
@@ -571,6 +598,43 @@ def _artifact_summary(root: Path, artifact: Any) -> dict[str, Any]:
         summary["sha256"] = ""
         summary["bytes"] = 0
     return summary
+
+
+def _io_artifact_payload(payload: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
+    legacy = payload.get(kind, {})
+    if isinstance(legacy, Mapping) and legacy.get("path"):
+        return legacy
+    return {
+        "path": str(payload.get(f"{kind}_path", "")),
+        "chars": int(payload.get(f"{kind}_chars", 0) or 0),
+    }
+
+
+def _model_io_response_text(payload: Mapping[str, Any]) -> str:
+    direct = str(payload.get("response", "") or "")
+    if direct:
+        return direct
+    artifact = _io_artifact_payload(payload, "response")
+    path = Path(str(artifact.get("path", "")))
+    if path.exists():
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return ""
+    return ""
+
+
+def _program_from_workspace_action(action: Mapping[str, Any]) -> list[dict[str, Any]]:
+    tool = str(action.get("tool", "") or action.get("name", "")).strip()
+    if not tool:
+        return []
+    args = action.get("args", action.get("arguments", {}))
+    return [
+        {
+            "tool": tool,
+            "args": dict(args) if isinstance(args, Mapping) else {},
+        }
+    ]
 
 
 def _artifact_text(root: Path, artifact: Mapping[str, Any]) -> str:
@@ -656,3 +720,25 @@ def _bounded_sequence(value: Any, *, max_items: int) -> list[Any]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     return [dict(item) if isinstance(item, Mapping) else item for item in value[:max_items]]
+
+
+def _public_bounded_value(value: Any, *, max_items: int, max_chars: int) -> Any:
+    if isinstance(value, Mapping):
+        encoded = json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
+        if len(encoded) <= max_chars:
+            return dict(value)
+        return _limit_text(encoded, max_chars=max_chars)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        items = []
+        for item in list(value)[:max_items]:
+            if isinstance(item, Mapping):
+                encoded = json.dumps(item, ensure_ascii=True, sort_keys=True, default=str)
+                items.append(dict(item) if len(encoded) <= max_chars else _limit_text(encoded, max_chars=max_chars))
+            elif isinstance(item, str):
+                items.append(_limit_text(item, max_chars=max_chars))
+            else:
+                items.append(item)
+        return items
+    if isinstance(value, str):
+        return _limit_text(value, max_chars=max_chars)
+    return value

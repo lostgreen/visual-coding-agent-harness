@@ -64,6 +64,9 @@ def test_render_trajectory_markdown_groups_planner_io_and_tool_results(tmp_path)
                 "observation_id": "obs_0001",
                 "claim": "The window shows a red car.",
                 "confidence": 0.9,
+                "time_range": {"start_sec": 0.0, "end_sec": 12.0},
+                "facts": [{"claim": "A red car is visible near the curb."}],
+                "evidence_record_ids": ["ev_0001"],
                 "visible_in_planner_rounds": [2],
             }
         ],
@@ -82,6 +85,8 @@ def test_render_trajectory_markdown_groups_planner_io_and_tool_results(tmp_path)
     assert "### Tool results" in markdown
     assert "obs_0001" in markdown
     assert "The window shows a red car." in markdown
+    assert "A red car is visible near the curb." in markdown
+    assert "ev_0001" in markdown
     assert "vision_read -> global_gist" in markdown
 
 
