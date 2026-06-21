@@ -694,6 +694,44 @@ def test_compose_commit_prompt_includes_full_view_on_minimal_retry(tmp_path: Pat
     assert '"anchor_id": "<candidate_anchor_id>"' in prompt
 
 
+def test_prompts_guide_whole_video_coverage_and_partial_evidence_commits(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_prompt_guidance")
+    observation = workspace.write_observation(
+        tool_name="read_segment",
+        claim="The opening root shows Austria-Hungary rising through maps and narration.",
+        confidence=0.8,
+        raw_output={
+            "facts": [{"text": "Austria-Hungary rises through maps and narration.", "source_kind": "visual_fact"}],
+            "produced_anchors": [
+                {
+                    "anchor_id": "clip_anch_seg_0001_00000000_00060000",
+                    "source_kind": "visual_fact",
+                    "modality": "visual",
+                    "excerpt": "Austria-Hungary rises through maps and narration.",
+                }
+            ],
+        },
+    )
+
+    plan_prompt = compose_plan_prompt(
+        question="What is the main idea of the video?",
+        workspace=workspace,
+        last_tool_result="observation rejected: obs_0001",
+        video_map=_video_map(),
+    )
+    commit_prompt = compose_commit_prompt(
+        question="What is the main idea of the video?",
+        workspace=workspace,
+        observation_id=observation.observation_id,
+    )
+
+    assert "whole-video or main-idea" in plan_prompt
+    assert "early, middle, and late root" in plan_prompt
+    assert "partial evidence" in commit_prompt
+    assert "answer_support" in commit_prompt
+    assert "Reject only when" in commit_prompt
+
+
 def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_plan_protocol")
 

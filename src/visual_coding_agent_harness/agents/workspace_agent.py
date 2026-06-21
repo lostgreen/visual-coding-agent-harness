@@ -534,6 +534,7 @@ Use read_segment(verify) for answer-grade evidence; only committed memory from v
 Do not refine an already-refined root range at the same resolution.
 Use synthesize_memory only after Committed Memory contains answer-support mem_* ids.
 Use answer only after Committed Memory contains mem_* ids that directly support the answer, except forced final requests.
+For whole-video or main-idea questions, collect coverage across early, middle, and late root segments before final answer.
 Every answer call must include {"text": "...", "citations": ["mem_*"], "confidence": "..."}.
 If there is no committed memory, or if the last answer was rejected, choose an exploration tool instead of answer.
 """
@@ -566,6 +567,7 @@ def compose_plan_prompt(
             "# Plan Protocol",
             "Return exactly one JSON object. Do not explain.",
             'If Committed Memory is empty, start with {"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"index"}} unless a better root segment is already known.',
+            "For a whole-video or main-idea question, inspect early, middle, and late root indexes; if one root's evidence was rejected or insufficient, move to another root or sub_window.",
             'If Last Tool Result starts with "answer rejected", the next tool must be read_segment, search, list, read_workspace, or verify.',
             'If Last Tool Result starts with "observation rejected", change segment, sub_window, evidence_mode, or focus; do not repeat the same verify.',
             'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',
@@ -601,6 +603,11 @@ def compose_commit_prompt(
         question,
         "",
         f"# Commit Phase (attempt {attempt})",
+        "# Commit Guidance",
+        "For read_segment/read_clip facts, commit useful partial evidence instead of rejecting it merely because it does not answer the full question alone.",
+        "Use memory kind answer_support when the fact supports an answer option or subclaim needed for that option; include supports_option when clear.",
+        "Reject only when the observation is corrupt, off-topic, duplicate, or has no usable factual anchor.",
+        "",
         workspace.render_commit_view(question=question, observation_id=observation_id),
     ]
     if validation_error:
