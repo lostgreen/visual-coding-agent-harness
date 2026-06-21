@@ -342,6 +342,7 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(config.model_path, "/models/vl")
             self.assertEqual(config.planner_model_path, "/models/planner")
             self.assertEqual(config.frame_cache_fps, 1.5)
+            self.assertEqual(config.scene_index_frame_fps, 0.5)
             self.assertEqual(config.budget.default_nframes, 6)
             self.assertEqual(config.budget.max_rounds, 7)
             self.assertEqual(config.budget.max_tool_calls_per_round, 3)
@@ -367,6 +368,7 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(resolved["budget"]["default_nframes"], 6)
             self.assertEqual(resolved["budget"]["max_rounds"], 7)
             self.assertEqual(resolved["frame_cache_fps"], 1.5)
+            self.assertEqual(resolved["scene_index_frame_fps"], 0.5)
             self.assertEqual(resolved["source_config_path"], str(config_path))
 
     def test_summary_payload_aggregates_route_violations_from_workspace_traces(self):
@@ -633,6 +635,7 @@ class EvalRunnerTest(unittest.TestCase):
                 window_sec=300.0,
                 scene_index_cache_dir=cache_dir,
                 scene_index_concurrency=8,
+                scene_index_frame_fps=0.5,
                 scene_index_max_beats_per_root=9,
                 scene_index_max_new_tokens=7777,
                 frame_cache_fps=2.0,
@@ -657,7 +660,7 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(builder_inits[0]["root_concurrency"], 8)
             self.assertEqual(builder_inits[0]["root_policy"].max_beats_per_root, 9)
             self.assertEqual(builder_inits[0]["root_policy"].max_new_tokens, 7777)
-            self.assertEqual(builder_inits[0]["root_policy"].frame_cache_fps, 2.0)
+            self.assertEqual(builder_inits[0]["root_policy"].frame_cache_fps, 0.5)
 
     def test_free_explore_cli_builds_budgetless_agent_config(self):
         from runs import eval_runner
@@ -867,6 +870,7 @@ class EvalRunnerTest(unittest.TestCase):
                         "scene_caption_nframes: 6",
                         "scene_index_max_beats_per_root: 10",
                         "dense_video_caption:",
+                        "  fps: 0.5",
                         "  max_new_tokens: 8192",
                     ]
                 ),
@@ -879,8 +883,32 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(config.scene_index_concurrency, 8)
         self.assertEqual(config.scene_caption_nframes, 6)
+        self.assertEqual(config.scene_index_frame_fps, 0.5)
         self.assertEqual(config.scene_index_max_beats_per_root, 10)
         self.assertEqual(config.scene_index_max_new_tokens, 8192)
+
+    def test_frame_cache_fps_caps_at_two_and_root_dvc_fps_cannot_exceed_cache(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "fps.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "frame_cache_fps: 3.0",
+                        "dense_video_caption:",
+                        "  fps: 2.5",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            parser = eval_runner.build_arg_parser()
+            args = parser.parse_args(["--config", str(config_path)])
+            config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.frame_cache_fps, 2.0)
+        self.assertEqual(config.scene_index_frame_fps, 2.0)
 
     def test_default_run_and_scene_cache_roots_are_under_m2v_management_root(self):
         from runs import eval_runner

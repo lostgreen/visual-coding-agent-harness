@@ -33,7 +33,7 @@ class SubtitleCue:
 @dataclass(frozen=True)
 class RootIndexPolicy:
     root_window_sec: float = 300.0
-    frame_cache_fps: float = 1.0
+    frame_cache_fps: float = 0.5
     max_pixels_per_frame: int = 360 * 420
     max_beats_per_root: int = 12
     max_new_tokens: int = 6144

@@ -94,10 +94,10 @@ def test_builder_creates_single_call_root_dvc_manifest() -> None:
 
     assert [request.task for request in backend.requests] == ["build_root_dvc_index"]
     assert backend.requests[0].metadata["schema_version"] == "dvc_root_v3"
-    assert backend.requests[0].metadata["frame_cache_fps"] == 1.0
+    assert backend.requests[0].metadata["frame_cache_fps"] == 0.5
     assert backend.requests[0].metadata["max_pixels_per_frame"] == 360 * 420
     assert backend.requests[0].metadata["max_pixels"] == 360 * 420
-    assert backend.requests[0].metadata["fps"] == 1.0
+    assert backend.requests[0].metadata["fps"] == 0.5
     assert backend.requests[0].metadata["nframes"] == 2
     assert backend.requests[0].metadata["max_beats_per_root"] == 12
     assert backend.requests[0].max_new_tokens == RootIndexPolicy().max_new_tokens
@@ -184,9 +184,9 @@ def test_builder_prefers_frame_cache_over_physical_clips(tmp_path) -> None:
 
     assert extracted == []
     assert [(round(call[1], 3), round(call[2], 3), call[3]) for call in sampled] == [
-        (0.0, 10.0, 10),
-        (10.0, 20.0, 10),
-        (20.0, 25.0, 5),
+        (0.0, 10.0, 5),
+        (10.0, 20.0, 5),
+        (20.0, 25.0, 2),
     ]
     assert all(request.media_path is None for request in visual_requests)
     assert all(request.media_type == "video" for request in visual_requests)
@@ -223,8 +223,8 @@ def test_builder_root_dvc_uses_policy_fps_without_caption_nframes_cap() -> None:
         subtitle_cues=[],
     )
 
-    assert sampled == [("/tmp/video-1.mp4", 0.0, 10.0, 10)]
-    assert backend.requests[0].metadata["nframes"] == 10
+    assert sampled == [("/tmp/video-1.mp4", 0.0, 10.0, 5)]
+    assert backend.requests[0].metadata["nframes"] == 5
 
 
 def test_summary_uses_one_line_map_not_full_dual_source_detail() -> None:
@@ -661,7 +661,7 @@ def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
             "video_path": "/tmp/video-1.mp4",
             "duration_sec": 30.0,
             "root_window_sec": 30.0,
-            "frame_cache_fps": 1.0,
+            "frame_cache_fps": 0.5,
             "max_pixels_per_frame": 360 * 420,
             "max_beats_per_root": 12,
             "max_new_tokens": 6144,
