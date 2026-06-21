@@ -849,6 +849,28 @@ class EvalRunnerTest(unittest.TestCase):
         )
         self.assertEqual(config.scene_index_concurrency, 8)
 
+    def test_scene_index_concurrency_top_level_yaml_key_builds_agent_config(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "gemini.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "scene_index_concurrency: 8",
+                        "scene_caption_nframes: 6",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            parser = eval_runner.build_arg_parser()
+            args = parser.parse_args(["--config", str(config_path)])
+            config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.scene_index_concurrency, 8)
+        self.assertEqual(config.scene_caption_nframes, 6)
+
     def test_default_run_and_scene_cache_roots_are_under_m2v_management_root(self):
         from runs import eval_runner
 

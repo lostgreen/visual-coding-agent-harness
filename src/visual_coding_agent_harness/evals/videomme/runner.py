@@ -1668,10 +1668,24 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         ),
         scene_index_cache_enabled=_as_bool(scene_index_cache_enabled),
         scene_caption_nframes=int(
-            _arg_or_config(args, config_data, "scene_caption_nframes", "caption_nframes", default=SEGMENT_NFRAMES)
+            _arg_or_config(
+                args,
+                config_data,
+                "scene_caption_nframes",
+                "scene_caption_nframes",
+                "caption_nframes",
+                default=SEGMENT_NFRAMES,
+            )
         ),
         scene_index_concurrency=int(
-            _arg_or_config(args, config_data, "scene_index_concurrency", "scene.index_concurrency", default=1)
+            _arg_or_config(
+                args,
+                config_data,
+                "scene_index_concurrency",
+                "scene_index_concurrency",
+                "scene.index_concurrency",
+                default=1,
+            )
         ),
         frame_cache_fps=float(_arg_or_config(args, config_data, "frame_cache_fps", default=FRAME_CACHE_FPS)),
         frame_cache_root=(
