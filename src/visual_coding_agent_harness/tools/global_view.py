@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from typing import Mapping
 
-from ..agents.contracts import VISUAL_EVIDENCE_NFRAMES, resolve_nframes
-from ..agents.open_questions import exploration_question
+from ..agent_contracts import VISUAL_EVIDENCE_NFRAMES, resolve_nframes
+from ..open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from .frame_cache import FrameSampler, frame_cache_artifact_ref

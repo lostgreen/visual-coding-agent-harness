@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from .contracts import VISUAL_EVIDENCE_NFRAMES
+from .agent_contracts import VISUAL_EVIDENCE_NFRAMES
 
 
 @dataclass(frozen=True)

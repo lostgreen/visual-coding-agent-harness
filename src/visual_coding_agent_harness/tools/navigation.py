@@ -6,8 +6,8 @@ import re
 from dataclasses import asdict
 from typing import Any, Mapping, Sequence
 
-from ..agents.grounding.lexicon import FUTURE_PROSPECTIVE_MARKERS
-from ..agents.transcript_binder import TranscriptEvidenceBinder
+from ..lexicon import FUTURE_PROSPECTIVE_MARKERS
+from ..transcript_binder import TranscriptEvidenceBinder
 from ..contracts import (
     ClaimModality,
     ClaimRelation,

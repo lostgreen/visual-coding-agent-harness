@@ -6,9 +6,9 @@ import json
 import re
 from typing import Mapping, Optional, Sequence
 
-from ..agents.contracts import resolve_nframes
-from ..agents.open_questions import exploration_question
-from ..agents.output_quality import confidence_signal_from_text
+from ..agent_contracts import resolve_nframes
+from ..open_questions import exploration_question
+from ..output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolError, ToolRegistry, tool
 from ..workspace import EvidenceWorkspace

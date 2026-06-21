@@ -15,7 +15,7 @@ from .inspector import build_segment_inspector_registry
 from .navigation import build_video_navigation_registry
 from .query_context import build_query_context_registry
 from .frame_cache import FrameSampler
-from .runtime_specs import install_video_runtime_specs
+from .tool_specs import install_video_tool_specs
 from .segments import ClipExtractor, build_segment_vlm_registry
 from .timeline import build_timeline_registry
 from .verification import build_verification_registry
@@ -83,7 +83,7 @@ def build_video_exploration_registry(
             frame_sampler=frame_sampler,
         )
     )
-    return install_video_runtime_specs(registry, required=True)
+    return install_video_tool_specs(registry, required=True)
 
 
 def _extend_without(registry: ToolRegistry, other: ToolRegistry, *, names: set[str]) -> None:

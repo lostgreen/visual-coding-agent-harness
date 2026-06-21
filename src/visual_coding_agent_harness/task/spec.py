@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
-from ..agents.grounding.operators import AnswerOperator, derive_answer_operator, normalize_answer_operator
+from ..answer_operators import AnswerOperator, derive_answer_operator, normalize_answer_operator
 from ..contracts import TargetRegistry
 
 AnswerFormat = Literal["mcq", "short_answer", "freeform"]

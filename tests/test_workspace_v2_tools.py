@@ -1,11 +1,9 @@
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from visual_coding_agent_harness.agents.runtime.lifecycle import RunContext
-from visual_coding_agent_harness.agents.runtime.program_normalizer import ProgramNormalizer
-from visual_coding_agent_harness.agents.runtime.state import RoundState, RunState
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.protocol import ToolRequest
 from visual_coding_agent_harness.registry import ToolError, ToolRegistry
@@ -82,15 +80,16 @@ class InvalidRefinementBackend(RecordingBackend):
         return super().generate(request)
 
 
-def _runtime_context(workspace: EvidenceWorkspace, registry: ToolRegistry) -> RunContext:
-    return RunContext(
-        workspace=workspace,
-        scene_index=None,
-        budget=None,
-        run_state=RunState(question="q", video_path="/videos/demo.mp4"),
-        round_state=RoundState(round_number=1),
-        registry=registry,
-    )
+@dataclass
+class _ToolSpecContext:
+    workspace: EvidenceWorkspace
+    registry: ToolRegistry
+    scene_index: object | None = None
+    budget: object | None = None
+
+
+def _tool_spec_context(workspace: EvidenceWorkspace, registry: ToolRegistry) -> _ToolSpecContext:
+    return _ToolSpecContext(workspace=workspace, registry=registry)
 
 
 def test_workspace_v2_search_returns_candidate_only_hits(tmp_path: Path) -> None:
@@ -145,8 +144,8 @@ def test_workspace_v2_list_reads_segments_and_workspace_sections(tmp_path: Path)
     assert entities["items"][0]["name"] == "Austria-Hungary"
 
 
-def test_workspace_v2_registry_installs_runtime_normalizers(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_runtime_specs")
+def test_workspace_v2_registry_installs_tool_normalizers(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_tool_specs")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
 
     for tool_name in ("read_segment", "read_clip", "search", "list", "verify", "synthesize_memory", "answer"):
@@ -156,13 +155,15 @@ def test_workspace_v2_registry_installs_runtime_normalizers(tmp_path: Path) -> N
 def test_workspace_v2_verify_normalizer_accepts_legacy_citation_args(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_legacy_args")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+    normalizer = registry.get_runtime_spec("verify").argument_normalizer
+    assert normalizer is not None
 
-    requests = ProgramNormalizer(registry).normalize(
-        [{"tool": "verify", "args": {"answer": "D", "citations": ["mem_0001"], "final": True}}],
-        ctx=_runtime_context(workspace, registry),
+    normalized = normalizer(
+        _tool_spec_context(workspace, registry),
+        ToolRequest(tool="verify", arguments={"answer": "D", "citations": ["mem_0001"], "final": True}),
     )
 
-    assert requests[0].arguments == {
+    assert normalized == {
         "claim": "D",
         "against": {"citations": ["mem_0001"], "final": True},
     }
@@ -173,7 +174,7 @@ def test_read_segment_verify_semantic_key_preserves_focus(tmp_path: Path) -> Non
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
     key_builder = registry.get_runtime_spec("read_segment").semantic_key_builder
     assert key_builder is not None
-    ctx = _runtime_context(workspace, registry)
+    ctx = _tool_spec_context(workspace, registry)
 
     first = key_builder(
         ctx,

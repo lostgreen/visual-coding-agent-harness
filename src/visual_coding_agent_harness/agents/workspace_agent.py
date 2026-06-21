@@ -8,11 +8,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..registry import ToolError, ToolRegistry
+from ..protocol import ToolRequest, ToolResult
+from ..registry import DuplicateGuardPolicy, ToolError, ToolRegistry
 from ..workspace import EvidenceWorkspace
-from .runtime.host import ToolRuntimeHost
-from .runtime.lifecycle import RunContext
-from .runtime.state import RoundState, RunState
 
 
 DISPOSITION_TOOLS = {
@@ -30,6 +28,32 @@ class WorkspaceRunResult:
     confidence: str = ""
     rounds: int = 0
     metadata: Mapping[str, Any] | None = None
+
+
+@dataclass
+class _MvpRoundState:
+    round_number: int
+    issued_tool_calls: int = 0
+
+
+@dataclass
+class _MvpExecutionContext:
+    workspace: EvidenceWorkspace
+    registry: ToolRegistry
+    round_state: _MvpRoundState
+    seen_tool_semantic_keys: set[str]
+    scene_index: Any | None = None
+    budget: Any | None = None
+    skill_runtime: Any | None = None
+    evidence_policy: Any | None = None
+    record_trace: Any | None = None
+
+    @property
+    def issued_tool_calls(self) -> int:
+        return self.round_state.issued_tool_calls
+
+    def increment_tool_calls(self, count: int = 1) -> None:
+        self.round_state.issued_tool_calls += int(count)
 
 
 class WorkspaceVisualAgent:
@@ -53,14 +77,10 @@ class WorkspaceVisualAgent:
         self.video_path = video_path
         self.video_map = video_map
         self.log_root = Path(log_root) if log_root is not None else workspace.root / "workspace_logs"
-        self.runtime_host = ToolRuntimeHost(
-            registry=registry,
-            workspace=workspace,
-        )
 
     def run(self, question: str) -> WorkspaceRunResult:
         last_tool_result = ""
-        run_state = RunState(question=question, video_path=self.video_path)
+        seen_tool_semantic_keys: set[str] = set()
         for round_number in range(1, self.max_rounds + 1):
             plan_action = self._decide_plan(
                 question=question,
@@ -73,7 +93,7 @@ class WorkspaceVisualAgent:
                         plan_action,
                         question=question,
                         rounds=round_number,
-                        run_state=run_state,
+                        seen_tool_semantic_keys=seen_tool_semantic_keys,
                     )
                 except (ToolError, ValueError) as exc:
                     last_tool_result = f"answer rejected: {exc}"
@@ -94,7 +114,7 @@ class WorkspaceVisualAgent:
                     plan_action,
                     question=question,
                     round_number=round_number,
-                    run_state=run_state,
+                    seen_tool_semantic_keys=seen_tool_semantic_keys,
                 )
             except (ToolError, ValueError) as exc:
                 last_tool_result = f"tool rejected: {exc}"
@@ -127,17 +147,20 @@ class WorkspaceVisualAgent:
         return self._force_final_answer(
             question=question,
             rounds=self.max_rounds,
-            run_state=run_state,
+            seen_tool_semantic_keys=seen_tool_semantic_keys,
         )
 
-    def _runtime_context(self, *, question: str, round_number: int, run_state: RunState | None = None) -> RunContext:
-        return RunContext(
+    def _execution_context(
+        self,
+        *,
+        round_number: int,
+        seen_tool_semantic_keys: set[str],
+    ) -> _MvpExecutionContext:
+        return _MvpExecutionContext(
             workspace=self.workspace,
-            scene_index=None,
-            budget=None,
-            run_state=run_state or RunState(question=question, video_path=self.video_path),
-            round_state=RoundState(round_number=round_number),
+            round_state=_MvpRoundState(round_number=round_number),
             registry=self.registry,
+            seen_tool_semantic_keys=seen_tool_semantic_keys,
             record_trace=self.workspace.write_trace_event,
         )
 
@@ -432,19 +455,112 @@ class WorkspaceVisualAgent:
         *,
         question: str,
         round_number: int,
-        run_state: RunState | None = None,
+        seen_tool_semantic_keys: set[str],
     ) -> tuple[str, ...]:
-        ctx = self._runtime_context(question=question, round_number=round_number, run_state=run_state)
-        result = self.runtime_host.run(
-            [{"tool": _tool_name(action), "args": _action_args(action)}],
-            ctx=ctx,
+        del question
+        ctx = self._execution_context(
+            round_number=round_number,
+            seen_tool_semantic_keys=seen_tool_semantic_keys,
         )
-        if not result.observation_ids and result.rejections:
-            rejection = result.rejections[-1]
-            reason = str(rejection.get("reason") or "tool_call_rejected").strip()
-            message = str(rejection.get("message") or "").strip()
-            raise ValueError(reason + (f": {message}" if message else ""))
-        return tuple(str(item) for item in result.observation_ids)
+        request = self._normalize_tool_action(
+            _tool_name(action),
+            _action_args(action),
+            ctx=ctx,
+            request_id="1",
+        )
+        self.workspace.write_trace_event(
+            "tool_use",
+            {"step": 1, "tool": request.tool, "arguments": dict(request.arguments)},
+        )
+        semantic_key = self._duplicate_guard_key(request, ctx=ctx)
+        if semantic_key and semantic_key in seen_tool_semantic_keys:
+            rejection = {
+                "step": 1,
+                "tool": request.tool,
+                "reason": "duplicate_tool_call",
+                "message": f"{request.tool} repeats semantic key {semantic_key}.",
+                "payload": {"tool": request.tool, "semantic_key": semantic_key},
+            }
+            self.workspace.write_trace_event("tool_call_rejected", rejection)
+            raise ValueError(f"duplicate_tool_call: {request.tool} repeats semantic key {semantic_key}.")
+
+        ctx.increment_tool_calls()
+        raw_output = dict(self.registry.execute(request.tool, request.arguments))
+        if semantic_key:
+            seen_tool_semantic_keys.add(semantic_key)
+        observation = self.workspace.write_observation(
+            tool_name=request.tool,
+            input_artifacts=raw_output.get("input_artifacts", []),
+            claim=str(raw_output.get("claim", "")),
+            confidence=float(raw_output.get("confidence", 0.0)),
+            regions=raw_output.get("regions", []),
+            limitations=str(raw_output.get("limitations", "")),
+            confidence_signal=str(raw_output.get("confidence_signal", "")),
+            raw_output=raw_output,
+        )
+        self.workspace.write_trace_event(
+            "tool_result",
+            {
+                "step": 1,
+                "tool": request.tool,
+                "observation_id": observation.observation_id,
+            },
+        )
+        observation_ids = [observation.observation_id]
+        result = ToolResult.from_mapping(request=request, output=raw_output)
+        for observation_id in self._adapted_observation_ids(request, result, ctx=ctx):
+            if observation_id not in observation_ids:
+                observation_ids.append(observation_id)
+        return tuple(observation_ids)
+
+    def _normalize_tool_action(
+        self,
+        tool_name: str,
+        args: Mapping[str, Any],
+        *,
+        ctx: _MvpExecutionContext,
+        request_id: str,
+    ) -> ToolRequest:
+        canonical_name = self.registry.resolve_alias(str(tool_name).strip())
+        if not canonical_name:
+            raise ValueError("Planner tool action is missing required 'tool'")
+        if not isinstance(args, Mapping):
+            raise ValueError(f"Planner tool action args must be an object for {canonical_name}")
+        request = ToolRequest(tool=canonical_name, arguments=dict(args), request_id=request_id)
+        runtime_spec = self.registry.get_runtime_spec(canonical_name)
+        normalizer = runtime_spec.argument_normalizer
+        if normalizer is None:
+            return request
+        normalized_args = normalizer(ctx, request)
+        if not isinstance(normalized_args, Mapping):
+            raise ValueError(f"Argument normalizer for {canonical_name} must return a mapping")
+        return ToolRequest(
+            tool=request.tool,
+            arguments=dict(normalized_args),
+            request_id=request.request_id,
+            caller=request.caller,
+        )
+
+    def _duplicate_guard_key(self, request: ToolRequest, *, ctx: _MvpExecutionContext) -> str:
+        runtime_spec = self.registry.get_runtime_spec(request.tool)
+        if runtime_spec.duplicate_guard_policy is DuplicateGuardPolicy.OFF:
+            return ""
+        builder = runtime_spec.semantic_key_builder
+        if builder is None:
+            return ""
+        return str(builder(ctx, request) or "").strip()
+
+    def _adapted_observation_ids(
+        self,
+        request: ToolRequest,
+        result: ToolResult,
+        *,
+        ctx: _MvpExecutionContext,
+    ) -> tuple[str, ...]:
+        adapter = self.registry.get_runtime_spec(request.tool).observation_adapter
+        if adapter is None:
+            return ()
+        return _coerce_observation_ids(adapter(ctx, request, result))
 
     def _commit_required(self, tool_name: str, observation: Any | None = None) -> bool:
         canonical_name = self.registry.resolve_alias(tool_name)
@@ -461,18 +577,24 @@ class WorkspaceVisualAgent:
         *,
         question: str,
         rounds: int,
-        run_state: RunState | None = None,
+        seen_tool_semantic_keys: set[str],
     ) -> WorkspaceRunResult:
         args = _action_args(action)
         try:
             self.registry.get_runtime_spec("answer")
         except ToolError:
             return _answer_result(action, rounds=rounds)
-        normalized = self.runtime_host.normalize_program(
-            [{"tool": "answer", "args": args}],
-            ctx=self._runtime_context(question=question, round_number=rounds, run_state=run_state),
+        del question
+        request = self._normalize_tool_action(
+            "answer",
+            args,
+            ctx=self._execution_context(
+                round_number=rounds,
+                seen_tool_semantic_keys=seen_tool_semantic_keys,
+            ),
+            request_id="answer",
         )
-        normalized_args = dict(normalized[0].get("args", {})) if normalized else args
+        normalized_args = dict(request.arguments)
         output = self.registry.execute("answer", normalized_args)
         citations = output.get("citations", ())
         citation_values = citations if isinstance(citations, Sequence) and not isinstance(citations, str) else ()
@@ -484,10 +606,21 @@ class WorkspaceVisualAgent:
             metadata={"raw_output": dict(output)},
         )
 
-    def _force_final_answer(self, *, question: str, rounds: int, run_state: RunState) -> WorkspaceRunResult:
+    def _force_final_answer(
+        self,
+        *,
+        question: str,
+        rounds: int,
+        seen_tool_semantic_keys: set[str],
+    ) -> WorkspaceRunResult:
         action = _coerce_answer_action(self._decide_final(question=question, round_number=rounds))
         try:
-            result = self._finalize_answer(action, question=question, rounds=rounds, run_state=run_state)
+            result = self._finalize_answer(
+                action,
+                question=question,
+                rounds=rounds,
+                seen_tool_semantic_keys=seen_tool_semantic_keys,
+            )
         except (ToolError, ValueError) as exc:
             result = _answer_result(action, rounds=rounds)
             metadata = dict(result.metadata or {})
@@ -1062,6 +1195,16 @@ def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         return []
     return [item for item in value if isinstance(item, Mapping)]
+
+
+def _coerce_observation_ids(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(str(item) for item in value if str(item))
+    return (str(value),)
 
 
 def _answer_result(action: Mapping[str, Any], *, rounds: int) -> WorkspaceRunResult:

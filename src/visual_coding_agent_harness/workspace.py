@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .agents.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
-from .agents.output_quality import is_unsupported_claim
-from .agents.transcript_binder import TranscriptEvidenceBinder
+from .agent_contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
+from .output_quality import is_unsupported_claim
+from .transcript_binder import TranscriptEvidenceBinder
 from .contracts import (
     ClaimModality,
     ClaimRelation,
@@ -2555,12 +2555,15 @@ class EvidenceWorkspace:
         max_chains: int = 100,
     ) -> Mapping[str, Any]:
         chains = self.evidence_chain_summaries(max_chains=max_chains)
+        if len(chains) < max_chains:
+            chains.extend(self.memory_evidence_chain_summaries(max_chains=max_chains - len(chains)))
         total_mapped = len(self.mapped_evidence_records())
         payload: dict[str, Any] = {
             "schema_version": "EvidenceChainsV1",
             "workspace_root": self.root.as_posix(),
             "chain_count": len(chains),
             "total_mapped_evidence": total_mapped,
+            "total_memory_evidence": len(_answer_support_memory_entries(self.memory_entries())),
             "truncated": total_mapped > len(chains),
             "chains": chains,
         }
@@ -2578,6 +2581,65 @@ class EvidenceWorkspace:
             },
         )
         return payload
+
+    def memory_evidence_chain_summaries(self, *, max_chains: int = 100) -> list[dict[str, Any]]:
+        chains: list[dict[str, Any]] = []
+        observations_by_id = {observation.observation_id: observation for observation in self.read_observations()}
+        for entry in _answer_support_memory_entries(self.memory_entries()):
+            anchor = next((candidate for candidate in entry.anchors if candidate.observation_id), None)
+            observation = observations_by_id.get(anchor.observation_id) if anchor is not None else None
+            stages = ["memory"]
+            records: list[dict[str, Any]] = []
+            if observation is not None:
+                stages.insert(0, "observation")
+                records.append(
+                    {
+                        "stage": "observation",
+                        "observation_id": observation.observation_id,
+                        "tool": observation.tool,
+                        "claim": _bounded_inline(observation.claim, 240),
+                        "confidence": observation.confidence,
+                    }
+                )
+            if anchor is not None:
+                anchor_stage_index = 1 if observation is not None else 0
+                stages.insert(anchor_stage_index, "anchor")
+                records.append(
+                    {
+                        "stage": "anchor",
+                        "anchor_id": anchor.anchor_id,
+                        "observation_id": anchor.observation_id,
+                        "source_kind": anchor.source_kind,
+                        "segment_id": anchor.segment_id,
+                        "time_range": [anchor.start_sec, anchor.end_sec],
+                        "modality": anchor.modality,
+                        "excerpt": _bounded_inline(anchor.excerpt, 240),
+                    }
+                )
+            records.append(
+                {
+                    "stage": "memory",
+                    "memory_id": entry.entry_id,
+                    "kind": entry.kind,
+                    "claim": _bounded_inline(entry.claim, 240),
+                    "supports_option": entry.supports_option,
+                    "confidence": entry.confidence,
+                    "anchor_ids": [anchor.anchor_id for anchor in entry.anchors],
+                }
+            )
+            chains.append(
+                {
+                    "leaf_evidence_id": entry.entry_id,
+                    "memory_id": entry.entry_id,
+                    "observation_id": observation.observation_id if observation is not None else "",
+                    "frame_set_id": observation.frame_set_id if observation is not None else None,
+                    "stages": stages,
+                    "records": records,
+                }
+            )
+            if len(chains) >= max_chains:
+                break
+        return chains
 
     def export_longvideoagent_trajectory(
         self,
@@ -3425,6 +3487,14 @@ def _latest_index_patch_lines(patch: Any) -> list[str]:
     if len(children) > 5:
         lines.append(f"... more refined children hidden: {len(children) - 5}")
     return lines
+
+
+def _answer_support_memory_entries(entries: Sequence[MemoryEntry]) -> list[MemoryEntry]:
+    return [
+        entry
+        for entry in entries
+        if entry.kind in {"answer_support", "synthesized_support", "answer_conflict_resolved"}
+    ]
 
 
 def _evidence_coverage_lines(workspace: "EvidenceWorkspace") -> list[str]:

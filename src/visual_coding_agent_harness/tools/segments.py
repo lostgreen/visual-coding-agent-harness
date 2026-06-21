@@ -7,9 +7,9 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
-from ..agents.contracts import resolve_nframes
-from ..agents.open_questions import exploration_question
-from ..agents.output_quality import confidence_signal_from_text
+from ..agent_contracts import resolve_nframes
+from ..open_questions import exploration_question
+from ..output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace

@@ -4,12 +4,19 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from visual_coding_agent_harness.agents.contracts import CONTRACT_VERSION
-from visual_coding_agent_harness.agents.final_control import FinalDecisionOwner
+from visual_coding_agent_harness.agent_contracts import CONTRACT_VERSION
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
+
+
+class FinalDecisionOwner(str, Enum):
+    MODEL = "model"
+    FORMAT_REPAIR = "format_repair"
+    NONE = "none"
+    FRAMEWORK = "framework"
 
 
 @dataclass

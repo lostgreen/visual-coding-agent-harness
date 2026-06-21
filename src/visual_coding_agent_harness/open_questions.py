@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from typing import Sequence
 
-from ..backends.base import BackendRequest, VisionLanguageBackend
-from .question_policy import extract_candidate_options
+from .backends.base import BackendRequest, VisionLanguageBackend
 
 
 _OPTION_LINE_RE = re.compile(r"^\s*[A-H][\).:-]\s+\S.*$", re.IGNORECASE)
@@ -35,6 +35,28 @@ class QuestionContext:
     answer_question: str
     navigation_question: str
     vlm_safe_question: str
+
+
+def extract_candidate_options(question: str) -> Sequence[str]:
+    options = []
+    for line in question.splitlines():
+        stripped = line.strip()
+        if re.match(r"^[A-H][.)]\s+\S+", stripped):
+            options.append(stripped)
+    if options:
+        return options
+
+    normalized = re.sub(r"\bOptions\s*:\s*", " ", question, flags=re.IGNORECASE)
+    matches = re.finditer(
+        r"(?<![A-Za-z0-9])([A-H])([.)])\s+(.*?)(?=(?<![A-Za-z0-9])[A-H][.)]\s+|$)",
+        normalized,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for match in matches:
+        text = " ".join(str(match.group(3)).split()).strip()
+        if text:
+            options.append(f"{match.group(1).upper()}{match.group(2)} {text}")
+    return options
 
 
 def build_question_context(question: str) -> QuestionContext:

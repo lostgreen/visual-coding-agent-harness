@@ -1,4 +1,4 @@
-"""Runtime metadata installers for video exploration tools."""
+"""Tool metadata installers for video exploration tools."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ from typing import Any
 
 from ..protocol import ToolRequest
 from ..registry import DuplicateGuardPolicy, ToolError, ToolRegistry
-from ..agents.runtime.lifecycle import RunContext
+
+ToolSpecContext = Any
 
 
-_CORE_RUNTIME_SPEC_TOOLS = (
+_CORE_TOOL_SPEC_TOOLS = (
     "bind_asr_claim",
     "target_coverage",
     "ground_question",
@@ -40,8 +41,8 @@ _CORE_RUNTIME_SPEC_TOOLS = (
 )
 
 
-def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = False) -> ToolRegistry:
-    """Attach lifecycle metadata to the real video exploration tools."""
+def install_video_tool_specs(registry: ToolRegistry, *, required: bool = False) -> ToolRegistry:
+    """Attach tool metadata to the real video exploration tools."""
 
     missing: list[str] = []
     _replace(
@@ -251,9 +252,9 @@ def install_video_runtime_specs(registry: ToolRegistry, *, required: bool = Fals
         duplicate_guard_policy=DuplicateGuardPolicy.OFF,
     )
     if required:
-        required_missing = [tool_name for tool_name in _CORE_RUNTIME_SPEC_TOOLS if tool_name in missing]
+        required_missing = [tool_name for tool_name in _CORE_TOOL_SPEC_TOOLS if tool_name in missing]
         if required_missing:
-            raise ToolError("Missing required runtime spec tools: " + ", ".join(required_missing))
+            raise ToolError("Missing required tool spec tools: " + ", ".join(required_missing))
     return registry
 
 
@@ -295,14 +296,14 @@ def _read_segment_verify_has_evidence(output: Mapping[str, Any]) -> bool:
 
 
 def _key_from_normalizer(tool_name: str, normalizer: Any):
-    def build(ctx: RunContext, request: ToolRequest) -> str:
+    def build(ctx: ToolSpecContext, request: ToolRequest) -> str:
         normalized = normalizer(ctx, request)
         return f"{tool_name}:{_canonical_json(normalized)}"
 
     return build
 
 
-def _read_segment_semantic_key(ctx: RunContext, request: ToolRequest) -> str:
+def _read_segment_semantic_key(ctx: ToolSpecContext, request: ToolRequest) -> str:
     normalized = _normalize_read_segment(ctx, request)
     mode = _text(normalized.get("mode")) or "index"
     sub_window = normalized.get("sub_window") if isinstance(normalized.get("sub_window"), Mapping) else {}
@@ -328,7 +329,7 @@ def _read_segment_semantic_key(ctx: RunContext, request: ToolRequest) -> str:
     return f"read_segment:{mode}:{_canonical_json(key)}"
 
 
-def _normalize_bind_asr_claim(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_bind_asr_claim(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "segment_id": _text(args.get("segment_id")),
@@ -336,7 +337,7 @@ def _normalize_bind_asr_claim(_ctx: RunContext, request: ToolRequest) -> Mapping
     }
 
 
-def _normalize_target_coverage(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_target_coverage(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "targets": _string_list(args.get("targets")),
@@ -348,7 +349,7 @@ def _normalize_target_coverage(_ctx: RunContext, request: ToolRequest) -> Mappin
     }
 
 
-def _normalize_ground_question(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_ground_question(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "query": _text(args.get("query")),
@@ -357,7 +358,7 @@ def _normalize_ground_question(_ctx: RunContext, request: ToolRequest) -> Mappin
     }
 
 
-def _normalize_search_segments(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_search_segments(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "query": _text(args.get("query")),
@@ -367,7 +368,7 @@ def _normalize_search_segments(_ctx: RunContext, request: ToolRequest) -> Mappin
     }
 
 
-def _normalize_read_segment_detail(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_read_segment_detail(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "segment_id": _text(args.get("segment_id")),
@@ -379,7 +380,7 @@ def _normalize_read_segment_detail(_ctx: RunContext, request: ToolRequest) -> Ma
     }
 
 
-def _normalize_vision_read(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_vision_read(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     normalized: dict[str, Any] = {
         "video_path": _text(args.get("video_path")),
@@ -402,7 +403,7 @@ def _normalize_vision_read(_ctx: RunContext, request: ToolRequest) -> Mapping[st
     return normalized
 
 
-def _normalize_global_gist(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_global_gist(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     normalized: dict[str, Any] = {
         "video_path": _text(args.get("video_path")),
@@ -416,7 +417,7 @@ def _normalize_global_gist(_ctx: RunContext, request: ToolRequest) -> Mapping[st
     return normalized
 
 
-def _normalize_query_context(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_query_context(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     normalized: dict[str, Any] = {
         "video_path": _text(args.get("video_path")),
@@ -431,7 +432,7 @@ def _normalize_query_context(_ctx: RunContext, request: ToolRequest) -> Mapping[
     return normalized
 
 
-def _normalize_caption_segment(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_caption_segment(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     normalized: dict[str, Any] = {
         "video_path": _text(args.get("video_path")),
@@ -447,7 +448,7 @@ def _normalize_caption_segment(_ctx: RunContext, request: ToolRequest) -> Mappin
     return normalized
 
 
-def _normalize_write_memory(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_write_memory(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "kind": _text(args.get("kind")) or "note",
@@ -468,7 +469,7 @@ def _normalize_write_memory(_ctx: RunContext, request: ToolRequest) -> Mapping[s
     }
 
 
-def _normalize_read_workspace(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_read_workspace(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "section": _text(args.get("section")),
@@ -476,7 +477,7 @@ def _normalize_read_workspace(_ctx: RunContext, request: ToolRequest) -> Mapping
     }
 
 
-def _normalize_commit_observation(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_commit_observation(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "observation_id": _text(args.get("observation_id")),
@@ -484,7 +485,7 @@ def _normalize_commit_observation(_ctx: RunContext, request: ToolRequest) -> Map
     }
 
 
-def _normalize_observation_reason_disposition(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_observation_reason_disposition(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "observation_id": _text(args.get("observation_id")),
@@ -492,7 +493,7 @@ def _normalize_observation_reason_disposition(_ctx: RunContext, request: ToolReq
     }
 
 
-def _normalize_defer_observation(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_defer_observation(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "observation_id": _text(args.get("observation_id")),
@@ -501,7 +502,7 @@ def _normalize_defer_observation(_ctx: RunContext, request: ToolRequest) -> Mapp
     }
 
 
-def _normalize_read_clip(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_read_clip(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     scope = args.get("scope") if isinstance(args.get("scope"), Mapping) else {}
     sampling = args.get("sampling") if isinstance(args.get("sampling"), Mapping) else {}
@@ -512,7 +513,7 @@ def _normalize_read_clip(_ctx: RunContext, request: ToolRequest) -> Mapping[str,
     }
 
 
-def _normalize_read_segment(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_read_segment(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     sub_window = args.get("sub_window") if isinstance(args.get("sub_window"), Mapping) else None
     return {
@@ -525,7 +526,7 @@ def _normalize_read_segment(_ctx: RunContext, request: ToolRequest) -> Mapping[s
     }
 
 
-def _normalize_workspace_v2_search(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_workspace_v2_search(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     scope = args.get("scope") if isinstance(args.get("scope"), Mapping) else {}
     return {
@@ -536,7 +537,7 @@ def _normalize_workspace_v2_search(_ctx: RunContext, request: ToolRequest) -> Ma
     }
 
 
-def _normalize_workspace_v2_list(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_workspace_v2_list(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     filter_payload = args.get("filter") if isinstance(args.get("filter"), Mapping) else {}
     return {
@@ -545,7 +546,7 @@ def _normalize_workspace_v2_list(_ctx: RunContext, request: ToolRequest) -> Mapp
     }
 
 
-def _normalize_workspace_v2_verify(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_workspace_v2_verify(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     against = dict(args.get("against")) if isinstance(args.get("against"), Mapping) else {}
     citations = _string_list(
@@ -565,7 +566,7 @@ def _normalize_workspace_v2_verify(_ctx: RunContext, request: ToolRequest) -> Ma
     }
 
 
-def _normalize_workspace_v2_synthesize_memory(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_workspace_v2_synthesize_memory(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "claim": _text(args.get("claim")),
@@ -577,7 +578,7 @@ def _normalize_workspace_v2_synthesize_memory(_ctx: RunContext, request: ToolReq
     }
 
 
-def _normalize_workspace_v2_answer(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_workspace_v2_answer(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     text = _text(args.get("text"))
     if not text:
@@ -591,11 +592,11 @@ def _normalize_workspace_v2_answer(_ctx: RunContext, request: ToolRequest) -> Ma
     }
 
 
-def _normalize_no_args(_ctx: RunContext, _request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_no_args(_ctx: ToolSpecContext, _request: ToolRequest) -> Mapping[str, Any]:
     return {}
 
 
-def _read_timeline_sorted_key(ctx: RunContext, request: ToolRequest) -> str:
+def _read_timeline_sorted_key(ctx: ToolSpecContext, request: ToolRequest) -> str:
     del request
     entries = ctx.workspace.read_timeline_sorted() if ctx.workspace is not None else []
     tail = entries[-1] if entries else {}
@@ -603,7 +604,7 @@ def _read_timeline_sorted_key(ctx: RunContext, request: ToolRequest) -> str:
     return f"read_timeline_sorted:{len(entries)}:{tail_key}"
 
 
-def _normalize_verify_segment_anchors(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_verify_segment_anchors(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     normalized: dict[str, Any] = {
         "video_path": _text(args.get("video_path")),
@@ -623,7 +624,7 @@ def _normalize_verify_segment_anchors(_ctx: RunContext, request: ToolRequest) ->
     return normalized
 
 
-def _normalize_verify_ledger_answer(_ctx: RunContext, request: ToolRequest) -> Mapping[str, Any]:
+def _normalize_verify_ledger_answer(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
     return {
         "answer": _text(args.get("answer")),

@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
-from ..agents.open_questions import exploration_question
+from ..open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace

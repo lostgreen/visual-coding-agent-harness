@@ -1,7 +1,6 @@
 from pathlib import Path
 
-from visual_coding_agent_harness.agents.answer_agent import arbitrate_evidence_table
-from visual_coding_agent_harness.agents.distill import distill
+from visual_coding_agent_harness.distill import distill
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -89,11 +88,9 @@ def test_repetition_loop_observation_is_weak(tmp_path: Path):
         options=["A. David", "D. The Ecstasy of Saint Teresa"],
     )
     row = table["groups"]["D"][0]
-    result = arbitrate_evidence_table(table)
     trace = (workspace.root / "trace.jsonl").read_text(encoding="utf-8")
 
     assert row["grounding_quality"] == "weak"
-    assert result.status == "need_more_evidence"
     assert "tool_output_degenerate" in trace
 
 

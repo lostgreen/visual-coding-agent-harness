@@ -1,4 +1,4 @@
-from visual_coding_agent_harness.agents.contracts import resolve_nframes
+from visual_coding_agent_harness.agent_contracts import resolve_nframes
 
 
 def test_default_returns_128():

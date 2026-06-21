@@ -11,19 +11,10 @@ from dataclasses import dataclass, field
 from string import Formatter
 from typing import Any, Callable, Dict, Mapping, Sequence
 
-from .agents.runtime.lifecycle import (
-    PostToolHook,
-    PreToolHook,
-    RunContext,
-    apply_post_tool_chain,
-    evaluate_pre_tool_chain,
-    mark_successful_tool_call,
-)
-from .agents.contracts import resolve_nframes
-from .agents.distill import distill
-from .agents.output_quality import DEGENERATE_CONFIDENCE_SIGNAL, is_degenerate
+from .agent_contracts import resolve_nframes
+from .distill import distill
+from .output_quality import DEGENERATE_CONFIDENCE_SIGNAL, is_degenerate
 from .registry import ToolRegistry
-from .protocol import ToolRequest, ToolResult
 from .workspace import EvidenceRecord, EvidenceWorkspace, MapUpdateProposal, Observation
 
 
@@ -43,9 +34,9 @@ class ProgramInterpreter:
         registry: ToolRegistry,
         workspace: EvidenceWorkspace,
         *,
-        lifecycle_context: RunContext | None = None,
-        pre_tool_hooks: Sequence[PreToolHook] = (),
-        post_tool_hooks: Sequence[PostToolHook] = (),
+        lifecycle_context: Any | None = None,
+        pre_tool_hooks: Sequence[Any] = (),
+        post_tool_hooks: Sequence[Any] = (),
     ) -> None:
         self.registry = registry
         self.workspace = workspace
@@ -132,29 +123,7 @@ class ProgramInterpreter:
             "tool_use",
             {"step": step_index, "tool": tool_name, "arguments": arguments},
         )
-        request = ToolRequest(tool=tool_name, arguments=arguments, request_id=str(step_index))
-        if self.lifecycle_context is not None and self.pre_tool_hooks:
-            decision = evaluate_pre_tool_chain(self.pre_tool_hooks, self.lifecycle_context, request)
-            if decision.rejected:
-                rejection = {
-                    "step": step_index,
-                    "tool": tool_name,
-                    "reason": decision.reason,
-                    "message": decision.message,
-                    "payload": dict(decision.payload),
-                }
-                rejections.append(rejection)
-                self.workspace.write_trace_event(
-                    "tool_call_rejected",
-                    rejection,
-                )
-                return ()
-
-        if self.lifecycle_context is not None and self.pre_tool_hooks:
-            self.lifecycle_context.increment_tool_calls()
         raw_output = dict(self.registry.execute(tool_name, arguments))
-        if self.lifecycle_context is not None and self.pre_tool_hooks:
-            mark_successful_tool_call(self.lifecycle_context, request)
         is_bad_output, fingerprint = is_degenerate(str(raw_output.get("claim", "")))
         if is_bad_output:
             raw_output["confidence_signal"] = DEGENERATE_CONFIDENCE_SIGNAL
@@ -210,15 +179,7 @@ class ProgramInterpreter:
                 "observation_id": observation.observation_id,
             },
         )
-        if self.lifecycle_context is not None and self.post_tool_hooks:
-            request = ToolRequest(tool=tool_name, arguments=arguments, request_id=str(step_index))
-            result = ToolResult.from_mapping(
-                request=request,
-                output=raw_output,
-            )
-            effects = apply_post_tool_chain(self.post_tool_hooks, self.lifecycle_context, request, result)
-        else:
-            effects = ()
+        effects = ()
         self._write_answer_evidence_rows(observation=observation, raw_output=raw_output)
         distilled_records = distill(observation, self.workspace)
         for evidence_record in distilled_records:

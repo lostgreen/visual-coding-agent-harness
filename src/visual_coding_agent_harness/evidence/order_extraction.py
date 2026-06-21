@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal, Mapping, Sequence
 
-from ..agents.grounding.order_hypotheses import OptionOrderHypothesis, OrderedSetSpec
+from ..order_hypotheses import OptionOrderHypothesis, OrderedSetSpec
 
 
 @dataclass(frozen=True)

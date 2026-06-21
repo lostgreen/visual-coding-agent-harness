@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from visual_coding_agent_harness.agents.budget import AgentBudget
+from visual_coding_agent_harness.agent_budget import AgentBudget
 from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
 

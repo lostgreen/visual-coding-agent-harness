@@ -17,7 +17,7 @@ from ..video_map import (
 )
 from ..workspace import EvidenceWorkspace
 from .frame_cache import FrameSampler
-from .runtime_specs import (
+from .tool_specs import (
     _normalize_read_clip,
     _normalize_read_segment,
     _read_segment_semantic_key,

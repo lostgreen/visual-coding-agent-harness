@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Literal, Mapping, Optional
 
-from ..agents.contracts import resolve_nframes
-from ..agents.open_questions import exploration_question
+from ..agent_contracts import resolve_nframes
+from ..open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..registry import ToolRegistry, tool
 from ..video_map import VideoMap, VideoMapStore

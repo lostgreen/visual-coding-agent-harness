@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
-from visual_coding_agent_harness.agents.skills.predicates import temporal_order_consistent
+from visual_coding_agent_harness.evidence_predicates import temporal_order_consistent
 from visual_coding_agent_harness.registry import ToolRegistry, tool
 from visual_coding_agent_harness.tools.verification import build_verification_registry
 from visual_coding_agent_harness.workspace import EvidenceWorkspace

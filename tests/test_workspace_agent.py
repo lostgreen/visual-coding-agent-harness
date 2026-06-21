@@ -385,6 +385,7 @@ def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp
 
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
+    assert not hasattr(agent, "runtime_host")
     assert result.answer == "D"
     assert workspace.observation_status("obs_0001") == "acknowledged"
     assert workspace.observation_status("obs_0002") == "acknowledged"

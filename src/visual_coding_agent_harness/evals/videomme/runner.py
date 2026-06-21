@@ -11,8 +11,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from visual_coding_agent_harness.agents.budget import AgentBudget
-from visual_coding_agent_harness.agents.context_budget import parse_budget_ratios
+from visual_coding_agent_harness.agent_budget import AgentBudget
+from visual_coding_agent_harness.context_budget import parse_budget_ratios
 from visual_coding_agent_harness.agents.workspace_agent import WorkspaceVisualAgent
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache

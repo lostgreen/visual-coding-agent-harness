@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from visual_coding_agent_harness.agents.distill import distill
-from visual_coding_agent_harness.agents.skills.predicates import grounding_quality_floor
+from visual_coding_agent_harness.distill import distill
+from visual_coding_agent_harness.evidence_predicates import grounding_quality_floor
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry

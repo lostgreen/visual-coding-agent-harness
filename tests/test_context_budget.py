@@ -1,6 +1,6 @@
 import pytest
 
-from visual_coding_agent_harness.agents.context_budget import (
+from visual_coding_agent_harness.context_budget import (
     BudgetExceededError,
     CompactStrategy,
     ContextBudgetAllocator,

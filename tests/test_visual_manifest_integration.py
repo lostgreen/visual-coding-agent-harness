@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from visual_coding_agent_harness.agents.contracts import CONTRACT_VERSION
+from visual_coding_agent_harness.agent_contracts import CONTRACT_VERSION
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.registry import ToolRegistry

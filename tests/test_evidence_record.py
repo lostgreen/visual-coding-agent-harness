@@ -86,3 +86,55 @@ def test_exports_compact_evidence_chains(tmp_path: Path):
     assert disk_payload["chains"][0]["stages"] == ["distilled", "ledger", "mapped"]
     assert disk_payload["chains"][0]["records"][1]["parent_id"] == root.evidence_id
     assert "raw_output" not in json.dumps(disk_payload)
+
+
+def test_exports_workspace_memory_evidence_chains_when_legacy_records_are_absent(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_chain")
+    observation = workspace.write_observation(
+        tool_name="read_segment",
+        claim="The video shows Austria-Hungary rising and falling.",
+        confidence=0.8,
+        raw_output={
+            "produced_anchors": [
+                {
+                    "anchor_id": "clip_anch_seg_0001",
+                    "source_kind": "visual_fact",
+                    "modality": "visual",
+                    "excerpt": "Austria-Hungary rising and falling.",
+                }
+            ]
+        },
+    )
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": "clip_anch_seg_0001",
+                    "source_kind": "visual_fact",
+                    "modality": "visual",
+                    "excerpt": "Austria-Hungary rising and falling.",
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "answer_support",
+                    "claim": "The video shows Austria-Hungary rising and falling.",
+                    "supports_option": "D",
+                    "anchor_ids": ["clip_anch_seg_0001"],
+                    "confidence": "high",
+                }
+            ],
+        },
+    )
+
+    payload = workspace.export_evidence_chains()
+
+    assert payload["chain_count"] == 1
+    chain = payload["chains"][0]
+    assert chain["leaf_evidence_id"] == "mem_0001"
+    assert chain["stages"] == ["observation", "anchor", "memory"]
+    assert chain["memory_id"] == "mem_0001"
+    assert chain["observation_id"] == observation.observation_id
+    assert chain["records"][-1]["kind"] == "answer_support"
+    assert chain["records"][-1]["supports_option"] == "D"

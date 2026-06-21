@@ -7,7 +7,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from ..registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
-from ..agents.skills.predicates import (
+from ..evidence_predicates import (
     direct_floor_holds,
     grounding_quality_floor,
     no_decisive_weak_grounding,
