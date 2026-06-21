@@ -66,6 +66,8 @@ class EvalConfig:
     planner_api_base: str = ""
     planner_api_model: str = ""
     planner_api_key: str = "EMPTY"
+    planner_api_user_key: str = ""
+    planner_api_biz_scene: str = ""
     planner_api_version: str = ""
     planner_api_base_env: str = ""
     planner_api_model_env: str = ""
@@ -446,6 +448,8 @@ def run_eval_cases(
         "planner_api_base": config.planner_api_base,
         "planner_api_model": config.planner_api_model,
         "planner_api_key_set": bool(config.planner_api_key and config.planner_api_key != "EMPTY"),
+        "planner_api_user_key_set": bool(config.planner_api_user_key),
+        "planner_api_biz_scene_set": bool(config.planner_api_biz_scene),
         "planner_api_version": config.planner_api_version,
         "planner_api_base_env": config.planner_api_base_env,
         "planner_api_model_env": config.planner_api_model_env,
@@ -1278,6 +1282,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--planner-api-base", default=None)
     parser.add_argument("--planner-api-model", default=None)
     parser.add_argument("--planner-api-key", default=None)
+    parser.add_argument("--planner-api-user-key", default=None)
+    parser.add_argument("--planner-api-biz-scene", default=None)
     parser.add_argument("--planner-api-version", default=None)
     parser.add_argument("--planner-api-base-env", default=None)
     parser.add_argument("--planner-api-model-env", default=None)
@@ -1520,6 +1526,12 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         planner_api_key=str(
             _arg_or_config(args, config_data, "planner_api_key", "planner.api_key", "planner_api.api_key", default="EMPTY")
         ),
+        planner_api_user_key=str(
+            _arg_or_config(args, config_data, "planner_api_user_key", "planner.user_key", "planner_api.user_key", default="")
+        ),
+        planner_api_biz_scene=str(
+            _arg_or_config(args, config_data, "planner_api_biz_scene", "planner.biz_scene", "planner_api.biz_scene", default="")
+        ),
         planner_api_version=str(
             _arg_or_config(args, config_data, "planner_api_version", "planner.api_version", "planner_api.api_version", default="")
         ),
@@ -1646,6 +1658,8 @@ def build_backend(config: EvalConfig) -> Any:
             api_version_env=config.planner_api_version_env,
             user_key_env=config.planner_api_user_key_env,
             biz_scene_env=config.planner_api_biz_scene_env,
+            user_key=config.planner_api_user_key,
+            biz_scene=config.planner_api_biz_scene,
             allow_media=config.planner_api_use_for_tools,
             timeout=config.planner_api_timeout,
             thinking_token_budget=config.planner_thinking_token_budget,

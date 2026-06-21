@@ -991,6 +991,94 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.planner_api_biz_scene_env, "GEMINI_BIZ_SCENE")
         self.assertTrue(config.planner_api_use_for_tools)
 
+    def test_planner_api_gemini_gateway_config_accepts_private_yaml_values_without_serializing_secrets(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "local.gemini.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "planner_api:",
+                        "  type: gemini_gateway",
+                        "  base: http://gateway.internal/openai/team/v1/chat/completions",
+                        "  model: pa/gemini-2.5-flash",
+                        "  api_key: private-api-key",
+                        "  user_key: team-user-key",
+                        "  biz_scene: offline",
+                        "  use_for_tools: true",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            parser = eval_runner.build_arg_parser()
+            args = parser.parse_args(
+                [
+                    "--config",
+                    str(config_path),
+                    "--model-path",
+                    "/models/vl",
+                    "--run-root",
+                    str(Path(tmp) / "run"),
+                    "--workspace-root",
+                    str(Path(tmp) / "run/workspaces"),
+                    "--cases",
+                    "605-1",
+                ]
+            )
+            config = eval_runner.config_from_args(args)
+            config.run_root.mkdir(parents=True, exist_ok=True)
+            config.workspace_root.mkdir(parents=True, exist_ok=True)
+            rows = {
+                "605-1": {
+                    "question_id": "605-1",
+                    "video_id": "vid605",
+                    "videoID": "video605",
+                    "task_type": "Information Synopsis",
+                    "question": "What is shown?",
+                    "options": ["A. one", "B. two", "C. three", "D. four"],
+                    "answer": "B",
+                }
+            }
+
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeSceneIndexBuilder):
+                    with patch.object(
+                        eval_runner,
+                        "run_loop",
+                        return_value={
+                            "answer": "B. The visual evidence supports option B.",
+                            "choice": "B",
+                            "status": "final",
+                            "confidence": 0.8,
+                            "citations": ["obs_0001"],
+                            "rounds": 1,
+                            "tools": ["read_clip"],
+                            "segments": ["seg_0001"],
+                            "seconds": 1.0,
+                        },
+                    ):
+                        eval_runner.run_eval_cases(
+                            backend=object(),
+                            rows_by_id=rows,
+                            config=config,
+                            duration_fn=lambda path: 120.0,
+                        )
+
+            run_config = json.loads((config.run_root / "run_config.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(config.planner_api_key, "private-api-key")
+        self.assertEqual(config.planner_api_user_key, "team-user-key")
+        self.assertEqual(config.planner_api_biz_scene, "offline")
+        self.assertTrue(config.planner_api_use_for_tools)
+        serialized = json.dumps(run_config, ensure_ascii=False)
+        self.assertNotIn("private-api-key", serialized)
+        self.assertNotIn("team-user-key", serialized)
+        self.assertEqual(run_config["planner_api_key_set"], True)
+        self.assertEqual(run_config["planner_api_user_key_set"], True)
+        self.assertEqual(run_config["planner_api_biz_scene_set"], True)
+
     def test_build_backend_uses_openai_chat_text_backend_for_planner_api(self):
         from runs import eval_runner
 
@@ -1154,6 +1242,41 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(backend.text_backend.api_type, "gemini_gateway")
         self.assertEqual(backend.text_backend.api_base, "http://gateway.internal/openai/team/v1/chat/completions")
         self.assertEqual(backend.text_backend.model, "pa/gemini-2.5-flash")
+        self.assertEqual(backend.text_backend.user_key, "team-user-key")
+        self.assertEqual(backend.text_backend.biz_scene, "offline")
+
+    def test_build_backend_passes_private_gemini_gateway_yaml_values(self):
+        from runs import eval_runner
+
+        config = eval_runner.EvalConfig(
+            run_root=Path("/tmp/run"),
+            workspace_root=Path("/tmp/run/workspaces"),
+            model_path="/models/vl-should-not-load",
+            planner_api_type="gemini_gateway",
+            planner_api_base="http://gateway.internal/openai/team/v1/chat/completions",
+            planner_api_model="pa/gemini-2.5-flash",
+            planner_api_key="private-api-key",
+            planner_api_user_key="team-user-key",
+            planner_api_biz_scene="offline",
+            planner_api_use_for_tools=True,
+            data_root=Path("/dataset"),
+            parquet_path=Path("/dataset/test.parquet"),
+            video_dir=Path("/dataset/video"),
+            subtitle_dir=Path("/dataset/subtitle"),
+            cases=("605-1",),
+            strategies=("workspace_v2",),
+        )
+
+        with patch(
+            "visual_coding_agent_harness.backends.qwen_vl.QwenVLBackend.from_pretrained",
+            side_effect=AssertionError("local vl should not load"),
+        ):
+            backend = eval_runner.build_backend(config)
+
+        self.assertIs(backend.text_backend, backend.vl_backend)
+        self.assertEqual(backend.text_backend.api_base, "http://gateway.internal/openai/team/v1/chat/completions")
+        self.assertEqual(backend.text_backend.model, "pa/gemini-2.5-flash")
+        self.assertEqual(backend.text_backend.api_key, "private-api-key")
         self.assertEqual(backend.text_backend.user_key, "team-user-key")
         self.assertEqual(backend.text_backend.biz_scene, "offline")
 

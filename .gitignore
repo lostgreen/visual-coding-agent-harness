@@ -1,5 +1,11 @@
 docs/
 plans/
+configs/local*.yaml
+configs/*.private.yaml
+configs/private/
+scripts/audit_videomme_rewrites.py
+scripts/extract_video_segment_evidence.py
+scripts/start_qwen35_9b_planner_vllm.sh
 artifacts/
 experiments/
 .pytest_cache/
