@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 import json
+import mimetypes
+import os
+from pathlib import Path
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Mapping
 
@@ -14,19 +19,48 @@ from .qwen_text import _JSON_TEXT_TASKS, _normalized_structured_json_output, _st
 
 @dataclass
 class OpenAIChatTextBackend:
-    """Text-only backend for vLLM/OpenAI-compatible chat completions."""
+    """Backend for OpenAI-compatible chat completions, with optional frame inputs."""
 
-    api_base: str
-    model: str
+    api_base: str = ""
+    model: str = ""
     api_key: str = "EMPTY"
     timeout: float = 180.0
+    api_type: str = "openai_compatible"
+    api_version: str = ""
+    api_base_env: str = ""
+    model_env: str = ""
+    api_key_env: str = ""
+    api_version_env: str = ""
+    allow_media: bool = False
     thinking_token_budget: int | None = None
     enable_thinking: bool | None = False
     extra_body: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.api_type = _normalized_api_type(self.api_type)
+        if _is_azure_api_type(self.api_type):
+            self.api_base_env = self.api_base_env or "ENDPOINT_URL"
+            self.model_env = self.model_env or "DEPLOYMENT_NAME"
+            self.api_key_env = self.api_key_env or "AZURE_OPENAI_API_KEY"
+            self.api_version_env = self.api_version_env or "AZURE_OPENAI_API_VERSION"
+            self.api_base = self.api_base or os.getenv(self.api_base_env, "")
+            self.model = self.model or os.getenv(self.model_env, "")
+            if not self.api_key or self.api_key == "EMPTY":
+                self.api_key = os.getenv(self.api_key_env, "")
+            self.api_version = self.api_version or os.getenv(self.api_version_env, "") or "2025-01-01-preview"
+        else:
+            if self.api_base_env and not self.api_base:
+                self.api_base = os.getenv(self.api_base_env, "")
+            if self.model_env and not self.model:
+                self.model = os.getenv(self.model_env, "")
+            if self.api_key_env and (not self.api_key or self.api_key == "EMPTY"):
+                self.api_key = os.getenv(self.api_key_env, self.api_key)
+            if self.api_version_env and not self.api_version:
+                self.api_version = os.getenv(self.api_version_env, "")
+
     def generate(self, request: BackendRequest) -> BackendResponse:
-        if request.media_path or request.frames:
-            raise ValueError("OpenAIChatTextBackend is text-only and cannot handle media requests")
+        if (request.media_path or request.frames) and not self.allow_media:
+            raise ValueError("OpenAIChatTextBackend media support is disabled for this route")
         body = self._request_body(request)
         thinking_budget_fallback = False
         try:
@@ -48,24 +82,38 @@ class OpenAIChatTextBackend:
                 "backend": "openai_chat",
                 "task": request.task,
                 "model": self.model,
-                "api_base": _normalized_api_base(self.api_base),
+                "api_type": self.api_type,
                 "thinking_budget_fallback": thinking_budget_fallback,
                 **raw_flags,
+                **self._raw_endpoint_flags(),
             },
         )
 
     def _request_body(self, request: BackendRequest) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": _messages_for_request(request),
-            "max_tokens": int(max(1, request.max_new_tokens)),
-            "temperature": float(request.temperature),
-        }
+        if _is_azure_api_type(self.api_type):
+            body: dict[str, Any] = {
+                "messages": _messages_for_request(
+                    request,
+                    system_role="developer",
+                    typed_content=True,
+                    include_media=self.allow_media,
+                ),
+                "max_completion_tokens": int(max(1, request.max_new_tokens)),
+            }
+        else:
+            body = {
+                "model": self.model,
+                "messages": _messages_for_request(request, typed_content=self.allow_media, include_media=self.allow_media),
+                "max_tokens": int(max(1, request.max_new_tokens)),
+                "temperature": float(request.temperature),
+            }
         extra_body = dict(self.extra_body)
         metadata_extra = request.metadata.get("extra_body")
         if isinstance(metadata_extra, Mapping):
             extra_body.update(dict(metadata_extra))
         body.update(extra_body)
+        if _is_azure_api_type(self.api_type):
+            return body
 
         metadata_has_thinking_budget = "thinking_token_budget" in request.metadata
         thinking_budget = request.metadata.get("thinking_token_budget", self.thinking_token_budget)
@@ -86,14 +134,12 @@ class OpenAIChatTextBackend:
         return body
 
     def _post_json(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        self._validate_endpoint_config()
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
-            _chat_completions_url(self.api_base),
+            self._chat_completions_url(),
             data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
+            headers=self._headers(),
             method="POST",
         )
         try:
@@ -111,8 +157,67 @@ class OpenAIChatTextBackend:
             raise RuntimeError("OpenAI-compatible planner returned a non-object JSON payload")
         return payload
 
+    def _chat_completions_url(self) -> str:
+        if _is_azure_api_type(self.api_type):
+            return _azure_chat_completions_url(
+                endpoint=self.api_base,
+                deployment=self.model,
+                api_version=self.api_version,
+            )
+        return _chat_completions_url(self.api_base)
 
-def _messages_for_request(request: BackendRequest) -> list[dict[str, str]]:
+    def _headers(self) -> dict[str, str]:
+        if _is_azure_api_type(self.api_type):
+            return {
+                "Content-Type": "application/json",
+                "api-key": self.api_key,
+            }
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+    def _validate_endpoint_config(self) -> None:
+        if not _is_azure_api_type(self.api_type):
+            if not self.api_base:
+                raise RuntimeError("OpenAI-compatible planner api_base is required")
+            if not self.model:
+                raise RuntimeError("OpenAI-compatible planner model is required")
+            return
+        missing = []
+        if not self.api_base:
+            missing.append(self.api_base_env or "ENDPOINT_URL")
+        if not self.model:
+            missing.append(self.model_env or "DEPLOYMENT_NAME")
+        if not self.api_key:
+            missing.append(self.api_key_env or "AZURE_OPENAI_API_KEY")
+        if missing:
+            raise RuntimeError(
+                "Azure OpenAI planner configuration is missing environment variable(s): "
+                + ", ".join(missing)
+            )
+
+    def _raw_endpoint_flags(self) -> dict[str, Any]:
+        if _is_azure_api_type(self.api_type):
+            return {
+                "api_base_set": bool(self.api_base),
+                "api_base_env": self.api_base_env,
+                "model_env": self.model_env,
+                "api_key_set": bool(self.api_key),
+                "api_key_env": self.api_key_env,
+                "api_version": self.api_version,
+                "api_version_env": self.api_version_env,
+            }
+        return {"api_base": _normalized_api_base(self.api_base)}
+
+
+def _messages_for_request(
+    request: BackendRequest,
+    *,
+    system_role: str = "system",
+    typed_content: bool = False,
+    include_media: bool = False,
+) -> list[dict[str, Any]]:
     prompt = str(request.prompt)
     if request.task in _JSON_TEXT_TASKS:
         prompt = (
@@ -123,19 +228,64 @@ def _messages_for_request(request: BackendRequest) -> list[dict[str, str]]:
         )
     messages = [
         {
-            "role": "system",
-            "content": (
+            "role": system_role,
+            "content": _message_content(
                 "Follow the user's requested output format exactly. "
                 "Do not explain your reasoning, restate context, or add markdown. "
-                "If JSON is requested, output only parseable JSON."
+                "If JSON is requested, output only parseable JSON.",
+                typed=typed_content,
             ),
         },
-        {"role": "user", "content": prompt},
+        {"role": "user", "content": _message_content_for_request(request, prompt=prompt, typed=typed_content, include_media=include_media)},
     ]
     system_prompt = str(getattr(request, "system_prompt", "") or "").strip()
     if system_prompt:
-        messages.insert(0, {"role": "system", "content": system_prompt})
+        messages.insert(0, {"role": system_role, "content": _message_content(system_prompt, typed=typed_content)})
     return messages
+
+
+def _message_content(text: str, *, typed: bool) -> str | list[dict[str, str]]:
+    if not typed:
+        return text
+    return [{"type": "text", "text": text}]
+
+
+def _message_content_for_request(
+    request: BackendRequest,
+    *,
+    prompt: str,
+    typed: bool,
+    include_media: bool,
+) -> str | list[dict[str, Any]]:
+    if not typed:
+        return prompt
+    content: list[dict[str, Any]] = []
+    if include_media:
+        content.extend(_media_content_for_request(request))
+    content.append({"type": "text", "text": prompt})
+    return content
+
+
+def _media_content_for_request(request: BackendRequest) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = []
+    for frame_path in request.frames:
+        content.append(_image_url_content(str(frame_path)))
+    if request.media_path and request.media_type == "image":
+        content.append(_image_url_content(str(request.media_path)))
+    elif request.media_path and request.media_type == "video" and not request.frames:
+        raise ValueError("OpenAIChatTextBackend media requests for video require sampled frame paths")
+    return content
+
+
+def _image_url_content(path: str) -> dict[str, Any]:
+    return {"type": "image_url", "image_url": {"url": _data_url_for_file(path)}}
+
+
+def _data_url_for_file(path: str) -> str:
+    file_path = Path(path)
+    mime_type = mimetypes.guess_type(str(file_path))[0] or "image/jpeg"
+    encoded = base64.b64encode(file_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def _extract_message_text(payload: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -182,11 +332,31 @@ def _chat_completions_url(api_base: str) -> str:
     return f"{base}/chat/completions"
 
 
+def _azure_chat_completions_url(*, endpoint: str, deployment: str, api_version: str) -> str:
+    base = str(endpoint).rstrip("/")
+    quoted_deployment = urllib.parse.quote(str(deployment), safe="")
+    query = urllib.parse.urlencode({"api-version": str(api_version)})
+    return f"{base}/openai/deployments/{quoted_deployment}/chat/completions?{query}"
+
+
 def _normalized_api_base(api_base: str) -> str:
     base = str(api_base).rstrip("/")
     if base.endswith("/chat/completions"):
         return base[: -len("/chat/completions")]
     return base
+
+
+def _normalized_api_type(api_type: str) -> str:
+    normalized = str(api_type or "openai_compatible").strip().lower().replace("-", "_")
+    if normalized in {"openai", "openai_compatible", "vllm", "compatible"}:
+        return "openai_compatible"
+    if normalized in {"azure", "azure_openai"}:
+        return "azure_openai"
+    return normalized
+
+
+def _is_azure_api_type(api_type: str) -> bool:
+    return _normalized_api_type(api_type) == "azure_openai"
 
 
 def _format_http_error(exc: urllib.error.HTTPError) -> str:

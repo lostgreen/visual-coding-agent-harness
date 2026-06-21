@@ -127,15 +127,121 @@ def test_openai_chat_backend_supports_request_metadata_override(monkeypatch):
     assert captured["body"]["top_k"] == 20
 
 
+def test_openai_chat_backend_azure_reads_endpoint_key_and_deployment_from_env(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("ENDPOINT_URL", "https://example-resource.openai.azure.com")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "gpt-prod-deployment")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret-from-env")
+    monkeypatch.setenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = {key.lower(): value for key, value in request.header_items()}
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeHTTPResponse({"choices": [{"message": {"content": '{"answer":"A"}'}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(api_type="azure", timeout=30.0)
+
+    response = backend.generate(
+        BackendRequest(
+            task="answer_from_evidence",
+            prompt="Answer from evidence.",
+            max_new_tokens=2048,
+            temperature=0.0,
+        )
+    )
+
+    assert captured["url"] == (
+        "https://example-resource.openai.azure.com/openai/deployments/"
+        "gpt-prod-deployment/chat/completions?api-version=2025-01-01-preview"
+    )
+    assert captured["timeout"] == 30.0
+    assert captured["headers"]["api-key"] == "secret-from-env"
+    assert "authorization" not in captured["headers"]
+    body = captured["body"]
+    assert "model" not in body
+    assert "max_tokens" not in body
+    assert body["max_completion_tokens"] == 2048
+    assert body["messages"][0]["role"] == "developer"
+    assert body["messages"][0]["content"][0]["type"] == "text"
+    assert "Return only one parseable JSON object" in body["messages"][1]["content"][0]["text"]
+    assert response.text == '{"answer":"A"}'
+    assert response.raw["api_type"] == "azure_openai"
+    assert response.raw["api_base_set"] is True
+    assert response.raw["api_base_env"] == "ENDPOINT_URL"
+    assert response.raw["model"] == "gpt-prod-deployment"
+    assert "api_base" not in response.raw
+
+
+def test_openai_chat_backend_azure_can_send_sampled_frames_when_media_enabled(monkeypatch, tmp_path):
+    captured = {}
+    frame_path = tmp_path / "frame.jpg"
+    frame_path.write_bytes(b"fake-image-bytes")
+    monkeypatch.setenv("ENDPOINT_URL", "https://example-resource.openai.azure.com")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "gpt-prod-deployment")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret-from-env")
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeHTTPResponse({"choices": [{"message": {"content": "visible fact"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(api_type="azure", allow_media=True)
+    response = backend.generate(
+        BackendRequest(
+            task="vision_read",
+            prompt="Read this frame.",
+            media_type="video",
+            frames=[str(frame_path)],
+            max_new_tokens=128,
+        )
+    )
+
+    content = captured["body"]["messages"][1]["content"]
+    assert content[0]["type"] == "image_url"
+    assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert content[1] == {"type": "text", "text": "Read this frame."}
+    assert response.text == "visible fact"
+
+
+def test_openai_chat_backend_media_video_requires_sampled_frames_when_enabled(monkeypatch):
+    monkeypatch.setenv("ENDPOINT_URL", "https://example-resource.openai.azure.com")
+    monkeypatch.setenv("DEPLOYMENT_NAME", "gpt-prod-deployment")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret-from-env")
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(api_type="azure", allow_media=True)
+
+    with pytest.raises(ValueError, match="sampled frame paths"):
+        backend.generate(
+            BackendRequest(
+                task="vision_read",
+                prompt="Read this clip.",
+                media_path="/tmp/video.mp4",
+                media_type="video",
+            )
+        )
+
+
 def test_openai_chat_backend_rejects_media_requests(monkeypatch):
     from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
 
     backend = OpenAIChatTextBackend(api_base="http://planner-host:8000/v1", model="Qwen3.5-9B")
 
-    with pytest.raises(ValueError, match="text-only"):
+    with pytest.raises(ValueError, match="media support is disabled"):
         backend.generate(BackendRequest(task="caption_segment", prompt="Describe.", media_path="/tmp/video.mp4"))
 
-    with pytest.raises(ValueError, match="text-only"):
+    with pytest.raises(ValueError, match="media support is disabled"):
         backend.generate(BackendRequest(task="caption_frames", prompt="Describe.", frames=["frame-1.png"]))
 
 

@@ -922,6 +922,42 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.planner_thinking_token_budget, 512)
         self.assertTrue(config.planner_enable_thinking)
 
+    def test_planner_api_azure_config_uses_environment_names_without_secret_values(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "azure.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "planner_api:",
+                        "  type: azure",
+                        "  endpoint_env: GPT_ENDPOINT",
+                        "  deployment_env: GPT_DEPLOYMENT",
+                        "  api_key_env: GPT_API_KEY",
+                        "  api_version_env: GPT_API_VERSION",
+                        "  use_for_tools: true",
+                        "  timeout: 45",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            parser = eval_runner.build_arg_parser()
+            args = parser.parse_args(["--config", str(config_path), "--model-path", "/models/vl"])
+            config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.planner_api_type, "azure")
+        self.assertEqual(config.planner_api_base, "")
+        self.assertEqual(config.planner_api_model, "")
+        self.assertEqual(config.planner_api_key, "EMPTY")
+        self.assertEqual(config.planner_api_base_env, "GPT_ENDPOINT")
+        self.assertEqual(config.planner_api_model_env, "GPT_DEPLOYMENT")
+        self.assertEqual(config.planner_api_key_env, "GPT_API_KEY")
+        self.assertEqual(config.planner_api_version_env, "GPT_API_VERSION")
+        self.assertTrue(config.planner_api_use_for_tools)
+        self.assertEqual(config.planner_api_timeout, 45.0)
+
     def test_build_backend_uses_openai_chat_text_backend_for_planner_api(self):
         from runs import eval_runner
 
@@ -959,6 +995,87 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(backend.text_backend.thinking_token_budget, 512)
         self.assertTrue(backend.text_backend.enable_thinking)
         vl_load.assert_called_once_with("/models/vl")
+
+    def test_build_backend_uses_azure_openai_text_backend_from_env(self):
+        from runs import eval_runner
+
+        config = eval_runner.EvalConfig(
+            run_root=Path("/tmp/run"),
+            workspace_root=Path("/tmp/run/workspaces"),
+            model_path="/models/vl",
+            planner_api_type="azure",
+            planner_api_base_env="GPT_ENDPOINT",
+            planner_api_model_env="GPT_DEPLOYMENT",
+            planner_api_key_env="GPT_API_KEY",
+            planner_api_version_env="GPT_API_VERSION",
+            planner_api_timeout=90.0,
+            data_root=Path("/dataset"),
+            parquet_path=Path("/dataset/test.parquet"),
+            video_dir=Path("/dataset/video"),
+            subtitle_dir=Path("/dataset/subtitle"),
+            cases=("605-1",),
+            strategies=("workspace_v2",),
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "GPT_ENDPOINT": "https://example-resource.openai.azure.com",
+                "GPT_DEPLOYMENT": "gpt-prod-deployment",
+                "GPT_API_KEY": "secret-from-env",
+                "GPT_API_VERSION": "2025-01-01-preview",
+            },
+            clear=False,
+        ):
+            with patch("visual_coding_agent_harness.backends.qwen_vl.QwenVLBackend.from_pretrained", return_value="vl"):
+                backend = eval_runner.build_backend(config)
+
+        self.assertEqual(backend.vl_backend, "vl")
+        self.assertEqual(backend.text_backend.api_type, "azure_openai")
+        self.assertEqual(backend.text_backend.api_base, "https://example-resource.openai.azure.com")
+        self.assertEqual(backend.text_backend.model, "gpt-prod-deployment")
+        self.assertEqual(backend.text_backend.api_key, "secret-from-env")
+        self.assertEqual(backend.text_backend.api_version, "2025-01-01-preview")
+        self.assertEqual(backend.text_backend.timeout, 90.0)
+
+    def test_build_backend_can_route_planner_and_tools_to_azure_openai(self):
+        from runs import eval_runner
+
+        config = eval_runner.EvalConfig(
+            run_root=Path("/tmp/run"),
+            workspace_root=Path("/tmp/run/workspaces"),
+            model_path="/models/vl-should-not-load",
+            planner_api_type="azure",
+            planner_api_use_for_tools=True,
+            planner_api_base_env="GPT_ENDPOINT",
+            planner_api_model_env="GPT_DEPLOYMENT",
+            planner_api_key_env="GPT_API_KEY",
+            data_root=Path("/dataset"),
+            parquet_path=Path("/dataset/test.parquet"),
+            video_dir=Path("/dataset/video"),
+            subtitle_dir=Path("/dataset/subtitle"),
+            cases=("605-1",),
+            strategies=("workspace_v2",),
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "GPT_ENDPOINT": "https://example-resource.openai.azure.com",
+                "GPT_DEPLOYMENT": "gpt-prod-deployment",
+                "GPT_API_KEY": "secret-from-env",
+            },
+            clear=False,
+        ):
+            with patch(
+                "visual_coding_agent_harness.backends.qwen_vl.QwenVLBackend.from_pretrained",
+                side_effect=AssertionError("local vl should not load"),
+            ):
+                backend = eval_runner.build_backend(config)
+
+        self.assertIs(backend.text_backend, backend.vl_backend)
+        self.assertTrue(backend.text_backend.allow_media)
+        self.assertEqual(backend.text_backend.api_type, "azure_openai")
 
     def test_ablation_cli_flags_serialized_to_config(self):
         from runs import eval_runner

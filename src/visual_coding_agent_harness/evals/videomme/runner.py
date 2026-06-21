@@ -62,9 +62,16 @@ class EvalConfig:
     cases: Sequence[str]
     strategies: Sequence[str]
     planner_model_path: str = PLANNER_MODEL_PATH
+    planner_api_type: str = "openai_compatible"
     planner_api_base: str = ""
     planner_api_model: str = ""
     planner_api_key: str = "EMPTY"
+    planner_api_version: str = ""
+    planner_api_base_env: str = ""
+    planner_api_model_env: str = ""
+    planner_api_key_env: str = ""
+    planner_api_version_env: str = ""
+    planner_api_use_for_tools: bool = False
     planner_api_timeout: float = 180.0
     planner_thinking_token_budget: int | None = None
     planner_enable_thinking: bool | None = None
@@ -432,9 +439,16 @@ def run_eval_cases(
         "budget": asdict(config.budget),
         "model_path": config.model_path,
         "planner_model_path": config.planner_model_path,
+        "planner_api_type": config.planner_api_type,
         "planner_api_base": config.planner_api_base,
         "planner_api_model": config.planner_api_model,
-        "planner_api_key_set": bool(config.planner_api_key),
+        "planner_api_key_set": bool(config.planner_api_key and config.planner_api_key != "EMPTY"),
+        "planner_api_version": config.planner_api_version,
+        "planner_api_base_env": config.planner_api_base_env,
+        "planner_api_model_env": config.planner_api_model_env,
+        "planner_api_key_env": config.planner_api_key_env,
+        "planner_api_version_env": config.planner_api_version_env,
+        "planner_api_use_for_tools": config.planner_api_use_for_tools,
         "planner_api_timeout": config.planner_api_timeout,
         "planner_thinking_token_budget": config.planner_thinking_token_budget,
         "planner_enable_thinking": config.planner_enable_thinking,
@@ -1255,9 +1269,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-root", type=Path, default=None)
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--planner-model-path", default=None)
+    parser.add_argument("--planner-api-type", default=None)
     parser.add_argument("--planner-api-base", default=None)
     parser.add_argument("--planner-api-model", default=None)
     parser.add_argument("--planner-api-key", default=None)
+    parser.add_argument("--planner-api-version", default=None)
+    parser.add_argument("--planner-api-base-env", default=None)
+    parser.add_argument("--planner-api-model-env", default=None)
+    parser.add_argument("--planner-api-key-env", default=None)
+    parser.add_argument("--planner-api-version-env", default=None)
+    parser.add_argument("--planner-api-use-for-tools", dest="planner_api_use_for_tools", action="store_true", default=None)
+    parser.add_argument("--planner-api-no-tools", dest="planner_api_use_for_tools", action="store_false")
     parser.add_argument("--planner-api-timeout", type=float, default=None)
     parser.add_argument("--planner-thinking-token-budget", type=int, default=None)
     parser.add_argument("--planner-enable-thinking", dest="planner_enable_thinking", action="store_true", default=None)
@@ -1450,20 +1472,93 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         "planner_api.enable_thinking",
         default=None,
     )
+    planner_api_use_for_tools = _arg_or_config(
+        args,
+        config_data,
+        "planner_api_use_for_tools",
+        "planner.api_use_for_tools",
+        "planner_api.use_for_tools",
+        default=False,
+    )
     return EvalConfig(
         run_root=run_root,
         workspace_root=workspace_root,
         model_path=str(_arg_or_config(args, config_data, "model_path", default=MODEL_PATH)),
         planner_model_path=str(_arg_or_config(args, config_data, "planner_model_path", default=PLANNER_MODEL_PATH)),
+        planner_api_type=str(
+            _arg_or_config(args, config_data, "planner_api_type", "planner.api_type", "planner_api.type", default="openai_compatible")
+        ),
         planner_api_base=str(
-            _arg_or_config(args, config_data, "planner_api_base", "planner.api_base", "planner_api.base", default="")
+            _arg_or_config(
+                args,
+                config_data,
+                "planner_api_base",
+                "planner.api_base",
+                "planner_api.base",
+                "planner_api.endpoint",
+                default="",
+            )
         ),
         planner_api_model=str(
-            _arg_or_config(args, config_data, "planner_api_model", "planner.api_model", "planner_api.model", default="")
+            _arg_or_config(
+                args,
+                config_data,
+                "planner_api_model",
+                "planner.api_model",
+                "planner_api.model",
+                "planner_api.deployment",
+                default="",
+            )
         ),
         planner_api_key=str(
             _arg_or_config(args, config_data, "planner_api_key", "planner.api_key", "planner_api.api_key", default="EMPTY")
         ),
+        planner_api_version=str(
+            _arg_or_config(args, config_data, "planner_api_version", "planner.api_version", "planner_api.api_version", default="")
+        ),
+        planner_api_base_env=str(
+            _arg_or_config(
+                args,
+                config_data,
+                "planner_api_base_env",
+                "planner.api_base_env",
+                "planner_api.base_env",
+                "planner_api.endpoint_env",
+                default="",
+            )
+        ),
+        planner_api_model_env=str(
+            _arg_or_config(
+                args,
+                config_data,
+                "planner_api_model_env",
+                "planner.api_model_env",
+                "planner_api.model_env",
+                "planner_api.deployment_env",
+                default="",
+            )
+        ),
+        planner_api_key_env=str(
+            _arg_or_config(
+                args,
+                config_data,
+                "planner_api_key_env",
+                "planner.api_key_env",
+                "planner_api.api_key_env",
+                default="",
+            )
+        ),
+        planner_api_version_env=str(
+            _arg_or_config(
+                args,
+                config_data,
+                "planner_api_version_env",
+                "planner.api_version_env",
+                "planner_api.api_version_env",
+                default="",
+            )
+        ),
+        planner_api_use_for_tools=_as_bool(planner_api_use_for_tools),
         planner_api_timeout=float(
             _arg_or_config(args, config_data, "planner_api_timeout", "planner.api_timeout", "planner_api.timeout", default=180.0)
         ),
@@ -1501,22 +1596,42 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
 
 
 def build_backend(config: EvalConfig) -> Any:
-    from visual_coding_agent_harness.backends.qwen_vl import QwenVLBackend
-
-    vl_backend = QwenVLBackend.from_pretrained(config.model_path)
-    if config.planner_api_base:
+    planner_api_type = config.planner_api_type.lower().replace("-", "_")
+    uses_azure_api = planner_api_type in {"azure", "azure_openai"}
+    if config.planner_api_base or uses_azure_api:
         from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
         from visual_coding_agent_harness.backends.routed import RoutedBackend
 
         text_backend = OpenAIChatTextBackend(
             api_base=config.planner_api_base,
-            model=config.planner_api_model or config.planner_model_path or config.model_path,
+            model=(
+                config.planner_api_model
+                if uses_azure_api
+                else config.planner_api_model or config.planner_model_path or config.model_path
+            ),
             api_key=config.planner_api_key,
+            api_type=config.planner_api_type,
+            api_version=config.planner_api_version,
+            api_base_env=config.planner_api_base_env,
+            model_env=config.planner_api_model_env,
+            api_key_env=config.planner_api_key_env,
+            api_version_env=config.planner_api_version_env,
+            allow_media=config.planner_api_use_for_tools,
             timeout=config.planner_api_timeout,
             thinking_token_budget=config.planner_thinking_token_budget,
             enable_thinking=config.planner_enable_thinking,
         )
+        if config.planner_api_use_for_tools:
+            return RoutedBackend(text_backend=text_backend, vl_backend=text_backend)
+
+        from visual_coding_agent_harness.backends.qwen_vl import QwenVLBackend
+
+        vl_backend = QwenVLBackend.from_pretrained(config.model_path)
         return RoutedBackend(text_backend=text_backend, vl_backend=vl_backend)
+
+    from visual_coding_agent_harness.backends.qwen_vl import QwenVLBackend
+
+    vl_backend = QwenVLBackend.from_pretrained(config.model_path)
     if not config.planner_model_path:
         return vl_backend
 
