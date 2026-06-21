@@ -292,6 +292,12 @@ def _merge_root_segment(
             "but the root DVC response did not include a usable caption."
         )
         synthesized_root_summary = True
+    beats, synthesized_coverage_beats = _ensure_root_beat_coverage(
+        segment=segment,
+        beats=beats,
+        cues=cues,
+        root_summary=root_summary,
+    )
 
     beat_entities = [hint for beat in beats for hint in beat.entity_hints]
     root_entities = _clean_list(root_data.get("entities") or root_data.get("entity_hints"))
@@ -302,6 +308,8 @@ def _merge_root_segment(
         limitations.append("root_dvc_synthesized_root_summary")
     if dropped_invalid_beats:
         limitations.append("root_dvc_dropped_invalid_beats")
+    if synthesized_coverage_beats:
+        limitations.append("root_dvc_synthesized_coverage_beats")
     return VideoSegment(
         segment_id=segment.segment_id,
         start_sec=segment.start_sec,
@@ -359,6 +367,101 @@ def _root_summary(root_data: Mapping[str, Any]) -> str:
         if summary:
             return summary
     return ""
+
+
+def _ensure_root_beat_coverage(
+    *,
+    segment: VideoSegment,
+    beats: Sequence[TimelineBeat],
+    cues: Sequence[SubtitleCue],
+    root_summary: str,
+) -> tuple[tuple[TimelineBeat, ...], int]:
+    sorted_beats = sorted(beats, key=lambda beat: (float(beat.start_sec), float(beat.end_sec)))
+    covered: list[TimelineBeat] = []
+    synthesized = 0
+    cursor = float(segment.start_sec)
+    for beat in sorted_beats:
+        start = max(float(segment.start_sec), min(float(segment.end_sec), float(beat.start_sec)))
+        end = max(float(segment.start_sec), min(float(segment.end_sec), float(beat.end_sec)))
+        if start - cursor > 1.0:
+            synthesized += 1
+            covered.append(
+                _synthetic_coverage_beat(
+                    segment=segment,
+                    start_sec=cursor,
+                    end_sec=start,
+                    index=synthesized,
+                    cues=cues,
+                    root_summary=root_summary,
+                )
+            )
+        if end > start:
+            covered.append(beat)
+            cursor = max(cursor, end)
+    if float(segment.end_sec) - cursor > 1.0:
+        synthesized += 1
+        covered.append(
+            _synthetic_coverage_beat(
+                segment=segment,
+                start_sec=cursor,
+                end_sec=float(segment.end_sec),
+                index=synthesized,
+                cues=cues,
+                root_summary=root_summary,
+            )
+        )
+    if not covered and float(segment.end_sec) > float(segment.start_sec):
+        synthesized += 1
+        covered.append(
+            _synthetic_coverage_beat(
+                segment=segment,
+                start_sec=float(segment.start_sec),
+                end_sec=float(segment.end_sec),
+                index=synthesized,
+                cues=cues,
+                root_summary=root_summary,
+            )
+        )
+    return tuple(covered), synthesized
+
+
+def _synthetic_coverage_beat(
+    *,
+    segment: VideoSegment,
+    start_sec: float,
+    end_sec: float,
+    index: int,
+    cues: Sequence[SubtitleCue],
+    root_summary: str,
+) -> TimelineBeat:
+    cue_text = _coverage_cue_text(cues, start_sec=start_sec, end_sec=end_sec)
+    event = _first_words(cue_text or root_summary, max_words=48)
+    if not event:
+        event = "The interval remains part of the root segment and needs optional refinement for finer detail."
+    return TimelineBeat(
+        beat_id=f"{segment.segment_id}_coverage_{index:02d}",
+        start_sec=round(float(start_sec), 3),
+        end_sec=round(float(end_sec), 3),
+        summary=f"Scene: root segment coverage. Event: {event}",
+        modality_hints=("asr", "temporal") if cue_text else ("temporal",),
+        limitations=("root_dvc_synthesized_coverage_gap",),
+    )
+
+
+def _coverage_cue_text(cues: Sequence[SubtitleCue], *, start_sec: float, end_sec: float) -> str:
+    texts = [
+        cue.text
+        for cue in cues
+        if float(cue.end_sec) > float(start_sec) and float(cue.start_sec) < float(end_sec)
+    ]
+    return _clean_text(" ".join(texts))
+
+
+def _first_words(text: str, *, max_words: int) -> str:
+    words = _clean_text(text).split()
+    if len(words) <= max_words:
+        return " ".join(words)
+    return " ".join(words[:max_words])
 
 
 def _normalize_root_beats(

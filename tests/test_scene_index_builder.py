@@ -350,7 +350,11 @@ def test_root_dvc_policy_caps_timeline_beats() -> None:
         subtitle_cues=[SubtitleCue(start_sec=0.0, end_sec=1.0, text="Museum aircraft.", cue_id="cue-1")],
     )
 
-    assert len(scene_index.segments[0].timeline_beats) == 1
+    segment = scene_index.segments[0]
+    assert len(segment.timeline_beats) == 2
+    assert segment.timeline_beats[0].summary == "A narrator introduces the aircraft museum."
+    assert segment.timeline_beats[1].limitations == ("root_dvc_synthesized_coverage_gap",)
+    assert "root_dvc_synthesized_coverage_beats" in segment.limitations
 
 
 def test_root_dvc_tolerates_beat_summary_aliases_and_drops_unusable_beats() -> None:
@@ -404,6 +408,7 @@ def test_root_dvc_tolerates_beat_summary_aliases_and_drops_unusable_beats() -> N
     assert [beat.summary for beat in scene_index.segments[0].timeline_beats] == [
         "People cross a busy intersection.",
         "Scene: A camera faces the curb beside the crosswalk. Event: Traffic pauses while pedestrians finish crossing.",
+        "Scene: root segment coverage. Event: A city street scene unfolds.",
     ]
 
 
@@ -446,8 +451,14 @@ def test_root_dvc_drops_empty_duration_beat_instead_of_failing_root_caption() ->
 
     segment = scene_index.segments[0]
     assert segment.map_summary == "The root interval has a complete caption."
-    assert [beat.summary for beat in segment.timeline_beats] == ["A valid follow-up beat remains usable."]
+    assert [beat.summary for beat in segment.timeline_beats] == [
+        "Scene: root segment coverage. Event: The root interval has a complete caption.",
+        "A valid follow-up beat remains usable.",
+        "Scene: root segment coverage. Event: The root interval has a complete caption.",
+    ]
+    assert [(beat.start_sec, beat.end_sec) for beat in segment.timeline_beats] == [(0.0, 30.0), (30.0, 40.0), (40.0, 60.0)]
     assert "root_dvc_dropped_invalid_beats" in segment.limitations
+    assert "root_dvc_synthesized_coverage_beats" in segment.limitations
 
 
 def test_root_dvc_synthesizes_root_summary_from_beats_when_missing() -> None:
@@ -528,9 +539,15 @@ def test_root_dvc_synthesizes_root_summary_from_cues_when_payload_has_no_caption
 
     segment = scene_index.segments[0]
     assert segment.map_summary == "The speaker describes the first scene. A second event is mentioned."
+    assert len(segment.timeline_beats) == 1
+    assert segment.timeline_beats[0].start_sec == 0.0
+    assert segment.timeline_beats[0].end_sec == 30.0
+    assert segment.timeline_beats[0].limitations == ("root_dvc_synthesized_coverage_gap",)
+    assert "Scene: root segment coverage. Event: The speaker describes the first scene." in segment.timeline_beats[0].summary
     assert "root_dvc_missing_root_summary" in segment.limitations
     assert "root_dvc_synthesized_root_summary" in segment.limitations
     assert "root_dvc_dropped_invalid_beats" in segment.limitations
+    assert "root_dvc_synthesized_coverage_beats" in segment.limitations
 
 
 def test_root_dvc_uses_plain_text_response_as_degraded_root_summary() -> None:
@@ -557,8 +574,12 @@ def test_root_dvc_uses_plain_text_response_as_degraded_root_summary() -> None:
 
     segment = scene_index.segments[0]
     assert segment.map_summary == "The clip shows a presenter walking through a city square."
-    assert segment.timeline_beats == ()
-    assert segment.limitations == ("root_dvc_non_json_response",)
+    assert len(segment.timeline_beats) == 1
+    assert segment.timeline_beats[0].summary == (
+        "Scene: root segment coverage. Event: The clip shows a presenter walking through a city square."
+    )
+    assert "root_dvc_synthesized_coverage_beats" in segment.limitations
+    assert "root_dvc_non_json_response" in segment.limitations
 
 
 def test_root_dvc_extracts_caption_from_truncated_json_without_polluting_map_summary() -> None:
@@ -591,8 +612,12 @@ def test_root_dvc_extracts_caption_from_truncated_json_without_polluting_map_sum
     segment = scene_index.segments[0]
     assert segment.map_summary == "The clip surveys the empire collapse with maps and narration."
     assert not segment.map_summary.lstrip().startswith("{")
-    assert segment.timeline_beats == ()
-    assert segment.limitations == ("root_dvc_truncated_json_response",)
+    assert len(segment.timeline_beats) == 1
+    assert segment.timeline_beats[0].summary == (
+        "Scene: root segment coverage. Event: The clip surveys the empire collapse with maps and narration."
+    )
+    assert "root_dvc_synthesized_coverage_beats" in segment.limitations
+    assert "root_dvc_truncated_json_response" in segment.limitations
 
 
 def test_root_dvc_rejects_unusable_jsonish_response_instead_of_using_it_as_caption() -> None:
