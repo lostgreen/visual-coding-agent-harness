@@ -268,13 +268,25 @@ def _merge_root_segment(
         max_beats=max_beats,
     )
     if not root_summary and beats:
-        root_summary = beats[0].summary
+        root_summary = _root_summary_from_beats(beats)
+    synthesized_root_summary = False
     if not root_summary:
-        raise ValueError(f"Root DVC response for {segment.segment_id} did not include root_summary")
+        root_summary = _root_summary_from_cues(cues)
+        synthesized_root_summary = bool(root_summary)
+    if not root_summary:
+        root_summary = (
+            f"{segment.segment_id} covers {segment.start_sec:.3f}-{segment.end_sec:.3f}s, "
+            "but the root DVC response did not include a usable caption."
+        )
+        synthesized_root_summary = True
 
     beat_entities = [hint for beat in beats for hint in beat.entity_hints]
     root_entities = _clean_list(root_data.get("entities") or root_data.get("entity_hints"))
     limitations = _clean_list(root_data.get("limitations"))
+    if "root_summary" not in root_data:
+        limitations.append("root_dvc_missing_root_summary")
+    if synthesized_root_summary:
+        limitations.append("root_dvc_synthesized_root_summary")
     if dropped_invalid_beats:
         limitations.append("root_dvc_dropped_invalid_beats")
     return VideoSegment(
@@ -307,6 +319,20 @@ def _merge_root_segment(
             "navigation_only": True,
         },
     )
+
+
+def _root_summary_from_beats(beats: Sequence[TimelineBeat]) -> str:
+    summaries = _unique(beat.summary for beat in beats if beat.summary)
+    return _clean_text(" ".join(summaries))
+
+
+def _root_summary_from_cues(cues: Sequence[SubtitleCue]) -> str:
+    cue_text = _clean_text(" ".join(cue.text for cue in cues if _clean_text(cue.text)))
+    if not cue_text:
+        return ""
+    if len(cue_text) <= 480:
+        return cue_text
+    return f"{cue_text[:477].rstrip()}..."
 
 
 def _root_summary(root_data: Mapping[str, Any]) -> str:

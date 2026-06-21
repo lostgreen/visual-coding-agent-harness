@@ -408,6 +408,89 @@ def test_root_dvc_drops_empty_duration_beat_instead_of_failing_root_caption() ->
     assert "root_dvc_dropped_invalid_beats" in segment.limitations
 
 
+def test_root_dvc_synthesizes_root_summary_from_beats_when_missing() -> None:
+    class BeatsOnlyBackend(RecordingBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            return BackendResponse(
+                text=json.dumps(
+                    {
+                        "beats": [
+                            {
+                                "start_offset_sec": 0.0,
+                                "end_offset_sec": 10.0,
+                                "summary": "A map introduces the region.",
+                            },
+                            {
+                                "start_offset_sec": 10.0,
+                                "end_offset_sec": 30.0,
+                                "summary": "Narration explains a political border change.",
+                            },
+                        ]
+                    }
+                )
+            )
+
+    scene_index = SceneIndexBuilder(
+        backend=BeatsOnlyBackend(),
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    ).build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=[],
+    )
+
+    segment = scene_index.segments[0]
+    assert segment.map_summary == "A map introduces the region. Narration explains a political border change."
+    assert "root_dvc_missing_root_summary" in segment.limitations
+    assert "root_dvc_synthesized_root_summary" not in segment.limitations
+
+
+def test_root_dvc_synthesizes_root_summary_from_cues_when_payload_has_no_caption() -> None:
+    class EmptyPayloadBackend(RecordingBackend):
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            self.requests.append(request)
+            return BackendResponse(
+                text=json.dumps(
+                    {
+                        "beats": [
+                            {
+                                "start_offset_sec": 0.0,
+                                "end_offset_sec": 0.0,
+                                "summary": "",
+                            }
+                        ]
+                    }
+                )
+            )
+
+    scene_index = SceneIndexBuilder(
+        backend=EmptyPayloadBackend(),
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    ).build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=[
+            SubtitleCue(start_sec=1.0, end_sec=3.0, text="The speaker describes the first scene.", cue_id="cue-1"),
+            SubtitleCue(start_sec=8.0, end_sec=9.0, text="A second event is mentioned.", cue_id="cue-2"),
+        ],
+    )
+
+    segment = scene_index.segments[0]
+    assert segment.map_summary == "The speaker describes the first scene. A second event is mentioned."
+    assert "root_dvc_missing_root_summary" in segment.limitations
+    assert "root_dvc_synthesized_root_summary" in segment.limitations
+    assert "root_dvc_dropped_invalid_beats" in segment.limitations
+
+
 def test_root_dvc_uses_plain_text_response_as_degraded_root_summary() -> None:
     class PlainTextBackend(RecordingBackend):
         def generate(self, request: BackendRequest) -> BackendResponse:
