@@ -225,7 +225,7 @@ class WorkspaceVisualAgent:
         return _parse_action(response.text)
 
     def _decide_final(self, *, question: str, round_number: int) -> Mapping[str, Any]:
-        prompt = compose_final_prompt(question=question, workspace=self.workspace)
+        prompt = compose_final_prompt(question=question, workspace=self.workspace, video_map=self.video_map)
         response = self.backend.generate(
             BackendRequest(
                 task="workspace_final",
@@ -658,7 +658,7 @@ def compose_commit_prompt(
     return "\n".join(sections)
 
 
-def compose_final_prompt(*, question: str, workspace: EvidenceWorkspace) -> str:
+def compose_final_prompt(*, question: str, workspace: EvidenceWorkspace, video_map: Any | None = None) -> str:
     return "\n".join(
         [
             "# Question",
@@ -670,7 +670,7 @@ def compose_final_prompt(*, question: str, workspace: EvidenceWorkspace) -> str:
             'Use {"tool":"answer","args":{"text":"<selected option>","citations":["mem_0001"],"confidence":"low"}}.',
             "Prefer committed mem_* citations. If no valid citation supports the answer, use citations: [] and confidence: low.",
             "",
-            workspace.render_plan_view(question=question),
+            workspace.render_plan_view(question=question, video_map=video_map),
         ]
     )
 

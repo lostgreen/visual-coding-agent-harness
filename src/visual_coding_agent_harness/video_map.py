@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import json
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
 
 from .backends.base import BackendRequest, VisionLanguageBackend
@@ -506,6 +507,12 @@ class VideoMapStore:
         self.current = video_map
         self._refinement_registry: dict[tuple[str, float, float, str], IndexRefinementPatch] = {}
 
+    @property
+    def latest_refinement_patch(self) -> IndexRefinementPatch | None:
+        if not self._refinement_registry:
+            return None
+        return next(reversed(self._refinement_registry.values()))
+
     def update_segment(
         self,
         segment_id: str,
@@ -668,9 +675,11 @@ class IndexRefiner:
         *,
         backend: VisionLanguageBackend,
         frame_sampler: FrameSampler | None = None,
+        artifact_root: str | Path | None = None,
     ) -> None:
         self.backend = backend
         self.frame_sampler = frame_sampler
+        self.artifact_root = Path(artifact_root) if artifact_root is not None else None
 
     def refine(
         self,
@@ -689,39 +698,80 @@ class IndexRefiner:
         end = float(requested_end_sec)
         max_frames = max(1, int(round(end - start)))
         frames = tuple(self.frame_sampler(store.current.video_path, start, end, max_frames)) if self.frame_sampler else ()
+        prompt = (
+            "Create a navigation-only local DVC index for this root video range. "
+            "Return JSON with children. Each child needs start_sec, end_sec, summary, optional beats, "
+            "entity_hints, modality_hints, and limitations. Do not answer the question; this is not evidence.\n"
+            f"Parent: {parent.segment_id} [{parent.start_sec:.3f}, {parent.end_sec:.3f}]\n"
+            f"Requested: [{start:.3f}, {end:.3f}], resolution={resolution}\n"
+            f"Focus: {', '.join(str(item) for item in focus)}"
+        )
+        metadata = {
+            "tool": "read_segment",
+            "mode": "refine",
+            "parent_segment_id": parent.segment_id,
+            "start_sec": start,
+            "end_sec": end,
+            "resolution": resolution,
+            "frame_cache_policy": "existing_cache_only",
+            "frame_count": len(frames),
+        }
+        artifact_prefix = _refinement_artifact_prefix(
+            self.artifact_root,
+            parent_segment_id=parent.segment_id,
+            start_sec=start,
+            end_sec=end,
+            resolution=resolution,
+        )
+        _write_refinement_request_artifact(
+            artifact_prefix,
+            {
+                "task": "refine_segment_index",
+                "prompt": prompt,
+                "media_type": "video",
+                "frames": list(frames),
+                "max_new_tokens": 512,
+                "metadata": metadata,
+            },
+        )
         response = self.backend.generate(
             BackendRequest(
                 task="refine_segment_index",
-                prompt=(
-                    "Create a navigation-only local DVC index for this root video range. "
-                    "Return JSON with children. Each child needs start_sec, end_sec, summary, optional beats, "
-                    "entity_hints, modality_hints, and limitations. Do not answer the question; this is not evidence.\n"
-                    f"Parent: {parent.segment_id} [{parent.start_sec:.3f}, {parent.end_sec:.3f}]\n"
-                    f"Requested: [{start:.3f}, {end:.3f}], resolution={resolution}\n"
-                    f"Focus: {', '.join(str(item) for item in focus)}"
-                ),
+                prompt=prompt,
                 media_type="video",
                 frames=frames,
                 max_new_tokens=512,
-                metadata={
-                    "tool": "read_segment",
-                    "mode": "refine",
-                    "parent_segment_id": parent.segment_id,
-                    "start_sec": start,
-                    "end_sec": end,
-                    "resolution": resolution,
-                    "frame_cache_policy": "existing_cache_only",
-                    "frame_count": len(frames),
-                },
+                metadata=metadata,
             )
         )
+        _write_refinement_response_artifact(artifact_prefix, response.text)
         data = _parse_json_mapping(response.text)
-        children = _refinement_children_from_payload(
-            payload=data,
-            parent=parent,
-            requested_start_sec=start,
-            requested_end_sec=end,
-            resolution=resolution,
+        try:
+            children = _refinement_children_from_payload(
+                payload=data,
+                parent=parent,
+                requested_start_sec=start,
+                requested_end_sec=end,
+                resolution=resolution,
+            )
+        except ValueError as exc:
+            _write_refinement_validation_artifact(
+                artifact_prefix,
+                {
+                    "valid": False,
+                    "error": str(exc),
+                    "parsed_keys": sorted(str(key) for key in data.keys()),
+                    "child_count": 0,
+                },
+            )
+            raise
+        _write_refinement_validation_artifact(
+            artifact_prefix,
+            {
+                "valid": True,
+                "child_count": len(children),
+                "parsed_keys": sorted(str(key) for key in data.keys()),
+            },
         )
         return store.apply_refinement(
             parent_segment_id=parent.segment_id,
@@ -746,7 +796,8 @@ def _refinement_children_from_payload(
     requested_end_sec: float,
     resolution: str,
 ) -> tuple[VideoMapSegment, ...]:
-    raw_children = payload.get("children") if isinstance(payload.get("children"), Sequence) else ()
+    raw_value = payload.get("children")
+    raw_children = raw_value if isinstance(raw_value, Sequence) and not isinstance(raw_value, (str, bytes)) else ()
     children = []
     for index, item in enumerate(raw_children, start=1):
         if not isinstance(item, Mapping):
@@ -786,19 +837,49 @@ def _refinement_children_from_payload(
         )
     if children:
         return tuple(children)
-    return (
-        VideoMapSegment(
-            segment_id=_refined_child_id(parent.segment_id, str(resolution), requested_start_sec, requested_end_sec),
-            start_sec=round(requested_start_sec, 3),
-            end_sec=round(requested_end_sec, 3),
-            source="dvc_refined_v1",
-            low_fps_caption=_clean_text(payload.get("summary") or "local refined index"),
-            index_level="refined",
-            parent_segment_id=parent.segment_id,
-            root_segment_id=parent.root_segment_id or parent.segment_id,
-            refinement_state="refined",
-            index_provenance={"schema_version": "dvc_refined_v1", "fresh_local_perception": True},
-        ),
+    raise ValueError(
+        "refinement_output_invalid: backend returned no valid children[*].summary; no index patch was applied"
+    )
+
+
+def _refinement_artifact_prefix(
+    artifact_root: Path | None,
+    *,
+    parent_segment_id: str,
+    start_sec: float,
+    end_sec: float,
+    resolution: str,
+) -> Path | None:
+    if artifact_root is None:
+        return None
+    safe_parent = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(parent_segment_id)).strip("_") or "segment"
+    return artifact_root / f"{safe_parent}_{_sec_id(start_sec)}_{_sec_id(end_sec)}_{resolution}"
+
+
+def _write_refinement_request_artifact(prefix: Path | None, payload: Mapping[str, Any]) -> None:
+    if prefix is None:
+        return
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    prefix.with_name(prefix.name + "_request.json").write_text(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _write_refinement_response_artifact(prefix: Path | None, text: str) -> None:
+    if prefix is None:
+        return
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    prefix.with_name(prefix.name + "_response.txt").write_text(str(text or ""), encoding="utf-8")
+
+
+def _write_refinement_validation_artifact(prefix: Path | None, payload: Mapping[str, Any]) -> None:
+    if prefix is None:
+        return
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    prefix.with_name(prefix.name + "_validation.json").write_text(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2),
+        encoding="utf-8",
     )
 
 

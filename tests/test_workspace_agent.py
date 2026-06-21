@@ -6,6 +6,7 @@ from visual_coding_agent_harness.agents.workspace_agent import (
     PLAN_SYSTEM_PROMPT,
     WorkspaceVisualAgent,
     compose_commit_prompt,
+    compose_final_prompt,
     compose_plan_prompt,
     _parse_action,
 )
@@ -15,7 +16,7 @@ from visual_coding_agent_harness.registry import ToolRegistry, ToolRuntimeSpec, 
 from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
 from visual_coding_agent_harness.video_index import TimelineBeat
-from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap, VideoMapSegment
+from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -399,6 +400,50 @@ def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp
         "workspace_commit",
         "workspace_plan",
     ]
+
+
+def test_plan_prompt_renders_latest_refinement_from_video_map_store(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_latest_refinement_prompt")
+    backend = ScriptedWorkspaceV2Backend(plan_responses=[], commit_responses=[])
+    store = VideoMapStore(_video_map())
+
+    def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
+        del video_path, start_sec, end_sec, max_frames
+        return ["/frames/demo/00005.jpg"]
+
+    registry = build_workspace_v2_registry(
+        video_map=store,
+        backend=backend,
+        workspace=workspace,
+        index_refiner=IndexRefiner(backend=backend, frame_sampler=fake_frame_sampler),
+    )
+    registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
+    registry.execute(
+        "read_segment",
+        {
+            "segment_id": "seg_0001",
+            "mode": "refine",
+            "sub_window": {"start_sec": 5.0, "end_sec": 20.0},
+            "resolution": "medium",
+            "focus": ["buffer"],
+        },
+    )
+
+    prompt = compose_plan_prompt(question="Why?", workspace=workspace, video_map=store)
+
+    assert "## Latest Index Patch" in prompt
+    assert "Fresh refined map view with Austria-Hungary between Russia and Western Europe." in prompt
+    assert "refined: 5.0-20.0s" in prompt
+
+
+def test_forced_final_prompt_renders_video_map_store(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_final_prompt_store")
+    store = VideoMapStore(_video_map())
+
+    prompt = compose_final_prompt(question="Why?", workspace=workspace, video_map=store)
+
+    assert "## Root Index" in prompt
+    assert "seg_0001 [0.0-60.0s]" in prompt
 
 
 def test_workspace_agent_rejects_exploration_tool_during_commit_phase_then_auto_pins(tmp_path: Path) -> None:

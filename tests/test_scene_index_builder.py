@@ -93,7 +93,7 @@ def test_builder_creates_single_call_root_dvc_manifest() -> None:
     )
 
     assert [request.task for request in backend.requests] == ["build_root_dvc_index"]
-    assert backend.requests[0].metadata["schema_version"] == "dvc_root_v1"
+    assert backend.requests[0].metadata["schema_version"] == "dvc_root_v2"
     assert backend.requests[0].metadata["frame_cache_fps"] == 1.0
     assert backend.requests[0].metadata["max_pixels_per_frame"] == 360 * 420
     assert backend.requests[0].metadata["max_pixels"] == 360 * 420
@@ -192,10 +192,10 @@ def test_builder_prefers_frame_cache_over_physical_clips(tmp_path) -> None:
         ["/frames/video-1/0020_a.jpg", "/frames/video-1/0020_b.jpg"],
     ]
     assert visual_requests[1].metadata["source_video_path"] == "/tmp/video-1.mp4"
-    assert visual_requests[1].metadata["frame_cache_policy"] == "precomputed_2fps"
+    assert visual_requests[1].metadata["frame_cache_policy"] == "root_policy_fps"
 
 
-def test_builder_caps_root_dvc_frame_sampling_with_caption_nframes() -> None:
+def test_builder_root_dvc_uses_policy_fps_without_caption_nframes_cap() -> None:
     backend = RecordingBackend()
     sampled = []
 
@@ -219,8 +219,8 @@ def test_builder_caps_root_dvc_frame_sampling_with_caption_nframes() -> None:
         subtitle_cues=[],
     )
 
-    assert sampled == [("/tmp/video-1.mp4", 0.0, 10.0, 3)]
-    assert backend.requests[0].metadata["nframes"] == 3
+    assert sampled == [("/tmp/video-1.mp4", 0.0, 10.0, 10)]
+    assert backend.requests[0].metadata["nframes"] == 10
 
 
 def test_summary_uses_one_line_map_not_full_dual_source_detail() -> None:
@@ -641,10 +641,10 @@ def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
 
     key = builder.cache_key(video_id="video-1", video_path="/tmp/video-1.mp4", duration_sec=30.0, subtitle_cues=cues)
 
-    assert SCENE_INDEX_BUILDER_SCHEMA_VERSION == "dvc_root_v1"
+    assert SCENE_INDEX_BUILDER_SCHEMA_VERSION == "dvc_root_v2"
     assert key == SceneIndexCache(Path("/tmp/unused")).key_for(
         {
-            "schema_version": "dvc_root_v1",
+            "schema_version": "dvc_root_v2",
             "video_id": "video-1",
             "video_path": "/tmp/video-1.mp4",
             "duration_sec": 30.0,
@@ -655,6 +655,53 @@ def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
             "vl_model_id": "vl-mini",
         }
     )
+
+
+def test_root_dvc_ignores_legacy_or_beatless_cache(tmp_path: Path) -> None:
+    backend = RecordingBackend()
+    cache = SceneIndexCache(tmp_path / "scene_cache")
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        cache=cache,
+        frame_sampler=_frame_sampler,
+    )
+    cues: list[SubtitleCue] = []
+    cache_key = builder.cache_key(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=cues,
+    )
+    cache.store(
+        cache_key,
+        SceneIndex(
+            video_path="/tmp/video-1.mp4",
+            duration_sec=30.0,
+            segments=[
+                VideoSegment(
+                    segment_id="seg_0001",
+                    start_sec=0.0,
+                    end_sec=30.0,
+                    source="dvc_root_v1",
+                    map_summary="legacy root summary without beats",
+                    low_fps_caption="legacy root summary without beats",
+                )
+            ],
+        ),
+    )
+
+    scene_index = builder.build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=cues,
+    )
+
+    assert [request.task for request in backend.requests] == ["build_root_dvc_index"]
+    assert scene_index.segments[0].timeline_beats
 
 
 def test_builder_can_build_root_dvc_segments_concurrently() -> None:

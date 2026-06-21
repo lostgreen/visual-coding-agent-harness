@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,14 @@ class RefinementBackend(RecordingBackend):
             ),
             raw={"source_kind": "visual_fact"},
         )
+
+
+class InvalidRefinementBackend(RecordingBackend):
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        if request.task == "refine_segment_index":
+            return BackendResponse(text='{"summary":"local refined index"}')
+        return super().generate(request)
 
 
 def _runtime_context(workspace: EvidenceWorkspace, registry: ToolRegistry) -> RunContext:
@@ -456,11 +465,79 @@ def test_workspace_v2_read_segment_index_and_refine_are_navigation_only(tmp_path
     assert registry.get_runtime_spec("read_segment").commit_required is False
 
 
+def test_workspace_v2_read_segment_requires_index_before_refine_or_verify(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_requires_index")
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    with pytest.raises(ValueError, match="requires_index_read"):
+        registry.execute(
+            "read_segment",
+            {
+                "segment_id": "seg_0001",
+                "mode": "refine",
+                "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
+            },
+        )
+
+    with pytest.raises(ValueError, match="requires_index_read"):
+        registry.execute(
+            "read_segment",
+            {
+                "segment_id": "seg_0001",
+                "mode": "verify",
+                "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
+            },
+        )
+
+    indexed = registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
+    assert indexed["mode"] == "index"
+    verified = registry.execute(
+        "read_segment",
+        {
+            "segment_id": "seg_0001",
+            "mode": "verify",
+            "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
+        },
+    )
+    assert verified["mode"] == "verify"
+
+
+def test_workspace_v2_refine_invalid_backend_output_is_rejected_with_artifacts(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_refine_invalid")
+    backend = InvalidRefinementBackend()
+    artifact_root = tmp_path / "artifacts" / "index_refinement"
+    registry = build_workspace_v2_registry(
+        video_map=_video_map(),
+        backend=backend,
+        workspace=workspace,
+        index_refiner=IndexRefiner(backend=backend, artifact_root=artifact_root),
+    )
+
+    registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
+    with pytest.raises(ValueError, match="refinement_output_invalid"):
+        registry.execute(
+            "read_segment",
+            {
+                "segment_id": "seg_0001",
+                "mode": "refine",
+                "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
+            },
+        )
+
+    prefix = artifact_root / "seg_0001_0010000_0025000_medium"
+    assert (prefix.with_name(prefix.name + "_request.json")).exists()
+    assert (prefix.with_name(prefix.name + "_response.txt")).read_text() == '{"summary":"local refined index"}'
+    validation = json.loads((prefix.with_name(prefix.name + "_validation.json")).read_text())
+    assert validation["valid"] is False
+    assert validation["error"].startswith("refinement_output_invalid")
+
+
 def test_workspace_v2_read_segment_verify_reuses_read_clip_commit_contract(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_verify")
     backend = RecordingBackend("The shield icon remains over Central Europe.")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
 
+    registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
     result = registry.execute(
         "read_segment",
         {

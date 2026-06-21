@@ -834,9 +834,10 @@ class EvidenceWorkspace:
             if total > len(shown):
                 lines.append(f"... shown {len(shown)}/{total}; use {hint} to see more")
 
-        if video_map is not None:
+        active_video_map = getattr(video_map, "current", video_map)
+        if active_video_map is not None:
             root_segments = [
-                segment for segment in getattr(video_map, "segments", ()) if getattr(segment, "index_level", "root") == "root"
+                segment for segment in getattr(active_video_map, "segments", ()) if getattr(segment, "index_level", "root") == "root"
             ]
             render_section(
                 "Root Index",
@@ -848,8 +849,12 @@ class EvidenceWorkspace:
                 hint='read_segment(mode="index")',
             )
             lines.extend(["", "## Index Coverage"])
-            lines.extend(_index_coverage_lines(video_map))
+            lines.extend(_index_coverage_lines(active_video_map))
             lines.append("Index coverage != evidence coverage")
+            latest_patch = getattr(video_map, "latest_refinement_patch", None)
+            if latest_patch is not None:
+                lines.extend(["", "## Latest Index Patch"])
+                lines.extend(_latest_index_patch_lines(latest_patch))
 
             lines.extend(["", "## Evidence Coverage"])
             lines.extend(_evidence_coverage_lines(self))
@@ -3397,6 +3402,28 @@ def _index_coverage_lines(video_map: Any) -> list[str]:
     else:
         lines.append("refined: none")
     lines.append(f"index cache: root={len(roots)} / refinement={len(refined)}")
+    return lines
+
+
+def _latest_index_patch_lines(patch: Any) -> list[str]:
+    children = list(getattr(patch, "children", ()) or ())
+    lines = [
+        (
+            f"{getattr(patch, 'parent_segment_id', '-')} refined "
+            f"[{float(getattr(patch, 'requested_start_sec', 0.0)):.1f}-{float(getattr(patch, 'requested_end_sec', 0.0)):.1f}s] "
+            f"{getattr(patch, 'resolution', '-')}:"
+        )
+    ]
+    if not children:
+        lines.append("- (no children)")
+        return lines
+    for child in children[:5]:
+        lines.append(
+            f"- {child.segment_id} [{child.start_sec:.1f}-{child.end_sec:.1f}s] "
+            f"{_bounded_inline(getattr(child, 'low_fps_caption', '') or getattr(child, 'compact_text', lambda: '')(), 180)}"
+        )
+    if len(children) > 5:
+        lines.append(f"... more refined children hidden: {len(children) - 5}")
     return lines
 
 

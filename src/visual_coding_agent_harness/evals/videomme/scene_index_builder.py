@@ -17,7 +17,7 @@ from ...video_index import SceneIndex, TimelineBeat, VideoSegment, fixed_window_
 from .scene_index_cache import SceneIndexCache
 
 
-SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dvc_root_v1"
+SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dvc_root_v2"
 
 ClipExtractor = Callable[[str, str, float, float], str]
 
@@ -93,7 +93,7 @@ class SceneIndexBuilder:
             video_path=video_path,
             duration_sec=duration_sec,
             window_sec=self.window_sec,
-            source="dvc_root_v1",
+            source=self.schema_version,
         )
         def build_segment(segment: VideoSegment) -> VideoSegment:
             segment_cues = _cues_for_segment(cues, segment)
@@ -236,12 +236,12 @@ class SceneIndexBuilder:
         if self.frame_sampler is None:
             raise ValueError("Root DVC requires a precomputed frame cache frame_sampler")
         window_frames = int(round(max(1.0, segment.end_sec - segment.start_sec) * self.root_policy.frame_cache_fps))
-        max_frames = max(1, min(window_frames, int(self.caption_nframes)))
+        max_frames = max(1, window_frames)
         frame_paths = tuple(self.frame_sampler(video_path, float(segment.start_sec), float(segment.end_sec), max_frames))
         if not frame_paths:
             raise ValueError("Root DVC requires non-empty cached frames from frame_sampler")
         media_path = None
-        metadata["frame_cache_policy"] = "precomputed_2fps"
+        metadata["frame_cache_policy"] = "root_policy_fps"
         metadata["frame_count"] = len(frame_paths)
         return media_path, media_type, frame_paths, metadata
 
@@ -301,7 +301,7 @@ def _merge_root_segment(
         end_sec=segment.end_sec,
         keyframe_path=segment.keyframe_path,
         low_fps_caption=root_summary,
-        source="dvc_root_v1",
+        source=SCENE_INDEX_BUILDER_SCHEMA_VERSION,
         source_segment_id=segment.segment_id,
         visual_caption=root_summary,
         visual_caption_source=root_source,
@@ -320,7 +320,7 @@ def _merge_root_segment(
         timeline_beats=beats,
         refinement_state="coarse",
         index_provenance={
-            "schema_version": "dvc_root_v1",
+            "schema_version": SCENE_INDEX_BUILDER_SCHEMA_VERSION,
             "source": root_source,
             "navigation_only": True,
         },
@@ -488,9 +488,11 @@ def _usable_root_dvc_cache(scene_index: SceneIndex) -> bool:
         summary = segment.map_summary or segment.low_fps_caption
         if not summary or _damaged_root_caption(summary):
             return False
-        if getattr(segment, "source", "") != "dvc_root_v1":
+        if getattr(segment, "source", "") != SCENE_INDEX_BUILDER_SCHEMA_VERSION:
             return False
         if getattr(segment, "index_level", "root") != "root":
+            return False
+        if not getattr(segment, "timeline_beats", ()):
             return False
     return True
 

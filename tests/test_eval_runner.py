@@ -1337,6 +1337,7 @@ class EvalRunnerTest(unittest.TestCase):
     def test_run_loop_workspace_v2_uses_workspace_agent_and_registry(self):
         from runs import eval_runner
         from visual_coding_agent_harness.agents.workspace_agent import WorkspaceRunResult
+        from visual_coding_agent_harness.video_map import VideoMapStore
 
         class FakeWorkspaceVisualAgent:
             def __init__(self, *, backend, registry, workspace, max_rounds, video_path, video_map=None, log_root):
@@ -1351,6 +1352,10 @@ class EvalRunnerTest(unittest.TestCase):
 
             def run(self, question):
                 self.workspace.write_trace_event("workspace_plan_model_io", {"round": 1, "question": question})
+                self.workspace.write_trace_event(
+                    "tool_use",
+                    {"step": 1, "tool": "read_segment", "arguments": {"segment_id": "seg_0001", "mode": "index"}},
+                )
                 return WorkspaceRunResult(
                     answer="B. workspace answer",
                     citations=(),
@@ -1390,7 +1395,9 @@ class EvalRunnerTest(unittest.TestCase):
 
             self.assertEqual(len(registry_calls), 1)
             self.assertIn("workspace", registry_calls[0])
+            self.assertIsInstance(registry_calls[0]["video_map"], VideoMapStore)
             self.assertEqual(len(agents), 1)
+            self.assertIs(agents[0].video_map, registry_calls[0]["video_map"])
             self.assertEqual(agents[0].max_rounds, 5)
             self.assertEqual(agents[0].video_path, "/videos/demo.mp4")
             self.assertEqual(agents[0].log_root, workspace_root.parent / "workspace_logs" / "case_workspace_v2")
@@ -1398,7 +1405,8 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(raw["choice"], "B")
             self.assertEqual(raw["status"], "final")
             self.assertEqual(raw["rounds"], 2)
-            self.assertEqual(raw["tools"], [])
+            self.assertEqual(raw["tools"], ["read_segment"])
+            self.assertEqual(raw["segments"], ["seg_0001"])
             self.assertEqual(raw["workspace_log_dir"], str(workspace_root.parent / "workspace_logs" / "case_workspace_v2"))
             self.assertEqual(raw["planner_io_dir"], str(workspace_root.parent / "workspace_logs" / "case_workspace_v2"))
 

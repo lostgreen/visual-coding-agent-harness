@@ -45,10 +45,11 @@ def build_workspace_v2_registry(
     """Build the compact v2 registry: read_clip/search/list/verify/answer plus dispositions."""
 
     video_map_store = video_map if isinstance(video_map, VideoMapStore) else VideoMapStore(video_map)
+    artifact_root = workspace.root / "artifacts" / "index_refinement" if workspace is not None else None
     segment_read_service = SegmentReadService(
         video_map_store=video_map_store,
         backend=backend,
-        index_refiner=index_refiner or IndexRefiner(backend=backend),
+        index_refiner=index_refiner or IndexRefiner(backend=backend, artifact_root=artifact_root),
         frame_sampler=frame_sampler,
         workspace=workspace,
     )
@@ -374,10 +375,12 @@ class SegmentReadService:
         self.index_refiner = index_refiner
         self.frame_sampler = frame_sampler
         self.workspace = workspace
+        self._indexed_roots: set[str] = set()
 
     def read_index(self, *, segment_id: str) -> Mapping[str, object]:
         current = self.video_map_store.current
         segment = current.get(segment_id)
+        self._indexed_roots.add(_root_segment_id(segment))
         children = [
             child
             for child in current.segments
@@ -409,6 +412,7 @@ class SegmentReadService:
         focus: Sequence[str],
     ) -> Mapping[str, object]:
         parent = self.video_map_store.current.get(segment_id)
+        self._require_index_read(parent, mode="refine")
         start_sec, end_sec = _sub_window_range(sub_window, parent)
         patch = self.index_refiner.refine(
             self.video_map_store,
@@ -449,6 +453,7 @@ class SegmentReadService:
         focus: Sequence[str],
     ) -> Mapping[str, object]:
         parent = self.video_map_store.current.get(segment_id)
+        self._require_index_read(parent, mode="verify")
         start_sec, end_sec = _sub_window_range(sub_window, parent)
         if self.workspace is not None:
             self.workspace.write_trace_event(
@@ -471,6 +476,13 @@ class SegmentReadService:
             tool_name="read_segment",
         )
         return {**result, "mode": "verify", "evidence_mode": evidence_mode}
+
+    def _require_index_read(self, segment: VideoMapSegment, *, mode: str) -> None:
+        root_id = _root_segment_id(segment)
+        if root_id not in self._indexed_roots:
+            raise ValueError(
+                f"read_segment_failed: requires_index_read before mode={mode} for root_segment_id={root_id}"
+            )
 
 
 def _read_clip_evidence(
@@ -598,6 +610,16 @@ def _segment_from_scope(video_map: VideoMap, scope: Mapping[str, Any]) -> VideoM
     if video_map.segments:
         return video_map.segments[0]
     raise ValueError("read_clip_failed: no segments are indexed")
+
+
+def _root_segment_id(segment: VideoMapSegment) -> str:
+    if segment.root_segment_id:
+        return str(segment.root_segment_id)
+    if segment.index_level == "root":
+        return str(segment.segment_id)
+    if segment.parent_segment_id:
+        return str(segment.parent_segment_id)
+    return str(segment.segment_id)
 
 
 def _time_range_from_scope(scope: Mapping[str, Any], segment: VideoMapSegment) -> tuple[float, float]:

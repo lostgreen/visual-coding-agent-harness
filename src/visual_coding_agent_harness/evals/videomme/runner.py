@@ -19,7 +19,7 @@ from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIn
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
 from visual_coding_agent_harness.video_index import SceneIndex
-from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap
+from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 from .summary_schema import RunSummary, validate as validate_run_summary
@@ -220,12 +220,17 @@ def run_loop(
     workspace = EvidenceWorkspace.create(base_dir=workspace_root, run_id=run_id)
     workspace_log_dir = workspace_root.parent / "workspace_logs" / run_id
     video_map = VideoMap.from_scene_index(scene_index)
+    video_map_store = VideoMapStore(video_map)
     if strategy == WORKSPACE_V2_STRATEGY:
-        index_refiner = IndexRefiner(backend=backend, frame_sampler=frame_sampler)
+        index_refiner = IndexRefiner(
+            backend=backend,
+            frame_sampler=frame_sampler,
+            artifact_root=workspace.root / "artifacts" / "index_refinement",
+        )
         agent = WorkspaceVisualAgent(
             backend=backend,
             registry=build_workspace_v2_registry(
-                video_map=video_map,
+                video_map=video_map_store,
                 backend=backend,
                 workspace=workspace,
                 index_refiner=index_refiner,
@@ -234,7 +239,7 @@ def run_loop(
             workspace=workspace,
             max_rounds=budget.max_rounds,
             video_path=video_path,
-            video_map=video_map,
+            video_map=video_map_store,
             log_root=workspace_log_dir,
         )
         result = agent.run(question)
@@ -276,7 +281,7 @@ def run_loop(
         log_root=workspace_log_dir,
     )
     planner_io_dir = workspace_log_dir
-    tools, segments = _result_tools_and_segments(result)
+    tools, segments = _result_tools_and_segments(result, workspace=workspace)
     backend_call_counters = _backend_call_counters(workspace=workspace, scene_index=scene_index)
     return {
         "answer": answer,
@@ -334,22 +339,42 @@ def _result_round_count(result: Any) -> int:
     return 0
 
 
-def _result_tools_and_segments(result: Any) -> tuple[list[str], list[str]]:
+def _result_tools_and_segments(result: Any, *, workspace: EvidenceWorkspace | None = None) -> tuple[list[str], list[str]]:
     rounds = getattr(result, "rounds", ())
-    if isinstance(rounds, int) or not isinstance(rounds, Sequence):
-        return [], []
     tools = []
     segments = []
-    for round_item in rounds:
-        program = getattr(round_item, "program", ())
-        for step in program:
-            if not isinstance(step, Mapping):
+    if not isinstance(rounds, int) and isinstance(rounds, Sequence):
+        for round_item in rounds:
+            program = getattr(round_item, "program", ())
+            for step in program:
+                if not isinstance(step, Mapping):
+                    continue
+                tools.append(str(step.get("tool", "")))
+                args = step.get("args", {}) if isinstance(step.get("args", {}), Mapping) else {}
+                if args.get("segment_id"):
+                    segments.append(str(args["segment_id"]))
+    if (not tools and not segments) and workspace is not None:
+        for event in _load_trace_events(workspace):
+            if _event_type(event) != "tool_use":
                 continue
-            tools.append(str(step.get("tool", "")))
-            args = step.get("args", {}) if isinstance(step.get("args", {}), Mapping) else {}
-            if args.get("segment_id"):
-                segments.append(str(args["segment_id"]))
+            payload = event.get("payload", {}) if isinstance(event.get("payload", {}), Mapping) else {}
+            tool_name = str(payload.get("tool") or "").strip()
+            if tool_name:
+                tools.append(tool_name)
+            arguments = payload.get("arguments", {}) if isinstance(payload.get("arguments", {}), Mapping) else {}
+            segment_id = _segment_id_from_tool_arguments(arguments)
+            if segment_id:
+                segments.append(segment_id)
     return tools, segments
+
+
+def _segment_id_from_tool_arguments(arguments: Mapping[str, Any]) -> str:
+    if arguments.get("segment_id"):
+        return str(arguments["segment_id"])
+    scope = arguments.get("scope")
+    if isinstance(scope, Mapping) and scope.get("segment_id"):
+        return str(scope["segment_id"])
+    return ""
 
 
 def _backend_call_counters(*, workspace: EvidenceWorkspace, scene_index: SceneIndex) -> dict[str, int]:
