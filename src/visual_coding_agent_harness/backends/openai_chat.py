@@ -31,6 +31,10 @@ class OpenAIChatTextBackend:
     model_env: str = ""
     api_key_env: str = ""
     api_version_env: str = ""
+    user_key_env: str = ""
+    biz_scene_env: str = ""
+    user_key: str = ""
+    biz_scene: str = ""
     allow_media: bool = False
     thinking_token_budget: int | None = None
     enable_thinking: bool | None = False
@@ -48,6 +52,18 @@ class OpenAIChatTextBackend:
             if not self.api_key or self.api_key == "EMPTY":
                 self.api_key = os.getenv(self.api_key_env, "")
             self.api_version = self.api_version or os.getenv(self.api_version_env, "") or "2025-01-01-preview"
+        elif _is_gemini_gateway_api_type(self.api_type):
+            self.api_base_env = self.api_base_env or "GEMINI_API_BASE"
+            self.model_env = self.model_env or "GEMINI_MODEL"
+            self.api_key_env = self.api_key_env or "GEMINI_API_KEY"
+            self.user_key_env = self.user_key_env or "GEMINI_USER_KEY"
+            self.biz_scene_env = self.biz_scene_env or "GEMINI_BIZ_SCENE"
+            self.api_base = self.api_base or os.getenv(self.api_base_env, "")
+            self.model = self.model or os.getenv(self.model_env, "")
+            if not self.api_key or self.api_key == "EMPTY":
+                self.api_key = os.getenv(self.api_key_env, "")
+            self.user_key = self.user_key or os.getenv(self.user_key_env, "")
+            self.biz_scene = self.biz_scene or os.getenv(self.biz_scene_env, "")
         else:
             if self.api_base_env and not self.api_base:
                 self.api_base = os.getenv(self.api_base_env, "")
@@ -107,6 +123,8 @@ class OpenAIChatTextBackend:
                 "max_tokens": int(max(1, request.max_new_tokens)),
                 "temperature": float(request.temperature),
             }
+            if _is_gemini_gateway_api_type(self.api_type):
+                body["stream"] = False
         extra_body = dict(self.extra_body)
         metadata_extra = request.metadata.get("extra_body")
         if isinstance(metadata_extra, Mapping):
@@ -172,12 +190,38 @@ class OpenAIChatTextBackend:
                 "Content-Type": "application/json",
                 "api-key": self.api_key,
             }
+        if _is_gemini_gateway_api_type(self.api_type):
+            return {
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "x-ks-user-key": self.user_key,
+                "x-ks-llm-model": self.model,
+                "x-ks-biz-scene": self.biz_scene,
+            }
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
 
     def _validate_endpoint_config(self) -> None:
+        if _is_gemini_gateway_api_type(self.api_type):
+            missing = []
+            if not self.api_base:
+                missing.append(self.api_base_env or "GEMINI_API_BASE")
+            if not self.model:
+                missing.append(self.model_env or "GEMINI_MODEL")
+            if not self.api_key:
+                missing.append(self.api_key_env or "GEMINI_API_KEY")
+            if not self.user_key:
+                missing.append(self.user_key_env or "GEMINI_USER_KEY")
+            if not self.biz_scene:
+                missing.append(self.biz_scene_env or "GEMINI_BIZ_SCENE")
+            if missing:
+                raise RuntimeError(
+                    "Gemini gateway planner configuration is missing environment variable(s): "
+                    + ", ".join(missing)
+                )
+            return
         if not _is_azure_api_type(self.api_type):
             if not self.api_base:
                 raise RuntimeError("OpenAI-compatible planner api_base is required")
@@ -207,6 +251,18 @@ class OpenAIChatTextBackend:
                 "api_key_env": self.api_key_env,
                 "api_version": self.api_version,
                 "api_version_env": self.api_version_env,
+            }
+        if _is_gemini_gateway_api_type(self.api_type):
+            return {
+                "api_base_set": bool(self.api_base),
+                "api_base_env": self.api_base_env,
+                "model_env": self.model_env,
+                "api_key_set": bool(self.api_key),
+                "api_key_env": self.api_key_env,
+                "user_key_set": bool(self.user_key),
+                "user_key_env": self.user_key_env,
+                "biz_scene_set": bool(self.biz_scene),
+                "biz_scene_env": self.biz_scene_env,
             }
         return {"api_base": _normalized_api_base(self.api_base)}
 
@@ -352,11 +408,17 @@ def _normalized_api_type(api_type: str) -> str:
         return "openai_compatible"
     if normalized in {"azure", "azure_openai"}:
         return "azure_openai"
+    if normalized in {"gemini", "gemini_gateway", "ks_gateway", "kigress_gateway"}:
+        return "gemini_gateway"
     return normalized
 
 
 def _is_azure_api_type(api_type: str) -> bool:
     return _normalized_api_type(api_type) == "azure_openai"
+
+
+def _is_gemini_gateway_api_type(api_type: str) -> bool:
+    return _normalized_api_type(api_type) == "gemini_gateway"
 
 
 def _format_http_error(exc: urllib.error.HTTPError) -> str:

@@ -958,6 +958,39 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertTrue(config.planner_api_use_for_tools)
         self.assertEqual(config.planner_api_timeout, 45.0)
 
+    def test_planner_api_gemini_gateway_config_uses_environment_names(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "gemini.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "planner_api:",
+                        "  type: gemini_gateway",
+                        "  base_env: GEMINI_API_BASE",
+                        "  model_env: GEMINI_MODEL",
+                        "  api_key_env: GEMINI_API_KEY",
+                        "  user_key_env: GEMINI_USER_KEY",
+                        "  biz_scene_env: GEMINI_BIZ_SCENE",
+                        "  use_for_tools: true",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            parser = eval_runner.build_arg_parser()
+            args = parser.parse_args(["--config", str(config_path), "--model-path", "/models/vl"])
+            config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.planner_api_type, "gemini_gateway")
+        self.assertEqual(config.planner_api_base_env, "GEMINI_API_BASE")
+        self.assertEqual(config.planner_api_model_env, "GEMINI_MODEL")
+        self.assertEqual(config.planner_api_key_env, "GEMINI_API_KEY")
+        self.assertEqual(config.planner_api_user_key_env, "GEMINI_USER_KEY")
+        self.assertEqual(config.planner_api_biz_scene_env, "GEMINI_BIZ_SCENE")
+        self.assertTrue(config.planner_api_use_for_tools)
+
     def test_build_backend_uses_openai_chat_text_backend_for_planner_api(self):
         from runs import eval_runner
 
@@ -1076,6 +1109,53 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertIs(backend.text_backend, backend.vl_backend)
         self.assertTrue(backend.text_backend.allow_media)
         self.assertEqual(backend.text_backend.api_type, "azure_openai")
+
+    def test_build_backend_can_route_planner_and_tools_to_gemini_gateway(self):
+        from runs import eval_runner
+
+        config = eval_runner.EvalConfig(
+            run_root=Path("/tmp/run"),
+            workspace_root=Path("/tmp/run/workspaces"),
+            model_path="/models/vl-should-not-load",
+            planner_api_type="gemini_gateway",
+            planner_api_use_for_tools=True,
+            planner_api_base_env="GEMINI_API_BASE",
+            planner_api_model_env="GEMINI_MODEL",
+            planner_api_key_env="GEMINI_API_KEY",
+            planner_api_user_key_env="GEMINI_USER_KEY",
+            planner_api_biz_scene_env="GEMINI_BIZ_SCENE",
+            data_root=Path("/dataset"),
+            parquet_path=Path("/dataset/test.parquet"),
+            video_dir=Path("/dataset/video"),
+            subtitle_dir=Path("/dataset/subtitle"),
+            cases=("605-1",),
+            strategies=("workspace_v2",),
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_BASE": "http://gateway.internal/openai/team/v1/chat/completions",
+                "GEMINI_MODEL": "pa/gemini-2.5-flash",
+                "GEMINI_API_KEY": "secret-from-env",
+                "GEMINI_USER_KEY": "team-user-key",
+                "GEMINI_BIZ_SCENE": "offline",
+            },
+            clear=False,
+        ):
+            with patch(
+                "visual_coding_agent_harness.backends.qwen_vl.QwenVLBackend.from_pretrained",
+                side_effect=AssertionError("local vl should not load"),
+            ):
+                backend = eval_runner.build_backend(config)
+
+        self.assertIs(backend.text_backend, backend.vl_backend)
+        self.assertTrue(backend.text_backend.allow_media)
+        self.assertEqual(backend.text_backend.api_type, "gemini_gateway")
+        self.assertEqual(backend.text_backend.api_base, "http://gateway.internal/openai/team/v1/chat/completions")
+        self.assertEqual(backend.text_backend.model, "pa/gemini-2.5-flash")
+        self.assertEqual(backend.text_backend.user_key, "team-user-key")
+        self.assertEqual(backend.text_backend.biz_scene, "offline")
 
     def test_ablation_cli_flags_serialized_to_config(self):
         from runs import eval_runner

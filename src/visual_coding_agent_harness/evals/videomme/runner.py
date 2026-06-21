@@ -71,6 +71,8 @@ class EvalConfig:
     planner_api_model_env: str = ""
     planner_api_key_env: str = ""
     planner_api_version_env: str = ""
+    planner_api_user_key_env: str = ""
+    planner_api_biz_scene_env: str = ""
     planner_api_use_for_tools: bool = False
     planner_api_timeout: float = 180.0
     planner_thinking_token_budget: int | None = None
@@ -448,6 +450,8 @@ def run_eval_cases(
         "planner_api_model_env": config.planner_api_model_env,
         "planner_api_key_env": config.planner_api_key_env,
         "planner_api_version_env": config.planner_api_version_env,
+        "planner_api_user_key_env": config.planner_api_user_key_env,
+        "planner_api_biz_scene_env": config.planner_api_biz_scene_env,
         "planner_api_use_for_tools": config.planner_api_use_for_tools,
         "planner_api_timeout": config.planner_api_timeout,
         "planner_thinking_token_budget": config.planner_thinking_token_budget,
@@ -1278,6 +1282,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--planner-api-model-env", default=None)
     parser.add_argument("--planner-api-key-env", default=None)
     parser.add_argument("--planner-api-version-env", default=None)
+    parser.add_argument("--planner-api-user-key-env", default=None)
+    parser.add_argument("--planner-api-biz-scene-env", default=None)
     parser.add_argument("--planner-api-use-for-tools", dest="planner_api_use_for_tools", action="store_true", default=None)
     parser.add_argument("--planner-api-no-tools", dest="planner_api_use_for_tools", action="store_false")
     parser.add_argument("--planner-api-timeout", type=float, default=None)
@@ -1558,6 +1564,26 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
                 default="",
             )
         ),
+        planner_api_user_key_env=str(
+            _arg_or_config(
+                args,
+                config_data,
+                "planner_api_user_key_env",
+                "planner.api_user_key_env",
+                "planner_api.user_key_env",
+                default="",
+            )
+        ),
+        planner_api_biz_scene_env=str(
+            _arg_or_config(
+                args,
+                config_data,
+                "planner_api_biz_scene_env",
+                "planner.api_biz_scene_env",
+                "planner_api.biz_scene_env",
+                default="",
+            )
+        ),
         planner_api_use_for_tools=_as_bool(planner_api_use_for_tools),
         planner_api_timeout=float(
             _arg_or_config(args, config_data, "planner_api_timeout", "planner.api_timeout", "planner_api.timeout", default=180.0)
@@ -1598,7 +1624,8 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
 def build_backend(config: EvalConfig) -> Any:
     planner_api_type = config.planner_api_type.lower().replace("-", "_")
     uses_azure_api = planner_api_type in {"azure", "azure_openai"}
-    if config.planner_api_base or uses_azure_api:
+    uses_gemini_gateway = planner_api_type in {"gemini", "gemini_gateway", "ks_gateway", "kigress_gateway"}
+    if config.planner_api_base or uses_azure_api or uses_gemini_gateway:
         from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
         from visual_coding_agent_harness.backends.routed import RoutedBackend
 
@@ -1606,7 +1633,7 @@ def build_backend(config: EvalConfig) -> Any:
             api_base=config.planner_api_base,
             model=(
                 config.planner_api_model
-                if uses_azure_api
+                if uses_azure_api or uses_gemini_gateway
                 else config.planner_api_model or config.planner_model_path or config.model_path
             ),
             api_key=config.planner_api_key,
@@ -1616,6 +1643,8 @@ def build_backend(config: EvalConfig) -> Any:
             model_env=config.planner_api_model_env,
             api_key_env=config.planner_api_key_env,
             api_version_env=config.planner_api_version_env,
+            user_key_env=config.planner_api_user_key_env,
+            biz_scene_env=config.planner_api_biz_scene_env,
             allow_media=config.planner_api_use_for_tools,
             timeout=config.planner_api_timeout,
             thinking_token_budget=config.planner_thinking_token_budget,

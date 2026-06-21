@@ -213,6 +213,46 @@ def test_openai_chat_backend_azure_can_send_sampled_frames_when_media_enabled(mo
     assert response.text == "visible fact"
 
 
+def test_openai_chat_backend_gemini_gateway_reads_headers_from_env(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("GEMINI_API_BASE", "http://gateway.internal/openai/team/v1/chat/completions")
+    monkeypatch.setenv("GEMINI_API_KEY", "gateway-secret")
+    monkeypatch.setenv("GEMINI_USER_KEY", "team-user-key")
+    monkeypatch.setenv("GEMINI_MODEL", "pa/gemini-2.5-flash")
+    monkeypatch.setenv("GEMINI_BIZ_SCENE", "offline")
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["headers"] = {key.lower(): value for key, value in request.header_items()}
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeHTTPResponse({"choices": [{"message": {"content": '{"status":"continue"}'}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(api_type="gemini_gateway", timeout=15.0)
+    response = backend.generate(BackendRequest(task="replan", prompt="Return JSON."))
+
+    assert captured["url"] == "http://gateway.internal/openai/team/v1/chat/completions"
+    assert captured["timeout"] == 15.0
+    assert captured["headers"]["x-api-key"] == "gateway-secret"
+    assert captured["headers"]["x-ks-user-key"] == "team-user-key"
+    assert captured["headers"]["x-ks-llm-model"] == "pa/gemini-2.5-flash"
+    assert captured["headers"]["x-ks-biz-scene"] == "offline"
+    assert "authorization" not in captured["headers"]
+    body = captured["body"]
+    assert body["model"] == "pa/gemini-2.5-flash"
+    assert body["stream"] is False
+    assert body["messages"][0]["role"] == "system"
+    assert response.text == '{"status":"continue"}'
+    assert response.raw["api_type"] == "gemini_gateway"
+    assert response.raw["api_base_set"] is True
+    assert response.raw["api_key_set"] is True
+    assert response.raw["user_key_set"] is True
+
+
 def test_openai_chat_backend_media_video_requires_sampled_frames_when_enabled(monkeypatch):
     monkeypatch.setenv("ENDPOINT_URL", "https://example-resource.openai.azure.com")
     monkeypatch.setenv("DEPLOYMENT_NAME", "gpt-prod-deployment")
