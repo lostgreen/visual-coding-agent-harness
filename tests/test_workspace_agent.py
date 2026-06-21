@@ -727,7 +727,7 @@ def test_prompts_guide_whole_video_coverage_and_partial_evidence_commits(tmp_pat
     )
 
     assert "whole-video or main-idea" in plan_prompt
-    assert "early, middle, and late root" in plan_prompt
+    assert "early, middle, and late DVC beat windows" in plan_prompt
     assert "partial evidence" in commit_prompt
     assert "answer_support" in commit_prompt
     assert "Reject only when" in commit_prompt
@@ -745,7 +745,9 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert "Available plan tools" in PLAN_SYSTEM_PROMPT
     assert "Every answer call must include" in PLAN_SYSTEM_PROMPT
     assert '"text":"D"' not in PLAN_SYSTEM_PROMPT
-    assert "If Committed Memory is empty" in prompt
+    assert "Use the visible Root Index / dense_video_caption beats as the starting navigation state" in prompt
+    assert "mode\":\"verify\"" in prompt
+    assert "sub_window" in prompt
     assert "synthesize_memory is unavailable until committed memory exists" in prompt
     assert "duplicate_tool_call" in prompt
     assert "do not repeat the same semantic request" in prompt

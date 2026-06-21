@@ -466,32 +466,34 @@ def test_workspace_v2_read_segment_index_and_refine_are_navigation_only(tmp_path
     assert registry.get_runtime_spec("read_segment").commit_required is False
 
 
-def test_workspace_v2_read_segment_requires_index_before_refine_or_verify(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_requires_index")
-    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+def test_workspace_v2_read_segment_refine_or_verify_requires_explicit_sub_window(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_requires_sub_window")
+    backend = RefinementBackend()
+    registry = build_workspace_v2_registry(
+        video_map=_video_map(),
+        backend=backend,
+        workspace=workspace,
+        index_refiner=IndexRefiner(backend=backend),
+    )
 
-    with pytest.raises(ValueError, match="requires_index_read"):
+    with pytest.raises(ValueError, match="requires explicit sub_window"):
         registry.execute(
             "read_segment",
             {
                 "segment_id": "seg_0001",
                 "mode": "refine",
-                "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
             },
         )
 
-    with pytest.raises(ValueError, match="requires_index_read"):
+    with pytest.raises(ValueError, match="requires explicit sub_window"):
         registry.execute(
             "read_segment",
             {
                 "segment_id": "seg_0001",
                 "mode": "verify",
-                "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
             },
         )
 
-    indexed = registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
-    assert indexed["mode"] == "index"
     verified = registry.execute(
         "read_segment",
         {

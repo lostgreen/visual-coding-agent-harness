@@ -661,9 +661,10 @@ class WorkspaceVisualAgent:
 PLAN_SYSTEM_PROMPT = """You are exploring a video through a durable workspace.
 Output exactly one JSON object: {"tool":"...","args":{...}}.
 Available plan tools are read_segment, search, list, read_workspace, verify, synthesize_memory, and answer.
-Use read_segment(index) to inspect a root segment timeline; index output is navigation only and cannot be a final citation.
-Use read_segment(refine) only when a root interval is too broad or ambiguous; never refine a refined child.
-Use read_segment(verify) for answer-grade evidence; only committed memory from verify-capable observations may support an answer.
+The Root Index already shows the initial Dense Video Caption timeline; do not call read_segment(index) just to reread visible DVC beats.
+Use read_segment(index) only when you need the raw structured index payload for a specific root segment.
+Use read_segment(refine) only when a DVC beat or root interval is too broad or ambiguous; always include an explicit sub_window from the DVC timeline and never refine a refined child.
+Use read_segment(verify) for answer-grade evidence; always include an explicit sub_window from a DVC beat. Only committed memory from verify-capable observations may support an answer.
 Do not refine an already-refined root range at the same resolution.
 Use synthesize_memory only after Committed Memory contains answer-support mem_* ids.
 Use answer only after Committed Memory contains mem_* ids that directly support the answer, except forced final requests.
@@ -699,8 +700,10 @@ def compose_plan_prompt(
             "",
             "# Plan Protocol",
             "Return exactly one JSON object. Do not explain.",
-            'If Committed Memory is empty, start with {"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"index"}} unless a better root segment is already known.',
-            "For a whole-video or main-idea question, inspect early, middle, and late root indexes; if one root's evidence was rejected or insufficient, move to another root or sub_window.",
+            "Use the visible Root Index / dense_video_caption beats as the starting navigation state; do not spend a turn on read_segment(index) unless the structured payload is missing from the prompt.",
+            'For answer-grade evidence, call {"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"verify","sub_window":{"start_sec":<beat_start>,"end_sec":<beat_end>},"evidence_mode":"visual","focus":["..."]}} using a narrow DVC beat window.',
+            'If a root beat is too broad or ambiguous, call read_segment(refine) with an explicit sub_window before verify.',
+            "For a whole-video or main-idea question, verify coverage across early, middle, and late DVC beat windows; if one root's evidence was rejected or insufficient, move to another root or sub_window.",
             'If Last Tool Result starts with "answer rejected", the next tool must be read_segment, search, list, read_workspace, or verify.',
             'If Last Tool Result starts with "observation rejected", change segment, sub_window, evidence_mode, or focus; do not repeat the same verify.',
             'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',

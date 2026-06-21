@@ -375,7 +375,11 @@ class SegmentReadService:
         self.index_refiner = index_refiner
         self.frame_sampler = frame_sampler
         self.workspace = workspace
-        self._indexed_roots: set[str] = set()
+        self._indexed_roots: set[str] = {
+            _root_segment_id(segment)
+            for segment in self.video_map_store.current.segments
+            if getattr(segment, "index_level", "root") == "root"
+        }
 
     def read_index(self, *, segment_id: str) -> Mapping[str, object]:
         current = self.video_map_store.current
@@ -413,7 +417,7 @@ class SegmentReadService:
     ) -> Mapping[str, object]:
         parent = self.video_map_store.current.get(segment_id)
         self._require_index_read(parent, mode="refine")
-        start_sec, end_sec = _sub_window_range(sub_window, parent)
+        start_sec, end_sec = _sub_window_range(sub_window, parent, mode="refine", require_explicit=True)
         patch = self.index_refiner.refine(
             self.video_map_store,
             parent_segment_id=segment_id,
@@ -454,7 +458,7 @@ class SegmentReadService:
     ) -> Mapping[str, object]:
         parent = self.video_map_store.current.get(segment_id)
         self._require_index_read(parent, mode="verify")
-        start_sec, end_sec = _sub_window_range(sub_window, parent)
+        start_sec, end_sec = _sub_window_range(sub_window, parent, mode="verify", require_explicit=True)
         if self.workspace is not None:
             self.workspace.write_trace_event(
                 "segment_verify_dispatched",
@@ -581,8 +585,18 @@ def _read_clip_evidence(
     }
 
 
-def _sub_window_range(sub_window: Mapping[str, float] | None, segment: VideoMapSegment) -> tuple[float, float]:
+def _sub_window_range(
+    sub_window: Mapping[str, float] | None,
+    segment: VideoMapSegment,
+    *,
+    mode: str,
+    require_explicit: bool = False,
+) -> tuple[float, float]:
     payload = dict(sub_window or {})
+    if require_explicit and ("start_sec" not in payload or "end_sec" not in payload):
+        raise ValueError(
+            f"read_segment_failed: mode={mode} requires explicit sub_window start_sec/end_sec from a DVC beat"
+        )
     start_sec = float(payload.get("start_sec", segment.start_sec))
     end_sec = float(payload.get("end_sec", segment.end_sec))
     if start_sec < segment.start_sec or end_sec > segment.end_sec or end_sec <= start_sec:
