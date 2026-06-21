@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Literal, Mapping, Optional
 
-from ..agent_contracts import resolve_nframes
-from ..open_questions import exploration_question
+from ..core.contracts import resolve_nframes
+from ..workspace.open_questions import exploration_question
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..registry import ToolRegistry, tool
-from ..video_map import VideoMap, VideoMapStore
+from ..core.registry import ToolRegistry, tool
+from ..video.map import VideoMap, VideoMapStore
 from .frame_cache import FrameSampler, frame_cache_artifact_ref
 
 

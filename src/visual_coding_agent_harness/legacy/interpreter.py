@@ -11,11 +11,11 @@ from dataclasses import dataclass, field
 from string import Formatter
 from typing import Any, Callable, Dict, Mapping, Sequence
 
-from .agent_contracts import resolve_nframes
-from .distill import distill
-from .output_quality import DEGENERATE_CONFIDENCE_SIGNAL, is_degenerate
-from .registry import ToolRegistry
-from .workspace import EvidenceRecord, EvidenceWorkspace, MapUpdateProposal, Observation
+from ..core.contracts import resolve_nframes
+from ..core.registry import ToolRegistry
+from ..workspace import EvidenceRecord, EvidenceWorkspace, MapUpdateProposal, Observation
+from ..workspace.distill import distill
+from ..workspace.output_quality import DEGENERATE_CONFIDENCE_SIGNAL, is_degenerate
 
 
 @dataclass(frozen=True)

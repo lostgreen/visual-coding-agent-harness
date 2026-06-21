@@ -7,8 +7,8 @@ import re
 from typing import Any, Mapping, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..registry import ToolRegistry, tool
-from ..video_map import VideoMapSegment, VideoMapStore
+from ..core.registry import ToolRegistry, tool
+from ..video.map import VideoMapSegment, VideoMapStore
 from ..workspace import EvidenceWorkspace
 
 

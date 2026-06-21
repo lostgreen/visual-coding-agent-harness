@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Optional, Sequence
 
-from ..registry import ToolRegistry, tool
+from ..core.registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
 
 

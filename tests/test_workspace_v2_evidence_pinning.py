@@ -4,7 +4,7 @@ from pathlib import Path
 from visual_coding_agent_harness.agents.workspace_agent import WorkspaceVisualAgent
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
-from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
+from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 

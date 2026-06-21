@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Sequence
 
-from .backends.base import BackendRequest, VisionLanguageBackend
+from ..backends.base import BackendRequest, VisionLanguageBackend
 
 
 _OPTION_LINE_RE = re.compile(r"^\s*[A-H][\).:-]\s+\S.*$", re.IGNORECASE)

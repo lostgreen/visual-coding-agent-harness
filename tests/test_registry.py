@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from visual_coding_agent_harness.registry import ToolError, ToolRegistry, ToolRuntimeSpec, tool
+from visual_coding_agent_harness.core.registry import ToolError, ToolRegistry, ToolRuntimeSpec, tool
 
 
 def test_resolve_alias() -> None:

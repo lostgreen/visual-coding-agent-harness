@@ -7,11 +7,11 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
-from ..agent_contracts import resolve_nframes
-from ..open_questions import exploration_question
-from ..output_quality import confidence_signal_from_text
+from ..core.contracts import resolve_nframes
+from ..workspace.open_questions import exploration_question
+from ..workspace.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..registry import ToolRegistry, tool
+from ..core.registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
 from .frame_cache import FrameSampler, frame_cache_artifact_ref
 

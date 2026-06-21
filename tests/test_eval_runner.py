@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from visual_coding_agent_harness.agent_budget import AgentBudget
-from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
+from visual_coding_agent_harness.core.budget import AgentBudget
+from visual_coding_agent_harness.video.index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
 
 
@@ -1359,7 +1359,7 @@ class EvalRunnerTest(unittest.TestCase):
     def test_run_loop_workspace_v2_uses_workspace_agent_and_registry(self):
         from runs import eval_runner
         from visual_coding_agent_harness.agents.workspace_agent import WorkspaceRunResult
-        from visual_coding_agent_harness.video_map import VideoMapStore
+        from visual_coding_agent_harness.video.map import VideoMapStore
 
         class FakeWorkspaceVisualAgent:
             def __init__(self, *, backend, registry, workspace, max_rounds, video_path, video_map=None, log_root):

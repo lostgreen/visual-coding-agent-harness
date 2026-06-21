@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from visual_coding_agent_harness.registry import ToolError
+from visual_coding_agent_harness.core.registry import ToolError
 
 
 def require_ffmpeg() -> str:

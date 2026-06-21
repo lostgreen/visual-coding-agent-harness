@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
-from visual_coding_agent_harness.protocol import ToolRequest
-from visual_coding_agent_harness.registry import ToolError, ToolRegistry
+from visual_coding_agent_harness.core.protocol import ToolRequest
+from visual_coding_agent_harness.core.registry import ToolError, ToolRegistry
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
-from visual_coding_agent_harness.video_index import TimelineBeat
-from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap, VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.video.index import TimelineBeat
+from visual_coding_agent_harness.video.map import IndexRefiner, VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 

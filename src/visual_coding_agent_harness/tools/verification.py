@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Optional, Sequence
 
-from ..registry import ToolRegistry, tool
+from ..core.registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
-from ..evidence_predicates import (
+from ..evidence.predicates import (
     direct_floor_holds,
     grounding_quality_floor,
     no_decisive_weak_grounding,

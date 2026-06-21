@@ -6,11 +6,11 @@ import json
 import re
 from typing import Mapping, Optional, Sequence
 
-from ..agent_contracts import resolve_nframes
-from ..open_questions import exploration_question
-from ..output_quality import confidence_signal_from_text
+from ..core.contracts import resolve_nframes
+from ..workspace.open_questions import exploration_question
+from ..workspace.output_quality import confidence_signal_from_text
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..registry import ToolError, ToolRegistry, tool
+from ..core.registry import ToolError, ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
 from .frame_cache import FrameSampler, frame_cache_artifact_ref
 from .segments import ClipExtractor, _clip_output_path, _extract_clip_ffmpeg

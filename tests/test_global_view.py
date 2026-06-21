@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from visual_coding_agent_harness.distill import distill
+from visual_coding_agent_harness.workspace.distill import distill
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 

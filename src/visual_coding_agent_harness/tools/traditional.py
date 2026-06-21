@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
-from visual_coding_agent_harness.registry import ToolRegistry, tool
+from visual_coding_agent_harness.core.registry import ToolRegistry, tool
 from visual_coding_agent_harness.tools import image_atomic, video_atomic
 
 

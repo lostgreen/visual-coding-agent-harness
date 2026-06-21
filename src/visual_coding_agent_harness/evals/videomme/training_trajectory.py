@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from visual_coding_agent_harness.agent_contracts import CONTRACT_VERSION
+from visual_coding_agent_harness.core.contracts import CONTRACT_VERSION
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 

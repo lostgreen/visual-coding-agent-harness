@@ -13,7 +13,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ...backends.base import BackendRequest, VisionLanguageBackend
 from ...tools.frame_cache import FrameSampler
-from ...video_index import SceneIndex, TimelineBeat, VideoSegment, fixed_window_scene_index
+from ...video.index import SceneIndex, TimelineBeat, VideoSegment, fixed_window_scene_index
 from .scene_index_cache import SceneIndexCache
 
 

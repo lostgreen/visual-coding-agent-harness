@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from visual_coding_agent_harness.agent_contracts import CONTRACT_VERSION
+from visual_coding_agent_harness.core.contracts import CONTRACT_VERSION
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
-from visual_coding_agent_harness.interpreter import ProgramInterpreter
-from visual_coding_agent_harness.registry import ToolRegistry
+from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
+from visual_coding_agent_harness.core.registry import ToolRegistry
 from visual_coding_agent_harness.tools.global_view import build_global_view_registry
 from visual_coding_agent_harness.tools.inspector import build_segment_inspector_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry

@@ -4,12 +4,12 @@ from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import ClaimRelation, ClaimModality, OptionSpec, TargetRegistry, TargetSpec
-from visual_coding_agent_harness.interpreter import ProgramInterpreter
-from visual_coding_agent_harness.registry import ToolError
+from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
+from visual_coding_agent_harness.core.registry import ToolError
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
-from visual_coding_agent_harness.video_index import SceneIndex, VideoSegment
-from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_fields
+from visual_coding_agent_harness.video.index import SceneIndex, VideoSegment
+from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_fields
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 

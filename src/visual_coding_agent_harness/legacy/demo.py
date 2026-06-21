@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from visual_coding_agent_harness.interpreter import ProgramInterpreter, ProgramResult
+from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter, ProgramResult
 from visual_coding_agent_harness.tools.dummy import build_dummy_registry
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 

@@ -3,9 +3,9 @@ from pathlib import Path
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import ClaimModality, TargetRegistry, TargetSpec
-from visual_coding_agent_harness.interpreter import ProgramInterpreter
+from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
-from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment
+from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 

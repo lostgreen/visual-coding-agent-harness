@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Optional
 
 from ..backends.base import VisionLanguageBackend
-from ..registry import ToolRegistry
-from ..video_map import IndexRefiner, VideoMap, VideoMapStore
+from ..core.registry import ToolRegistry
+from ..video.map import IndexRefiner, VideoMap, VideoMapStore
 from ..workspace import EvidenceWorkspace
 from .asr_binding import build_asr_binding_registry
 from .enrichment import build_video_enrichment_registry

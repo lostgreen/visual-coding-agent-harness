@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, Mapping, Sequence
 
-from .workspace import EvidenceRecord, EvidenceWorkspace, Observation
+from .state import EvidenceRecord, EvidenceWorkspace, Observation
 from .output_quality import confidence_signal_from_text
 
 

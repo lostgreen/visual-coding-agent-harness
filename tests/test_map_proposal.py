@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from visual_coding_agent_harness.tools.navigation import build_video_navigation_registry
-from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace, MapUpdateProposal
 
 

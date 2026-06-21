@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Mapping, Optional, Sequence
 
-from ..registry import ToolRegistry, tool
+from ..core.registry import ToolRegistry, tool
 from ..workspace import EvidenceWorkspace
 
 

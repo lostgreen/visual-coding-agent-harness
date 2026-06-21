@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from ...video_index import SceneIndex
+from ...video.index import SceneIndex
 
 
 class SceneIndexCache:

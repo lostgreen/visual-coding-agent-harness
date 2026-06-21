@@ -6,8 +6,8 @@ import re
 from typing import Any, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
-from ..video_map import (
+from ..core.registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
+from ..video.map import (
     IndexRefiner,
     VideoMap,
     VideoMapSegment,

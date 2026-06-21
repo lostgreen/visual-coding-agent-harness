@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from visual_coding_agent_harness.demo import run_demo
+from visual_coding_agent_harness.legacy.demo import run_demo
 
 
 class DemoTest(unittest.TestCase):

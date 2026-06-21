@@ -6,7 +6,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Mapping, Sequence
 
-from .contracts import ClaimRelation, EvidenceBinding, RelationBinding, TargetSpec, TargetTextHit
+from ..contracts import ClaimRelation, EvidenceBinding, RelationBinding, TargetSpec, TargetTextHit
 
 
 @dataclass(frozen=True)

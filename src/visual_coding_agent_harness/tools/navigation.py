@@ -6,8 +6,8 @@ import re
 from dataclasses import asdict
 from typing import Any, Mapping, Sequence
 
-from ..lexicon import FUTURE_PROSPECTIVE_MARKERS
-from ..transcript_binder import TranscriptEvidenceBinder
+from ..evidence.lexicon import FUTURE_PROSPECTIVE_MARKERS
+from ..workspace.transcript_binder import TranscriptEvidenceBinder
 from ..contracts import (
     ClaimModality,
     ClaimRelation,
@@ -15,9 +15,9 @@ from ..contracts import (
     build_ordered_transcript_sequence,
     ordered_sequence_exact_option,
 )
-from ..registry import ToolError, ToolRegistry, tool
-from ..text_norm import token_spans, unique_tokens
-from ..video_map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_modalities, search_modality_limitations
+from ..core.registry import ToolError, ToolRegistry, tool
+from ..video.text_norm import token_spans, unique_tokens
+from ..video.map import VideoMap, VideoMapSegment, VideoMapStore, _resolve_search_modalities, search_modality_limitations
 from ..workspace import EvidenceWorkspace, MapUpdateProposal
 
 

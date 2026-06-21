@@ -8,9 +8,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
 
-from .backends.base import BackendRequest, VisionLanguageBackend
+from ..backends.base import BackendRequest, VisionLanguageBackend
 from .text_norm import unique_tokens
-from .video_index import SceneIndex, TimelineBeat
+from .index import SceneIndex, TimelineBeat
 
 FrameSampler = Callable[[str, float, float, int], Sequence[str]]
 

@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..protocol import ToolRequest, ToolResult
-from ..registry import DuplicateGuardPolicy, ToolError, ToolRegistry
+from ..core.protocol import ToolRequest, ToolResult
+from ..core.registry import DuplicateGuardPolicy, ToolError, ToolRegistry
 from ..workspace import EvidenceWorkspace
 
 

@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from typing import Any
 
-from visual_coding_agent_harness.agent_contracts import CONTRACT_VERSION
+from visual_coding_agent_harness.core.contracts import CONTRACT_VERSION
 
 
 @dataclass

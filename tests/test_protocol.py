@@ -1,7 +1,7 @@
 import unittest
 
-from visual_coding_agent_harness.protocol import ToolRequest, ToolResult
-from visual_coding_agent_harness.registry import ToolRegistry, tool
+from visual_coding_agent_harness.core.protocol import ToolRequest, ToolResult
+from visual_coding_agent_harness.core.registry import ToolRegistry, tool
 
 
 class ProtocolTest(unittest.TestCase):

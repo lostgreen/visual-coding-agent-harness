@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-from visual_coding_agent_harness.interpreter import ProgramInterpreter
-from visual_coding_agent_harness.registry import ToolRegistry, tool
+from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
+from visual_coding_agent_harness.core.registry import ToolRegistry, tool
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 

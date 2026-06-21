@@ -11,15 +11,15 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from visual_coding_agent_harness.agent_budget import AgentBudget
-from visual_coding_agent_harness.context_budget import parse_budget_ratios
+from visual_coding_agent_harness.core.budget import AgentBudget
+from visual_coding_agent_harness.workspace.context_budget import parse_budget_ratios
 from visual_coding_agent_harness.agents.workspace_agent import WorkspaceVisualAgent
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
-from visual_coding_agent_harness.video_index import SceneIndex
-from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap, VideoMapStore
+from visual_coding_agent_harness.video.index import SceneIndex
+from visual_coding_agent_harness.video.map import IndexRefiner, VideoMap, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 from .summary_schema import RunSummary, validate as validate_run_summary

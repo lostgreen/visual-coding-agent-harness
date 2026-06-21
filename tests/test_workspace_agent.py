@@ -12,11 +12,11 @@ from visual_coding_agent_harness.agents.workspace_agent import (
 )
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.evals.videomme.workspace_round_log import export_workspace_round_log
-from visual_coding_agent_harness.registry import ToolRegistry, ToolRuntimeSpec, tool
+from visual_coding_agent_harness.core.registry import ToolRegistry, ToolRuntimeSpec, tool
 from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
-from visual_coding_agent_harness.video_index import TimelineBeat
-from visual_coding_agent_harness.video_map import IndexRefiner, VideoMap, VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.video.index import TimelineBeat
+from visual_coding_agent_harness.video.map import IndexRefiner, VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 

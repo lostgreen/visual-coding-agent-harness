@@ -6,8 +6,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ..protocol import ToolRequest
-from ..registry import DuplicateGuardPolicy, ToolError, ToolRegistry
+from ..core.protocol import ToolRequest
+from ..core.registry import DuplicateGuardPolicy, ToolError, ToolRegistry
 
 ToolSpecContext = Any
 

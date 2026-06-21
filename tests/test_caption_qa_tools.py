@@ -6,12 +6,12 @@ import pytest
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import TargetRegistry, TargetSpec
-from visual_coding_agent_harness.interpreter import ProgramInterpreter
+from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.tools.enrichment import build_video_enrichment_registry
 from visual_coding_agent_harness.tools.inspector import build_segment_inspector_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry
 from visual_coding_agent_harness.tools.vlm import build_vlm_registry
-from visual_coding_agent_harness.video_map import VideoMap, VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
