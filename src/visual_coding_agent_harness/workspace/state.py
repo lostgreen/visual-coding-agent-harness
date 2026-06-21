@@ -839,15 +839,7 @@ class EvidenceWorkspace:
             root_segments = [
                 segment for segment in getattr(active_video_map, "segments", ()) if getattr(segment, "index_level", "root") == "root"
             ]
-            render_section(
-                "Root Index",
-                root_segments,
-                lambda segment: (
-                    f"{segment.segment_id} [{segment.start_sec:.1f}-{segment.end_sec:.1f}s] "
-                    f"{_bounded_inline(segment.low_fps_caption or segment.compact_text(), 140)}"
-                ),
-                hint='read_segment(mode="index")',
-            )
+            lines.extend(_root_index_lines(root_segments))
             lines.extend(["", "## Index Coverage"])
             lines.extend(_index_coverage_lines(active_video_map))
             lines.append("Index coverage != evidence coverage")
@@ -3445,6 +3437,60 @@ def _bounded_inline(value: Any, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _single_line_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _root_index_lines(root_segments: Sequence[Any]) -> list[str]:
+    lines: list[str] = ["", "## Root Index"]
+    if not root_segments:
+        return [*lines, "(none)"]
+    for segment in root_segments:
+        lines.extend(_root_segment_index_lines(segment))
+    return lines
+
+
+def _root_segment_index_lines(segment: Any) -> list[str]:
+    summary = _single_line_text(getattr(segment, "low_fps_caption", "") or _compact_segment_text(segment))
+    lines = [
+        (
+            f"- {getattr(segment, 'segment_id', '-')} "
+            f"[{float(getattr(segment, 'start_sec', 0.0)):.1f}-{float(getattr(segment, 'end_sec', 0.0)):.1f}s] "
+            f"{summary or '(no root summary)'}"
+        )
+    ]
+    beats = list(getattr(segment, "timeline_beats", ()) or ())
+    if not beats:
+        return lines
+    lines.append("  dense_video_caption:")
+    for beat in beats:
+        lines.append(_root_beat_line(beat))
+    return lines
+
+
+def _root_beat_line(beat: Any) -> str:
+    hints = []
+    entity_hints = [str(item) for item in getattr(beat, "entity_hints", ()) or () if str(item)]
+    modality_hints = [str(item) for item in getattr(beat, "modality_hints", ()) or () if str(item)]
+    if entity_hints:
+        hints.append("entities=" + ", ".join(entity_hints))
+    if modality_hints:
+        hints.append("modalities=" + ", ".join(modality_hints))
+    suffix = f" ({'; '.join(hints)})" if hints else ""
+    return (
+        f"  - {getattr(beat, 'beat_id', '-') or '-'} "
+        f"[{float(getattr(beat, 'start_sec', 0.0)):.1f}-{float(getattr(beat, 'end_sec', 0.0)):.1f}s] "
+        f"{_single_line_text(getattr(beat, 'summary', ''))}{suffix}"
+    )
+
+
+def _compact_segment_text(segment: Any) -> str:
+    compact_text = getattr(segment, "compact_text", None)
+    if callable(compact_text):
+        return str(compact_text())
+    return ""
 
 
 def _index_coverage_lines(video_map: Any) -> list[str]:

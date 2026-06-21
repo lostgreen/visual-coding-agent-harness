@@ -17,7 +17,7 @@ from ...video.index import SceneIndex, TimelineBeat, VideoSegment, fixed_window_
 from .scene_index_cache import SceneIndexCache
 
 
-SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dvc_root_v2"
+SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dvc_root_v3"
 
 ClipExtractor = Callable[[str, str, float, float], str]
 
@@ -35,8 +35,8 @@ class RootIndexPolicy:
     root_window_sec: float = 300.0
     frame_cache_fps: float = 1.0
     max_pixels_per_frame: int = 360 * 420
-    max_beats_per_root: int = 8
-    max_new_tokens: int = 2048
+    max_beats_per_root: int = 12
+    max_new_tokens: int = 6144
 
 
 class SceneIndexBuilder:
@@ -137,6 +137,8 @@ class SceneIndexBuilder:
             "root_window_sec": round(float(self.root_policy.root_window_sec), 3),
             "frame_cache_fps": round(float(self.root_policy.frame_cache_fps), 3),
             "max_pixels_per_frame": int(self.root_policy.max_pixels_per_frame),
+            "max_beats_per_root": int(self.root_policy.max_beats_per_root),
+            "max_new_tokens": int(self.root_policy.max_new_tokens),
             "subtitle_hash": subtitle_hash(subtitle_cues),
             "vl_model_id": self.vl_model_id,
         }
@@ -166,17 +168,19 @@ class SceneIndexBuilder:
             BackendRequest(
                 task="build_root_dvc_index",
                 prompt=(
-                    "You are building a navigation-only index for a five-minute video interval.\n\n"
+                    "You are building a dense navigation-only caption index for a five-minute video interval.\n\n"
                     "You receive chronologically ordered video frames sampled at 1 FPS when available, "
                     "and timestamped subtitle / ASR cues for the same interval.\n\n"
                     "Return only JSON using this schema:\n"
                     "{\n"
-                    '  "root_summary": "one sentence navigation summary",\n'
+                    '  "root_summary": "one sentence overview of the whole interval",\n'
                     '  "beats": [\n'
                     "    {\n"
-                    '      "start_offset_sec": 0.0,\n'
-                    '      "end_offset_sec": 10.0,\n'
-                    '      "summary": "visible or spoken content in this beat",\n'
+                    '      "start_sec": 0.0,\n'
+                    '      "end_sec": 10.0,\n'
+                    '      "scene": "where the video is and what is visible",\n'
+                    '      "event": "the simple action, narration point, or state change",\n'
+                    '      "summary": "Scene: ... Event: ...",\n'
                     '      "entity_hints": ["optional"],\n'
                     '      "modality_hints": ["visual|asr|ocr|temporal"]\n'
                     "    }\n"
@@ -184,12 +188,15 @@ class SceneIndexBuilder:
                     '  "topic_tags": ["optional"],\n'
                     '  "limitations": ["optional"]\n'
                     "}\n"
-                    "Use 1 to MAX_BEATS chronological non-overlapping beats. For each beat, provide "
-                    "start_offset_sec, end_offset_sec, and summary relative to this interval. Summarize only visible "
-                    "or spoken content. Mark useful cues as visual, asr, ocr, or temporal. Do not answer a downstream "
-                    "question. This is a navigation index, not final evidence.\n\n"
+                    "Use enough chronological non-overlapping beats to cover the interval; use MAX_BEATS when "
+                    "the scene, visual state, narration point, or event changes often. For each beat, provide "
+                    "start_sec and end_sec as absolute video seconds within this segment. Each beat must describe "
+                    "both the scene and a simple event/state/narration point. Do not collapse the interval into "
+                    "only one broad overview. Summarize only visible or spoken content. Mark useful cues as "
+                    "visual, asr, ocr, or temporal. Do not answer a downstream question. This is a navigation "
+                    "index, not final evidence.\n\n"
                     f"MAX_BEATS: {self.root_policy.max_beats_per_root}\n"
-                    "Keep the whole JSON short enough to complete. Each summary must be one concise sentence.\n"
+                    "Each beat summary must be one concise complete sentence, not an ellipsis.\n"
                     f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s\n"
                     f"Subtitles / ASR cues:\n{cue_text}"
                 ),
@@ -334,11 +341,7 @@ def _root_summary_from_beats(beats: Sequence[TimelineBeat]) -> str:
 
 def _root_summary_from_cues(cues: Sequence[SubtitleCue]) -> str:
     cue_text = _clean_text(" ".join(cue.text for cue in cues if _clean_text(cue.text)))
-    if not cue_text:
-        return ""
-    if len(cue_text) <= 480:
-        return cue_text
-    return f"{cue_text[:477].rstrip()}..."
+    return cue_text
 
 
 def _root_summary(root_data: Mapping[str, Any]) -> str:
@@ -425,10 +428,18 @@ def _normalize_root_beats_with_diagnostics(
 
 
 def _beat_summary(item: Mapping[str, Any]) -> str:
-    for key in ("summary", "description", "caption", "text", "event", "content"):
+    for key in ("summary", "description", "caption", "text", "content"):
         summary = _clean_generated_text(item.get(key) or "", key)
         if summary:
             return summary
+    scene = _clean_generated_text(item.get("scene") or "", "scene")
+    event = _clean_generated_text(item.get("event") or "", "event")
+    if scene and event:
+        return f"Scene: {scene} Event: {event}"
+    if scene:
+        return f"Scene: {scene}"
+    if event:
+        return f"Event: {event}"
     return ""
 
 

@@ -14,7 +14,7 @@ from typing import Any, Callable, Mapping, Sequence
 from visual_coding_agent_harness.core.budget import AgentBudget
 from visual_coding_agent_harness.workspace.context_budget import parse_budget_ratios
 from visual_coding_agent_harness.agents.workspace_agent import WorkspaceVisualAgent
-from visual_coding_agent_harness.evals.videomme.scene_index_builder import SceneIndexBuilder, SubtitleCue
+from visual_coding_agent_harness.evals.videomme.scene_index_builder import RootIndexPolicy, SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
 from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
@@ -85,6 +85,8 @@ class EvalConfig:
     scene_index_cache_enabled: bool = True
     scene_caption_nframes: int = SEGMENT_NFRAMES
     scene_index_concurrency: int = 1
+    scene_index_max_beats_per_root: int = RootIndexPolicy().max_beats_per_root
+    scene_index_max_new_tokens: int = RootIndexPolicy().max_new_tokens
     frame_cache_fps: float = FRAME_CACHE_FPS
     frame_cache_root: Path | None = None
     budget: AgentBudget = AgentBudget()
@@ -498,6 +500,8 @@ def run_eval_cases(
         "scene_index_cache_enabled": config.scene_index_cache_enabled,
         "scene_caption_nframes": config.scene_caption_nframes,
         "scene_index_concurrency": config.scene_index_concurrency,
+        "scene_index_max_beats_per_root": config.scene_index_max_beats_per_root,
+        "scene_index_max_new_tokens": config.scene_index_max_new_tokens,
         "frame_cache_fps": config.frame_cache_fps,
         "frame_cache_root": str(_frame_cache_root(config)),
         "export_training": config.export_training,
@@ -1135,6 +1139,12 @@ def run_strategy(
         vl_model_id=config.model_path,
         window_sec=config.window_sec,
         caption_nframes=config.scene_caption_nframes,
+        root_policy=RootIndexPolicy(
+            root_window_sec=float(config.window_sec),
+            frame_cache_fps=float(config.frame_cache_fps),
+            max_beats_per_root=int(config.scene_index_max_beats_per_root),
+            max_new_tokens=int(config.scene_index_max_new_tokens),
+        ),
         root_concurrency=config.scene_index_concurrency,
         cache=cache,
         clip_root=None if frame_sampler is not None else config.scene_index_cache_dir / "clips",
@@ -1345,6 +1355,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-scene-index-cache", action="store_true", default=None)
     parser.add_argument("--scene-caption-nframes", type=int, default=None)
     parser.add_argument("--scene-index-concurrency", type=int, default=None)
+    parser.add_argument("--scene-index-max-beats-per-root", type=int, default=None)
+    parser.add_argument("--scene-index-max-new-tokens", type=int, default=None)
     parser.add_argument("--frame-cache-root", type=Path, default=None)
     parser.add_argument("--frame-cache-fps", type=float, default=None)
     parser.add_argument("--max-rounds", type=int, default=None)
@@ -1685,6 +1697,30 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
                 "scene_index_concurrency",
                 "scene.index_concurrency",
                 default=1,
+            )
+        ),
+        scene_index_max_beats_per_root=int(
+            _arg_or_config(
+                args,
+                config_data,
+                "scene_index_max_beats_per_root",
+                "scene_index_max_beats_per_root",
+                "scene_index.max_beats_per_root",
+                "scene.max_beats_per_root",
+                "dense_video_caption.max_beats_per_root",
+                default=RootIndexPolicy().max_beats_per_root,
+            )
+        ),
+        scene_index_max_new_tokens=int(
+            _arg_or_config(
+                args,
+                config_data,
+                "scene_index_max_new_tokens",
+                "scene_index_max_new_tokens",
+                "scene_index.max_new_tokens",
+                "scene.max_new_tokens",
+                "dense_video_caption.max_new_tokens",
+                default=RootIndexPolicy().max_new_tokens,
             )
         ),
         frame_cache_fps=float(_arg_or_config(args, config_data, "frame_cache_fps", default=FRAME_CACHE_FPS)),

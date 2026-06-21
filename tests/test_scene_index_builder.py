@@ -93,13 +93,17 @@ def test_builder_creates_single_call_root_dvc_manifest() -> None:
     )
 
     assert [request.task for request in backend.requests] == ["build_root_dvc_index"]
-    assert backend.requests[0].metadata["schema_version"] == "dvc_root_v2"
+    assert backend.requests[0].metadata["schema_version"] == "dvc_root_v3"
     assert backend.requests[0].metadata["frame_cache_fps"] == 1.0
     assert backend.requests[0].metadata["max_pixels_per_frame"] == 360 * 420
     assert backend.requests[0].metadata["max_pixels"] == 360 * 420
     assert backend.requests[0].metadata["fps"] == 1.0
     assert backend.requests[0].metadata["nframes"] == 2
-    assert backend.requests[0].max_new_tokens == 2048
+    assert backend.requests[0].metadata["max_beats_per_root"] == 12
+    assert backend.requests[0].max_new_tokens == RootIndexPolicy().max_new_tokens
+    assert '"scene": "where the video is and what is visible"' in backend.requests[0].prompt
+    assert '"event": "the simple action, narration point, or state change"' in backend.requests[0].prompt
+    assert "Do not collapse the interval into only one broad overview" in backend.requests[0].prompt
     segment = scene_index.segments[0]
     assert segment.source_segment_id == "seg_0001"
     assert segment.map_summary == "Museum aircraft intro with a silver plane in a hangar."
@@ -367,6 +371,13 @@ def test_root_dvc_tolerates_beat_summary_aliases_and_drops_unusable_beats() -> N
                             {
                                 "start_offset_sec": 8.0,
                                 "end_offset_sec": 12.0,
+                                "scene": "A camera faces the curb beside the crosswalk.",
+                                "event": "Traffic pauses while pedestrians finish crossing.",
+                                "modality_hints": ["visual", "temporal"],
+                            },
+                            {
+                                "start_offset_sec": 12.0,
+                                "end_offset_sec": 16.0,
                                 "entity_hints": ["traffic light"],
                             },
                         ],
@@ -391,7 +402,8 @@ def test_root_dvc_tolerates_beat_summary_aliases_and_drops_unusable_beats() -> N
     )
 
     assert [beat.summary for beat in scene_index.segments[0].timeline_beats] == [
-        "People cross a busy intersection."
+        "People cross a busy intersection.",
+        "Scene: A camera faces the curb beside the crosswalk. Event: Traffic pauses while pedestrians finish crossing.",
     ]
 
 
@@ -641,16 +653,18 @@ def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
 
     key = builder.cache_key(video_id="video-1", video_path="/tmp/video-1.mp4", duration_sec=30.0, subtitle_cues=cues)
 
-    assert SCENE_INDEX_BUILDER_SCHEMA_VERSION == "dvc_root_v2"
+    assert SCENE_INDEX_BUILDER_SCHEMA_VERSION == "dvc_root_v3"
     assert key == SceneIndexCache(Path("/tmp/unused")).key_for(
         {
-            "schema_version": "dvc_root_v2",
+            "schema_version": "dvc_root_v3",
             "video_id": "video-1",
             "video_path": "/tmp/video-1.mp4",
             "duration_sec": 30.0,
             "root_window_sec": 30.0,
             "frame_cache_fps": 1.0,
             "max_pixels_per_frame": 360 * 420,
+            "max_beats_per_root": 12,
+            "max_new_tokens": 6144,
             "subtitle_hash": subtitle_hash(cues),
             "vl_model_id": "vl-mini",
         }

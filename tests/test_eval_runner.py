@@ -633,6 +633,9 @@ class EvalRunnerTest(unittest.TestCase):
                 window_sec=300.0,
                 scene_index_cache_dir=cache_dir,
                 scene_index_concurrency=8,
+                scene_index_max_beats_per_root=9,
+                scene_index_max_new_tokens=7777,
+                frame_cache_fps=2.0,
                 budget=AgentBudget(),
             )
 
@@ -652,6 +655,9 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(builder_inits[0]["vl_model_id"], "/models/vl")
             self.assertEqual(builder_inits[0]["cache"].cache_dir, cache_dir)
             self.assertEqual(builder_inits[0]["root_concurrency"], 8)
+            self.assertEqual(builder_inits[0]["root_policy"].max_beats_per_root, 9)
+            self.assertEqual(builder_inits[0]["root_policy"].max_new_tokens, 7777)
+            self.assertEqual(builder_inits[0]["root_policy"].frame_cache_fps, 2.0)
 
     def test_free_explore_cli_builds_budgetless_agent_config(self):
         from runs import eval_runner
@@ -859,6 +865,9 @@ class EvalRunnerTest(unittest.TestCase):
                     [
                         "scene_index_concurrency: 8",
                         "scene_caption_nframes: 6",
+                        "scene_index_max_beats_per_root: 10",
+                        "dense_video_caption:",
+                        "  max_new_tokens: 8192",
                     ]
                 ),
                 encoding="utf-8",
@@ -870,6 +879,8 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(config.scene_index_concurrency, 8)
         self.assertEqual(config.scene_caption_nframes, 6)
+        self.assertEqual(config.scene_index_max_beats_per_root, 10)
+        self.assertEqual(config.scene_index_max_new_tokens, 8192)
 
     def test_default_run_and_scene_cache_roots_are_under_m2v_management_root(self):
         from runs import eval_runner
