@@ -224,6 +224,8 @@ def test_workspace_v2_plan_phase_tool_surface_is_exact(tmp_path: Path) -> None:
 
     assert tool_names == {
         "read_segment",
+        "scan_segment",
+        "verify_window",
         "read_clip",
         "search",
         "list",
@@ -474,6 +476,70 @@ def test_workspace_v2_read_segment_index_and_refine_are_navigation_only(tmp_path
     assert refined["commit_required"] is False
     assert sampled == [("/videos/demo.mp4", 10.0, 25.0, 15)]
     assert registry.get_runtime_spec("read_segment").commit_required is False
+
+
+def test_workspace_v2_scan_segment_and_verify_window_delegate_local_workers(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_scan_verify_workers")
+    backend = RecordingBackend(
+        text=(
+            '{"candidates":[{"time_range":[10,20],"source_beat_ids":["seg_0001_b01"],'
+            '"entities":["shield"],"verification_goal":"Verify what the shield marks.",'
+            '"recommended_evidence_mode":"multimodal","priority":1}],"scan_notes":"ok"}'
+        )
+    )
+    sampled = []
+
+    def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
+        sampled.append((video_path, start_sec, end_sec, max_frames))
+        return ["/frames/demo/00010.jpg", "/frames/demo/00020.jpg"]
+
+    registry = build_workspace_v2_registry(
+        video_map=_video_map(),
+        backend=backend,
+        workspace=workspace,
+        frame_sampler=fake_frame_sampler,
+    )
+
+    scan = registry.execute(
+        "scan_segment",
+        {
+            "segment_id": "seg_0001",
+            "question": "Why is the shield shown?",
+            "scan_goal": "Find the local window explaining the shield.",
+            "preferred_modalities": ["visual", "asr"],
+        },
+    )
+    workspace.write_observation(
+        tool_name="scan_segment",
+        claim=str(scan["claim"]),
+        confidence=float(scan["confidence"]),
+        regions=scan["regions"],
+        limitations=str(scan["limitations"]),
+        raw_output=scan,
+    )
+    backend.text = "The local window shows a shield icon over Central Europe while narration describes Austria-Hungary as a buffer."
+
+    verified = registry.execute(
+        "verify_window",
+        {
+            "candidate_id": "cand_seg_0001_001",
+            "sampling": {"fps": 2, "max_frames": 32},
+            "focus": ["shield meaning"],
+        },
+    )
+
+    assert scan["worker"] == "IndexScout"
+    assert scan["candidate_windows"][0]["candidate_id"] == "cand_seg_0001_001"
+    assert backend.requests[0].metadata["worker"] == "IndexScout"
+    assert "dense_video_caption" in backend.requests[0].prompt
+    assert verified["worker"] == "EvidenceVerifier"
+    assert verified["candidate_id"] == "cand_seg_0001_001"
+    assert verified["mode"] == "verify_window"
+    assert sampled == [("/videos/demo.mp4", 10.0, 20.0, 20)]
+    assert backend.requests[-1].metadata["tool"] == "verify_window"
+    plan_view = workspace.render_plan_view(question="Why?", video_map=_video_map())
+    assert "## Pending Candidate Windows" in plan_view
+    assert "cand_seg_0001_001 [10.0-20.0] segment=seg_0001 status=pending" in plan_view
 
 
 def test_workspace_v2_read_segment_refine_or_verify_requires_explicit_sub_window(tmp_path: Path) -> None:

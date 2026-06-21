@@ -533,10 +533,11 @@ def test_plan_view_renders_compact_root_ledger_and_index_evidence_coverage(tmp_p
 
     plan_view = workspace.render_plan_view(question="Why?", video_map=video_map)
 
-    assert "## Root Index" in plan_view
-    assert "seg_0001 [0.0-60.0s] Root overview" in plan_view
-    assert "dense_video_caption:" in plan_view
-    assert "This beat should only appear through read_segment(index)." in plan_view
+    assert "## Segment Cards" in plan_view
+    assert "seg_0001 [0.0-60.0s] navigation_only=true index_status=available" in plan_view
+    assert "Summary: Root overview" in plan_view
+    assert "dense_video_caption:" not in plan_view
+    assert "This beat should only appear through read_segment(index)." not in plan_view
     assert "## Index Coverage" in plan_view
     assert "root indexed: 0.0-60.0s (1 roots)" in plan_view
     assert "refined: 10.0-20.0s" in plan_view
@@ -600,14 +601,14 @@ def test_plan_view_does_not_truncate_root_index_summaries(tmp_path: Path):
     plan_view = workspace.render_plan_view(question="What is the main arc?", video_map=video_map, max_per_section=1)
 
     assert long_summary in plan_view
-    root_index = plan_view.split("## Root Index", 1)[1].split("## Index Coverage", 1)[0]
+    root_index = plan_view.split("## Segment Cards", 1)[1].split("## Index Coverage", 1)[0]
     assert "seg_0002 [300.0-600.0s]" in root_index
-    assert "dense_video_caption:" in root_index
-    assert "Opening maps introduce the empire's multi-ethnic structure" in root_index
-    assert "Later narration connects war losses and nationalist movements" in root_index
-    assert "A follow-up section keeps the causal timeline in view." in root_index
-    assert "entities=Austro-Hungarian Empire" in root_index
-    assert "modalities=visual, asr" in root_index
+    assert "dense_video_caption:" not in root_index
+    assert "Opening maps introduce the empire's multi-ethnic structure" not in root_index
+    assert "Later narration connects war losses and nationalist movements" not in root_index
+    assert "A follow-up section keeps the causal timeline in view." not in root_index
+    assert "Entities: Austro-Hungarian Empire, nationalist movements" in root_index
+    assert "Modalities: visual, asr" in root_index
     assert "shown 1/2" not in root_index
     assert "..." not in root_index
 

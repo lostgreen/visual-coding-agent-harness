@@ -852,6 +852,19 @@ class EvidenceWorkspace:
             lines.extend(_evidence_coverage_lines(self))
 
         render_section(
+            "Pending Candidate Windows",
+            _candidate_window_rows(self),
+            lambda candidate: (
+                f"{candidate.get('candidate_id')} "
+                f"{_format_time_range(candidate.get('time_range'))} "
+                f"segment={candidate.get('segment_id')} "
+                f"status={candidate.get('status') or 'pending'} "
+                f"goal={candidate.get('verification_goal') or '-'}"
+            ).rstrip(),
+            hint='verify_window(candidate_id="cand_*")',
+        )
+
+        render_section(
             "Deferred Observations",
             self._deferred_observations(),
             lambda item: f"{item.get('observation_id')} until={item.get('until') or '-'} reason={item.get('reason') or '-'}",
@@ -3444,7 +3457,11 @@ def _single_line_text(value: Any) -> str:
 
 
 def _root_index_lines(root_segments: Sequence[Any]) -> list[str]:
-    lines: list[str] = ["", "## Root Index"]
+    lines: list[str] = [
+        "",
+        "## Segment Cards",
+        "Video map is navigation-only. Full RawSegmentIndex / dense_video_caption beats stay in workspace and are expanded through scan_segment or read_segment(index).",
+    ]
     if not root_segments:
         return [*lines, "(none)"]
     for segment in root_segments:
@@ -3454,19 +3471,22 @@ def _root_index_lines(root_segments: Sequence[Any]) -> list[str]:
 
 def _root_segment_index_lines(segment: Any) -> list[str]:
     summary = _single_line_text(getattr(segment, "low_fps_caption", "") or _compact_segment_text(segment))
+    entities = _segment_card_entities(segment)
+    modalities = _segment_card_modalities(segment)
+    index_status = "available" if list(getattr(segment, "timeline_beats", ()) or ()) else "summary_only"
     lines = [
         (
             f"- {getattr(segment, 'segment_id', '-')} "
             f"[{float(getattr(segment, 'start_sec', 0.0)):.1f}-{float(getattr(segment, 'end_sec', 0.0)):.1f}s] "
-            f"{summary or '(no root summary)'}"
+            f"navigation_only=true index_status={index_status}"
         )
     ]
-    beats = list(getattr(segment, "timeline_beats", ()) or ())
-    if not beats:
-        return lines
-    lines.append("  dense_video_caption:")
-    for beat in beats:
-        lines.append(_root_beat_line(beat))
+    lines.append(f"  Summary: {summary or '(no segment summary)'}")
+    lines.append(f"  Entities: {', '.join(entities) if entities else '-'}")
+    lines.append(f"  Modalities: {', '.join(modalities) if modalities else '-'}")
+    lines.append(
+        "  Expand: scan_segment chooses CandidateWindows; read_segment(index) returns the raw structured index for this segment."
+    )
     return lines
 
 
@@ -3491,6 +3511,38 @@ def _compact_segment_text(segment: Any) -> str:
     if callable(compact_text):
         return str(compact_text())
     return ""
+
+
+def _segment_card_entities(segment: Any, *, max_entities: int = 8) -> list[str]:
+    values: list[Any] = [*list(getattr(segment, "entities", ()) or ())]
+    for beat in getattr(segment, "timeline_beats", ()) or ():
+        values.extend(list(getattr(beat, "entity_hints", ()) or ()))
+    return _unique_nonempty_texts(values)[:max_entities]
+
+
+def _segment_card_modalities(segment: Any) -> list[str]:
+    values: list[Any] = []
+    if getattr(segment, "keyframe_paths", None) or getattr(segment, "low_fps_caption", ""):
+        values.append("visual")
+    if getattr(segment, "asr_text", "") or getattr(segment, "asr_sentences", None):
+        values.append("asr")
+    if getattr(segment, "ocr_text", "") or getattr(segment, "ocr_frames", None):
+        values.append("ocr")
+    for beat in getattr(segment, "timeline_beats", ()) or ():
+        values.extend(list(getattr(beat, "modality_hints", ()) or ()))
+    return _unique_nonempty_texts(values)
+
+
+def _unique_nonempty_texts(values: Sequence[Any]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
 
 
 def _index_coverage_lines(video_map: Any) -> list[str]:
@@ -3561,6 +3613,31 @@ def _evidence_coverage_lines(workspace: "EvidenceWorkspace") -> list[str]:
     answer_support_count = sum(1 for entry in workspace.memory_entries() if entry.kind in {"answer_support", "synthesized_support", "answer_conflict_resolved"})
     lines.append(f"committed answer-support memories: {answer_support_count}")
     return lines
+
+
+def _candidate_window_rows(workspace: "EvidenceWorkspace") -> list[dict[str, Any]]:
+    verified_ids: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for observation in workspace.read_observations():
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        candidate_id = str(raw_output.get("candidate_id") or "").strip()
+        if candidate_id and str(raw_output.get("worker") or "") == "EvidenceVerifier":
+            verified_ids.add(candidate_id)
+        for candidate in _mapping_row_items(raw_output.get("candidate_windows")):
+            row = dict(candidate)
+            if not row.get("time_range"):
+                row["time_range"] = [row.get("start_sec"), row.get("end_sec")]
+            row["status"] = "verified" if str(row.get("candidate_id") or "") in verified_ids else row.get("status") or "pending"
+            rows.append(row)
+    return rows
+
+
+def _mapping_row_items(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, Mapping):
+        return [value]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [item for item in value if isinstance(item, Mapping)]
+    return []
 
 
 def _segment_range_summary(segments: Sequence[Any]) -> str:

@@ -370,3 +370,70 @@ def test_openai_chat_backend_falls_back_when_vllm_rejects_thinking_budget(monkey
     assert bodies[1]["chat_template_kwargs"] == {"enable_thinking": False}
     assert response.text == '{"status":"continue","program":[]}'
     assert response.raw["thinking_budget_fallback"] is True
+
+
+def test_openai_chat_backend_retries_transient_http_errors_with_backoff(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                503,
+                "Service Unavailable",
+                hdrs=None,
+                fp=io.BytesIO(b'{"error":{"message":"temporary overload"}}'),
+            )
+        return FakeHTTPResponse({"choices": [{"message": {"content": '{"status":"continue"}'}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(
+        api_base="http://planner-host:8000/v1",
+        model="Qwen3.5-9B",
+        retry_initial_delay=0.25,
+    )
+    sleeps = []
+    backend._sleep = lambda seconds: sleeps.append(seconds)  # type: ignore[method-assign]
+
+    response = backend.generate(BackendRequest(task="replan", prompt="Return JSON."))
+
+    assert calls["count"] == 3
+    assert sleeps == [0.25, 0.5]
+    assert response.text == '{"status":"continue"}'
+    assert response.raw["retry_attempts"] == 2
+    assert response.raw["request_attempts"] == 3
+    assert response.raw["max_retries"] == 5
+
+
+def test_openai_chat_backend_does_not_retry_request_too_large(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_urlopen(request, timeout):
+        del request, timeout
+        calls["count"] += 1
+        raise urllib.error.HTTPError(
+            "http://planner-host:8000/v1/chat/completions",
+            413,
+            "Payload Too Large",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"context length exceeded"}}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    from visual_coding_agent_harness.backends.openai_chat import OpenAIChatTextBackend
+
+    backend = OpenAIChatTextBackend(api_base="http://planner-host:8000/v1", model="Qwen3.5-9B")
+    sleeps = []
+    backend._sleep = lambda seconds: sleeps.append(seconds)  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="HTTP 413"):
+        backend.generate(BackendRequest(task="replan", prompt="Return JSON."))
+
+    assert calls["count"] == 1
+    assert sleeps == []

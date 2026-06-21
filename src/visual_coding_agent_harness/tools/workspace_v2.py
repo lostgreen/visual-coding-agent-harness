@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Mapping, Optional, Sequence
 
@@ -81,6 +82,42 @@ def build_workspace_v2_registry(
                 focus=focus,
             )
         raise ValueError(f"read_segment_failed: unknown mode={mode}")
+
+    @tool(name="scan_segment", description="Ask an IndexScout worker to turn one raw segment index into candidate verification windows.")
+    def scan_segment(
+        segment_id: str,
+        question: str = "",
+        options: Mapping[str, Any] | None = None,
+        scan_goal: str = "",
+        preferred_modalities: Sequence[str] = (),
+        max_candidates: int = 3,
+    ) -> Mapping[str, object]:
+        return segment_read_service.scan_segment(
+            segment_id=segment_id,
+            question=question,
+            options=options or {},
+            scan_goal=scan_goal,
+            preferred_modalities=preferred_modalities,
+            max_candidates=max_candidates,
+        )
+
+    @tool(name="verify_window", description="Ask an EvidenceVerifier worker to read one candidate window and return local facts with anchors.")
+    def verify_window(
+        candidate_id: str = "",
+        segment_id: str = "",
+        time_range: Sequence[float] | Mapping[str, float] | None = None,
+        evidence_mode: str = "multimodal",
+        focus: Sequence[str] = (),
+        sampling: Mapping[str, Any] | None = None,
+    ) -> Mapping[str, object]:
+        return segment_read_service.verify_window(
+            candidate_id=candidate_id,
+            segment_id=segment_id,
+            time_range=time_range,
+            evidence_mode=evidence_mode,
+            focus=focus,
+            sampling=sampling,
+        )
 
     @tool(name="read_clip", description="Read facts from a video clip without choosing an answer option.")
     def read_clip(
@@ -318,6 +355,21 @@ def build_workspace_v2_registry(
     )
     registry.register(
         ToolRuntimeSpec(
+            tool_spec=scan_segment,
+            semantic_key_builder=_static_key("scan_segment"),
+            duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+        )
+    )
+    registry.register(
+        ToolRuntimeSpec(
+            tool_spec=verify_window,
+            semantic_key_builder=_static_key("verify_window"),
+            duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+            commit_required=True,
+        )
+    )
+    registry.register(
+        ToolRuntimeSpec(
             tool_spec=read_clip,
             argument_normalizer=_normalize_read_clip,
             semantic_key_builder=_static_key("read_clip"),
@@ -418,6 +470,94 @@ class SegmentReadService:
             "limitations": ["navigation only; not answer evidence"],
         }
 
+    def scan_segment(
+        self,
+        *,
+        segment_id: str,
+        question: str,
+        options: Mapping[str, Any],
+        scan_goal: str,
+        preferred_modalities: Sequence[str],
+        max_candidates: int,
+    ) -> Mapping[str, object]:
+        current = self.video_map_store.current
+        segment = current.get(segment_id)
+        self._indexed_roots.add(_root_segment_id(segment))
+        max_candidates = max(0, min(8, int(max_candidates or 3)))
+        if self.workspace is not None:
+            self.workspace.write_trace_event(
+                "index_scout_dispatched",
+                {
+                    "segment_id": segment.segment_id,
+                    "start_sec": segment.start_sec,
+                    "end_sec": segment.end_sec,
+                    "max_candidates": max_candidates,
+                    "preferred_modalities": [str(item) for item in preferred_modalities],
+                },
+            )
+        raw_index = _raw_segment_index_payload(segment)
+        prompt = _scan_segment_prompt(
+            question=question,
+            options=options,
+            scan_goal=scan_goal,
+            preferred_modalities=preferred_modalities,
+            max_candidates=max_candidates,
+            raw_index=raw_index,
+        )
+        scan_notes = ""
+        try:
+            response = self.backend.generate(
+                BackendRequest(
+                    task="replan",
+                    prompt=prompt,
+                    max_new_tokens=1024,
+                    temperature=0.0,
+                    metadata={
+                        "worker": "IndexScout",
+                        "tool": "scan_segment",
+                        "segment_id": segment.segment_id,
+                    },
+                )
+            )
+            payload = _parse_json_object(response.text)
+            candidates = _candidate_windows_from_payload(
+                payload,
+                segment=segment,
+                max_candidates=max_candidates,
+                default_goal=scan_goal or question,
+                preferred_modalities=preferred_modalities,
+            )
+            scan_notes = str(payload.get("scan_notes") or "")
+        except Exception as exc:
+            candidates = _fallback_candidate_windows(
+                segment=segment,
+                max_candidates=max_candidates,
+                default_goal=scan_goal or question,
+                preferred_modalities=preferred_modalities,
+            )
+            scan_notes = f"IndexScout fallback used after invalid worker output: {exc}"
+        claim = _candidate_windows_claim(segment.segment_id, candidates)
+        return {
+            "claim": claim,
+            "confidence": 1.0,
+            "worker": "IndexScout",
+            "mode": "scan_segment",
+            "segment_id": segment.segment_id,
+            "candidate_windows": candidates,
+            "regions": [
+                {
+                    "segment_id": segment.segment_id,
+                    "start_sec": segment.start_sec,
+                    "end_sec": segment.end_sec,
+                    "worker": "IndexScout",
+                }
+            ],
+            "produced_anchors": [],
+            "commit_required": False,
+            "limitations": ["navigation only; candidate windows require verify_window before answer use"],
+            "scan_notes": scan_notes,
+        }
+
     def refine_index(
         self,
         *,
@@ -492,12 +632,92 @@ class SegmentReadService:
         )
         return {**result, "mode": "verify", "evidence_mode": evidence_mode}
 
+    def verify_window(
+        self,
+        *,
+        candidate_id: str,
+        segment_id: str,
+        time_range: Sequence[float] | Mapping[str, float] | None,
+        evidence_mode: str,
+        focus: Sequence[str],
+        sampling: Mapping[str, Any] | None,
+    ) -> Mapping[str, object]:
+        candidate = self._resolve_candidate(candidate_id=candidate_id, segment_id=segment_id, time_range=time_range)
+        resolved_segment_id = str(candidate["segment_id"])
+        start_sec = float(candidate["start_sec"])
+        end_sec = float(candidate["end_sec"])
+        parent = self.video_map_store.current.get(resolved_segment_id)
+        if start_sec < float(parent.start_sec) or end_sec > float(parent.end_sec) or end_sec <= start_sec:
+            raise ValueError("verify_window_failed: candidate time_range must be non-empty and within its root segment")
+        sampling_payload = _verification_sampling_payload(sampling, start_sec=start_sec, end_sec=end_sec)
+        if self.workspace is not None:
+            self.workspace.write_trace_event(
+                "evidence_verifier_dispatched",
+                {
+                    "candidate_id": str(candidate.get("candidate_id") or ""),
+                    "segment_id": resolved_segment_id,
+                    "start_sec": start_sec,
+                    "end_sec": end_sec,
+                    "evidence_mode": evidence_mode,
+                    "sampling": dict(sampling_payload),
+                },
+            )
+        focus_items = [
+            str(evidence_mode).strip(),
+            str(candidate.get("verification_goal") or "").strip(),
+            *[str(item).strip() for item in focus if str(item).strip()],
+        ]
+        result = _read_clip_evidence(
+            video_map_store=self.video_map_store,
+            backend=self.backend,
+            frame_sampler=self.frame_sampler,
+            scope={"segment_id": resolved_segment_id, "time_range": [start_sec, end_sec]},
+            focus=focus_items,
+            sampling=sampling_payload,
+            tool_name="verify_window",
+        )
+        return {
+            **result,
+            "worker": "EvidenceVerifier",
+            "mode": "verify_window",
+            "candidate_id": str(candidate.get("candidate_id") or candidate_id or ""),
+            "source_beat_ids": list(candidate.get("source_beat_ids") or ()),
+            "verification_goal": str(candidate.get("verification_goal") or ""),
+            "evidence_mode": evidence_mode,
+        }
+
     def _require_index_read(self, segment: VideoMapSegment, *, mode: str) -> None:
         root_id = _root_segment_id(segment)
         if root_id not in self._indexed_roots:
             raise ValueError(
                 f"read_segment_failed: requires_index_read before mode={mode} for root_segment_id={root_id}"
             )
+
+    def _resolve_candidate(
+        self,
+        *,
+        candidate_id: str,
+        segment_id: str,
+        time_range: Sequence[float] | Mapping[str, float] | None,
+    ) -> dict[str, object]:
+        normalized_candidate_id = str(candidate_id or "").strip()
+        if normalized_candidate_id and self.workspace is not None:
+            for observation in reversed(self.workspace.read_observations()):
+                raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+                for candidate in _mapping_items(raw_output.get("candidate_windows")):
+                    if str(candidate.get("candidate_id") or "") == normalized_candidate_id:
+                        return dict(candidate)
+        if not segment_id:
+            raise ValueError("verify_window_failed: candidate_id was not found; provide segment_id and time_range")
+        start_sec, end_sec = _time_range_argument(time_range)
+        return {
+            "candidate_id": normalized_candidate_id,
+            "segment_id": str(segment_id),
+            "start_sec": start_sec,
+            "end_sec": end_sec,
+            "source_beat_ids": [],
+            "verification_goal": "; ".join(str(item).strip() for item in ()),
+        }
 
 
 def _read_clip_evidence(
@@ -613,6 +833,247 @@ def _sub_window_range(
     if start_sec < segment.start_sec or end_sec > segment.end_sec or end_sec <= start_sec:
         raise ValueError("read_segment_failed: sub_window must be non-empty and within the root segment")
     return start_sec, end_sec
+
+
+def _raw_segment_index_payload(segment: VideoMapSegment) -> Mapping[str, object]:
+    return {
+        "segment_id": segment.segment_id,
+        "time_range": [float(segment.start_sec), float(segment.end_sec)],
+        "root_summary": segment.low_fps_caption,
+        "entities": list(segment.entities),
+        "dense_video_caption": [beat.to_dict() for beat in segment.timeline_beats],
+        "asr_cues": [dict(item) for item in segment.asr_sentences],
+        "ocr_spans": [dict(item) for item in segment.ocr_frames],
+    }
+
+
+def _scan_segment_prompt(
+    *,
+    question: str,
+    options: Mapping[str, Any],
+    scan_goal: str,
+    preferred_modalities: Sequence[str],
+    max_candidates: int,
+    raw_index: Mapping[str, object],
+) -> str:
+    payload = {
+        "question": str(question or ""),
+        "options": {str(key): str(value) for key, value in dict(options or {}).items()},
+        "scan_goal": str(scan_goal or ""),
+        "preferred_modalities": [str(item) for item in preferred_modalities],
+        "max_candidates": int(max_candidates),
+        "raw_segment_index": raw_index,
+    }
+    return (
+        "You are IndexScout, an index-navigation worker.\n"
+        "Read the raw index for ONE segment and propose candidate time windows for later verification.\n"
+        "Do not answer the question. Do not choose A/B/C/D. Do not treat captions as final evidence.\n"
+        "Return exactly one JSON object with keys: candidates, scan_notes.\n"
+        "Each candidate must include time_range [start_sec,end_sec], source_beat_ids, entities, "
+        "verification_goal, recommended_evidence_mode, and priority.\n\n"
+        f"INPUT:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    stripped = str(text or "").strip()
+    try:
+        loaded = json.loads(stripped)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        loaded = json.loads(stripped[start : end + 1])
+    if not isinstance(loaded, dict):
+        raise ValueError("expected JSON object")
+    return dict(loaded)
+
+
+def _candidate_windows_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    segment: VideoMapSegment,
+    max_candidates: int,
+    default_goal: str,
+    preferred_modalities: Sequence[str],
+) -> list[dict[str, object]]:
+    raw_candidates = payload.get("candidates")
+    if raw_candidates is None:
+        raw_candidates = payload.get("candidate_windows")
+    candidates = []
+    for item in _mapping_items(raw_candidates):
+        try:
+            start_sec, end_sec = _time_range_argument(item.get("time_range"))
+        except ValueError:
+            continue
+        if start_sec < float(segment.start_sec) or end_sec > float(segment.end_sec) or end_sec <= start_sec:
+            continue
+        index = len(candidates) + 1
+        candidates.append(
+            _candidate_window(
+                segment=segment,
+                index=index,
+                start_sec=start_sec,
+                end_sec=end_sec,
+                source_beat_ids=_string_sequence(item.get("source_beat_ids")),
+                entities=_string_sequence(item.get("entities")),
+                verification_goal=str(item.get("verification_goal") or default_goal or "Verify local facts in this window."),
+                recommended_evidence_mode=str(
+                    item.get("recommended_evidence_mode")
+                    or item.get("evidence_mode")
+                    or _preferred_evidence_mode(preferred_modalities)
+                ),
+                priority=int(item.get("priority") or index),
+            )
+        )
+        if len(candidates) >= max_candidates:
+            break
+    return candidates or _fallback_candidate_windows(
+        segment=segment,
+        max_candidates=max_candidates,
+        default_goal=default_goal,
+        preferred_modalities=preferred_modalities,
+    )
+
+
+def _fallback_candidate_windows(
+    *,
+    segment: VideoMapSegment,
+    max_candidates: int,
+    default_goal: str,
+    preferred_modalities: Sequence[str],
+) -> list[dict[str, object]]:
+    if max_candidates <= 0:
+        return []
+    candidates: list[dict[str, object]] = []
+    beats = list(segment.timeline_beats or ())
+    if not beats:
+        beats = [
+            type(
+                "_FallbackBeat",
+                (),
+                {
+                    "beat_id": f"{segment.segment_id}_root",
+                    "start_sec": float(segment.start_sec),
+                    "end_sec": float(segment.end_sec),
+                    "entity_hints": tuple(segment.entities),
+                },
+            )()
+        ]
+    for index, beat in enumerate(beats[:max_candidates], start=1):
+        candidates.append(
+            _candidate_window(
+                segment=segment,
+                index=index,
+                start_sec=float(getattr(beat, "start_sec", segment.start_sec)),
+                end_sec=float(getattr(beat, "end_sec", segment.end_sec)),
+                source_beat_ids=[str(getattr(beat, "beat_id", f"{segment.segment_id}_b{index:02d}"))],
+                entities=[str(item) for item in getattr(beat, "entity_hints", ()) or ()],
+                verification_goal=default_goal or "Verify local facts in this window.",
+                recommended_evidence_mode=_preferred_evidence_mode(preferred_modalities),
+                priority=index,
+            )
+        )
+    return candidates
+
+
+def _candidate_window(
+    *,
+    segment: VideoMapSegment,
+    index: int,
+    start_sec: float,
+    end_sec: float,
+    source_beat_ids: Sequence[str],
+    entities: Sequence[str],
+    verification_goal: str,
+    recommended_evidence_mode: str,
+    priority: int,
+) -> dict[str, object]:
+    candidate_id = f"cand_{segment.segment_id}_{index:03d}"
+    return {
+        "candidate_id": candidate_id,
+        "segment_id": segment.segment_id,
+        "time_range": [float(start_sec), float(end_sec)],
+        "start_sec": float(start_sec),
+        "end_sec": float(end_sec),
+        "source_beat_ids": _unique_nonempty(source_beat_ids),
+        "entities": _unique_nonempty(entities),
+        "verification_goal": str(verification_goal),
+        "recommended_evidence_mode": str(recommended_evidence_mode or "multimodal"),
+        "priority": int(priority),
+        "status": "pending",
+    }
+
+
+def _candidate_windows_claim(segment_id: str, candidates: Sequence[Mapping[str, object]]) -> str:
+    if not candidates:
+        return f"IndexScout found no candidate windows for {segment_id}."
+    parts = []
+    for candidate in candidates:
+        time_range = candidate.get("time_range") or [candidate.get("start_sec"), candidate.get("end_sec")]
+        start_sec, end_sec = _time_range_argument(time_range)
+        goal = str(candidate.get("verification_goal") or "").strip()
+        parts.append(f"{candidate.get('candidate_id')} [{start_sec:.1f}-{end_sec:.1f}s] {goal}".strip())
+    return f"IndexScout candidate windows for {segment_id}: " + "; ".join(parts)
+
+
+def _preferred_evidence_mode(preferred_modalities: Sequence[str]) -> str:
+    values = _unique_nonempty(preferred_modalities)
+    if not values:
+        return "multimodal"
+    if len(values) == 1:
+        return values[0]
+    return "multimodal"
+
+
+def _time_range_argument(value: Sequence[float] | Mapping[str, float] | None) -> tuple[float, float]:
+    if isinstance(value, Mapping):
+        start = value.get("start_sec", value.get("start"))
+        end = value.get("end_sec", value.get("end"))
+        if start is not None and end is not None:
+            return float(start), float(end)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) >= 2:
+        return float(value[0]), float(value[1])
+    raise ValueError("time_range must include start/end seconds")
+
+
+def _verification_sampling_payload(
+    sampling: Mapping[str, Any] | None,
+    *,
+    start_sec: float,
+    end_sec: float,
+) -> dict[str, object]:
+    payload = dict(sampling or {})
+    if "nframes" in payload:
+        payload["nframes"] = max(1, int(payload["nframes"]))
+        return payload
+    max_frames = int(payload.get("max_frames") or 16)
+    fps = float(payload.get("fps") or 0.0)
+    if fps > 0:
+        duration = max(0.1, float(end_sec) - float(start_sec))
+        payload["nframes"] = max(1, min(max_frames, int(duration * fps + 0.999)))
+    else:
+        payload["nframes"] = max(1, max_frames)
+    return payload
+
+
+def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, Mapping):
+        return [value]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [item for item in value if isinstance(item, Mapping)]
+    return []
+
+
+def _string_sequence(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, Sequence):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
 
 
 def _resolution(value: str) -> Any:

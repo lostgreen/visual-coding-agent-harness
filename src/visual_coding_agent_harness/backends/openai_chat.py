@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,6 +17,15 @@ from typing import Any, Mapping
 
 from .base import BackendRequest, BackendResponse
 from .qwen_text import _JSON_TEXT_TASKS, _normalized_structured_json_output, _strip_qwen_thinking
+
+
+class _OpenAIChatRequestError(RuntimeError):
+    def __init__(self, message: str, *, status_code: int | None = None, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+        self.retry_attempts = 0
+        self.request_attempts = 1
 
 
 @dataclass
@@ -41,6 +51,9 @@ class OpenAIChatTextBackend:
     enable_thinking: bool | None = False
     proxy_env: Mapping[str, str] = field(default_factory=dict)
     extra_body: Mapping[str, Any] = field(default_factory=dict)
+    max_retries: int = 5
+    retry_initial_delay: float = 1.0
+    retry_max_delay: float = 16.0
 
     def __post_init__(self) -> None:
         self.api_type = _normalized_api_type(self.api_type)
@@ -81,13 +94,21 @@ class OpenAIChatTextBackend:
             raise ValueError("OpenAIChatTextBackend media support is disabled for this route")
         body = self._request_body(request)
         thinking_budget_fallback = False
+        retry_attempts = 0
+        request_attempts = 0
         try:
-            payload = self._post_json(body)
+            payload, stats = self._post_json_with_retries(body)
+            retry_attempts += int(stats["retry_attempts"])
+            request_attempts += int(stats["request_attempts"])
         except RuntimeError as exc:
             if not _should_retry_without_thinking_budget(body, exc):
                 raise
+            retry_attempts += int(getattr(exc, "retry_attempts", 0))
+            request_attempts += int(getattr(exc, "request_attempts", 1))
             thinking_budget_fallback = True
-            payload = self._post_json(_disable_thinking_budget_body(body))
+            payload, stats = self._post_json_with_retries(_disable_thinking_budget_body(body))
+            retry_attempts += int(stats["retry_attempts"])
+            request_attempts += int(stats["request_attempts"])
         text, raw_flags = _extract_message_text(payload)
         cleaned_text = _strip_qwen_thinking(text).strip()
         if request.task in _JSON_TEXT_TASKS:
@@ -102,6 +123,9 @@ class OpenAIChatTextBackend:
                 "model": self.model,
                 "api_type": self.api_type,
                 "thinking_budget_fallback": thinking_budget_fallback,
+                "retry_attempts": retry_attempts,
+                "request_attempts": request_attempts,
+                "max_retries": int(max(0, self.max_retries)),
                 **raw_flags,
                 **self._raw_endpoint_flags(),
             },
@@ -153,7 +177,24 @@ class OpenAIChatTextBackend:
             body["chat_template_kwargs"] = chat_template_kwargs
         return body
 
-    def _post_json(self, body: Mapping[str, Any]) -> dict[str, Any]:
+    def _post_json_with_retries(self, body: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
+        retry_attempts = 0
+        while True:
+            try:
+                payload = self._post_json_once(body)
+                return payload, {
+                    "retry_attempts": retry_attempts,
+                    "request_attempts": retry_attempts + 1,
+                }
+            except _OpenAIChatRequestError as exc:
+                if retry_attempts >= int(max(0, self.max_retries)) or not exc.retryable:
+                    exc.retry_attempts = retry_attempts
+                    exc.request_attempts = retry_attempts + 1
+                    raise
+                self._sleep(self._retry_delay(retry_attempts))
+                retry_attempts += 1
+
+    def _post_json_once(self, body: Mapping[str, Any]) -> dict[str, Any]:
         self._validate_endpoint_config()
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
@@ -167,16 +208,36 @@ class OpenAIChatTextBackend:
                 with urllib.request.urlopen(request, timeout=float(self.timeout)) as response:
                     payload_bytes = response.read()
         except urllib.error.HTTPError as exc:
-            raise RuntimeError(_format_http_error(exc)) from exc
+            raise _OpenAIChatRequestError(
+                _format_http_error(exc),
+                status_code=int(exc.code),
+                retryable=_is_retryable_http_status(int(exc.code)),
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"OpenAI-compatible planner request failed: {exc.reason}") from exc
+            raise _OpenAIChatRequestError(
+                f"OpenAI-compatible planner request failed: {exc.reason}",
+                retryable=True,
+            ) from exc
         try:
             payload = json.loads(payload_bytes.decode("utf-8"))
         except Exception as exc:
-            raise RuntimeError("OpenAI-compatible planner returned invalid JSON") from exc
+            raise _OpenAIChatRequestError(
+                "OpenAI-compatible planner returned invalid JSON",
+                retryable=True,
+            ) from exc
         if not isinstance(payload, dict):
             raise RuntimeError("OpenAI-compatible planner returned a non-object JSON payload")
         return payload
+
+    def _retry_delay(self, retry_attempts: int) -> float:
+        initial = max(0.0, float(self.retry_initial_delay))
+        delay = initial * (2 ** max(0, int(retry_attempts)))
+        return min(delay, max(0.0, float(self.retry_max_delay)))
+
+    def _sleep(self, seconds: float) -> None:
+        if seconds <= 0:
+            return
+        time.sleep(seconds)
 
     def _chat_completions_url(self) -> str:
         if _is_azure_api_type(self.api_type):
@@ -442,6 +503,10 @@ def _is_azure_api_type(api_type: str) -> bool:
 
 def _is_gemini_gateway_api_type(api_type: str) -> bool:
     return _normalized_api_type(api_type) == "gemini_gateway"
+
+
+def _is_retryable_http_status(status_code: int) -> bool:
+    return status_code in {408, 409, 425, 429, 500, 502, 503, 504} or 520 <= status_code <= 599
 
 
 def _format_http_error(exc: urllib.error.HTTPError) -> str:
