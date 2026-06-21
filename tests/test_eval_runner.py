@@ -632,6 +632,7 @@ class EvalRunnerTest(unittest.TestCase):
                 strategies=("workspace_v2",),
                 window_sec=300.0,
                 scene_index_cache_dir=cache_dir,
+                scene_index_concurrency=8,
                 budget=AgentBudget(),
             )
 
@@ -650,6 +651,7 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(builder_inits[0]["text_model_id"], "/models/text")
             self.assertEqual(builder_inits[0]["vl_model_id"], "/models/vl")
             self.assertEqual(builder_inits[0]["cache"].cache_dir, cache_dir)
+            self.assertEqual(builder_inits[0]["root_concurrency"], 8)
 
     def test_free_explore_cli_builds_budgetless_agent_config(self):
         from runs import eval_runner
@@ -832,6 +834,8 @@ class EvalRunnerTest(unittest.TestCase):
                 "/home/xuboshen/models/Qwen3-4B-Instruct-2507",
                 "--scene-index-cache-dir",
                 "/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache",
+                "--scene-index-concurrency",
+                "8",
             ]
         )
 
@@ -843,6 +847,7 @@ class EvalRunnerTest(unittest.TestCase):
             config.scene_index_cache_dir,
             Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness/scene_index_cache"),
         )
+        self.assertEqual(config.scene_index_concurrency, 8)
 
     def test_default_run_and_scene_cache_roots_are_under_m2v_management_root(self):
         from runs import eval_runner

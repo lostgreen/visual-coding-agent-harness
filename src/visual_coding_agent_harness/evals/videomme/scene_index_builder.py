@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import re
@@ -52,6 +53,7 @@ class SceneIndexBuilder:
         clip_root: Optional[Path | str] = None,
         clip_extractor: Optional[ClipExtractor] = None,
         frame_sampler: Optional[FrameSampler] = None,
+        root_concurrency: int = 1,
         schema_version: str = SCENE_INDEX_BUILDER_SCHEMA_VERSION,
     ) -> None:
         self.backend = backend
@@ -64,6 +66,7 @@ class SceneIndexBuilder:
         self.clip_root = Path(clip_root) if clip_root is not None else None
         self.clip_extractor = clip_extractor or _extract_clip_ffmpeg
         self.frame_sampler = frame_sampler
+        self.root_concurrency = max(1, int(root_concurrency))
         self.schema_version = schema_version
 
     def build(
@@ -92,8 +95,7 @@ class SceneIndexBuilder:
             window_sec=self.window_sec,
             source="dvc_root_v1",
         )
-        segments = []
-        for segment in base.segments:
+        def build_segment(segment: VideoSegment) -> VideoSegment:
             segment_cues = _cues_for_segment(cues, segment)
             root_data = self._build_root_dvc(
                 video_id=video_id,
@@ -101,15 +103,18 @@ class SceneIndexBuilder:
                 segment=segment,
                 cues=segment_cues,
             )
-            segments.append(
-                _merge_root_segment(
-                    segment,
-                    root_data=root_data,
-                    cues=segment_cues,
-                    root_source=f"build_root_dvc_index:{self.vl_model_id}",
-                    max_beats=self.root_policy.max_beats_per_root,
-                )
+            return _merge_root_segment(
+                segment,
+                root_data=root_data,
+                cues=segment_cues,
+                root_source=f"build_root_dvc_index:{self.vl_model_id}",
+                max_beats=self.root_policy.max_beats_per_root,
             )
+        if self.root_concurrency <= 1 or len(base.segments) <= 1:
+            segments = [build_segment(segment) for segment in base.segments]
+        else:
+            with ThreadPoolExecutor(max_workers=min(self.root_concurrency, len(base.segments))) as executor:
+                segments = list(executor.map(build_segment, base.segments))
 
         scene_index = SceneIndex(video_path=video_path, duration_sec=duration_sec, segments=segments)
         if self.cache is not None:

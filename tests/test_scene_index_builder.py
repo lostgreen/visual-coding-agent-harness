@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
@@ -625,6 +627,46 @@ def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
             "vl_model_id": "vl-mini",
         }
     )
+
+
+def test_builder_can_build_root_dvc_segments_concurrently() -> None:
+    class ConcurrentBackend(RecordingBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.active = 0
+            self.max_active = 0
+            self.lock = threading.Lock()
+
+        def generate(self, request: BackendRequest) -> BackendResponse:
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            try:
+                time.sleep(0.02)
+                return super().generate(request)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    backend = ConcurrentBackend()
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+        root_concurrency=3,
+    )
+
+    scene_index = builder.build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=90.0,
+        subtitle_cues=[],
+    )
+
+    assert [segment.segment_id for segment in scene_index.segments] == ["seg_0001", "seg_0002", "seg_0003"]
+    assert backend.max_active > 1
 
 
 def test_old_scene_index_fixtures_load_with_default_index_fields() -> None:
