@@ -225,6 +225,7 @@ def run_loop(
                 backend=backend,
                 workspace=workspace,
                 index_refiner=index_refiner,
+                frame_sampler=frame_sampler,
             ),
             workspace=workspace,
             max_rounds=budget.max_rounds,

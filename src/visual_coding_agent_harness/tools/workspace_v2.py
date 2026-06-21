@@ -16,6 +16,7 @@ from ..video_map import (
     search_modality_limitations,
 )
 from ..workspace import EvidenceWorkspace
+from .frame_cache import FrameSampler
 from .runtime_specs import (
     _normalize_read_clip,
     _normalize_read_segment,
@@ -39,6 +40,7 @@ def build_workspace_v2_registry(
     workspace: Optional[EvidenceWorkspace] = None,
     include_workspace_primitives: bool = True,
     index_refiner: IndexRefiner | None = None,
+    frame_sampler: FrameSampler | None = None,
 ) -> ToolRegistry:
     """Build the compact v2 registry: read_clip/search/list/verify/answer plus dispositions."""
 
@@ -47,6 +49,7 @@ def build_workspace_v2_registry(
         video_map_store=video_map_store,
         backend=backend,
         index_refiner=index_refiner or IndexRefiner(backend=backend),
+        frame_sampler=frame_sampler,
         workspace=workspace,
     )
     registry = ToolRegistry()
@@ -87,6 +90,7 @@ def build_workspace_v2_registry(
         return _read_clip_evidence(
             video_map_store=video_map_store,
             backend=backend,
+            frame_sampler=frame_sampler,
             scope=scope,
             focus=focus,
             sampling=sampling,
@@ -362,11 +366,13 @@ class SegmentReadService:
         video_map_store: VideoMapStore,
         backend: VisionLanguageBackend,
         index_refiner: IndexRefiner,
+        frame_sampler: FrameSampler | None = None,
         workspace: EvidenceWorkspace | None = None,
     ) -> None:
         self.video_map_store = video_map_store
         self.backend = backend
         self.index_refiner = index_refiner
+        self.frame_sampler = frame_sampler
         self.workspace = workspace
 
     def read_index(self, *, segment_id: str) -> Mapping[str, object]:
@@ -458,6 +464,7 @@ class SegmentReadService:
         result = _read_clip_evidence(
             video_map_store=self.video_map_store,
             backend=self.backend,
+            frame_sampler=self.frame_sampler,
             scope={"segment_id": segment_id, "time_range": [start_sec, end_sec]},
             focus=focus_items,
             sampling={},
@@ -470,6 +477,7 @@ def _read_clip_evidence(
     *,
     video_map_store: VideoMapStore,
     backend: VisionLanguageBackend,
+    frame_sampler: FrameSampler | None = None,
     scope: Mapping[str, Any],
     focus: Sequence[str],
     sampling: Mapping[str, Any] | None,
@@ -481,6 +489,14 @@ def _read_clip_evidence(
     focus_items = [str(item).strip() for item in focus if str(item).strip()]
     ask_for = "; ".join(focus_items) or "Return concise visible/audio/OCR facts from this clip."
     sampling_payload = dict(sampling or {})
+    requested_nframes = int(sampling_payload.get("nframes") or 8)
+    requested_nframes = max(1, requested_nframes)
+    frame_paths = (
+        tuple(frame_sampler(current.video_path, float(start_sec), float(end_sec), requested_nframes))
+        if frame_sampler is not None
+        else ()
+    )
+    media_path = None if frame_paths else current.video_path
     response = backend.generate(
         BackendRequest(
             task="vision_read",
@@ -490,8 +506,9 @@ def _read_clip_evidence(
                 end_sec=end_sec,
                 focus=ask_for,
             ),
-            media_path=current.video_path,
+            media_path=media_path,
             media_type="video",
+            frames=frame_paths,
             max_new_tokens=384,
             metadata={
                 "tool": tool_name,
@@ -500,6 +517,7 @@ def _read_clip_evidence(
                 "end_sec": end_sec,
                 "focus": focus_items,
                 "sampling": sampling_payload,
+                "nframes": len(frame_paths) if frame_paths else requested_nframes,
             },
         )
     )

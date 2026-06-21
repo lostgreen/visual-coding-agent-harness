@@ -59,6 +59,7 @@ def build_video_exploration_registry(
             backend=backend,
             workspace=workspace,
             index_refiner=IndexRefiner(backend=backend, frame_sampler=frame_sampler),
+            frame_sampler=frame_sampler,
             include_workspace_primitives=False,
         )
     )

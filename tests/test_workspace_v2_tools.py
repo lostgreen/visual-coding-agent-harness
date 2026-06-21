@@ -387,6 +387,39 @@ def test_workspace_v2_read_clip_normalizes_facts_only(tmp_path: Path) -> None:
     assert backend.requests[0].task == "vision_read"
 
 
+def test_workspace_v2_read_clip_uses_sampled_frames_when_available(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_clip_frames")
+    backend = RecordingBackend("The shield icon remains over Central Europe.")
+    sampled = []
+
+    def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
+        sampled.append((video_path, start_sec, end_sec, max_frames))
+        return ["/frames/demo/00001.jpg", "/frames/demo/00002.jpg"]
+
+    registry = build_workspace_v2_registry(
+        video_map=_video_map(),
+        backend=backend,
+        workspace=workspace,
+        frame_sampler=fake_frame_sampler,
+    )
+
+    registry.execute(
+        "read_clip",
+        {
+            "scope": {"segment_id": "seg_0001"},
+            "focus": ["shield icon meaning"],
+            "sampling": {"nframes": 2},
+        },
+    )
+
+    request = backend.requests[0]
+    assert sampled == [("/videos/demo.mp4", 0.0, 60.0, 2)]
+    assert request.media_path is None
+    assert request.media_type == "video"
+    assert request.frames == ("/frames/demo/00001.jpg", "/frames/demo/00002.jpg")
+    assert request.metadata["nframes"] == 2
+
+
 def test_workspace_v2_read_segment_index_and_refine_are_navigation_only(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_navigation")
     backend = RefinementBackend()
