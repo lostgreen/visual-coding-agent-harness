@@ -177,6 +177,7 @@ class WorkspaceVisualAgent:
                 task="workspace_plan",
                 system_prompt=PLAN_SYSTEM_PROMPT,
                 prompt=prompt,
+                max_new_tokens=2048,
                 metadata={"round": round_number, "phase": "plan"},
             )
         )
@@ -943,7 +944,11 @@ def _first_action_object(raw: str) -> Mapping[str, Any]:
         if _tool_name(payload) or str(payload.get("disposition") or "").strip():
             return payload
     if first_object is not None:
+        if '"tool"' in raw or "'tool'" in raw:
+            raise ValueError("workspace_agent_parse_failed: truncated_or_invalid_action_json")
         return first_object
+    if '"tool"' in raw or "'tool'" in raw:
+        raise ValueError("workspace_agent_parse_failed: truncated_or_invalid_action_json")
     raise ValueError("workspace_agent_parse_failed: no JSON object found")
 
 

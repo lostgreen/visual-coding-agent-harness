@@ -243,6 +243,24 @@ def test_workspace_agent_parse_action_accepts_nested_action_json() -> None:
     assert action == {"tool": "verify", "args": {"claim": "D", "against": {"citations": ["mem_0001"]}}}
 
 
+def test_workspace_agent_parse_action_flags_truncated_tool_json() -> None:
+    with pytest.raises(ValueError, match="truncated_or_invalid_action_json"):
+        _parse_action('{"tool":"explore","args":{"query":"sequence","targets":[{"target_id":"target_1"},')
+
+
+def test_workspace_plan_request_allows_long_json_actions(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_plan_generation_budget")
+    registry = ToolRegistry()
+    backend = ScriptedWorkspaceBackend(['{"tool":"answer","args":{"text":"done","citations":[],"confidence":"low"}}'])
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    action = agent._decide_plan(question="Question: demo", round_number=1, last_tool_result="")
+
+    assert action["tool"] == "answer"
+    assert backend.requests[0].task == "workspace_plan"
+    assert backend.requests[0].max_new_tokens == 2048
+
+
 def test_workspace_agent_recovers_from_rejected_plan_tool(tmp_path: Path) -> None:
     @tool(name="bad_tool", description="Always reject.")
     def bad_tool() -> dict[str, object]:
