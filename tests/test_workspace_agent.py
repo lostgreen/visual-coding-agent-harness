@@ -105,6 +105,35 @@ class StructuredVerifyFallbackBackend(VisionLanguageBackend):
         return BackendResponse(text=self.plan_responses.pop(0))
 
 
+class ExploreCaptionFallbackBackend(VisionLanguageBackend):
+    def __init__(self, plan_responses: list[str], commit_responses: list[str]) -> None:
+        self.plan_responses = plan_responses
+        self.commit_responses = commit_responses
+        self.requests: list[BackendRequest] = []
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        if request.task == "explore_caption_reasoning":
+            return BackendResponse(
+                text=(
+                    '{"mode":"caption_fact","support_status":"caption_supported",'
+                    '"claim":"The narration says Austria-Hungary was a buffer between Russia and Western Europe.",'
+                    '"confidence":0.86,'
+                    '"facts":[{"claim":"Austria-Hungary was seen as a good buffer between Russia and Western Europe.",'
+                    '"source_kind":"asr","segment_id":"seg_0001","time_range":[0,60],"confidence":0.86,'
+                    '"supports_option":"C"}],'
+                    '"anchors":[{"source_kind":"asr","segment_id":"seg_0001","time_range":[0,60],'
+                    '"excerpt":"Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe."}],'
+                    '"answer_mapping":{"supports_option":"C"},"needs_visual_verify":false}'
+                )
+            )
+        if request.task == "workspace_commit":
+            return BackendResponse(text=self.commit_responses.pop(0))
+        if request.task == "workspace_final":
+            return BackendResponse(text='{"tool":"answer","args":{"text":"C","citations":["mem_0001"],"confidence":"medium"}}')
+        return BackendResponse(text=self.plan_responses.pop(0))
+
+
 class EmptyCommitRequiredBackend(VisionLanguageBackend):
     def __init__(self, responses: list[str]) -> None:
         self.responses = responses
@@ -1061,6 +1090,34 @@ def test_workspace_agent_auto_pins_structured_verify_results_after_commit_parse_
     assert {memory.metadata["target_id"] for memory in memories} == {"shoebox", "ruler"}
     assert {memory.metadata["verdict"] for memory in memories} == {"supported", "not_found_in_window"}
     assert all(memory.metadata["source_tool"] == "verify_window" for memory in memories)
+    assert not any(memory.kind == "unverified_capture" for memory in memories)
+    assert any(event["type"] == "commit_auto_pinned" for event in workspace._read_jsonl_dicts("trace.jsonl"))
+
+
+def test_workspace_agent_auto_pins_caption_fact_after_commit_parse_failure(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_caption_fact_auto_pin")
+    backend = ExploreCaptionFallbackBackend(
+        plan_responses=['{"tool":"explore","args":{"query":"buffer between Russia and Western Europe","modalities":["asr"],"top_k":1}}'],
+        commit_responses=[
+            "not json",
+            '{"tool":"commit_observation","args":{"observation_id":"obs_0001"}}',
+            '{"tool":"no_commit_needed","args":{"observation_id":"obs_0001","comment":"bad alias"}}',
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
+
+    assert result.answer == "C"
+    assert workspace.observation_status("obs_0001") == "committed"
+    memories = workspace.memory_entries()
+    assert [memory.kind for memory in memories] == ["caption_support"]
+    assert memories[0].supports_option == "C"
+    assert memories[0].metadata["source_tool"] == "explore"
+    assert memories[0].metadata["support_status"] == "caption_supported"
+    assert memories[0].metadata["auto_pinned"] is True
+    assert memories[0].metadata["requires_visual_verify"] is False
     assert not any(memory.kind == "unverified_capture" for memory in memories)
     assert any(event["type"] == "commit_auto_pinned" for event in workspace._read_jsonl_dicts("trace.jsonl"))
 

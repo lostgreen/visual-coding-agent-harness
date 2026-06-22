@@ -353,6 +353,23 @@ class WorkspaceVisualAgent:
         raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
         fact_text = _first_fact_text(raw_output.get("facts"))
         anchors = _mapping_items(raw_output.get("produced_anchors"))
+        caption_fact_writes = _caption_fact_writes(raw_output, anchors=anchors, reason=reason)
+        if caption_fact_writes:
+            try:
+                self.workspace.commit_observation(observation.observation_id, writes=caption_fact_writes)
+            except (ToolError, ValueError) as exc:
+                self._defer_auto_pin_failure(observation.observation_id, reason=reason, error=str(exc))
+                return
+            self.workspace.write_trace_event(
+                "commit_auto_pinned",
+                {
+                    "observation_id": observation.observation_id,
+                    "reason": reason,
+                    "kind": "caption_fact_results",
+                    "memory_count": len(caption_fact_writes.get("memory", [])),
+                },
+            )
+            return
         structured_verify_writes = _structured_verify_writes(raw_output, anchors=anchors, reason=reason)
         if structured_verify_writes:
             try:
@@ -1178,7 +1195,7 @@ def _first_fact_text(value: Any) -> str:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         for item in value:
             if isinstance(item, Mapping):
-                text = str(item.get("text") or "").strip()
+                text = str(item.get("text") or item.get("claim") or item.get("excerpt") or "").strip()
                 if text:
                     return text
             else:
@@ -1247,6 +1264,109 @@ def _retrieval_candidate_writes(
         ],
         "plan_update": f"Next: verify_window candidate {anchor_id} at {_format_scope_for_plan(time_range)} before final answer.",
     }
+
+
+def _caption_fact_writes(
+    raw_output: Mapping[str, Any],
+    *,
+    anchors: Sequence[Mapping[str, Any]],
+    reason: str,
+) -> dict[str, Any]:
+    mode = str(raw_output.get("mode") or "").strip()
+    support_status = str(raw_output.get("support_status") or "").strip()
+    if mode not in {"caption_fact", "mixed"} or support_status not in {
+        "caption_supported",
+        "partial_caption_supported",
+    }:
+        return {}
+    facts = _mapping_items(raw_output.get("facts"))
+    if not facts:
+        return {}
+
+    normalized_anchors = _dedupe_anchor_payloads(_caption_fact_anchor_payloads(anchors, facts=facts))
+    anchor_ids = [str(anchor.get("anchor_id") or "").strip() for anchor in normalized_anchors]
+    anchor_ids = [anchor_id for anchor_id in anchor_ids if anchor_id]
+    default_anchor_id = anchor_ids[0] if anchor_ids else ""
+    answer_mapping = raw_output.get("answer_mapping") if isinstance(raw_output.get("answer_mapping"), Mapping) else {}
+    memory: list[dict[str, Any]] = []
+    for index, fact in enumerate(facts):
+        claim = str(fact.get("claim") or fact.get("text") or fact.get("excerpt") or "").strip()
+        if not claim:
+            continue
+        fact_anchor_ids = [
+            str(item).strip()
+            for item in _sequence_items(fact.get("anchor_ids") or fact.get("anchor_id"))
+            if str(item).strip()
+        ]
+        if not fact_anchor_ids:
+            fact_anchor_ids = [anchor_ids[index]] if index < len(anchor_ids) else ([default_anchor_id] if default_anchor_id else [])
+        supports_option = str(
+            fact.get("supports_option")
+            or fact.get("option")
+            or (answer_mapping.get("supports_option") if isinstance(answer_mapping, Mapping) else "")
+            or ""
+        ).strip()
+        metadata: dict[str, Any] = {
+            "auto_pinned": True,
+            "auto_pin_reason": reason,
+            "mode": mode,
+            "support_status": support_status,
+            "requires_visual_verify": bool(raw_output.get("needs_visual_verify") or fact.get("needs_visual_verify")),
+            "source_kind": str(fact.get("source_kind") or ""),
+        }
+        scope = _caption_fact_scope(fact)
+        if scope:
+            metadata["scope"] = scope
+        item: dict[str, Any] = {
+            "kind": "caption_support",
+            "claim": claim,
+            "anchor_ids": fact_anchor_ids,
+            "confidence": _memory_confidence(fact.get("confidence", raw_output.get("confidence"))),
+            "metadata": metadata,
+        }
+        if supports_option:
+            item["supports_option"] = supports_option
+        memory.append(item)
+    if not memory:
+        return {}
+    return {"pinned_anchors": normalized_anchors, "memory": memory}
+
+
+def _caption_fact_anchor_payloads(
+    anchors: Sequence[Mapping[str, Any]],
+    *,
+    facts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for index, anchor in enumerate(anchors):
+        anchor_id = str(anchor.get("anchor_id") or "").strip()
+        if not anchor_id:
+            continue
+        fact = facts[index] if index < len(facts) else {}
+        excerpt = str(anchor.get("excerpt") or fact.get("excerpt") or fact.get("claim") or fact.get("text") or "").strip()
+        payloads.append(
+            {
+                **dict(anchor),
+                "anchor_id": anchor_id,
+                "kind": str(anchor.get("kind") or anchor.get("modality") or anchor.get("source_kind") or "dense_caption"),
+                "source_kind": str(anchor.get("source_kind") or fact.get("source_kind") or "dense_caption"),
+                "excerpt": excerpt,
+            }
+        )
+    return payloads
+
+
+def _caption_fact_scope(fact: Mapping[str, Any]) -> dict[str, Any]:
+    scope: dict[str, Any] = {}
+    segment_id = str(fact.get("segment_id") or "").strip()
+    if segment_id:
+        scope["segment_id"] = segment_id
+    time_range = fact.get("time_range")
+    if isinstance(time_range, Sequence) and not isinstance(time_range, (str, bytes)) and len(time_range) >= 2:
+        scope["time_range"] = [time_range[0], time_range[1]]
+    elif fact.get("start_sec") is not None and fact.get("end_sec") is not None:
+        scope["time_range"] = [fact.get("start_sec"), fact.get("end_sec")]
+    return scope
 
 
 def _structured_verify_writes(
