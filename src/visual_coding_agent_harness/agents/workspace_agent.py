@@ -1281,7 +1281,10 @@ def _caption_fact_writes(
         return {}
     facts = _mapping_items(raw_output.get("facts"))
     if not facts:
-        return {}
+        claim = str(raw_output.get("claim") or "").strip()
+        if not claim:
+            return {}
+        facts = [_caption_fact_from_claim(claim, anchors=anchors, raw_output=raw_output)]
 
     normalized_anchors = _dedupe_anchor_payloads(_caption_fact_anchor_payloads(anchors, facts=facts))
     anchor_ids = [str(anchor.get("anchor_id") or "").strip() for anchor in normalized_anchors]
@@ -1330,6 +1333,37 @@ def _caption_fact_writes(
     if not memory:
         return {}
     return {"pinned_anchors": normalized_anchors, "memory": memory}
+
+
+def _caption_fact_from_claim(
+    claim: str,
+    *,
+    anchors: Sequence[Mapping[str, Any]],
+    raw_output: Mapping[str, Any],
+) -> dict[str, Any]:
+    first_anchor = anchors[0] if anchors else {}
+    fact: dict[str, Any] = {
+        "claim": claim,
+        "confidence": raw_output.get("confidence"),
+        "source_kind": str(first_anchor.get("source_kind") or first_anchor.get("kind") or "dense_caption"),
+    }
+    segment_id = str(first_anchor.get("segment_id") or "").strip()
+    if segment_id:
+        fact["segment_id"] = segment_id
+    time_range = first_anchor.get("time_range")
+    if time_range is not None:
+        fact["time_range"] = time_range
+    elif first_anchor.get("start_sec") is not None and first_anchor.get("end_sec") is not None:
+        fact["time_range"] = [first_anchor.get("start_sec"), first_anchor.get("end_sec")]
+    excerpt = str(first_anchor.get("excerpt") or "").strip()
+    if excerpt:
+        fact["excerpt"] = excerpt
+    answer_mapping = raw_output.get("answer_mapping")
+    if isinstance(answer_mapping, Mapping):
+        supports_option = str(answer_mapping.get("supports_option") or "").strip()
+        if supports_option:
+            fact["supports_option"] = supports_option
+    return fact
 
 
 def _caption_fact_anchor_payloads(
