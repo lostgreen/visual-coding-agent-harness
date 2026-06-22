@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from visual_coding_agent_harness.agents.workspace_agent import (
+    FINAL_SYSTEM_PROMPT,
     PLAN_SYSTEM_PROMPT,
     WorkspaceVisualAgent,
     compose_commit_prompt,
@@ -699,7 +700,7 @@ def test_compose_commit_prompt_includes_full_view_on_minimal_retry(tmp_path: Pat
     assert '"anchor_id": "<candidate_anchor_id>"' in prompt
 
 
-def test_prompts_guide_whole_video_coverage_and_partial_evidence_commits(tmp_path: Path) -> None:
+def test_prompts_keep_generic_planning_and_scope_local_negatives(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_prompt_guidance")
     observation = workspace.write_observation(
         tool_name="read_segment",
@@ -730,9 +731,14 @@ def test_prompts_guide_whole_video_coverage_and_partial_evidence_commits(tmp_pat
         observation_id=observation.observation_id,
     )
 
-    assert "whole-video or main-idea" in plan_prompt
-    assert "early, middle, and late segment cards" in plan_prompt
-    assert "partial evidence" in commit_prompt
+    assert "whole-video or main-idea" not in PLAN_SYSTEM_PROMPT
+    assert "early, middle, and late" not in PLAN_SYSTEM_PROMPT
+    assert "whole-video or main-idea" not in plan_prompt
+    assert "early, middle, and late segment cards" not in plan_prompt
+    assert "local_negative" in commit_prompt
+    assert "global_negation_allowed" in commit_prompt
+    assert "scope" in commit_prompt
+    assert "cannot support a final answer" in commit_prompt
     assert "answer_support" in commit_prompt
     assert "Reject only when" in commit_prompt
 
@@ -761,7 +767,19 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert "refinement_output_invalid" in prompt
     assert "candidate_id" in prompt
     assert '"text":"D"' not in prompt
-    assert '"text":"A"' in prompt
+    assert '"text":"A"' not in prompt
+
+
+def test_forced_final_prompt_does_not_default_to_option_a(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_forced_final_prompt")
+
+    prompt = compose_final_prompt(question="Which option is correct?", workspace=workspace, video_map=_video_map())
+
+    assert '"text":"A"' not in FINAL_SYSTEM_PROMPT
+    assert '"text":"A"' not in prompt
+    assert "best supported option" in prompt
+    assert "do not default" in prompt
+    assert "citations: []" in prompt
 
 
 def test_workspace_agent_exports_downloadable_round_log(tmp_path: Path) -> None:

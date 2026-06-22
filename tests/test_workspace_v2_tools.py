@@ -542,6 +542,65 @@ def test_workspace_v2_scan_segment_and_verify_window_delegate_local_workers(tmp_
     assert "cand_seg_0001_001 [10.0-20.0] segment=seg_0001 status=pending" in plan_view
 
 
+def test_workspace_v2_verify_window_accepts_multiple_verification_targets(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_multi_targets")
+    backend = RecordingBackend(
+        text=(
+            "Target hubble: not found in this local window. "
+            "Target telescope: a telescope graphic appears near the narration."
+        )
+    )
+    registry = build_workspace_v2_registry(
+        video_map=_video_map(),
+        backend=backend,
+        workspace=workspace,
+        frame_sampler=lambda _video_path, _start_sec, _end_sec, max_frames: [f"/frames/{idx:03d}.jpg" for idx in range(max_frames)],
+    )
+
+    scan = registry.execute(
+        "scan_segment",
+        {
+            "segment_id": "seg_0001",
+            "question": "Which telescope is discussed?",
+            "scan_goal": "Find telescope references.",
+            "preferred_modalities": ["visual", "asr"],
+        },
+    )
+    workspace.write_observation(
+        tool_name="scan_segment",
+        claim=str(scan["claim"]),
+        confidence=float(scan["confidence"]),
+        regions=scan["regions"],
+        limitations=str(scan["limitations"]),
+        raw_output=scan,
+    )
+
+    verified = registry.execute(
+        "verify_window",
+        {
+            "candidate_id": "cand_seg_0001_001",
+            "evidence_mode": "multimodal",
+            "sampling": {"fps": 2, "max_frames": 128},
+            "focus": ["telescope identity"],
+            "checks": [
+                {"id": "hubble", "claim": "Hubble Telescope is mentioned or shown", "polarity": "presence"},
+                {"id": "generic", "claim": "A telescope appears in the local window", "polarity": "presence"},
+            ],
+        },
+    )
+
+    assert verified["verification_targets"] == [
+        {"id": "hubble", "claim": "Hubble Telescope is mentioned or shown", "polarity": "presence"},
+        {"id": "generic", "claim": "A telescope appears in the local window", "polarity": "presence"},
+    ]
+    request = backend.requests[-1]
+    assert "Verification targets" in request.prompt
+    assert "Hubble Telescope is mentioned or shown" in request.prompt
+    assert "A telescope appears in the local window" in request.prompt
+    assert request.metadata["verification_targets"] == verified["verification_targets"]
+    assert verified["raw"]["verification_targets"] == verified["verification_targets"]
+
+
 def test_workspace_v2_read_segment_refine_or_verify_requires_explicit_sub_window(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_requires_sub_window")
     backend = RefinementBackend()
@@ -744,6 +803,74 @@ def test_workspace_v2_answer_rejects_non_answer_supporting_memory_kinds(tmp_path
 
     with pytest.raises(ValueError, match="answer_support"):
         registry.execute("answer", {"text": "D", "citations": ["mem_0001"], "confidence": "high"})
+
+
+def test_workspace_v2_local_negative_memory_requires_scope_and_cannot_final_cite(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_local_negative_scope")
+    observation = workspace.write_observation(
+        tool_name="verify_window",
+        claim="The Hubble Telescope is not found in this local window.",
+        confidence=0.8,
+        regions=[{"segment_id": "seg_0001", "time_range": [10.0, 20.0]}],
+    )
+
+    with pytest.raises(ValueError, match="local_negative.*scope"):
+        workspace.commit_observation(
+            observation.observation_id,
+            writes={
+                "pinned_anchors": [
+                    {
+                        "anchor_id": "anch_hubble_absent",
+                        "kind": "asr",
+                        "source_kind": "audio_fact",
+                        "excerpt": "Hubble Telescope is not found",
+                    }
+                ],
+                "memory": [
+                    {
+                        "kind": "local_negative",
+                        "claim": "Hubble Telescope was not found in this local window.",
+                        "anchor_ids": ["anch_hubble_absent"],
+                        "confidence": "medium",
+                    }
+                ],
+            },
+        )
+
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": "anch_hubble_absent",
+                    "kind": "asr",
+                    "source_kind": "audio_fact",
+                    "excerpt": "Hubble Telescope is not found",
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "local_negative",
+                    "claim": "Hubble Telescope was not found in this local window.",
+                    "anchor_ids": ["anch_hubble_absent"],
+                    "confidence": "medium",
+                    "metadata": {
+                        "scope": {"segment_id": "seg_0001", "time_range": [10.0, 20.0]},
+                        "global_negation_allowed": False,
+                    },
+                }
+            ],
+        },
+    )
+    entry = workspace.get_memory("mem_0001")
+    assert entry is not None
+    assert entry.kind == "local_negative"
+    assert entry.metadata["scope"] == {"segment_id": "seg_0001", "time_range": [10.0, 20.0]}
+    assert entry.metadata["global_negation_allowed"] is False
+
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+    with pytest.raises(ValueError, match="answer_support"):
+        registry.execute("answer", {"text": "A", "citations": ["mem_0001"], "confidence": "low"})
 
 
 @pytest.mark.parametrize("kind", ["answer_support", "synthesized_support", "answer_conflict_resolved"])

@@ -669,6 +669,7 @@ class EvidenceWorkspace:
             memory_entries: list[dict[str, Any]] = []
             available_anchor_ids = [str(anchor.get("anchor_id")) for anchor in pinned_anchors if anchor.get("anchor_id")]
             for memory_payload in _mapping_list(normalized_writes.get("memory")):
+                memory_metadata = _memory_commit_metadata(memory_payload)
                 anchor_ids = [
                     str(item).strip()
                     for item in _sequence_items(memory_payload.get("anchor_ids"))
@@ -688,7 +689,7 @@ class EvidenceWorkspace:
                     layer=str(memory_payload.get("layer", "") or ""),
                     embedding_refs=[str(item) for item in _sequence_items(memory_payload.get("embedding_refs"))],
                     metadata={
-                        **dict(memory_payload.get("metadata", {}) or {}),
+                        **memory_metadata,
                         "evidence_obs_ids": _default_evidence_obs_ids(memory_payload, observation.observation_id),
                         "disposition_observation_id": observation.observation_id,
                     },
@@ -3431,11 +3432,56 @@ def _validate_memory_commit_payload(payload: Mapping[str, Any]) -> None:
         "answer_conflict_resolved",
         "unverified_capture",
         "retrieval_candidate",
+        "local_negative",
     }:
         raise ValueError(f"memory_validation_failed: unknown kind={kind}")
     confidence = str(payload.get("confidence") or "medium")
     if confidence not in {"high", "medium", "low"}:
         raise ValueError(f"memory_validation_failed: unknown confidence={confidence}")
+    if kind == "local_negative":
+        metadata = _memory_commit_metadata(payload)
+        scope = metadata.get("scope")
+        if not _valid_local_negative_scope(scope):
+            raise ValueError("memory_validation_failed: local_negative requires metadata.scope with segment_id and time_range")
+        if _truthy(metadata.get("global_negation_allowed")):
+            raise ValueError("memory_validation_failed: local_negative must set global_negation_allowed=false")
+        if str(payload.get("supports_option", "") or "").strip():
+            raise ValueError("memory_validation_failed: local_negative cannot support an answer option")
+
+
+def _memory_commit_metadata(payload: Mapping[str, Any]) -> dict[str, object]:
+    metadata = dict(payload.get("metadata", {}) or {})
+    if "scope" in payload and "scope" not in metadata:
+        metadata["scope"] = payload["scope"]
+    if "global_negation_allowed" in payload and "global_negation_allowed" not in metadata:
+        metadata["global_negation_allowed"] = payload["global_negation_allowed"]
+    if str(payload.get("kind") or "support") == "local_negative":
+        metadata.setdefault("global_negation_allowed", False)
+    return metadata
+
+
+def _valid_local_negative_scope(scope: object) -> bool:
+    if not isinstance(scope, Mapping):
+        return False
+    segment_id = str(scope.get("segment_id") or "").strip()
+    time_range = scope.get("time_range")
+    if not segment_id or not isinstance(time_range, Sequence) or isinstance(time_range, (str, bytes)):
+        return False
+    if len(time_range) != 2:
+        return False
+    try:
+        start_sec = float(time_range[0])  # type: ignore[index]
+        end_sec = float(time_range[1])  # type: ignore[index]
+    except (TypeError, ValueError):
+        return False
+    return end_sec > start_sec
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y"}
 
 
 def _row_matches_expected(row: Mapping[str, Any], expected: Mapping[str, Any]) -> bool:

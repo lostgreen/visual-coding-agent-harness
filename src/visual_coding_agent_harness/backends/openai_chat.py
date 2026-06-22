@@ -18,6 +18,8 @@ from typing import Any, Mapping
 from .base import BackendRequest, BackendResponse
 from .qwen_text import _JSON_TEXT_TASKS, _normalized_structured_json_output, _strip_qwen_thinking
 
+_OPENAI_COMPATIBLE_USER_AGENT = "OpenAI/Python 1.0.0"
+
 
 class _OpenAIChatRequestError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None, retryable: bool = False) -> None:
@@ -249,21 +251,26 @@ class OpenAIChatTextBackend:
         return _chat_completions_url(self.api_base)
 
     def _headers(self) -> dict[str, str]:
+        base_headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": _OPENAI_COMPATIBLE_USER_AGENT,
+        }
         if _is_azure_api_type(self.api_type):
             return {
-                "Content-Type": "application/json",
+                **base_headers,
                 "api-key": self.api_key,
             }
         if _is_gemini_gateway_api_type(self.api_type):
             return {
-                "Content-Type": "application/json",
+                **base_headers,
                 "x-api-key": self.api_key,
                 "x-ks-user-key": self.user_key,
                 "x-ks-llm-model": self.model,
                 "x-ks-biz-scene": self.biz_scene,
             }
         return {
-            "Content-Type": "application/json",
+            **base_headers,
             "Authorization": f"Bearer {self.api_key}",
         }
 

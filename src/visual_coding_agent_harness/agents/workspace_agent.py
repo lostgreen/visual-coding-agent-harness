@@ -675,7 +675,6 @@ Do not call the standalone verify tool during planning; it is a provenance gate,
 Do not refine an already-refined root range at the same resolution.
 Use synthesize_memory only after Committed Memory contains answer-support mem_* ids.
 Use answer only after Committed Memory contains mem_* ids that directly support the answer.
-For whole-video or main-idea questions, collect coverage across early, middle, and late root segments before final answer.
 For multiple-choice questions, answer text must be exactly one option letter: "A", "B", "C", or "D".
 Every answer call must include {"text": "A|B|C|D", "citations": ["mem_*"], "confidence": "..."}.
 If there is no committed memory, or if the last answer was rejected, choose an exploration tool instead of answer.
@@ -690,8 +689,8 @@ The JSON object must include a "tool" field and an "args" object.
 FINAL_SYSTEM_PROMPT = """The exploration budget is exhausted.
 Answer only from committed workspace memory. Do not invent citations.
 For multiple-choice questions, the answer text must be exactly one option letter: "A", "B", "C", or "D".
-Output exactly one JSON object using only {"tool":"answer","args":{"text":"A|B|C|D","citations":["mem_*"],"confidence":"low|medium|high"}}.
-If no committed memory directly supports an option, still output the best option letter but leave citations empty; the framework will mark it unvalidated.
+Output exactly one JSON object using only {"tool":"answer","args":{"text":"<option_letter>","citations":["mem_*"],"confidence":"low|medium|high"}}.
+If no committed memory directly supports an option, still output the most likely option letter with citations: [] and confidence: low; do not default to any specific letter.
 """
 
 
@@ -711,17 +710,16 @@ def compose_plan_prompt(
             "Return exactly one JSON object. Do not explain.",
             "Use Segment Cards as the starting navigation state. They are summaries only, not answer evidence.",
             'To inspect one promising segment, call {"tool":"scan_segment","args":{"segment_id":"seg_0001","question":"...","scan_goal":"what to localize","preferred_modalities":["asr","visual"],"max_candidates":3}}.',
-            'For answer-grade evidence, call {"tool":"verify_window","args":{"candidate_id":"cand_seg_0001_001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":32},"focus":["what must be verified"]}}.',
+            'For answer-grade evidence, call {"tool":"verify_window","args":{"candidate_id":"cand_seg_0001_001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"focus":["what must be verified"],"checks":[{"id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
             'Do not call {"tool":"verify"} as a standalone planning action; use verify_window for video evidence.',
             'If an old read_segment path is needed, first get a concrete sub_window from scan_segment or read_segment(index).',
-            "For a whole-video or main-idea question, verify coverage across early, middle, and late segment cards; if one root's evidence was rejected or insufficient, move to another root or candidate.",
             "After search returns candidate hits, inspect a concrete segment with scan_segment or verify_window; do not answer directly from search candidates.",
             'If Last Tool Result starts with "answer rejected", the next tool must be scan_segment, verify_window, read_segment, search, list, or read_workspace.',
             'If Last Tool Result starts with "observation rejected", change candidate, segment, sub_window, evidence_mode, or focus; do not repeat the same verify.',
             'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',
             'If Last Tool Result contains "refinement_output_invalid", switch to verify_window on a candidate or choose a different segment; do not repeat refine.',
             _synthesize_memory_availability(workspace),
-            'Use {"tool":"answer","args":{"text":"A","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory directly supports that option.',
+            'Use {"tool":"answer","args":{"text":"<option_letter>","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory directly supports that option.',
             "",
             workspace.render_plan_view(question=question, video_map=video_map),
             "",
@@ -753,8 +751,10 @@ def compose_commit_prompt(
         "",
         f"# Commit Phase (attempt {attempt})",
         "# Commit Guidance",
-        "For read_segment/read_clip facts, commit useful partial evidence instead of rejecting it merely because it does not answer the full question alone.",
+        "Commit local factual evidence with its valid scope; do not convert local absence into full-video absence.",
         "Use memory kind answer_support when the fact supports an answer option or subclaim needed for that option; include supports_option when clear.",
+        "Use memory kind local_negative when a fact only says something was not found, not mentioned, or not visible inside one local window; include metadata.scope and metadata.global_negation_allowed=false.",
+        "A local_negative cannot support a final answer or global negation by itself; it only tells the planner where to search next or what a checked local window did not contain.",
         "Reject only when the observation is corrupt, off-topic, duplicate, or has no usable factual anchor.",
         "",
         workspace.render_commit_view(question=question, observation_id=observation_id),
@@ -827,9 +827,10 @@ def compose_final_prompt(*, question: str, workspace: EvidenceWorkspace, video_m
             "# Forced Final Protocol",
             "The maximum round count has been reached. You must answer now.",
             "Return exactly one JSON object using the answer tool.",
-            'Use {"tool":"answer","args":{"text":"A","citations":["mem_0001"],"confidence":"low"}}.',
+            'Use {"tool":"answer","args":{"text":"<option_letter>","citations":["mem_0001"],"confidence":"low"}}.',
             "For multiple-choice questions, text must be exactly one option letter: A, B, C, or D.",
-            "Prefer committed mem_* citations. If no valid citation supports the answer, use citations: [] and confidence: low; the framework will mark the answer unvalidated.",
+            "Choose the best supported option from committed memory; do not default to any option letter.",
+            "Prefer committed mem_* citations. If no valid citation supports the answer, choose the most likely option with citations: [] and confidence: low; the framework will mark the answer unvalidated.",
             "",
             workspace.render_plan_view(question=question, video_map=video_map),
         ]
@@ -1048,7 +1049,13 @@ def _legacy_commit_writes(
     pinned_anchors = _legacy_anchor_payloads(args, workspace=workspace, observation_id=observation_id)
     claim = explicit_claim or str(observation.claim if observation is not None else "").strip()
     memory_kind = str(args.get("kind") or args.get("output_type") or "answer_support").strip()
-    if memory_kind not in {"answer_support", "synthesized_support", "answer_conflict_resolved", "retrieval_candidate"}:
+    if memory_kind not in {
+        "answer_support",
+        "synthesized_support",
+        "answer_conflict_resolved",
+        "retrieval_candidate",
+        "local_negative",
+    }:
         memory_kind = "answer_support"
 
     writes: dict[str, Any] = {}
@@ -1067,6 +1074,12 @@ def _legacy_commit_writes(
         supports_option = str(args.get("supports_option") or args.get("option") or "").strip()
         if supports_option:
             memory["supports_option"] = supports_option
+        if memory_kind == "local_negative":
+            metadata: dict[str, Any] = {"global_negation_allowed": False}
+            scope = args.get("scope")
+            if isinstance(scope, Mapping):
+                metadata["scope"] = dict(scope)
+            memory["metadata"] = metadata
         if memory_kind == "retrieval_candidate":
             time_range = _first_anchor_time_range(pinned_anchors)
             memory["tags"] = ["retrieval_candidate", "requires_local_read"]

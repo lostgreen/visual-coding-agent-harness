@@ -1057,6 +1057,49 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(config.planner_api_biz_scene_env, "GEMINI_BIZ_SCENE")
         self.assertTrue(config.planner_api_use_for_tools)
 
+    def test_local_gemini25_pro_profile_uses_ppio_openai_compatible_api(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "local_gemini25_pro_ppio.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "planner_api:",
+                        "  type: openai_compatible",
+                        "  base: https://api.novita.ai/openai",
+                        "  model: pa/gmn-2.5-pr",
+                        "  api_key_env: PPIO_API_KEY",
+                        "  use_for_tools: true",
+                        "  timeout: 300",
+                        "scene_index_concurrency: 8",
+                        "dense_video_caption:",
+                        "  fps: 0.5",
+                        "  max_new_tokens: 6144",
+                        "frame_cache_fps: 2.0",
+                        "scene_index_frame_fps: 0.5",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            parser = eval_runner.build_arg_parser()
+            args = parser.parse_args(["--config", str(config_path)])
+            config = eval_runner.config_from_args(args)
+
+        self.assertEqual(config.planner_api_type, "openai_compatible")
+        self.assertEqual(config.planner_api_base, "https://api.novita.ai/openai")
+        self.assertEqual(config.planner_api_model, "pa/gmn-2.5-pr")
+        self.assertEqual(config.planner_api_key, "EMPTY")
+        self.assertEqual(config.planner_api_key_env, "PPIO_API_KEY")
+        self.assertEqual(config.planner_api_user_key, "")
+        self.assertEqual(config.planner_api_biz_scene, "")
+        self.assertTrue(config.planner_api_use_for_tools)
+        self.assertEqual(config.planner_api_timeout, 300.0)
+        self.assertEqual(config.scene_index_concurrency, 8)
+        self.assertEqual(config.scene_index_frame_fps, 0.5)
+        self.assertEqual(config.frame_cache_fps, 2.0)
+
     def test_planner_api_gemini_gateway_config_accepts_private_yaml_values_without_serializing_secrets(self):
         from runs import eval_runner
 

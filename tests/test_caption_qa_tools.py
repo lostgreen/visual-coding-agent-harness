@@ -10,6 +10,7 @@ from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.tools.enrichment import build_video_enrichment_registry
 from visual_coding_agent_harness.tools.inspector import build_segment_inspector_registry
 from visual_coding_agent_harness.tools.segments import build_segment_vlm_registry
+from visual_coding_agent_harness.tools.workspace_v2 import _verification_sampling_payload
 from visual_coding_agent_harness.tools.vlm import build_vlm_registry
 from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -42,6 +43,17 @@ def assert_no_mcq_leak(testcase: unittest.TestCase, prompt: str, option_texts=MC
     testcase.assertNotRegex(text, r"\boption\s+[A-D]\b")
     for option in option_texts:
         testcase.assertNotIn(option, text)
+
+
+def test_verify_window_sampling_defaults_to_two_fps_with_128_frame_cap():
+    short_payload = _verification_sampling_payload(None, start_sec=10.0, end_sec=40.0)
+    assert short_payload["fps"] == 2.0
+    assert short_payload["max_frames"] == 128
+    assert short_payload["nframes"] == 60
+
+    long_payload = _verification_sampling_payload({"fps": 2, "max_frames": 256}, start_sec=0.0, end_sec=120.0)
+    assert long_payload["max_frames"] == 128
+    assert long_payload["nframes"] == 128
 
 
 class CaptionQARecordingBackend(VisionLanguageBackend):

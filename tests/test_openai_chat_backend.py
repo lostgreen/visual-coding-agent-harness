@@ -75,6 +75,9 @@ def test_openai_chat_backend_sends_thinking_budget_and_returns_structured_json(m
     assert captured["url"] == "http://planner-host:8000/v1/chat/completions"
     assert captured["timeout"] == 12.5
     assert captured["headers"]["Authorization"] == "Bearer EMPTY"
+    normalized_headers = {key.lower(): value for key, value in captured["headers"].items()}
+    assert normalized_headers["accept"] == "application/json"
+    assert normalized_headers["user-agent"].startswith("OpenAI/Python")
     body = captured["body"]
     assert body["model"] == "Qwen3.5-9B"
     assert body["max_tokens"] == 4096

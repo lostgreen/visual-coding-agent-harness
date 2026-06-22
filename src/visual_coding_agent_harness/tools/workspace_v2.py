@@ -32,6 +32,8 @@ from .workspace_primitives import build_workspace_primitives_registry
 
 
 ANSWER_SUPPORTING_KINDS = frozenset({"answer_support", "synthesized_support", "answer_conflict_resolved"})
+VERIFY_WINDOW_DEFAULT_FPS = 2.0
+VERIFY_WINDOW_MAX_FRAMES = 128
 
 
 def build_workspace_v2_registry(
@@ -108,6 +110,8 @@ def build_workspace_v2_registry(
         time_range: Sequence[float] | Mapping[str, float] | None = None,
         evidence_mode: str = "multimodal",
         focus: Sequence[str] = (),
+        checks: Sequence[Mapping[str, Any] | str] = (),
+        verification_targets: Sequence[Mapping[str, Any] | str] = (),
         sampling: Mapping[str, Any] | None = None,
     ) -> Mapping[str, object]:
         return segment_read_service.verify_window(
@@ -116,6 +120,8 @@ def build_workspace_v2_registry(
             time_range=time_range,
             evidence_mode=evidence_mode,
             focus=focus,
+            checks=checks,
+            verification_targets=verification_targets,
             sampling=sampling,
         )
 
@@ -640,6 +646,8 @@ class SegmentReadService:
         time_range: Sequence[float] | Mapping[str, float] | None,
         evidence_mode: str,
         focus: Sequence[str],
+        checks: Sequence[Mapping[str, Any] | str] = (),
+        verification_targets: Sequence[Mapping[str, Any] | str] = (),
         sampling: Mapping[str, Any] | None,
     ) -> Mapping[str, object]:
         candidate = self._resolve_candidate(candidate_id=candidate_id, segment_id=segment_id, time_range=time_range)
@@ -650,6 +658,7 @@ class SegmentReadService:
         if start_sec < float(parent.start_sec) or end_sec > float(parent.end_sec) or end_sec <= start_sec:
             raise ValueError("verify_window_failed: candidate time_range must be non-empty and within its root segment")
         sampling_payload = _verification_sampling_payload(sampling, start_sec=start_sec, end_sec=end_sec)
+        targets = _normalize_verification_targets((*_sequence_items(checks), *_sequence_items(verification_targets)))
         if self.workspace is not None:
             self.workspace.write_trace_event(
                 "evidence_verifier_dispatched",
@@ -660,6 +669,7 @@ class SegmentReadService:
                     "end_sec": end_sec,
                     "evidence_mode": evidence_mode,
                     "sampling": dict(sampling_payload),
+                    "verification_targets": targets,
                 },
             )
         focus_items = [
@@ -673,6 +683,7 @@ class SegmentReadService:
             frame_sampler=self.frame_sampler,
             scope={"segment_id": resolved_segment_id, "time_range": [start_sec, end_sec]},
             focus=focus_items,
+            verification_targets=targets,
             sampling=sampling_payload,
             tool_name="verify_window",
         )
@@ -683,6 +694,7 @@ class SegmentReadService:
             "candidate_id": str(candidate.get("candidate_id") or candidate_id or ""),
             "source_beat_ids": list(candidate.get("source_beat_ids") or ()),
             "verification_goal": str(candidate.get("verification_goal") or ""),
+            "verification_targets": targets,
             "evidence_mode": evidence_mode,
         }
 
@@ -727,6 +739,7 @@ def _read_clip_evidence(
     frame_sampler: FrameSampler | None = None,
     scope: Mapping[str, Any],
     focus: Sequence[str],
+    verification_targets: Sequence[Mapping[str, Any]] = (),
     sampling: Mapping[str, Any] | None,
     tool_name: str,
 ) -> Mapping[str, object]:
@@ -734,7 +747,17 @@ def _read_clip_evidence(
     segment = _segment_from_scope(current, scope)
     start_sec, end_sec = _time_range_from_scope(scope, segment)
     focus_items = [str(item).strip() for item in focus if str(item).strip()]
+    targets = _normalize_verification_targets(verification_targets)
     ask_for = "; ".join(focus_items) or "Return concise visible/audio/OCR facts from this clip."
+    if targets:
+        ask_for = "\n".join(
+            [
+                ask_for,
+                "Verification targets:",
+                *_format_verification_target_lines(targets),
+                "For each target, return only local findings for this clip and distinguish present, absent, and uncertain.",
+            ]
+        )
     sampling_payload = dict(sampling or {})
     requested_nframes = int(sampling_payload.get("nframes") or 8)
     requested_nframes = max(1, requested_nframes)
@@ -763,6 +786,7 @@ def _read_clip_evidence(
                 "start_sec": start_sec,
                 "end_sec": end_sec,
                 "focus": focus_items,
+                "verification_targets": targets,
                 "sampling": sampling_payload,
                 "nframes": len(frame_paths) if frame_paths else requested_nframes,
             },
@@ -812,7 +836,9 @@ def _read_clip_evidence(
         "candidate_anchor_ids": [str(anchor["anchor_id"]) for anchor in produced_anchors],
         "produced_anchors": produced_anchors,
         "limitations": "Facts-only clip read; no answer option vote is emitted.",
+        "verification_targets": targets,
         "raw_backend": raw_backend,
+        "raw": {**raw_backend, "verification_targets": targets},
     }
 
 
@@ -1046,10 +1072,12 @@ def _verification_sampling_payload(
 ) -> dict[str, object]:
     payload = dict(sampling or {})
     if "nframes" in payload:
-        payload["nframes"] = max(1, int(payload["nframes"]))
+        payload["nframes"] = min(VERIFY_WINDOW_MAX_FRAMES, max(1, int(payload["nframes"])))
         return payload
-    max_frames = int(payload.get("max_frames") or 16)
-    fps = float(payload.get("fps") or 0.0)
+    max_frames = min(VERIFY_WINDOW_MAX_FRAMES, max(1, int(payload.get("max_frames") or VERIFY_WINDOW_MAX_FRAMES)))
+    fps = float(payload.get("fps") or VERIFY_WINDOW_DEFAULT_FPS)
+    payload["max_frames"] = max_frames
+    payload["fps"] = fps
     if fps > 0:
         duration = max(0.1, float(end_sec) - float(start_sec))
         payload["nframes"] = max(1, min(max_frames, int(duration * fps + 0.999)))
@@ -1125,6 +1153,38 @@ def _read_clip_prompt(*, segment_id: str, start_sec: float, end_sec: float, focu
         "Do not choose an answer option. "
         f"Segment {segment_id} [{start_sec:.1f}, {end_sec:.1f}], focus: {focus}"
     )
+
+
+def _normalize_verification_targets(targets: Sequence[Mapping[str, Any] | str] | None) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for item in _sequence_items(targets):
+        if isinstance(item, Mapping):
+            claim = str(item.get("claim") or item.get("question") or item.get("text") or "").strip()
+            if not claim:
+                continue
+            target_id = str(item.get("id") or item.get("target_id") or item.get("name") or "").strip()
+            polarity = str(item.get("polarity") or item.get("kind") or "presence").strip()
+        else:
+            claim = str(item or "").strip()
+            if not claim:
+                continue
+            target_id = ""
+            polarity = "presence"
+        if not target_id:
+            target_id = f"target_{len(normalized) + 1}"
+        normalized.append({"id": target_id, "claim": claim, "polarity": polarity or "presence"})
+    return normalized
+
+
+def _format_verification_target_lines(targets: Sequence[Mapping[str, Any]]) -> list[str]:
+    lines = []
+    for target in targets:
+        target_id = str(target.get("id") or "").strip()
+        claim = str(target.get("claim") or "").strip()
+        polarity = str(target.get("polarity") or "presence").strip()
+        if claim:
+            lines.append(f"- {target_id}: {claim} (polarity={polarity})")
+    return lines
 
 
 def _source_kind_from_focus(focus: Sequence[str]) -> str:
