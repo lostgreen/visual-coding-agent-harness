@@ -783,6 +783,13 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
     total_observations = 0
     normalization_notes = 0
     normalization_rounds = 0
+    option_biased_first_queries = 0
+    wrong_scope_caption_facts = 0
+    caption_fact_downgrades = 0
+    caption_fact_observations = 0
+    caption_support_finals = 0
+    visual_required_caption_finals = 0
+    final_cases = 0
 
     for workspace in workspaces:
         events = _load_trace_events(workspace)
@@ -804,6 +811,14 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         notes, rounds = _normalization_note_trace_metrics(events)
         normalization_notes += notes
         normalization_rounds += rounds
+        caption_metrics = _caption_explore_trace_metrics(workspace)
+        option_biased_first_queries += caption_metrics["option_biased_first_query"]
+        wrong_scope_caption_facts += caption_metrics["wrong_scope_caption_facts"]
+        caption_fact_downgrades += caption_metrics["caption_fact_downgrades"]
+        caption_fact_observations += caption_metrics["caption_fact_observations"]
+        caption_support_finals += caption_metrics["caption_support_final"]
+        visual_required_caption_finals += caption_metrics["visual_required_but_caption_final"]
+        final_cases += caption_metrics["final_case"]
 
     summary.route_violations = route_violations
     summary.context_budget_overflow_count = context_overflows
@@ -822,6 +837,62 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         summary.degenerate_observation_rate = degenerate_observations / total_observations
     if normalization_rounds:
         summary.normalization_notes_per_round = normalization_notes / normalization_rounds
+    if workspaces:
+        summary.option_biased_first_query_rate = option_biased_first_queries / len(workspaces)
+    if caption_fact_observations:
+        summary.wrong_scope_caption_fact_rate = wrong_scope_caption_facts / caption_fact_observations
+        summary.caption_fact_downgrade_rate = caption_fact_downgrades / caption_fact_observations
+    if final_cases:
+        summary.caption_support_final_rate = caption_support_finals / final_cases
+        summary.visual_required_but_caption_final_rate = visual_required_caption_finals / final_cases
+
+
+def _caption_explore_trace_metrics(workspace: EvidenceWorkspace) -> dict[str, int]:
+    observations = workspace._read_jsonl_dicts("observations.jsonl")
+    explore_observations = [
+        row for row in observations if str(row.get("tool") or row.get("tool_name") or "") == "explore"
+    ]
+    first_explore = explore_observations[0] if explore_observations else {}
+    first_raw = first_explore.get("raw_output") if isinstance(first_explore.get("raw_output"), Mapping) else {}
+    option_biased_first = int(bool((first_raw.get("query_analysis") or {}).get("is_option_biased")) if isinstance(first_raw.get("query_analysis"), Mapping) else False)
+    caption_facts = []
+    wrong_scope = 0
+    downgrades = 0
+    for row in explore_observations:
+        raw = row.get("raw_output") if isinstance(row.get("raw_output"), Mapping) else {}
+        if str(raw.get("mode") or "") not in {"caption_fact", "mixed"} and not raw.get("caption_fact_downgraded"):
+            continue
+        caption_facts.append(raw)
+        condition_match = raw.get("condition_match") if isinstance(raw.get("condition_match"), Mapping) else {}
+        if str(condition_match.get("match_level") or "") == "related_but_wrong_scope":
+            wrong_scope += 1
+        if bool(raw.get("caption_fact_downgraded")):
+            downgrades += 1
+    final_mem_ids = set()
+    for event in workspace._read_jsonl_dicts("trace.jsonl"):
+        event_type = str(event.get("type") or event.get("event_type") or "")
+        if event_type not in {"answer_accepted", "workspace_answer_accepted", "iterative_final", "low_confidence_final"}:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
+        for citation in payload.get("citations") or payload.get("attempted_citations") or ():
+            final_mem_ids.add(str(citation))
+    caption_support_final = 0
+    visual_required_caption_final = 0
+    for memory in workspace.memory_entries():
+        if memory.entry_id not in final_mem_ids or memory.kind != "caption_support":
+            continue
+        caption_support_final = 1
+        if bool(memory.metadata.get("requires_visual_verify")) or bool(memory.metadata.get("cannot_final_cite")):
+            visual_required_caption_final = 1
+    return {
+        "option_biased_first_query": option_biased_first,
+        "wrong_scope_caption_facts": wrong_scope,
+        "caption_fact_downgrades": downgrades,
+        "caption_fact_observations": len(caption_facts),
+        "caption_support_final": caption_support_final,
+        "visual_required_but_caption_final": visual_required_caption_final,
+        "final_case": 1,
+    }
 
 
 def _evidence_provenance_completeness(workspaces: Sequence[EvidenceWorkspace]) -> float:

@@ -261,6 +261,9 @@ def test_workspace_v2_explore_can_return_caption_fact_and_final_citable_memory(t
     assert result["answer_mapping"]["opposes_options"] == ["B"]
     assert result["produced_anchors"][0]["anchor_id"] == "anch_caption_obs_0001_001"
     assert backend.requests[0].task == "explore_caption_reasoning"
+    assert "Original question:" in backend.requests[0].prompt
+    assert "Answer options:" in backend.requests[0].prompt
+    assert "The planner query is only a retrieval hint" in backend.requests[0].prompt
 
     observation = workspace.write_observation(
         tool_name="explore",
@@ -304,6 +307,218 @@ def test_workspace_v2_explore_can_return_caption_fact_and_final_citable_memory(t
     assert memory.metadata["source_tool"] == "explore"
     accepted = registry.execute("answer", {"text": "C", "citations": ["mem_0001"], "confidence": "medium"})
     assert accepted["accepted"] is True
+
+
+def test_workspace_v2_explore_downgrades_wrong_scope_caption_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_wrong_scope_caption")
+    backend = ExploreReasoningBackend(
+        {
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim": "Gypsies became enslaved in the Balkans as the Ottomans expanded.",
+            "confidence": 0.9,
+            "query_analysis": {"is_option_biased": True, "biased_toward_option": "B", "reason": "The query copies option B."},
+            "question_condition": {
+                "condition_text": "when the Gypsies migrated to Europe",
+                "condition_type": "temporal_event",
+                "required_focus": "the event at migration to Europe",
+            },
+            "condition_match": {
+                "matches_original_question": False,
+                "match_level": "related_but_wrong_scope",
+                "reason": "The caption discusses later Balkans slavery rather than the migration event.",
+            },
+            "answer_mapping": {
+                "supports_option": "B",
+                "opposes_options": [],
+                "reason": "Option B text matches but not the question condition.",
+            },
+            "facts": [
+                {
+                    "claim": "Gypsies became enslaved in the Balkans as the Ottomans expanded.",
+                    "source_kind": "dense_caption",
+                    "segment_id": "seg_0002",
+                    "time_range": [300.0, 600.0],
+                    "excerpt": "Later, many became enslaved in the Balkans as the Ottomans expanded territory.",
+                    "supports_option": "B",
+                }
+            ],
+            "anchors": [
+                {
+                    "source_kind": "dense_caption",
+                    "segment_id": "seg_0002",
+                    "time_range": [300.0, 600.0],
+                    "excerpt": "Later, many became enslaved in the Balkans as the Ottomans expanded territory.",
+                }
+            ],
+            "candidate_windows": [],
+            "needs_visual_verify": False,
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_gypsy_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "Gypsy migration to Europe and enslavement in the Balkans",
+            "original_question": (
+                "What happened when the Gypsies migrated to Europe?\n"
+                "A. They settled peacefully\nB. They became enslaved in the Balkans\n"
+                "C. They fought with Selic or Seljuk Turks\nD. They returned to India"
+            ),
+            "answer_options": {
+                "A": "They settled peacefully",
+                "B": "They became enslaved in the Balkans",
+                "C": "They fought with Selic or Seljuk Turks",
+                "D": "They returned to India",
+            },
+            "modalities": ["caption", "asr"],
+            "top_k": 4,
+        },
+    )
+
+    assert result["mode"] == "mixed"
+    assert result["support_status"] == "partial_caption_supported"
+    assert result["cannot_final_cite"] is True
+    assert result["needs_visual_verify"] is True
+    assert result["condition_match"]["matches_original_question"] is False
+    assert result["condition_match"]["match_level"] == "related_but_wrong_scope"
+    assert result["answer_mapping"]["supports_option"] is None
+    assert result["facts"][0]["supports_option"] is None
+
+
+def test_workspace_v2_explore_valid_caption_condition_can_commit_and_answer(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_valid_caption_condition")
+    backend = ExploreReasoningBackend(
+        {
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim": "When the Gypsies migrated to Europe, they fought with Selic/Seljuk Turks.",
+            "confidence": 0.82,
+            "query_analysis": {"is_option_biased": False, "biased_toward_option": None, "reason": "Question-centered query."},
+            "question_condition": {"condition_text": "when the Gypsies migrated to Europe", "condition_type": "temporal_event"},
+            "condition_match": {"matches_original_question": True, "match_level": "direct", "reason": "The caption answers the migration event."},
+            "answer_mapping": {"supports_option": "C", "opposes_options": ["B"], "reason": "Option C matches the condition."},
+            "facts": [
+                {
+                    "claim": "When the Gypsies migrated to Europe, they fought with Selic/Seljuk Turks.",
+                    "source_kind": "dense_caption",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 300.0],
+                    "excerpt": "When Gypsies migrated to Europe, they fought with Selic or Seljuk Turks.",
+                    "supports_option": "C",
+                }
+            ],
+            "anchors": [
+                {
+                    "source_kind": "dense_caption",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 300.0],
+                    "excerpt": "When Gypsies migrated to Europe, they fought with Selic or Seljuk Turks.",
+                }
+            ],
+            "needs_visual_verify": False,
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_gypsy_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "What happened when the Gypsies migrated to Europe?",
+            "original_question": "What happened when the Gypsies migrated to Europe?\nA. one\nB. slavery\nC. fought Seljuk Turks\nD. other",
+            "answer_options": {"A": "one", "B": "slavery", "C": "fought Seljuk Turks", "D": "other"},
+            "modalities": ["caption", "asr"],
+        },
+    )
+
+    assert result["mode"] == "caption_fact"
+    assert result["cannot_final_cite"] is False
+    assert result["answer_mapping"]["supports_option"] == "C"
+    observation = workspace.write_observation(tool_name="explore", claim=result["claim"], confidence=result["confidence"], raw_output=result)
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [result["produced_anchors"][0]],
+            "memory": [
+                {
+                    "kind": "caption_support",
+                    "claim": result["claim"],
+                    "anchor_ids": [result["produced_anchors"][0]["anchor_id"]],
+                    "supports_option": "C",
+                    "confidence": "medium",
+                }
+            ],
+        },
+    )
+    accepted = registry.execute("answer", {"text": "C", "citations": ["mem_0001"], "confidence": "medium"})
+    assert accepted["accepted"] is True
+
+
+def test_workspace_v2_explore_counting_caption_fact_requires_visual_verify(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_counting_caption_requires_visual")
+    backend = ExploreReasoningBackend(
+        {
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim": "The caption says there are two timeouts.",
+            "confidence": 0.9,
+            "condition_match": {"matches_original_question": True, "match_level": "direct", "reason": "Caption mentions a count."},
+            "answer_mapping": {"supports_option": "D", "opposes_options": [], "reason": "Count text matches option D."},
+            "facts": [{"claim": "There are two timeouts.", "source_kind": "dense_caption", "excerpt": "two timeouts", "supports_option": "D"}],
+            "anchors": [{"source_kind": "dense_caption", "excerpt": "two timeouts"}],
+            "needs_visual_verify": False,
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "How many timeouts did HUN call?",
+            "original_question": "How many timeouts did HUN call?\nA. 0\nB. 1\nC. 3\nD. 2",
+            "answer_options": {"A": "0", "B": "1", "C": "3", "D": "2"},
+            "modalities": ["caption"],
+        },
+    )
+
+    assert result["mode"] == "mixed"
+    assert result["cannot_final_cite"] is True
+    assert result["needs_visual_verify"] is True
+    assert result["answer_mapping"]["supports_option"] is None
+
+
+def test_workspace_v2_explore_rejects_empty_caption_fact(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_empty_caption_fact")
+    backend = ExploreReasoningBackend(
+        {
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim": "Hungary calls a timeout",
+            "confidence": 0.8,
+            "facts": [],
+            "anchors": [],
+            "condition_match": {"matches_original_question": True, "match_level": "direct"},
+            "answer_mapping": {"supports_option": "D"},
+            "needs_visual_verify": False,
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "Hungary calls a timeout",
+            "original_question": "How many timeouts did Hungary call?\nA. 0\nB. 1\nC. 2\nD. 3",
+            "modalities": ["caption"],
+        },
+    )
+
+    assert result["mode"] == "candidate_discovery"
+    assert result["support_status"] == "uncertain"
+    assert result["cannot_final_cite"] is True
+    assert result["needs_visual_verify"] is True
+    assert result["answer_mapping"]["supports_option"] is None
 
 
 def test_workspace_v2_answer_rejects_caption_support_when_visual_verify_required(tmp_path: Path) -> None:

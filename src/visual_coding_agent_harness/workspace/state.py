@@ -3515,6 +3515,20 @@ def _memory_commit_metadata(payload: Mapping[str, Any], *, observation: Observat
         raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
         metadata.setdefault("mode", str(raw_output.get("mode") or ""))
         metadata.setdefault("support_status", str(raw_output.get("support_status") or ""))
+        metadata.setdefault("cannot_final_cite", bool(raw_output.get("cannot_final_cite", False)))
+        metadata.setdefault("requires_visual_verify", bool(raw_output.get("needs_visual_verify", False)))
+        metadata.setdefault("task_type", str(raw_output.get("task_type") or ""))
+        condition_match = raw_output.get("condition_match")
+        if isinstance(condition_match, Mapping):
+            metadata.setdefault("condition_match", dict(condition_match))
+            metadata.setdefault("question_condition_match", bool(condition_match.get("matches_original_question")))
+            metadata.setdefault("condition_match_level", str(condition_match.get("match_level") or ""))
+        query_analysis = raw_output.get("query_analysis")
+        if isinstance(query_analysis, Mapping):
+            metadata.setdefault("query_analysis", dict(query_analysis))
+        question_condition = raw_output.get("question_condition")
+        if isinstance(question_condition, Mapping):
+            metadata.setdefault("question_condition", dict(question_condition))
         answer_mapping = raw_output.get("answer_mapping")
         if isinstance(answer_mapping, Mapping):
             metadata.setdefault("answer_mapping", dict(answer_mapping))

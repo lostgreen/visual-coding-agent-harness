@@ -11,6 +11,7 @@ from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..core.protocol import ToolRequest, ToolResult
 from ..core.registry import DuplicateGuardPolicy, ToolError, ToolRegistry
 from ..workspace import EvidenceWorkspace
+from ..workspace.open_questions import extract_candidate_options
 
 
 DISPOSITION_TOOLS = {
@@ -491,14 +492,17 @@ class WorkspaceVisualAgent:
         round_number: int,
         seen_tool_semantic_keys: set[str],
     ) -> tuple[str, ...]:
-        del question
         ctx = self._execution_context(
             round_number=round_number,
             seen_tool_semantic_keys=seen_tool_semantic_keys,
         )
+        tool_name = _tool_name(action)
+        action_args = _action_args(action)
+        if tool_name == "explore":
+            action_args = _with_original_question_context(action_args, question=question)
         request = self._normalize_tool_action(
-            _tool_name(action),
-            _action_args(action),
+            tool_name,
+            action_args,
             ctx=ctx,
             request_id="1",
         )
@@ -708,7 +712,16 @@ Use synthesize_memory only after Committed Memory contains verified or caption-s
 Use answer only after Committed Memory contains mem_* ids that directly support the answer.
 For questions with multiple factual requirements, pass multiple checks to verify_window when they belong to the same local window.
 Treat every verify_window result as scoped to its inspected time window. A local miss is not global absence.
-For multiple-choice questions, first explore the question condition before option-biased queries.
+Query Framing Policy:
+When calling explore, write the query as a verification question, not as a guessed answer.
+The query should preserve the original question condition: when, after, before, during, first, last, shown as, how many, what object, which action, or what event.
+The planner query is a retrieval hint. The original question defines what counts as evidence.
+For multiple-choice questions:
+1. Prefer a question-centered explore query first.
+2. Do not begin by copying terms from only one answer option unless your explicit goal is to test that option.
+3. If you test an option, phrase the target as: "Check whether option X answers the original question condition."
+4. Evidence that matches an option but does not answer the original question condition is not answer evidence.
+Task policy: counting, object presence, spatial relation, scoreboard/UI, fine visual action, and visual text questions require verify_window visual_support for final answers; caption_support alone is only eligible for narrative facts that match the original condition.
 For multiple-choice questions, answer text must be exactly one option letter: "A", "B", "C", or "D".
 Every answer call must include {"text": "A|B|C|D", "citations": ["mem_*"], "confidence": "..."}.
 If there is no committed memory, or if the last answer was rejected, choose an exploration tool instead of answer.
@@ -743,9 +756,13 @@ def compose_plan_prompt(
             "# Plan Protocol",
             "Return exactly one JSON object. Do not explain.",
             "Use Segment Cards as the starting navigation state. They are summaries only, not answer evidence.",
-            'To inspect dense captions/indexes or find candidate windows, call {"tool":"explore","args":{"query":"question-centered condition to resolve","targets":[{"target_id":"target_1","claim":"fact to locate or answer","aliases":[]}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
+            "Query Framing Policy: for the first explore call, ask the question the user asked; do not merge in a candidate answer unless explicitly checking that option.",
+            'To inspect dense captions/indexes or find candidate windows, call {"tool":"explore","args":{"query":"question-centered condition to resolve","targets":[{"target_id":"target_1","question":"question condition to verify","verification_goal":"identify the fact that directly answers the original question condition"}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
+            'When testing an option, use a target like {"target_id":"option_B_check","claim":"option B claim","verification_goal":"Check whether option B answers the original question condition.","option_id":"B"}.',
             'For answer-grade local evidence, call {"tool":"verify_window","args":{"candidate_key":"obs_0001:cand_0001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
             "Explore can return caption_fact, mixed, or candidate_discovery. Commit caption_fact/mixed caption facts; verify candidate-only windows before final.",
+            "Inspect explore condition_match and answer_mapping: if condition_match is false or unknown, do not answer from that memory.",
+            "For counting/object/spatial/scoreboard/fine-action/visual-text tasks, use caption/index evidence only for navigation; final citations need visual_support.",
             "If Pending Candidate Windows exist and no answer-support/caption-support memory exists, prefer verify_window over repeating similar explore.",
             "For MCQ, start with the question condition; map evidence to options only after evidence is retrieved.",
             'If Last Tool Result starts with "answer rejected", the next tool must be explore, verify_window, read_workspace, or synthesize_memory.',
@@ -767,6 +784,20 @@ def _synthesize_memory_availability(workspace: EvidenceWorkspace) -> str:
     if any(entry.kind in answer_supporting for entry in workspace.memory_entries()):
         return "synthesize_memory is available only for deriving from cited committed support memory."
     return "synthesize_memory is unavailable until committed support memory exists; first commit caption facts from explore or visual facts from verify_window."
+
+
+def _with_original_question_context(args: Mapping[str, Any], *, question: str) -> dict[str, Any]:
+    enriched = dict(args)
+    enriched.setdefault("original_question", str(question or ""))
+    if "answer_options" not in enriched and "options" not in enriched:
+        options: dict[str, str] = {}
+        for option in extract_candidate_options(str(question or "")):
+            text = str(option or "").strip()
+            if len(text) >= 3 and text[0].upper() in "ABCDEFGH" and text[1] in {".", ")"}:
+                options[text[0].upper()] = text[2:].strip()
+        if options:
+            enriched["answer_options"] = options
+    return enriched
 
 
 def compose_commit_prompt(
@@ -1291,6 +1322,9 @@ def _caption_fact_writes(
     anchor_ids = [anchor_id for anchor_id in anchor_ids if anchor_id]
     default_anchor_id = anchor_ids[0] if anchor_ids else ""
     answer_mapping = raw_output.get("answer_mapping") if isinstance(raw_output.get("answer_mapping"), Mapping) else {}
+    condition_match = raw_output.get("condition_match") if isinstance(raw_output.get("condition_match"), Mapping) else {}
+    query_analysis = raw_output.get("query_analysis") if isinstance(raw_output.get("query_analysis"), Mapping) else {}
+    question_condition = raw_output.get("question_condition") if isinstance(raw_output.get("question_condition"), Mapping) else {}
     memory: list[dict[str, Any]] = []
     for index, fact in enumerate(facts):
         claim = str(fact.get("claim") or fact.get("text") or fact.get("excerpt") or "").strip()
@@ -1314,7 +1348,15 @@ def _caption_fact_writes(
             "auto_pin_reason": reason,
             "mode": mode,
             "support_status": support_status,
+            "cannot_final_cite": bool(raw_output.get("cannot_final_cite", False)),
             "requires_visual_verify": bool(raw_output.get("needs_visual_verify") or fact.get("needs_visual_verify")),
+            "task_type": str(raw_output.get("task_type") or ""),
+            "condition_match": dict(condition_match),
+            "question_condition_match": bool(condition_match.get("matches_original_question")) if condition_match else False,
+            "condition_match_level": str(condition_match.get("match_level") or ""),
+            "query_analysis": dict(query_analysis),
+            "question_condition": dict(question_condition),
+            "answer_mapping": dict(answer_mapping),
             "source_kind": str(fact.get("source_kind") or ""),
         }
         scope = _caption_fact_scope(fact)

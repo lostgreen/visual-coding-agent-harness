@@ -63,6 +63,8 @@ def build_workspace_v2_registry(
         top_k: int = 8,
         window_sec: float = 20.0,
         purpose: str = "candidate_discovery",
+        original_question: str = "",
+        answer_options: Mapping[str, Any] | Sequence[str] | None = None,
     ) -> Mapping[str, object]:
         return segment_read_service.explore(
             query=query,
@@ -72,6 +74,8 @@ def build_workspace_v2_registry(
             top_k=top_k,
             window_sec=window_sec,
             purpose=purpose,
+            original_question=original_question,
+            answer_options=answer_options or {},
         )
 
     @tool(name="read_segment", description="Progressively read a video segment index, refinement, or verified evidence.")
@@ -462,9 +466,13 @@ class SegmentReadService:
         top_k: int,
         window_sec: float,
         purpose: str,
+        original_question: str = "",
+        answer_options: Mapping[str, Any] | Sequence[str] | None = None,
     ) -> Mapping[str, object]:
         current = self.video_map_store.current
         normalized_targets = _normalize_explore_targets(targets)
+        original_question = str(original_question or "").strip()
+        normalized_options = _normalize_answer_options(answer_options)
         scope_filter = dict(scope or {})
         top_k = max(1, min(16, int(top_k or 8)))
         source_observation_id = _predicted_source_observation_id(self.workspace)
@@ -548,10 +556,16 @@ class SegmentReadService:
             caption_hits=caption_hits,
             candidate_windows=candidate_windows,
             source_observation_id=source_observation_id,
+            original_question=original_question,
+            answer_options=normalized_options,
         )
         if reasoning is not None:
             mode = str(reasoning.get("mode") or "").strip()
             facts = _normalize_caption_facts(reasoning.get("facts"))
+            answer_mapping = _normalize_answer_mapping(reasoning.get("answer_mapping"))
+            query_analysis = _normalize_query_analysis(reasoning.get("query_analysis"), query=search_query, answer_options=normalized_options)
+            question_condition = _normalize_question_condition(reasoning.get("question_condition"), original_question=original_question)
+            condition_match = _normalize_condition_match(reasoning.get("condition_match"), default_matches=not bool(original_question))
             caption_anchors = _normalize_caption_anchors(
                 reasoning.get("anchors"),
                 facts=facts,
@@ -577,21 +591,25 @@ class SegmentReadService:
                     or ("caption_supported" if mode == "caption_fact" else "partial_caption_supported")
                 )
                 claim = str(reasoning.get("claim") or _caption_fact_claim(facts) or "Explore found caption-level evidence.").strip()
-                return {
+                payload = {
                     "claim": claim,
                     "confidence": _bounded_confidence(reasoning.get("confidence"), default=0.72),
                     "mode": mode,
                     "support_status": support_status,
-                    "cannot_final_cite": False,
                     "needs_visual_verify": bool(reasoning.get("needs_visual_verify", mode == "mixed")),
                     "purpose": str(purpose or "caption_reasoning"),
                     "query": search_query,
+                    "original_question": original_question,
+                    "answer_options": normalized_options,
                     "targets": normalized_targets,
                     "scope": scope_filter,
                     "modalities_used": list(resolved_modalities),
                     "facts": facts,
                     "anchors": caption_anchors,
-                    "answer_mapping": _normalize_answer_mapping(reasoning.get("answer_mapping")),
+                    "query_analysis": query_analysis,
+                    "question_condition": question_condition,
+                    "condition_match": condition_match,
+                    "answer_mapping": answer_mapping,
                     "candidate_windows": candidate_payload,
                     "regions": [*caption_anchors, *candidate_payload],
                     "produced_anchors": produced_anchors,
@@ -599,6 +617,7 @@ class SegmentReadService:
                     "limitations": str(reasoning.get("limitations") or "Caption/index reasoning only; no new visual verification was performed."),
                     "raw": {"explore_reasoning": reasoning, "caption_hits": caption_hits},
                 }
+                return _validated_caption_explore_payload(payload)
         return {
             "claim": f"Explore found {len(candidate_windows)} candidate window(s) for verification.",
             "confidence": 0.85 if candidate_windows else 0.2,
@@ -607,6 +626,8 @@ class SegmentReadService:
             "mode": "candidate_discovery",
             "purpose": str(purpose or "candidate_discovery"),
             "query": search_query,
+            "original_question": original_question,
+            "answer_options": normalized_options,
             "targets": normalized_targets,
             "scope": scope_filter,
             "modalities_used": list(resolved_modalities),
@@ -614,6 +635,9 @@ class SegmentReadService:
             "regions": candidate_windows,
             "facts": [],
             "anchors": [],
+            "query_analysis": _normalize_query_analysis({}, query=search_query, answer_options=normalized_options),
+            "question_condition": _normalize_question_condition({}, original_question=original_question),
+            "condition_match": {"matches_original_question": False, "match_level": "unknown", "reason": "Candidate discovery requires verification."},
             "answer_mapping": {"supports_option": None, "opposes_options": [], "reason": None},
             "needs_visual_verify": True,
             "produced_anchors": candidate_anchors,
@@ -1316,6 +1340,8 @@ def _run_explore_caption_reasoning(
     caption_hits: Sequence[Mapping[str, object]],
     candidate_windows: Sequence[Mapping[str, object]],
     source_observation_id: str,
+    original_question: str = "",
+    answer_options: Mapping[str, str] | None = None,
 ) -> dict[str, Any] | None:
     if not caption_hits:
         return None
@@ -1324,6 +1350,8 @@ def _run_explore_caption_reasoning(
         targets=targets,
         caption_hits=caption_hits,
         candidate_windows=candidate_windows,
+        original_question=original_question,
+        answer_options=answer_options or {},
     )
     response = backend.generate(
         BackendRequest(
@@ -1359,15 +1387,26 @@ def _explore_caption_reasoning_prompt(
     targets: Sequence[Mapping[str, object]],
     caption_hits: Sequence[Mapping[str, object]],
     candidate_windows: Sequence[Mapping[str, object]],
+    original_question: str = "",
+    answer_options: Mapping[str, str] | None = None,
 ) -> str:
     return (
         "You are the explore subagent. Use only dense captions, ASR, OCR, and index summaries below. "
         "Do not use outside knowledge and do not inspect video frames. "
-        "Decide whether the planner query can be answered at caption/index level, or whether candidate windows need verify_window.\n"
+        "Decide whether the original question can be answered at caption/index level, or whether candidate windows need verify_window.\n"
+        "The planner query is only a retrieval hint. The original question defines what counts as answer evidence.\n"
+        "Before returning caption_fact, check whether the fact directly answers the original question condition, "
+        "whether it is merely related background, and whether it belongs to a later or earlier event than the one asked.\n"
+        "For multiple-choice questions, determine whether the planner query is option-biased. "
+        "Do not return caption_supported merely because a caption matches one option; it must also satisfy the original question condition.\n"
         "Return exactly one JSON object with keys: mode, support_status, claim, confidence, facts, anchors, "
-        "candidate_windows, answer_mapping, needs_visual_verify, limitations.\n"
+        "candidate_windows, query_analysis, question_condition, condition_match, answer_mapping, needs_visual_verify, cannot_final_cite, limitations.\n"
         "Allowed mode values: caption_fact, candidate_discovery, mixed. "
         "Allowed support_status values: caption_supported, partial_caption_supported, candidate_only, uncertain, not_found.\n\n"
+        f"Original question: {original_question}\n"
+        "Answer options:\n"
+        + json.dumps(dict(answer_options or {}), ensure_ascii=False)
+        + "\n"
         f"Planner query: {query}\n"
         "Targets:\n"
         + json.dumps(list(targets), ensure_ascii=False)
@@ -1519,9 +1558,246 @@ def _normalize_answer_mapping(value: Any) -> dict[str, object]:
     payload = dict(value or {}) if isinstance(value, Mapping) else {}
     return {
         "supports_option": str(payload.get("supports_option") or "").strip() or None,
+        "neutral_options": [str(option).strip() for option in _sequence_items(payload.get("neutral_options")) if str(option).strip()],
         "opposes_options": [str(option).strip() for option in _sequence_items(payload.get("opposes_options")) if str(option).strip()],
         "reason": str(payload.get("reason") or "").strip() or None,
     }
+
+
+def _normalize_answer_options(value: Mapping[str, Any] | Sequence[str] | None) -> dict[str, str]:
+    if isinstance(value, Mapping):
+        return {str(key).strip().upper()[:1]: str(item).strip() for key, item in value.items() if str(key).strip() and str(item).strip()}
+    options: dict[str, str] = {}
+    for index, item in enumerate(_sequence_items(value), start=1):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if len(text) >= 2 and text[0].upper() in "ABCDEFGH" and text[1] in {".", ")"}:
+            options[text[0].upper()] = text[2:].strip()
+        else:
+            options[chr(ord("A") + len(options))] = text
+    return options
+
+
+def _normalize_query_analysis(value: Any, *, query: str, answer_options: Mapping[str, str]) -> dict[str, object]:
+    payload = dict(value or {}) if isinstance(value, Mapping) else {}
+    biased = payload.get("is_option_biased")
+    biased_option = str(payload.get("biased_toward_option") or "").strip().upper()[:1] or None
+    if biased is None:
+        biased_option = _query_biased_toward_option(query, answer_options)
+        biased = bool(biased_option)
+    return {
+        "is_option_biased": bool(biased),
+        "biased_toward_option": biased_option,
+        "reason": str(payload.get("reason") or ("Query overlaps mostly with one answer option." if biased else "No strong option-only bias detected.")).strip() or None,
+    }
+
+
+def _normalize_question_condition(value: Any, *, original_question: str) -> dict[str, object]:
+    payload = dict(value or {}) if isinstance(value, Mapping) else {}
+    return {
+        "condition_text": str(payload.get("condition_text") or _question_condition_text(original_question) or "").strip() or None,
+        "condition_type": str(payload.get("condition_type") or _condition_type(original_question) or "").strip() or None,
+        "required_focus": str(payload.get("required_focus") or "").strip() or None,
+    }
+
+
+def _normalize_condition_match(value: Any, *, default_matches: bool = False) -> dict[str, object]:
+    payload = dict(value or {}) if isinstance(value, Mapping) else {}
+    match_level = str(payload.get("match_level") or "unknown").strip()
+    if match_level not in {"direct", "related", "related_but_wrong_scope", "contradiction", "unknown"}:
+        match_level = "unknown"
+    if default_matches and not payload:
+        match_level = "direct"
+    return {
+        "matches_original_question": bool(payload.get("matches_original_question")) if "matches_original_question" in payload else bool(default_matches),
+        "match_level": match_level,
+        "reason": str(payload.get("reason") or "").strip() or None,
+    }
+
+
+def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, object]:
+    result = dict(payload)
+    facts = [dict(item) for item in _mapping_items(result.get("facts"))]
+    anchors = [dict(item) for item in _mapping_items(result.get("anchors"))]
+    produced_anchors = [dict(item) for item in _mapping_items(result.get("produced_anchors"))]
+    answer_mapping = _normalize_answer_mapping(result.get("answer_mapping"))
+    condition_match = _normalize_condition_match(result.get("condition_match"))
+    query_analysis = _normalize_query_analysis(
+        result.get("query_analysis"),
+        query=str(result.get("query") or ""),
+        answer_options=_normalize_answer_options(result.get("answer_options") if isinstance(result.get("answer_options"), Mapping) else {}),
+    )
+    original_question = str(result.get("original_question") or "").strip()
+    task_type = _task_type_for_question(original_question or str(result.get("query") or ""))
+    visual_required = _task_requires_visual_verification(task_type)
+    grounded = _caption_fact_is_grounded(result, facts=facts, anchors=anchors, produced_anchors=produced_anchors)
+    condition_ok = bool(condition_match.get("matches_original_question")) and str(condition_match.get("match_level") or "") == "direct"
+
+    if not grounded:
+        result.update(
+            {
+                "mode": "candidate_discovery",
+                "support_status": "uncertain",
+                "cannot_final_cite": True,
+                "needs_visual_verify": True,
+                "facts": [],
+                "anchors": [],
+                "produced_anchors": candidate_anchors_for_windows(_mapping_items(result.get("candidate_windows"))),
+                "answer_mapping": _clear_answer_support(answer_mapping, reason="Caption fact downgraded because it lacks grounded facts/anchors."),
+                "condition_match": condition_match,
+                "query_analysis": query_analysis,
+                "task_type": task_type,
+                "caption_fact_downgraded": True,
+            }
+        )
+        return result
+
+    if not condition_ok or visual_required:
+        result["mode"] = "mixed"
+        result["support_status"] = "partial_caption_supported"
+        result["cannot_final_cite"] = True
+        result["needs_visual_verify"] = True
+        answer_mapping = _clear_answer_support(
+            answer_mapping,
+            reason=(
+                "Option match removed because evidence does not satisfy original question condition."
+                if not condition_ok
+                else f"Task type {task_type} requires visual verification."
+            ),
+        )
+        for fact in facts:
+            fact["supports_option"] = None
+        result["facts"] = facts
+        result["caption_fact_downgraded"] = True
+    else:
+        result["cannot_final_cite"] = False
+        result["needs_visual_verify"] = bool(result.get("needs_visual_verify", False))
+        result["caption_fact_downgraded"] = False
+
+    if query_analysis.get("is_option_biased") and not condition_ok:
+        answer_mapping = _clear_answer_support(answer_mapping, reason="Option-biased query cannot support an answer without direct condition match.")
+        result["cannot_final_cite"] = True
+        result["needs_visual_verify"] = True
+    if query_analysis.get("is_option_biased"):
+        result["confidence"] = min(float(result.get("confidence") or 0.0), 0.74)
+    if answer_mapping.get("supports_option") and not condition_ok:
+        answer_mapping = _clear_answer_support(answer_mapping, reason="Option match removed because evidence does not satisfy original question condition.")
+    result["answer_mapping"] = answer_mapping
+    result["condition_match"] = condition_match
+    result["query_analysis"] = query_analysis
+    result["task_type"] = task_type
+    return result
+
+
+def _caption_fact_is_grounded(
+    payload: Mapping[str, Any],
+    *,
+    facts: Sequence[Mapping[str, Any]],
+    anchors: Sequence[Mapping[str, Any]],
+    produced_anchors: Sequence[Mapping[str, Any]],
+) -> bool:
+    claim = str(payload.get("claim") or "").strip()
+    query = str(payload.get("query") or "").strip()
+    if claim and query and _norm_text(claim) == _norm_text(query):
+        return False
+    if not facts and not anchors and not produced_anchors:
+        return False
+    for item in [*facts, *anchors, *produced_anchors]:
+        if str(item.get("excerpt") or item.get("claim") or item.get("text") or "").strip():
+            return True
+        if item.get("time_range") is not None or item.get("segment_id") is not None:
+            return True
+    return False
+
+
+def _clear_answer_support(answer_mapping: Mapping[str, object], *, reason: str) -> dict[str, object]:
+    mapping = dict(answer_mapping)
+    existing_reason = str(mapping.get("reason") or "").strip()
+    mapping["supports_option"] = None
+    mapping["reason"] = (existing_reason + " " + reason).strip() if existing_reason else reason
+    return mapping
+
+
+def _query_biased_toward_option(query: str, answer_options: Mapping[str, str]) -> str | None:
+    query_tokens = set(_word_tokens(query))
+    if not query_tokens or not answer_options:
+        return None
+    scores: list[tuple[str, int]] = []
+    for option, text in answer_options.items():
+        tokens = set(_word_tokens(text))
+        scores.append((option, len(query_tokens & tokens)))
+    scores.sort(key=lambda item: item[1], reverse=True)
+    if not scores or scores[0][1] < 2:
+        return None
+    runner_up = scores[1][1] if len(scores) > 1 else 0
+    if scores[0][1] >= runner_up + 2:
+        return scores[0][0]
+    return None
+
+
+def _question_condition_text(question: str) -> str:
+    lines = str(question or "").splitlines()
+    text = lines[0].strip() if lines else ""
+    if not text:
+        return ""
+    lower = text.lower()
+    for marker in ("when ", "after ", "before ", "during ", "shown as ", "how many ", "what object ", "which action ", "what event "):
+        index = lower.find(marker)
+        if index >= 0:
+            return text[index:].rstrip(" ?")
+    return text.rstrip(" ?")
+
+
+def _condition_type(question: str) -> str:
+    lower = str(question or "").lower()
+    if any(term in lower for term in ("how many", "number of", "count")):
+        return "counting"
+    if any(term in lower for term in ("when", "after", "before", "during", "first", "last")):
+        return "temporal_event"
+    if any(term in lower for term in ("where", "left", "right", "above", "below", "between")):
+        return "spatial_relation"
+    return "narrative_fact"
+
+
+def _task_type_for_question(question: str) -> str:
+    lower = str(question or "").lower()
+    if any(term in lower for term in ("how many", "number of", "count")):
+        return "counting"
+    if any(term in lower for term in ("order", "sequence", "first", "last", "before", "after")):
+        return "ordering"
+    if any(term in lower for term in ("visible", "appears", "object", "which item")):
+        return "object_presence"
+    if any(term in lower for term in ("where", "left", "right", "above", "below", "next to")):
+        return "spatial_relation"
+    if any(term in lower for term in ("score", "scoreboard", "ui", "screen text")):
+        return "scoreboard"
+    if any(term in lower for term in ("read", "text", "ocr", "word")):
+        return "visual_text"
+    if any(term in lower for term in ("action", "gesture", "move", "opens", "closes")):
+        return "fine_action"
+    return "mcq_narrative_fact" if _normalize_answer_options_from_question(question) else "narrative_fact"
+
+
+def _task_requires_visual_verification(task_type: str) -> bool:
+    return task_type in {"counting", "object_presence", "spatial_relation", "scoreboard", "fine_action", "visual_text"}
+
+
+def _normalize_answer_options_from_question(question: str) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for line in str(question or "").splitlines():
+        stripped = line.strip()
+        if len(stripped) >= 3 and stripped[0].upper() in "ABCDEFGH" and stripped[1] in {".", ")"}:
+            options[stripped[0].upper()] = stripped[2:].strip()
+    return options
+
+
+def _word_tokens(text: str) -> list[str]:
+    return [token for token in _norm_text(text).split() if len(token) > 2]
+
+
+def _norm_text(text: str) -> str:
+    return " ".join("".join(ch.lower() if ch.isalnum() else " " for ch in str(text or "")).split())
 
 
 def _caption_source_kind(value: Any) -> str:
@@ -2110,6 +2386,8 @@ def _normalize_workspace_v2_explore(_ctx: Any, request: Any) -> Mapping[str, Any
         "top_k": int(args.get("top_k") or args.get("max_candidates") or 8),
         "window_sec": float(args.get("window_sec") or args.get("window_seconds") or 20.0),
         "purpose": str(args.get("purpose") or "candidate_discovery"),
+        "original_question": str(args.get("original_question") or ""),
+        "answer_options": args.get("answer_options") or args.get("options") or {},
     }
 
 
@@ -2257,10 +2535,29 @@ def _invalid_final_citation_provenance(
     if entry.kind == "caption_support":
         if source_tool != "explore":
             return f"final citation {entry.entry_id} must come from explore caption provenance"
+        if _truthy(metadata.get("cannot_final_cite")):
+            return f"final citation {entry.entry_id} is marked non-final-citable"
         if _truthy(metadata.get("requires_visual_verify")):
             return f"final citation {entry.entry_id} requires visual verification"
+        if str(metadata.get("task_type") or "") in {"counting", "object_presence", "spatial_relation", "scoreboard", "fine_action", "visual_text"}:
+            return f"final citation {entry.entry_id} task requires visual_support"
+        condition_match = metadata.get("condition_match")
+        if isinstance(condition_match, Mapping):
+            if not bool(condition_match.get("matches_original_question")):
+                return f"final citation {entry.entry_id} does not match the original question condition"
+            if str(condition_match.get("match_level") or "") != "direct":
+                return f"final citation {entry.entry_id} is not a direct condition match"
+        elif "question_condition_match" in metadata and not _truthy(metadata.get("question_condition_match")):
+            return f"final citation {entry.entry_id} does not match the original question condition"
+        elif "question_condition_match" not in metadata:
+            return f"final citation {entry.entry_id} lacks condition-match provenance"
+        if entry.supports_option is None:
+            answer_mapping = metadata.get("answer_mapping")
+            mapped_option = answer_mapping.get("supports_option") if isinstance(answer_mapping, Mapping) else None
+            if not str(mapped_option or "").strip():
+                return f"final citation {entry.entry_id} lacks explicit option support"
         support_status = str(metadata.get("support_status") or "").strip()
-        if support_status and support_status not in {"caption_supported", "partial_caption_supported"}:
+        if support_status != "caption_supported":
             return f"final citation {entry.entry_id} has non-caption support status {support_status}"
         return ""
     if entry.kind == "visual_support":

@@ -122,6 +122,8 @@ class ExploreCaptionFallbackBackend(VisionLanguageBackend):
                     '"facts":[],'
                     '"anchors":[{"source_kind":"asr","segment_id":"seg_0001","time_range":[0,60],'
                     '"excerpt":"Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe."}],'
+                    '"condition_match":{"matches_original_question":true,"match_level":"direct",'
+                    '"reason":"The ASR directly answers why Austria-Hungary is between Russia and Western Europe."},'
                     '"answer_mapping":{"supports_option":"C"},"needs_visual_verify":false}'
                 )
             )
@@ -824,6 +826,12 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert "duplicate_tool_call" in prompt
     assert "do not repeat the same semantic request" in prompt
     assert "candidate_key" in prompt
+    assert "Query Framing Policy" in PLAN_SYSTEM_PROMPT
+    assert "write the query as a verification question" in PLAN_SYSTEM_PROMPT
+    assert "The original question defines what counts as evidence" in PLAN_SYSTEM_PROMPT
+    assert "Check whether option X answers the original question condition" in PLAN_SYSTEM_PROMPT
+    assert "Do not begin by copying terms from only one answer option" in PLAN_SYSTEM_PROMPT
+    assert "question-centered condition" in prompt
     assert '"text":"D"' not in prompt
     assert '"text":"A"' not in prompt
 

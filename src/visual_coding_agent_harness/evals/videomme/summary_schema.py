@@ -44,6 +44,11 @@ class RunSummary:
     timeline_completeness: float
     degenerate_observation_rate: float
     normalization_notes_per_round: float
+    option_biased_first_query_rate: float
+    wrong_scope_caption_fact_rate: float
+    caption_fact_downgrade_rate: float
+    caption_support_final_rate: float
+    visual_required_but_caption_final_rate: float
 
     # diagnostics
     route_violations: int
@@ -80,6 +85,11 @@ class RunSummary:
             timeline_completeness=0.0,
             degenerate_observation_rate=0.0,
             normalization_notes_per_round=0.0,
+            option_biased_first_query_rate=0.0,
+            wrong_scope_caption_fact_rate=0.0,
+            caption_fact_downgrade_rate=0.0,
+            caption_support_final_rate=0.0,
+            visual_required_but_caption_final_rate=0.0,
             route_violations=0,
             nframes_histogram={},
             map_reflux_commit_count=0,
