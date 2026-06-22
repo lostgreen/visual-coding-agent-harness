@@ -52,7 +52,9 @@ def build_video_exploration_registry(
         )
     )
     registry.extend(build_timeline_registry(workspace=workspace))
-    registry.extend(build_workspace_primitives_registry(workspace=workspace, include=("all",)))
+    # workspace_v2 owns the planner-visible read_workspace tool. Keep the legacy
+    # exploration harness's commit/internal primitives without double-registering it.
+    registry.extend(build_workspace_primitives_registry(workspace=workspace, include=("commit", "internal")))
     registry.extend(
         build_workspace_v2_registry(
             video_map=video_map_store,

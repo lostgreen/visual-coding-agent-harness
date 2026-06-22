@@ -19,14 +19,8 @@ from ..video.map import (
 from ..workspace import EvidenceWorkspace
 from .frame_cache import FrameSampler
 from .tool_specs import (
-    _normalize_read_clip,
-    _normalize_read_segment,
-    _read_segment_semantic_key,
     _normalize_workspace_v2_answer,
-    _normalize_workspace_v2_list,
-    _normalize_workspace_v2_search,
     _normalize_workspace_v2_synthesize_memory,
-    _normalize_workspace_v2_verify,
 )
 from .workspace_primitives import build_workspace_primitives_registry
 
@@ -45,7 +39,7 @@ def build_workspace_v2_registry(
     index_refiner: IndexRefiner | None = None,
     frame_sampler: FrameSampler | None = None,
 ) -> ToolRegistry:
-    """Build the compact v2 registry: read_clip/search/list/verify/answer plus dispositions."""
+    """Build the compact v2 registry: explore -> verify_window -> memory -> answer."""
 
     video_map_store = video_map if isinstance(video_map, VideoMapStore) else VideoMapStore(video_map)
     artifact_root = workspace.root / "artifacts" / "index_refinement" if workspace is not None else None
@@ -57,6 +51,26 @@ def build_workspace_v2_registry(
         workspace=workspace,
     )
     registry = ToolRegistry()
+
+    @tool(name="explore", description="Find candidate windows from the video index. Navigation only; never answer evidence.")
+    def explore(
+        query: str = "",
+        targets: Sequence[Mapping[str, Any] | str] = (),
+        scope: Mapping[str, Any] | None = None,
+        modalities: str | Sequence[str] = (),
+        top_k: int = 8,
+        window_sec: float = 20.0,
+        purpose: str = "candidate_discovery",
+    ) -> Mapping[str, object]:
+        return segment_read_service.explore(
+            query=query,
+            targets=targets,
+            scope=scope or {},
+            modalities=_modalities_arg(modalities),
+            top_k=top_k,
+            window_sec=window_sec,
+            purpose=purpose,
+        )
 
     @tool(name="read_segment", description="Progressively read a video segment index, refinement, or verified evidence.")
     def read_segment(
@@ -105,7 +119,9 @@ def build_workspace_v2_registry(
 
     @tool(name="verify_window", description="Ask an EvidenceVerifier worker to read one candidate window and return local facts with anchors.")
     def verify_window(
+        candidate_key: str = "",
         candidate_id: str = "",
+        source_observation_id: str = "",
         segment_id: str = "",
         time_range: Sequence[float] | Mapping[str, float] | None = None,
         evidence_mode: str = "multimodal",
@@ -115,7 +131,9 @@ def build_workspace_v2_registry(
         sampling: Mapping[str, Any] | None = None,
     ) -> Mapping[str, object]:
         return segment_read_service.verify_window(
+            candidate_key=candidate_key,
             candidate_id=candidate_id,
+            source_observation_id=source_observation_id,
             segment_id=segment_id,
             time_range=time_range,
             evidence_mode=evidence_mode,
@@ -124,6 +142,17 @@ def build_workspace_v2_registry(
             verification_targets=verification_targets,
             sampling=sampling,
         )
+
+    @tool(name="read_workspace", description="Read a bounded section from the durable workspace.")
+    def read_workspace(section: str, filter: Mapping[str, Any] | None = None) -> Mapping[str, object]:
+        rows = workspace.read_workspace_section(section, filter=filter or {}) if workspace is not None else []
+        return {
+            "claim": f"Read {len(rows)} row(s) from workspace section {section}.",
+            "confidence": 1.0,
+            "items": rows,
+            "regions": [{"section": section, "rows": rows, "observations": rows if section == "observations_by_id" else []}],
+            "limitations": "Cheap workspace read; no video frames inspected.",
+        }
 
     @tool(name="read_clip", description="Read facts from a video clip without choosing an answer option.")
     def read_clip(
@@ -313,6 +342,7 @@ def build_workspace_v2_registry(
             role="planner",
             layer="derived",
             metadata={
+                "source_tool": "synthesize_memory",
                 "tool": "synthesize_memory",
                 "supports": support_ids,
                 "derived_from": derived_ids,
@@ -350,63 +380,33 @@ def build_workspace_v2_registry(
             "limitations": "Final answer cites committed planner-authored workspace memory.",
         }
 
+    # workspace_v2 intentionally exposes a small planner tool surface:
+    # explore -> verify_window -> memory -> answer. Legacy read_clip/read_segment/
+    # search/scan_segment/verify tools are not registered on the active planner path.
     registry.register(
         ToolRuntimeSpec(
-            tool_spec=read_segment,
-            argument_normalizer=_normalize_read_segment,
-            semantic_key_builder=_read_segment_semantic_key,
+            tool_spec=explore,
+            argument_normalizer=_normalize_workspace_v2_explore,
+            semantic_key_builder=_canonical_tool_key("explore"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
-            commit_required_predicate=_read_segment_verify_has_evidence,
-        )
-    )
-    registry.register(
-        ToolRuntimeSpec(
-            tool_spec=scan_segment,
-            semantic_key_builder=_static_key("scan_segment"),
-            duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
+            commit_required_predicate=_explore_has_candidates,
         )
     )
     registry.register(
         ToolRuntimeSpec(
             tool_spec=verify_window,
-            semantic_key_builder=_static_key("verify_window"),
+            argument_normalizer=_normalize_workspace_v2_verify_window,
+            semantic_key_builder=_canonical_tool_key("verify_window"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
             commit_required=True,
         )
     )
     registry.register(
         ToolRuntimeSpec(
-            tool_spec=read_clip,
-            argument_normalizer=_normalize_read_clip,
-            semantic_key_builder=_static_key("read_clip"),
+            tool_spec=read_workspace,
+            argument_normalizer=_normalize_workspace_v2_read_workspace,
+            semantic_key_builder=_canonical_tool_key("read_workspace"),
             duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
-            commit_required=True,
-        )
-    )
-    registry.register(
-        ToolRuntimeSpec(
-            tool_spec=search,
-            argument_normalizer=_normalize_workspace_v2_search,
-            semantic_key_builder=_static_key("search"),
-            duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
-            commit_required_predicate=_search_has_evidence,
-        )
-    )
-    registry.register(
-        ToolRuntimeSpec(
-            tool_spec=list_tool,
-            argument_normalizer=_normalize_workspace_v2_list,
-            semantic_key_builder=_static_key("list"),
-            duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
-        )
-    )
-    registry.register(
-        ToolRuntimeSpec(
-            tool_spec=verify,
-            argument_normalizer=_normalize_workspace_v2_verify,
-            semantic_key_builder=_static_key("verify"),
-            duplicate_guard_policy=DuplicateGuardPolicy.STRICT,
-            commit_required_predicate=_verify_has_rejection_evidence,
         )
     )
     registry.register(
@@ -425,7 +425,7 @@ def build_workspace_v2_registry(
         )
     )
     if include_workspace_primitives:
-        registry.extend(build_workspace_primitives_registry(workspace=workspace))
+        registry.extend(build_workspace_primitives_registry(workspace=workspace, include=("commit",)))
     return registry
 
 
@@ -448,6 +448,112 @@ class SegmentReadService:
             _root_segment_id(segment)
             for segment in self.video_map_store.current.segments
             if getattr(segment, "index_level", "root") == "root"
+        }
+
+    def explore(
+        self,
+        *,
+        query: str,
+        targets: Sequence[Mapping[str, Any] | str],
+        scope: Mapping[str, Any],
+        modalities: Sequence[str],
+        top_k: int,
+        window_sec: float,
+        purpose: str,
+    ) -> Mapping[str, object]:
+        current = self.video_map_store.current
+        normalized_targets = _normalize_explore_targets(targets)
+        scope_filter = dict(scope or {})
+        top_k = max(1, min(16, int(top_k or 8)))
+        source_observation_id = _predicted_source_observation_id(self.workspace)
+        resolved_modalities = _resolve_search_modalities(_explore_search_modalities(modalities))
+        search_query = str(query or "").strip() or " ".join(str(target.get("claim") or "") for target in normalized_targets)
+        search_results = list(current.search(query=search_query, top_k=top_k, modalities=resolved_modalities))
+        if scope_filter:
+            search_results = [
+                result
+                for result in search_results
+                if _segment_matches_scope(result.segment, scope_filter)
+            ]
+        segments = [result.segment for result in search_results]
+        if not segments:
+            segments = [
+                segment
+                for segment in current.segments
+                if getattr(segment, "index_level", "root") == "root" and _segment_matches_scope(segment, scope_filter)
+            ][:top_k]
+        result_by_segment = {result.segment.segment_id: result for result in search_results}
+        candidate_windows: list[dict[str, object]] = []
+        anchors: list[dict[str, object]] = []
+        for segment in segments:
+            if len(candidate_windows) >= top_k:
+                break
+            result = result_by_segment.get(segment.segment_id)
+            index = len(candidate_windows) + 1
+            time_range = _explore_time_range(segment, window_sec=window_sec)
+            candidate_id = f"cand_{index:04d}"
+            candidate_key = f"{source_observation_id}:{candidate_id}"
+            match = _first_match(result.to_dict()) if result is not None else {}
+            matched_terms = [str(item) for item in _sequence_items(match.get("matched_terms")) if str(item)]
+            source_modalities = _unique_nonempty(
+                [
+                    str(match.get("modality") or ""),
+                    *([_first_modality(result.matched_fields)] if result is not None else []),
+                    *resolved_modalities,
+                ]
+            )
+            matched_target_ids = _matched_target_ids(segment, matched_terms=matched_terms, targets=normalized_targets)
+            rationale = str(result.relevance_reason if result is not None else "").strip()
+            if not rationale:
+                rationale = "Scoped index window selected for verification."
+            candidate = {
+                "candidate_key": candidate_key,
+                "candidate_id": candidate_id,
+                "source_observation_id": source_observation_id,
+                "segment_id": segment.segment_id,
+                "time_range": time_range,
+                "start_sec": time_range[0],
+                "end_sec": time_range[1],
+                "matched_targets": matched_target_ids,
+                "matched_terms": matched_terms,
+                "source_modalities": source_modalities,
+                "source_beat_ids": _beat_ids_for_window(segment, time_range),
+                "entities": list(segment.entities),
+                "verification_goal": search_query or "Verify local facts in this window.",
+                "recommended_evidence_mode": "multimodal",
+                "rationale": rationale,
+                "status": "pending_verification",
+            }
+            candidate_windows.append(candidate)
+            anchors.append(
+                {
+                    "anchor_id": f"anch_explore_{source_observation_id}_{candidate_id}",
+                    "observation_id": "__pending__",
+                    "source_kind": "retrieval_hit",
+                    "segment_id": segment.segment_id,
+                    "start_sec": time_range[0],
+                    "end_sec": time_range[1],
+                    "field_path": "candidate_windows",
+                    "excerpt": rationale,
+                    "modality": source_modalities[0] if source_modalities else "index",
+                }
+            )
+        return {
+            "claim": f"Explore found {len(candidate_windows)} candidate window(s) for verification.",
+            "confidence": 0.85 if candidate_windows else 0.2,
+            "support_status": "candidate_only",
+            "cannot_final_cite": True,
+            "mode": "explore",
+            "purpose": str(purpose or "candidate_discovery"),
+            "query": search_query,
+            "targets": normalized_targets,
+            "scope": scope_filter,
+            "modalities_used": list(resolved_modalities),
+            "candidate_windows": candidate_windows,
+            "regions": candidate_windows,
+            "produced_anchors": anchors,
+            "notes": ["Candidate windows are navigation only. Use verify_window before committing answer_support."],
+            "limitations": "Explore results are navigation only and candidate_only; they cannot support final answers.",
         }
 
     def read_index(self, *, segment_id: str) -> Mapping[str, object]:
@@ -641,7 +747,9 @@ class SegmentReadService:
     def verify_window(
         self,
         *,
+        candidate_key: str,
         candidate_id: str,
+        source_observation_id: str,
         segment_id: str,
         time_range: Sequence[float] | Mapping[str, float] | None,
         evidence_mode: str,
@@ -650,7 +758,13 @@ class SegmentReadService:
         verification_targets: Sequence[Mapping[str, Any] | str] = (),
         sampling: Mapping[str, Any] | None,
     ) -> Mapping[str, object]:
-        candidate = self._resolve_candidate(candidate_id=candidate_id, segment_id=segment_id, time_range=time_range)
+        candidate = self._resolve_candidate(
+            candidate_key=candidate_key,
+            candidate_id=candidate_id,
+            source_observation_id=source_observation_id,
+            segment_id=segment_id,
+            time_range=time_range,
+        )
         resolved_segment_id = str(candidate["segment_id"])
         start_sec = float(candidate["start_sec"])
         end_sec = float(candidate["end_sec"])
@@ -692,6 +806,9 @@ class SegmentReadService:
             "worker": "EvidenceVerifier",
             "mode": "verify_window",
             "candidate_id": str(candidate.get("candidate_id") or candidate_id or ""),
+            "candidate_key": str(candidate.get("candidate_key") or ""),
+            "source_observation_id": str(candidate.get("source_observation_id") or source_observation_id or ""),
+            "segment_id": resolved_segment_id,
             "source_beat_ids": list(candidate.get("source_beat_ids") or ()),
             "verification_goal": str(candidate.get("verification_goal") or ""),
             "verification_targets": targets,
@@ -708,22 +825,51 @@ class SegmentReadService:
     def _resolve_candidate(
         self,
         *,
+        candidate_key: str,
         candidate_id: str,
+        source_observation_id: str,
         segment_id: str,
         time_range: Sequence[float] | Mapping[str, float] | None,
     ) -> dict[str, object]:
+        normalized_candidate_key = str(candidate_key or "").strip()
         normalized_candidate_id = str(candidate_id or "").strip()
+        normalized_source_observation_id = str(source_observation_id or "").strip()
+        if normalized_candidate_key and self.workspace is not None:
+            for observation in self.workspace.read_observations():
+                raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+                for candidate in _mapping_items(raw_output.get("candidate_windows")):
+                    if str(candidate.get("candidate_key") or "") == normalized_candidate_key:
+                        return dict(candidate)
+            raise ValueError(f"verify_window_failed: candidate_key not found: {normalized_candidate_key}")
         if normalized_candidate_id and self.workspace is not None:
-            for observation in reversed(self.workspace.read_observations()):
+            matches = []
+            for observation in self.workspace.read_observations():
+                if normalized_source_observation_id and observation.observation_id != normalized_source_observation_id:
+                    continue
                 raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
                 for candidate in _mapping_items(raw_output.get("candidate_windows")):
                     if str(candidate.get("candidate_id") or "") == normalized_candidate_id:
-                        return dict(candidate)
+                        matches.append(dict(candidate))
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                raise ValueError(
+                    "verify_window_failed: candidate_id is ambiguous; provide candidate_key or source_observation_id"
+                )
+            if normalized_source_observation_id:
+                raise ValueError(
+                    f"verify_window_failed: candidate_id={normalized_candidate_id} not found in {normalized_source_observation_id}"
+                )
         if not segment_id:
-            raise ValueError("verify_window_failed: candidate_id was not found; provide segment_id and time_range")
+            raise ValueError(
+                "verify_window_failed: candidate was not found; provide candidate_key, "
+                "candidate_id+source_observation_id, or segment_id+time_range"
+            )
         start_sec, end_sec = _time_range_argument(time_range)
         return {
             "candidate_id": normalized_candidate_id,
+            "candidate_key": normalized_candidate_key,
+            "source_observation_id": normalized_source_observation_id,
             "segment_id": str(segment_id),
             "start_sec": start_sec,
             "end_sec": end_sec,
@@ -820,10 +966,20 @@ def _read_clip_evidence(
                 "modality": _anchor_modality(source_kind),
             }
         )
+    verification_results = _verification_results_from_backend(
+        targets=targets,
+        raw_backend=raw_backend,
+        facts=facts,
+        produced_anchors=produced_anchors,
+        segment_id=segment.segment_id,
+        time_range=[start_sec, end_sec],
+    )
     return {
         "claim": fact_text,
         "confidence": 0.74,
         "facts": facts,
+        "verification_results": verification_results,
+        "summary": _verification_summary(verification_results, fallback=fact_text),
         "regions": [
             {
                 "segment_id": segment.segment_id,
@@ -838,7 +994,7 @@ def _read_clip_evidence(
         "limitations": "Facts-only clip read; no answer option vote is emitted.",
         "verification_targets": targets,
         "raw_backend": raw_backend,
-        "raw": {**raw_backend, "verification_targets": targets},
+        "raw": {**raw_backend, "verification_targets": targets, "verification_results": verification_results},
     }
 
 
@@ -1044,6 +1200,83 @@ def _candidate_windows_claim(segment_id: str, candidates: Sequence[Mapping[str, 
     return f"IndexScout candidate windows for {segment_id}: " + "; ".join(parts)
 
 
+def _predicted_source_observation_id(workspace: EvidenceWorkspace | None) -> str:
+    if workspace is None:
+        return "obs_pending"
+    return workspace._next_observation_id()  # noqa: SLF001 - candidate keys must match the imminent observation id.
+
+
+def _normalize_explore_targets(targets: Sequence[Mapping[str, Any] | str] | None) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for item in _sequence_items(targets):
+        if isinstance(item, Mapping):
+            claim = str(item.get("claim") or item.get("question") or item.get("text") or "").strip()
+            aliases = [str(alias).strip() for alias in _sequence_items(item.get("aliases")) if str(alias).strip()]
+            target_id = str(item.get("target_id") or item.get("id") or item.get("name") or "").strip()
+        else:
+            claim = str(item or "").strip()
+            aliases = []
+            target_id = ""
+        if not claim and not aliases:
+            continue
+        if not target_id:
+            target_id = f"target_{len(normalized) + 1}"
+        normalized.append({"target_id": target_id, "claim": claim, "aliases": aliases})
+    return normalized
+
+
+def _explore_search_modalities(modalities: Sequence[str]) -> tuple[str, ...]:
+    values = [str(item).strip().lower() for item in modalities if str(item).strip()]
+    if not values:
+        return ()
+    mapped = []
+    for value in values:
+        if value == "index":
+            mapped.extend(["caption", "entities"])
+        else:
+            mapped.append(value)
+    return tuple(mapped)
+
+
+def _explore_time_range(segment: VideoMapSegment, *, window_sec: float) -> list[float]:
+    beats = list(segment.timeline_beats or ())
+    if beats:
+        beat = beats[0]
+        return [float(getattr(beat, "start_sec", segment.start_sec)), float(getattr(beat, "end_sec", segment.end_sec))]
+    duration = max(0.1, float(segment.end_sec) - float(segment.start_sec))
+    width = min(duration, max(0.1, float(window_sec or duration)))
+    return [float(segment.start_sec), float(segment.start_sec) + width]
+
+
+def _beat_ids_for_window(segment: VideoMapSegment, time_range: Sequence[float]) -> list[str]:
+    start_sec, end_sec = _time_range_argument(time_range)
+    beat_ids = []
+    for beat in segment.timeline_beats or ():
+        beat_start = float(getattr(beat, "start_sec", segment.start_sec))
+        beat_end = float(getattr(beat, "end_sec", segment.end_sec))
+        if beat_end >= start_sec and beat_start <= end_sec:
+            beat_ids.append(str(getattr(beat, "beat_id", "")))
+    return _unique_nonempty(beat_ids)
+
+
+def _matched_target_ids(
+    segment: VideoMapSegment,
+    *,
+    matched_terms: Sequence[str],
+    targets: Sequence[Mapping[str, object]],
+) -> list[str]:
+    if not targets:
+        return []
+    haystack = " ".join([segment.compact_text(), " ".join(matched_terms)]).lower()
+    matched = []
+    for target in targets:
+        target_id = str(target.get("target_id") or "").strip()
+        terms = [str(target.get("claim") or ""), *[str(item) for item in _sequence_items(target.get("aliases"))]]
+        if any(term.strip().lower() and term.strip().lower() in haystack for term in terms):
+            matched.append(target_id)
+    return _unique_nonempty(matched)
+
+
 def _preferred_evidence_mode(preferred_modalities: Sequence[str]) -> str:
     values = _unique_nonempty(preferred_modalities)
     if not values:
@@ -1155,31 +1388,46 @@ def _read_clip_prompt(*, segment_id: str, start_sec: float, end_sec: float, focu
     )
 
 
-def _normalize_verification_targets(targets: Sequence[Mapping[str, Any] | str] | None) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
+def _normalize_verification_targets(targets: Sequence[Mapping[str, Any] | str] | None) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
     for item in _sequence_items(targets):
         if isinstance(item, Mapping):
             claim = str(item.get("claim") or item.get("question") or item.get("text") or "").strip()
             if not claim:
                 continue
-            target_id = str(item.get("id") or item.get("target_id") or item.get("name") or "").strip()
+            target_id = str(item.get("target_id") or item.get("id") or item.get("target_ref") or item.get("name") or "").strip()
             polarity = str(item.get("polarity") or item.get("kind") or "presence").strip()
+            expected_evidence = [
+                str(value).strip()
+                for value in _sequence_items(
+                    item.get("expected_evidence") or item.get("evidence_modes") or item.get("modalities")
+                )
+                if str(value).strip()
+            ]
         else:
             claim = str(item or "").strip()
             if not claim:
                 continue
             target_id = ""
             polarity = "presence"
+            expected_evidence = []
         if not target_id:
             target_id = f"target_{len(normalized) + 1}"
-        normalized.append({"id": target_id, "claim": claim, "polarity": polarity or "presence"})
+        normalized.append(
+            {
+                "target_id": target_id,
+                "claim": claim,
+                "polarity": polarity or "presence",
+                "expected_evidence": expected_evidence,
+            }
+        )
     return normalized
 
 
 def _format_verification_target_lines(targets: Sequence[Mapping[str, Any]]) -> list[str]:
     lines = []
     for target in targets:
-        target_id = str(target.get("id") or "").strip()
+        target_id = str(target.get("target_id") or target.get("id") or "").strip()
         claim = str(target.get("claim") or "").strip()
         polarity = str(target.get("polarity") or "presence").strip()
         if claim:
@@ -1251,6 +1499,115 @@ def _facts_from_backend_response(
     return facts
 
 
+def _verification_results_from_backend(
+    *,
+    targets: Sequence[Mapping[str, Any]],
+    raw_backend: Mapping[str, Any],
+    facts: Sequence[Mapping[str, Any]],
+    produced_anchors: Sequence[Mapping[str, Any]],
+    segment_id: str,
+    time_range: Sequence[float],
+) -> list[dict[str, Any]]:
+    if not targets:
+        return []
+    scope = {"segment_id": str(segment_id), "time_range": [float(time_range[0]), float(time_range[1])]}
+    raw_results = raw_backend.get("verification_results")
+    if isinstance(raw_results, Sequence) and not isinstance(raw_results, (str, bytes)):
+        normalized = []
+        for index, item in enumerate(raw_results):
+            if not isinstance(item, Mapping):
+                continue
+            target = targets[index] if index < len(targets) else {}
+            normalized.append(
+                _verification_result(
+                    target_id=str(item.get("target_id") or item.get("id") or target.get("target_id") or "unknown"),
+                    claim=str(item.get("claim") or target.get("claim") or ""),
+                    verdict=str(item.get("verdict") or "uncertain"),
+                    scope=dict(item.get("scope", {}) or scope) if isinstance(item.get("scope", {}), Mapping) else scope,
+                    anchor_ids=[str(value) for value in _sequence_items(item.get("anchor_ids")) if str(value)],
+                    source_kind=str(item.get("source_kind") or "multimodal_fact"),
+                    confidence=float(item.get("confidence", 0.5) or 0.5),
+                    rationale=str(item.get("rationale") or ""),
+                )
+            )
+        if normalized:
+            return normalized
+
+    raw_facts = raw_backend.get("facts")
+    if (
+        isinstance(raw_facts, Sequence)
+        and not isinstance(raw_facts, (str, bytes))
+        and len(raw_facts) == len(targets)
+    ):
+        aligned = []
+        for index, target in enumerate(targets):
+            fact = facts[index] if index < len(facts) else {}
+            anchor = produced_anchors[index] if index < len(produced_anchors) else {}
+            aligned.append(
+                _verification_result(
+                    target_id=str(target.get("target_id") or f"target_{index + 1}"),
+                    claim=str(target.get("claim") or ""),
+                    verdict=str(fact.get("verdict") or "supported"),
+                    scope=scope,
+                    anchor_ids=[str(anchor.get("anchor_id"))] if anchor.get("anchor_id") else [],
+                    source_kind=str(fact.get("source_kind") or "multimodal_fact"),
+                    confidence=float(fact.get("confidence", 0.74) or 0.74),
+                    rationale=str(fact.get("text") or ""),
+                )
+            )
+        return aligned
+
+    return [
+        _verification_result(
+            target_id=str(target.get("target_id") or f"target_{index + 1}"),
+            claim=str(target.get("claim") or ""),
+            verdict="uncertain",
+            scope=scope,
+            anchor_ids=[],
+            source_kind="multimodal_fact",
+            confidence=0.5,
+            rationale="Backend output was not structured enough to assign this check a supported verdict.",
+        )
+        for index, target in enumerate(targets)
+    ]
+
+
+def _verification_result(
+    *,
+    target_id: str,
+    claim: str,
+    verdict: str,
+    scope: Mapping[str, Any],
+    anchor_ids: Sequence[str],
+    source_kind: str,
+    confidence: float,
+    rationale: str,
+) -> dict[str, Any]:
+    normalized_verdict = str(verdict or "uncertain").strip()
+    if normalized_verdict not in {"supported", "contradicted", "not_found_in_window", "uncertain"}:
+        normalized_verdict = "uncertain"
+    return {
+        "target_id": str(target_id or "unknown"),
+        "claim": str(claim or ""),
+        "verdict": normalized_verdict,
+        "scope": dict(scope),
+        "anchor_ids": [str(anchor_id) for anchor_id in anchor_ids if str(anchor_id)],
+        "source_kind": str(source_kind or "multimodal_fact"),
+        "confidence": float(confidence),
+        "rationale": str(rationale or ""),
+    }
+
+
+def _verification_summary(results: Sequence[Mapping[str, Any]], *, fallback: str) -> str:
+    if not results:
+        return str(fallback or "")
+    counts: dict[str, int] = {}
+    for result in results:
+        verdict = str(result.get("verdict") or "uncertain")
+        counts[verdict] = counts.get(verdict, 0) + 1
+    return ", ".join(f"{verdict}={count}" for verdict, count in sorted(counts.items()))
+
+
 def _split_fact_sentences(text: str) -> list[str]:
     normalized = " ".join(str(text or "").split())
     if not normalized:
@@ -1278,6 +1635,9 @@ def _modalities_arg(value: Any) -> tuple[str, ...]:
 def _segment_matches_scope(segment: VideoMapSegment, scope: Mapping[str, Any]) -> bool:
     segment_id = str(scope.get("segment_id") or "").strip()
     if segment_id and segment.segment_id != segment_id:
+        return False
+    segment_ids = {str(item).strip() for item in _sequence_items(scope.get("segment_ids")) if str(item).strip()}
+    if segment_ids and segment.segment_id not in segment_ids:
         return False
     time_range = scope.get("time_range")
     if isinstance(time_range, Sequence) and not isinstance(time_range, (str, bytes)) and len(time_range) >= 2:
@@ -1319,6 +1679,11 @@ def _search_has_evidence(output: Mapping[str, Any]) -> bool:
         if excerpt and excerpt != segment_id:
             return True
     return False
+
+
+def _explore_has_candidates(output: Mapping[str, Any]) -> bool:
+    candidates = output.get("candidate_windows") or ()
+    return isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)) and bool(candidates)
 
 
 def _read_segment_verify_has_evidence(output: Mapping[str, Any]) -> bool:
@@ -1365,6 +1730,101 @@ def _unique_nonempty(values: Sequence[Any]) -> list[str]:
     return unique
 
 
+def _normalize_workspace_v2_explore(_ctx: Any, request: Any) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    scope = dict(args.get("scope", {}) or {}) if isinstance(args.get("scope"), Mapping) else {}
+    segment_ids = args.get("segment_ids")
+    if segment_ids is None:
+        segment_ids = args.get("segments")
+    if segment_ids is None and args.get("segment_id") is not None:
+        segment_ids = [args.get("segment_id")]
+    if segment_ids is not None:
+        scope["segment_ids"] = [str(item).strip() for item in _sequence_items(segment_ids) if str(item).strip()]
+    time_range = _optional_time_range(args.get("time_range") or args.get("range"))
+    if time_range is not None:
+        scope["time_range"] = time_range
+    modalities = args.get("modalities")
+    if modalities is None:
+        modalities = args.get("modality")
+    if modalities is None:
+        modalities = args.get("evidence_modes")
+    return {
+        "query": str(args.get("query") or args.get("focus") or args.get("question") or ""),
+        "targets": list(_sequence_items(args.get("targets") or args.get("checks") or args.get("facts"))),
+        "scope": scope,
+        "modalities": _modalities_arg(modalities),
+        "top_k": int(args.get("top_k") or args.get("max_candidates") or 8),
+        "window_sec": float(args.get("window_sec") or args.get("window_seconds") or 20.0),
+        "purpose": str(args.get("purpose") or "candidate_discovery"),
+    }
+
+
+def _normalize_workspace_v2_verify_window(_ctx: Any, request: Any) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    candidate_value = str(args.get("candidate") or "").strip()
+    candidate_key = str(args.get("candidate_key") or "").strip()
+    candidate_id = str(args.get("candidate_id") or "").strip()
+    if candidate_value:
+        if ":" in candidate_value and not candidate_key:
+            candidate_key = candidate_value
+        elif not candidate_id:
+            candidate_id = candidate_value
+    checks = args.get("checks")
+    if checks is None:
+        checks = args.get("verification_targets")
+    if checks is None:
+        checks = args.get("targets")
+    if checks is None:
+        checks = args.get("facts")
+    modalities = args.get("evidence_mode")
+    if modalities is None:
+        modalities = args.get("modalities")
+    if modalities is None:
+        modalities = args.get("evidence_modes")
+    evidence_values = _modalities_arg(modalities)
+    sampling = dict(args.get("sampling", {}) or {}) if isinstance(args.get("sampling"), Mapping) else {}
+    if args.get("max_frames") is not None:
+        sampling["max_frames"] = int(args["max_frames"])
+    if args.get("nframes") is not None:
+        sampling["nframes"] = int(args["nframes"])
+    return {
+        "candidate_key": candidate_key,
+        "candidate_id": candidate_id,
+        "source_observation_id": str(args.get("source_observation_id") or args.get("obs_id") or ""),
+        "segment_id": str(args.get("segment_id") or args.get("segment") or ""),
+        "time_range": _optional_time_range(args.get("time_range") or args.get("range")),
+        "evidence_mode": ",".join(evidence_values) if evidence_values else "multimodal",
+        "focus": tuple(str(item).strip() for item in _sequence_items(args.get("focus")) if str(item).strip()),
+        "checks": _normalize_verification_targets(checks),
+        "sampling": sampling,
+    }
+
+
+def _normalize_workspace_v2_read_workspace(_ctx: Any, request: Any) -> Mapping[str, Any]:
+    args = dict(request.arguments)
+    return {
+        "section": str(args.get("section") or args.get("kind") or ""),
+        "filter": dict(args.get("filter", {}) or {}) if isinstance(args.get("filter"), Mapping) else {},
+    }
+
+
+def _optional_time_range(value: Any) -> list[float] | None:
+    if value is None:
+        return None
+    try:
+        start_sec, end_sec = _time_range_argument(value)
+    except ValueError:
+        return None
+    return [start_sec, end_sec]
+
+
+def _canonical_tool_key(tool_name: str):
+    def build(_ctx: Any, request: Any) -> str:
+        return f"{tool_name}:{json.dumps(request.arguments, sort_keys=True, ensure_ascii=False, default=str)}"
+
+    return build
+
+
 def _verify_citations(
     workspace: Optional[EvidenceWorkspace],
     citations: Sequence[str],
@@ -1401,7 +1861,68 @@ def _verify_citations(
                 + "; allowed: "
                 + "/".join(sorted(ANSWER_SUPPORTING_KINDS))
             )
+        for entry in cited_memory:
+            provenance_reason = _invalid_final_citation_provenance(workspace, entry, memory_by_id, seen=set())
+            if provenance_reason:
+                return False, provenance_reason
     return True, ""
+
+
+def _invalid_final_citation_provenance(
+    workspace: EvidenceWorkspace,
+    entry: Any,
+    memory_by_id: Mapping[str, Any],
+    *,
+    seen: set[str],
+) -> str:
+    if entry.entry_id in seen:
+        return ""
+    seen.add(entry.entry_id)
+    metadata = dict(entry.metadata or {})
+    source_tool = str(metadata.get("source_tool") or metadata.get("tool") or "").strip()
+    removed_legacy_tools = {
+        "read_clip",
+        "read_segment",
+        "scan_segment",
+        "search",
+        "list",
+        "verify",
+        "bind_asr_claim",
+        "target_coverage",
+        "ground_question",
+        "vision_read",
+        "verify_segment_anchors",
+        "global_gist",
+        "query_context",
+        "caption_segment",
+    }
+    if not source_tool:
+        return f"final citation {entry.entry_id} lacks source provenance"
+    if source_tool in removed_legacy_tools:
+        return f"final citation {entry.entry_id} comes from removed legacy tool {source_tool}"
+    if entry.kind in {"answer_support", "answer_conflict_resolved"}:
+        if source_tool != "verify_window":
+            return f"final citation {entry.entry_id} must come from verify_window provenance"
+        if entry.kind == "answer_support" and str(metadata.get("verdict") or "") not in {"", "supported"}:
+            return f"final citation {entry.entry_id} has non-support verdict {metadata.get('verdict')}"
+        return ""
+    if entry.kind == "synthesized_support":
+        if source_tool != "synthesize_memory":
+            return f"final citation {entry.entry_id} must record synthesize_memory provenance"
+        refs = [str(ref).strip() for ref in entry.previous_memory_refs if str(ref).strip()]
+        if not refs:
+            refs = [str(ref).strip() for ref in _sequence_items(metadata.get("supports")) if str(ref).strip()]
+        if not refs:
+            return f"final citation {entry.entry_id} lacks synthesized source memory refs"
+        for ref in refs:
+            source = memory_by_id.get(ref)
+            if source is None:
+                return f"final citation {entry.entry_id} references unknown source memory {ref}"
+            reason = _invalid_final_citation_provenance(workspace, source, memory_by_id, seen=seen)
+            if reason:
+                return reason
+        return ""
+    return f"final citation {entry.entry_id} has unsupported provenance kind {entry.kind}"
 
 
 def _provenance_observation_ids(memory_by_id: Mapping[str, Any], memory_ids: Sequence[str]) -> list[str]:

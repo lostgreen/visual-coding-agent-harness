@@ -180,10 +180,17 @@ The run writes the same harness artifacts under `runs/<run_id>/`:
 
 The active long-video evaluation path is `--strategy workspace_v2`. It uses
 `WorkspaceVisualAgent`, a durable workspace layout, compact exploration tools
-(`read_clip`, `search`, `list`, `read_workspace`, `verify`,
-`synthesize_memory`, `answer`), and a mandatory plan -> act -> commit loop for
-visual evidence. The old iterative agent and its old exploration loop have been
-removed from the active branch.
+(`explore`, `verify_window`, `read_workspace`, `synthesize_memory`, `answer`),
+and a mandatory plan -> act -> commit loop for visual evidence. The evidence
+hierarchy is:
+
+- `explore` = candidate discovery only; never final evidence.
+- `verify_window` = scoped local video evidence, with one or more factual checks.
+- `synthesize_memory` = derived evidence from committed verified memory.
+- `answer` = final citation gate over committed verified memory.
+
+The old iterative agent and its old exploration loop have been removed from the
+active branch.
 
 ```bash
 PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.eval_videomme \
@@ -197,10 +204,28 @@ Planner output for an exploration round is one JSON tool call:
 
 ```json
 {
-  "tool": "read_clip",
+  "tool": "explore",
   "args": {
-    "scope": {"segment_id": "seg_0002"},
-    "focus": ["what is discussed in this segment"]
+    "query": "what is discussed in this segment",
+    "scope": {"segment_ids": ["seg_0002"]},
+    "modalities": ["index", "asr", "ocr", "visual"],
+    "top_k": 8
+  }
+}
+```
+
+After `explore` returns a candidate, inspect local evidence with
+`verify_window`:
+
+```json
+{
+  "tool": "verify_window",
+  "args": {
+    "candidate_key": "obs_0001:cand_0001",
+    "checks": [
+      {"target_id": "target_1", "claim": "The local fact to verify.", "polarity": "presence"}
+    ],
+    "sampling": {"fps": 2, "max_frames": 128}
   }
 }
 ```
@@ -215,7 +240,7 @@ planner-authored workspace memory:
   "tool": "answer",
   "args": {
     "text": "...",
-    "citations": ["mem_0001"],
+    "citations": ["mem_<committed_support_id>"],
     "confidence": "high"
   }
 }

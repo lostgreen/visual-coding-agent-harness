@@ -92,65 +92,115 @@ def _tool_spec_context(workspace: EvidenceWorkspace, registry: ToolRegistry) -> 
     return _ToolSpecContext(workspace=workspace, registry=registry)
 
 
-def test_workspace_v2_search_returns_candidate_only_hits(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_search")
+def _commit_verified_memory(workspace: EvidenceWorkspace, *, kind: str = "answer_support") -> None:
+    backend = RecordingBackend(
+        raw={
+            "facts": [{"text": "Austria-Hungary was a buffer.", "source_kind": "audio_fact", "confidence": 0.9}],
+            "verification_results": [
+                {
+                    "target_id": "buffer",
+                    "claim": "Austria-Hungary was a buffer.",
+                    "verdict": "supported",
+                    "confidence": 0.9,
+                    "rationale": "Narration states the buffer relation.",
+                }
+            ],
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    verified = registry.execute(
+        "verify_window",
+        {
+            "segment_id": "seg_0001",
+            "time_range": [0.0, 30.0],
+            "checks": [{"target_id": "buffer", "claim": "Austria-Hungary was a buffer.", "polarity": "presence"}],
+        },
+    )
+    observation = workspace.write_observation(
+        tool_name="verify_window",
+        claim=str(verified["claim"]),
+        confidence=float(verified["confidence"]),
+        regions=verified["regions"],
+        limitations=str(verified["limitations"]),
+        raw_output=verified,
+    )
+    anchor_id = verified["produced_anchors"][0]["anchor_id"]
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": anchor_id,
+                    "kind": "asr",
+                    "source_kind": "audio_fact",
+                    "excerpt": "Austria-Hungary was a buffer",
+                }
+            ],
+            "memory": [
+                {
+                    "kind": kind,
+                    "claim": "Austria-Hungary was a buffer.",
+                    "anchor_ids": [anchor_id],
+                    "confidence": "high",
+                    "supports_option": "D",
+                }
+            ],
+        },
+    )
+
+
+def test_workspace_v2_explore_returns_candidate_only_windows(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_explore")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
 
-    result = registry.execute("search", {"query": "buffer Russia", "modality": "asr"})
+    result = registry.execute("explore", {"query": "buffer Russia", "modalities": ["asr"], "top_k": 3})
 
-    assert result["results"][0]["segment_id"] == "seg_0001"
-    assert result["results"][0]["support_status"] == "candidate_only"
-    assert result["results"][0]["needs_local_read"] is True
-    assert result["results"][0]["recommended_next_tool"] == "read_segment"
-    assert result["results"][0]["recommended_mode"] == "verify"
-    assert result["results"][0]["recommended_scope"] == {
-        "segment_id": "seg_0001",
-        "sub_window": {"start_sec": 0.0, "end_sec": 60.0},
-    }
+    assert result["support_status"] == "candidate_only"
+    assert result["cannot_final_cite"] is True
+    assert result["candidate_windows"][0]["candidate_id"] == "cand_0001"
+    assert result["candidate_windows"][0]["candidate_key"] == "obs_0001:cand_0001"
+    assert result["candidate_windows"][0]["source_observation_id"] == "obs_0001"
+    assert result["candidate_windows"][0]["segment_id"] == "seg_0001"
+    assert result["candidate_windows"][0]["status"] == "pending_verification"
     assert result["produced_anchors"][0]["observation_id"] == "__pending__"
-    assert "candidate_only" in result["limitations"]
+    assert "navigation only" in result["limitations"]
 
 
-def test_workspace_v2_search_commit_required_predicate_depends_on_evidence_shape(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_search_predicate")
+def test_workspace_v2_explore_supports_scoped_segment_query(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_explore_scoped")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
-    predicate = registry.get_runtime_spec("search").commit_required_predicate
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "closing topic",
+            "scope": {"segment_ids": ["seg_0002"]},
+            "modalities": ["index"],
+            "top_k": 2,
+        },
+    )
+
+    assert result["candidate_windows"]
+    assert {candidate["segment_id"] for candidate in result["candidate_windows"]} == {"seg_0002"}
+
+
+def test_workspace_v2_explore_commit_required_predicate_depends_on_candidates(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_explore_predicate")
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+    predicate = registry.get_runtime_spec("explore").commit_required_predicate
 
     assert predicate is not None
-    assert predicate({"results": [{"segment_id": "seg_0001", "excerpt": "Austria-Hungary was a buffer."}]}) is True
-    assert predicate({"results": []}) is False
-    assert predicate({"results": [{"segment_id": "seg_0001", "excerpt": "seg_0001"}]}) is False
+    assert predicate({"candidate_windows": [{"candidate_id": "cand_0001"}]}) is True
+    assert predicate({"candidate_windows": []}) is False
 
 
-def test_workspace_v2_verify_commit_required_predicate_tracks_rejections(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_predicate")
-    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
-    predicate = registry.get_runtime_spec("verify").commit_required_predicate
-
-    assert predicate is not None
-    assert predicate({"accepted": True, "reason": ""}) is False
-    assert predicate({"accepted": False, "reason": "unknown citation: mem_x"}) is True
-
-
-def test_workspace_v2_verify_rejects_empty_citations(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_empty")
-    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
-
-    result = registry.execute("verify", {"claim": "", "against": {}})
-
-    assert result["accepted"] is False
-    assert result["reason"] == "verify requires at least one citation"
-
-
-def test_workspace_v2_list_reads_segments_and_workspace_sections(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_list")
+def test_workspace_v2_read_workspace_reads_sections(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_workspace")
     workspace.note_entity(kind="concept", name="Austria-Hungary")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
 
-    segments = registry.execute("list", {"kind": "segments", "filter": {"segment_id": "seg_0001"}})
-    entities = registry.execute("list", {"kind": "entities"})
+    entities = registry.execute("read_workspace", {"section": "entities"})
 
-    assert segments["items"][0]["segment_id"] == "seg_0001"
     assert entities["items"][0]["name"] == "Austria-Hungary"
 
 
@@ -158,57 +208,66 @@ def test_workspace_v2_registry_installs_tool_normalizers(tmp_path: Path) -> None
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_tool_specs")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
 
-    for tool_name in ("read_segment", "read_clip", "search", "list", "verify", "synthesize_memory", "answer"):
+    for tool_name in ("explore", "verify_window", "read_workspace", "synthesize_memory", "answer"):
         assert registry.get_runtime_spec(tool_name).argument_normalizer is not None, tool_name
 
 
-def test_workspace_v2_verify_normalizer_accepts_legacy_citation_args(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_legacy_args")
+def test_workspace_v2_verify_window_normalizer_accepts_aliases(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_window_aliases")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
-    normalizer = registry.get_runtime_spec("verify").argument_normalizer
+    normalizer = registry.get_runtime_spec("verify_window").argument_normalizer
     assert normalizer is not None
 
     normalized = normalizer(
         _tool_spec_context(workspace, registry),
-        ToolRequest(tool="verify", arguments={"answer": "D", "citations": ["mem_0001"], "final": True}),
+        ToolRequest(
+            tool="verify_window",
+            arguments={
+                "candidate": "obs_0003:cand_0001",
+                "facts": [{"name": "target_1", "question": "The Big Bang appears.", "kind": "presence"}],
+                "modalities": ["ocr", "asr"],
+                "max_frames": 64,
+            },
+        ),
     )
 
     assert normalized == {
-        "claim": "D",
-        "against": {"citations": ["mem_0001"], "final": True},
+        "candidate_key": "obs_0003:cand_0001",
+        "candidate_id": "",
+        "source_observation_id": "",
+        "segment_id": "",
+        "time_range": None,
+        "evidence_mode": "ocr,asr",
+        "focus": (),
+        "checks": [{"target_id": "target_1", "claim": "The Big Bang appears.", "polarity": "presence", "expected_evidence": []}],
+        "sampling": {"max_frames": 64},
     }
 
 
-def test_read_segment_verify_semantic_key_preserves_focus(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_focus_key")
+def test_verify_window_semantic_key_preserves_checks(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_window_key")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
-    key_builder = registry.get_runtime_spec("read_segment").semantic_key_builder
+    key_builder = registry.get_runtime_spec("verify_window").semantic_key_builder
     assert key_builder is not None
     ctx = _tool_spec_context(workspace, registry)
 
     first = key_builder(
         ctx,
         ToolRequest(
-            tool="read_segment",
+            tool="verify_window",
             arguments={
-                "segment_id": "seg_0001",
-                "mode": "verify",
-                "sub_window": {"start_sec": 0.0, "end_sec": 60.0},
-                "evidence_mode": "visual",
-                "focus": ["shield"],
+                "candidate_key": "obs_0001:cand_0001",
+                "checks": [{"target_id": "target_1", "claim": "shield", "polarity": "presence"}],
             },
         ),
     )
     second = key_builder(
         ctx,
         ToolRequest(
-            tool="read_segment",
+            tool="verify_window",
             arguments={
-                "segment_id": "seg_0001",
-                "mode": "verify",
-                "sub_window": {"start_sec": 0.0, "end_sec": 60.0},
-                "evidence_mode": "visual",
-                "focus": ["map label"],
+                "candidate_key": "obs_0001:cand_0001",
+                "checks": [{"target_id": "target_2", "claim": "map label", "polarity": "presence"}],
             },
         ),
     )
@@ -223,14 +282,9 @@ def test_workspace_v2_plan_phase_tool_surface_is_exact(tmp_path: Path) -> None:
     tool_names = {spec.tool_spec.name for spec in registry.list_runtime_specs()}
 
     assert tool_names == {
-        "read_segment",
-        "scan_segment",
+        "explore",
         "verify_window",
-        "read_clip",
-        "search",
-        "list",
         "read_workspace",
-        "verify",
         "synthesize_memory",
         "answer",
         "commit_observation",
@@ -238,6 +292,9 @@ def test_workspace_v2_plan_phase_tool_surface_is_exact(tmp_path: Path) -> None:
         "defer_observation",
         "no_commit_needed",
     }
+    for removed in ("scan_segment", "read_clip", "read_segment", "verify", "search", "list"):
+        with pytest.raises(ToolError, match="Unknown tool"):
+            registry.get_runtime_spec(removed)
 
 
 def test_video_map_store_apply_refinement_rejects_child_recursion_and_parent_caption_copy() -> None:
@@ -389,15 +446,16 @@ def test_workspace_v2_write_memory_backdoor_is_not_callable(tmp_path: Path) -> N
         )
 
 
-def test_workspace_v2_read_clip_normalizes_facts_only(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_clip")
+def test_workspace_v2_verify_window_normalizes_facts_only(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_window_facts")
     backend = RecordingBackend("The shield icon remains over Central Europe.")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
 
     result = registry.execute(
-        "read_clip",
+        "verify_window",
         {
-            "scope": {"segment_id": "seg_0001"},
+            "segment_id": "seg_0001",
+            "time_range": [0.0, 60.0],
             "focus": ["shield icon meaning"],
             "sampling": {"nframes": 4},
         },
@@ -409,8 +467,8 @@ def test_workspace_v2_read_clip_normalizes_facts_only(tmp_path: Path) -> None:
     assert backend.requests[0].task == "vision_read"
 
 
-def test_workspace_v2_read_clip_uses_sampled_frames_when_available(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_clip_frames")
+def test_workspace_v2_verify_window_uses_sampled_frames_when_available(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_window_frames")
     backend = RecordingBackend("The shield icon remains over Central Europe.")
     sampled = []
 
@@ -426,9 +484,10 @@ def test_workspace_v2_read_clip_uses_sampled_frames_when_available(tmp_path: Pat
     )
 
     registry.execute(
-        "read_clip",
+        "verify_window",
         {
-            "scope": {"segment_id": "seg_0001"},
+            "segment_id": "seg_0001",
+            "time_range": [0.0, 60.0],
             "focus": ["shield icon meaning"],
             "sampling": {"nframes": 2},
         },
@@ -442,51 +501,9 @@ def test_workspace_v2_read_clip_uses_sampled_frames_when_available(tmp_path: Pat
     assert request.metadata["nframes"] == 2
 
 
-def test_workspace_v2_read_segment_index_and_refine_are_navigation_only(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_navigation")
-    backend = RefinementBackend()
-    sampled = []
-
-    def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
-        sampled.append((video_path, start_sec, end_sec, max_frames))
-        return ["/frames/demo/00010.jpg"]
-
-    registry = build_workspace_v2_registry(
-        video_map=_video_map(),
-        backend=backend,
-        workspace=workspace,
-        index_refiner=IndexRefiner(backend=backend, frame_sampler=fake_frame_sampler),
-    )
-
-    indexed = registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
-    refined = registry.execute(
-        "read_segment",
-        {
-            "segment_id": "seg_0001",
-            "mode": "refine",
-            "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
-            "resolution": "medium",
-            "focus": ["shield"],
-        },
-    )
-
-    assert indexed["timeline_beats"][0]["summary"] == "A shield icon appears over Central Europe."
-    assert indexed["limitations"][0] == "navigation only; not answer evidence"
-    assert refined["patch"]["cache_hit"] is False
-    assert refined["commit_required"] is False
-    assert sampled == [("/videos/demo.mp4", 10.0, 25.0, 15)]
-    assert registry.get_runtime_spec("read_segment").commit_required is False
-
-
-def test_workspace_v2_scan_segment_and_verify_window_delegate_local_workers(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_scan_verify_workers")
-    backend = RecordingBackend(
-        text=(
-            '{"candidates":[{"time_range":[10,20],"source_beat_ids":["seg_0001_b01"],'
-            '"entities":["shield"],"verification_goal":"Verify what the shield marks.",'
-            '"recommended_evidence_mode":"multimodal","priority":1}],"scan_notes":"ok"}'
-        )
-    )
+def test_workspace_v2_explore_and_verify_window_delegate_local_workers(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_explore_verify_workers")
+    backend = RecordingBackend()
     sampled = []
 
     def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
@@ -500,46 +517,43 @@ def test_workspace_v2_scan_segment_and_verify_window_delegate_local_workers(tmp_
         frame_sampler=fake_frame_sampler,
     )
 
-    scan = registry.execute(
-        "scan_segment",
+    explored = registry.execute(
+        "explore",
         {
-            "segment_id": "seg_0001",
-            "question": "Why is the shield shown?",
-            "scan_goal": "Find the local window explaining the shield.",
-            "preferred_modalities": ["visual", "asr"],
+            "query": "shield buffer",
+            "scope": {"segment_ids": ["seg_0001"]},
+            "modalities": ["visual", "asr"],
+            "top_k": 1,
         },
     )
     workspace.write_observation(
-        tool_name="scan_segment",
-        claim=str(scan["claim"]),
-        confidence=float(scan["confidence"]),
-        regions=scan["regions"],
-        limitations=str(scan["limitations"]),
-        raw_output=scan,
+        tool_name="explore",
+        claim=str(explored["claim"]),
+        confidence=float(explored["confidence"]),
+        regions=explored["regions"],
+        limitations=str(explored["limitations"]),
+        raw_output=explored,
     )
     backend.text = "The local window shows a shield icon over Central Europe while narration describes Austria-Hungary as a buffer."
 
     verified = registry.execute(
         "verify_window",
         {
-            "candidate_id": "cand_seg_0001_001",
+            "candidate_key": explored["candidate_windows"][0]["candidate_key"],
             "sampling": {"fps": 2, "max_frames": 32},
             "focus": ["shield meaning"],
         },
     )
 
-    assert scan["worker"] == "IndexScout"
-    assert scan["candidate_windows"][0]["candidate_id"] == "cand_seg_0001_001"
-    assert backend.requests[0].metadata["worker"] == "IndexScout"
-    assert "dense_video_caption" in backend.requests[0].prompt
+    assert explored["candidate_windows"][0]["candidate_key"] == "obs_0001:cand_0001"
     assert verified["worker"] == "EvidenceVerifier"
-    assert verified["candidate_id"] == "cand_seg_0001_001"
+    assert verified["candidate_key"] == "obs_0001:cand_0001"
     assert verified["mode"] == "verify_window"
-    assert sampled == [("/videos/demo.mp4", 10.0, 20.0, 20)]
+    assert sampled == [("/videos/demo.mp4", 0.0, 30.0, 32)]
     assert backend.requests[-1].metadata["tool"] == "verify_window"
     plan_view = workspace.render_plan_view(question="Why?", video_map=_video_map())
     assert "## Pending Candidate Windows" in plan_view
-    assert "cand_seg_0001_001 [10.0-20.0] segment=seg_0001 status=pending" in plan_view
+    assert "obs_0001:cand_0001 [0.0-30.0] segment=seg_0001 status=pending_verification" in plan_view
 
 
 def test_workspace_v2_verify_window_accepts_multiple_verification_targets(tmp_path: Path) -> None:
@@ -557,42 +571,45 @@ def test_workspace_v2_verify_window_accepts_multiple_verification_targets(tmp_pa
         frame_sampler=lambda _video_path, _start_sec, _end_sec, max_frames: [f"/frames/{idx:03d}.jpg" for idx in range(max_frames)],
     )
 
-    scan = registry.execute(
-        "scan_segment",
+    explore = registry.execute(
+        "explore",
         {
-            "segment_id": "seg_0001",
-            "question": "Which telescope is discussed?",
-            "scan_goal": "Find telescope references.",
-            "preferred_modalities": ["visual", "asr"],
+            "query": "telescope",
+            "scope": {"segment_ids": ["seg_0001"]},
+            "modalities": ["visual", "asr"],
+            "top_k": 1,
         },
     )
     workspace.write_observation(
-        tool_name="scan_segment",
-        claim=str(scan["claim"]),
-        confidence=float(scan["confidence"]),
-        regions=scan["regions"],
-        limitations=str(scan["limitations"]),
-        raw_output=scan,
+        tool_name="explore",
+        claim=str(explore["claim"]),
+        confidence=float(explore["confidence"]),
+        regions=explore["regions"],
+        limitations=str(explore["limitations"]),
+        raw_output=explore,
     )
+    candidate_key = str(explore["candidate_windows"][0]["candidate_key"])
 
     verified = registry.execute(
         "verify_window",
         {
-            "candidate_id": "cand_seg_0001_001",
+            "candidate_key": candidate_key,
             "evidence_mode": "multimodal",
             "sampling": {"fps": 2, "max_frames": 128},
             "focus": ["telescope identity"],
             "checks": [
-                {"id": "hubble", "claim": "Hubble Telescope is mentioned or shown", "polarity": "presence"},
-                {"id": "generic", "claim": "A telescope appears in the local window", "polarity": "presence"},
+                {"target_id": "hubble", "claim": "Hubble Telescope is mentioned or shown", "polarity": "presence"},
+                {"target_id": "generic", "claim": "A telescope appears in the local window", "polarity": "presence"},
             ],
         },
     )
 
     assert verified["verification_targets"] == [
-        {"id": "hubble", "claim": "Hubble Telescope is mentioned or shown", "polarity": "presence"},
-        {"id": "generic", "claim": "A telescope appears in the local window", "polarity": "presence"},
+        {"target_id": "hubble", "claim": "Hubble Telescope is mentioned or shown", "polarity": "presence", "expected_evidence": []},
+        {"target_id": "generic", "claim": "A telescope appears in the local window", "polarity": "presence", "expected_evidence": []},
     ]
+    assert [result["target_id"] for result in verified["verification_results"]] == ["hubble", "generic"]
+    assert {result["verdict"] for result in verified["verification_results"]} == {"uncertain"}
     request = backend.requests[-1]
     assert "Verification targets" in request.prompt
     assert "Hubble Telescope is mentioned or shown" in request.prompt
@@ -601,117 +618,77 @@ def test_workspace_v2_verify_window_accepts_multiple_verification_targets(tmp_pa
     assert verified["raw"]["verification_targets"] == verified["verification_targets"]
 
 
-def test_workspace_v2_read_segment_refine_or_verify_requires_explicit_sub_window(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_requires_sub_window")
-    backend = RefinementBackend()
-    registry = build_workspace_v2_registry(
-        video_map=_video_map(),
-        backend=backend,
-        workspace=workspace,
-        index_refiner=IndexRefiner(backend=backend),
+def test_workspace_v2_verify_window_resolves_candidate_key_and_rejects_ambiguous_bare_id(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_candidate_identity")
+    backend = RecordingBackend(raw={"facts": [{"text": "The shield is visible.", "source_kind": "visual_fact"}]})
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+
+    first = registry.execute("explore", {"query": "shield", "scope": {"segment_ids": ["seg_0001"]}, "top_k": 1})
+    workspace.write_observation(
+        tool_name="explore",
+        claim=str(first["claim"]),
+        confidence=float(first["confidence"]),
+        regions=first["regions"],
+        limitations=str(first["limitations"]),
+        raw_output=first,
+    )
+    second = registry.execute("explore", {"query": "closing", "scope": {"segment_ids": ["seg_0002"]}, "top_k": 1})
+    workspace.write_observation(
+        tool_name="explore",
+        claim=str(second["claim"]),
+        confidence=float(second["confidence"]),
+        regions=second["regions"],
+        limitations=str(second["limitations"]),
+        raw_output=second,
     )
 
-    with pytest.raises(ValueError, match="requires explicit sub_window"):
-        registry.execute(
-            "read_segment",
-            {
-                "segment_id": "seg_0001",
-                "mode": "refine",
-            },
-        )
+    assert first["candidate_windows"][0]["candidate_id"] == second["candidate_windows"][0]["candidate_id"] == "cand_0001"
+    assert first["candidate_windows"][0]["candidate_key"] != second["candidate_windows"][0]["candidate_key"]
 
-    with pytest.raises(ValueError, match="requires explicit sub_window"):
+    with pytest.raises(ValueError, match="ambiguous"):
         registry.execute(
-            "read_segment",
+            "verify_window",
             {
-                "segment_id": "seg_0001",
-                "mode": "verify",
+                "candidate_id": "cand_0001",
+                "checks": [{"target_id": "shield", "claim": "The shield is visible.", "polarity": "presence"}],
             },
         )
 
     verified = registry.execute(
-        "read_segment",
+        "verify_window",
         {
-            "segment_id": "seg_0001",
-            "mode": "verify",
-            "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
+            "candidate_key": first["candidate_windows"][0]["candidate_key"],
+            "checks": [{"target_id": "shield", "claim": "The shield is visible.", "polarity": "presence"}],
         },
     )
-    assert verified["mode"] == "verify"
+
+    assert verified["candidate_key"] == first["candidate_windows"][0]["candidate_key"]
+    assert verified["segment_id"] == "seg_0001"
 
 
-def test_workspace_v2_refine_invalid_backend_output_is_rejected_with_artifacts(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_refine_invalid")
-    backend = InvalidRefinementBackend()
-    artifact_root = tmp_path / "artifacts" / "index_refinement"
-    registry = build_workspace_v2_registry(
-        video_map=_video_map(),
-        backend=backend,
-        workspace=workspace,
-        index_refiner=IndexRefiner(backend=backend, artifact_root=artifact_root),
-    )
-
-    registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
-    with pytest.raises(ValueError, match="refinement_output_invalid"):
-        registry.execute(
-            "read_segment",
-            {
-                "segment_id": "seg_0001",
-                "mode": "refine",
-                "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
-            },
-        )
-
-    prefix = artifact_root / "seg_0001_0010000_0025000_medium"
-    assert (prefix.with_name(prefix.name + "_request.json")).exists()
-    assert (prefix.with_name(prefix.name + "_response.txt")).read_text() == '{"summary":"local refined index"}'
-    validation = json.loads((prefix.with_name(prefix.name + "_validation.json")).read_text())
-    assert validation["valid"] is False
-    assert validation["error"].startswith("refinement_output_invalid")
-
-
-def test_workspace_v2_read_segment_verify_reuses_read_clip_commit_contract(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_segment_verify")
-    backend = RecordingBackend("The shield icon remains over Central Europe.")
-    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
-
-    registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
-    result = registry.execute(
-        "read_segment",
-        {
-            "segment_id": "seg_0001",
-            "mode": "verify",
-            "sub_window": {"start_sec": 10.0, "end_sec": 25.0},
-            "evidence_mode": "visual",
-            "focus": ["shield"],
-        },
-    )
-    spec = registry.get_runtime_spec("read_segment")
-
-    assert result["facts"][0]["text"] == "The shield icon remains over Central Europe."
-    assert result["regions"][0]["segment_id"] == "seg_0001"
-    assert backend.requests[0].task == "vision_read"
-    assert spec.commit_required_predicate is not None
-    assert spec.commit_required_predicate(result) is True
-
-
-def test_workspace_v2_read_clip_uses_backend_source_kind(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_clip_source_kind")
+def test_workspace_v2_verify_window_uses_backend_source_kind(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_window_source_kind")
     backend = RecordingBackend("The label reads buffer zone.", raw={"source_kind": "ocr_fact"})
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
 
-    result = registry.execute("read_clip", {"scope": {"segment_id": "seg_0001"}, "focus": ["shield icon"]})
+    result = registry.execute(
+        "verify_window",
+        {"segment_id": "seg_0001", "time_range": [0.0, 60.0], "focus": ["shield icon"]},
+    )
 
     assert result["facts"][0]["source_kind"] == "ocr_fact"
     assert result["produced_anchors"][0]["modality"] == "ocr"
 
 
-def test_workspace_v2_read_clip_splits_sentence_facts(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_read_clip_sentence_facts")
+def test_workspace_v2_verify_window_splits_sentence_facts(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_window_sentence_facts")
     backend = RecordingBackend("Austria-Hungary is shown near Russia. A shield marks the buffer zone.")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
 
-    result = registry.execute("read_clip", {"scope": {"segment_id": "seg_0001"}, "focus": ["audio narration"]})
+    result = registry.execute(
+        "verify_window",
+        {"segment_id": "seg_0001", "time_range": [0.0, 60.0], "focus": ["audio narration"]},
+    )
 
     assert [fact["text"] for fact in result["facts"]] == [
         "Austria-Hungary is shown near Russia.",
@@ -720,45 +697,6 @@ def test_workspace_v2_read_clip_splits_sentence_facts(tmp_path: Path) -> None:
     assert [fact["source_kind"] for fact in result["facts"]] == ["audio_fact", "audio_fact"]
     assert len(result["candidate_anchor_ids"]) == 2
     assert result["produced_anchors"][1]["field_path"] == "facts[1].text"
-
-
-def test_workspace_v2_verify_is_provenance_gate(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify")
-    observation = workspace.write_observation(
-        tool_name="read_clip",
-        claim="Austria-Hungary was seen as a buffer between Russia and Western Europe.",
-        confidence=0.9,
-    )
-    workspace.commit_observation(
-        observation.observation_id,
-        writes={
-            "pinned_anchors": [
-                {
-                    "anchor_id": "anch_asr_206",
-                    "kind": "asr",
-                    "source_kind": "audio_fact",
-                    "excerpt": "buffer between Russia and Western Europe",
-                }
-            ],
-            "memory": [
-                {
-                    "kind": "answer_support",
-                    "claim": "Narration says Austria-Hungary was a buffer.",
-                    "anchor_ids": ["anch_asr_206"],
-                    "confidence": "high",
-                }
-            ],
-        },
-    )
-    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
-
-    accepted = registry.execute("verify", {"claim": "D", "against": {"citations": ["mem_0001"]}})
-    rejected = registry.execute("verify", {"claim": "D", "against": {"citations": ["obs_missing"]}})
-
-    assert accepted["accepted"] is True
-    assert accepted["phase"] == "provenance_gate"
-    assert rejected["accepted"] is False
-    assert "unknown citation" in rejected["reason"]
 
 
 def test_workspace_v2_verify_final_requires_memory_citation(tmp_path: Path) -> None:
@@ -873,12 +811,176 @@ def test_workspace_v2_local_negative_memory_requires_scope_and_cannot_final_cite
         registry.execute("answer", {"text": "A", "citations": ["mem_0001"], "confidence": "low"})
 
 
-@pytest.mark.parametrize("kind", ["answer_support", "synthesized_support", "answer_conflict_resolved"])
-def test_workspace_v2_answer_accepts_answer_supporting_memory_kinds(tmp_path: Path, kind: str) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, f"workspace_v2_answer_accepts_{kind}")
+def test_workspace_v2_commit_rejects_explore_answer_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_explore_commit_gate")
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+    explore = registry.execute("explore", {"query": "buffer", "top_k": 1})
+    observation = workspace.write_observation(
+        tool_name="explore",
+        claim=str(explore["claim"]),
+        confidence=float(explore["confidence"]),
+        regions=explore["regions"],
+        limitations=str(explore["limitations"]),
+        raw_output=explore,
+    )
+    anchor = explore["produced_anchors"][0]
+
+    with pytest.raises(ValueError, match="explore observations.*cannot become answer_support"):
+        workspace.commit_observation(
+            observation.observation_id,
+            writes={
+                "pinned_anchors": [
+                    {
+                        "anchor_id": anchor["anchor_id"],
+                        "kind": anchor["source_kind"],
+                        "source_kind": anchor["source_kind"],
+                        "excerpt": anchor["excerpt"],
+                    }
+                ],
+                "memory": [
+                    {
+                        "kind": "answer_support",
+                        "claim": "Candidate-only evidence supports an answer.",
+                        "anchor_ids": [anchor["anchor_id"]],
+                        "confidence": "medium",
+                    }
+                ],
+            },
+        )
+
+
+def test_workspace_v2_commit_accepts_supported_verify_window_answer_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_commit_gate")
+    backend = RecordingBackend(
+        raw={
+            "facts": [{"text": "The shield is visible in the inspected window.", "source_kind": "visual_fact", "confidence": 0.91}],
+            "verification_results": [
+                {
+                    "target_id": "shield",
+                    "claim": "The shield is visible.",
+                    "verdict": "supported",
+                    "confidence": 0.91,
+                    "rationale": "The shield appears in the frame.",
+                }
+            ],
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    verified = registry.execute(
+        "verify_window",
+        {
+            "segment_id": "seg_0001",
+            "time_range": [0.0, 30.0],
+            "checks": [{"target_id": "shield", "claim": "The shield is visible.", "polarity": "presence"}],
+        },
+    )
+    observation = workspace.write_observation(
+        tool_name="verify_window",
+        claim=str(verified["claim"]),
+        confidence=float(verified["confidence"]),
+        regions=verified["regions"],
+        limitations=str(verified["limitations"]),
+        raw_output=verified,
+    )
+    anchor_id = verified["produced_anchors"][0]["anchor_id"]
+
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": anchor_id,
+                    "kind": "visual",
+                    "source_kind": "visual_fact",
+                    "excerpt": "The shield is visible",
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "answer_support",
+                    "claim": "The shield is visible.",
+                    "anchor_ids": [anchor_id],
+                    "confidence": "high",
+                    "supports_option": "D",
+                }
+            ],
+        },
+    )
+
+    entry = workspace.get_memory("mem_0001")
+    assert entry is not None
+    assert entry.metadata["source_tool"] == "verify_window"
+    assert entry.metadata["source_observation_id"] == observation.observation_id
+    assert entry.metadata["target_id"] == "shield"
+    assert entry.metadata["verdict"] == "supported"
+    result = registry.execute("answer", {"text": "D", "citations": ["mem_0001"], "confidence": "high"})
+    assert result["accepted"] is True
+
+
+def test_workspace_v2_commit_rejects_not_found_as_answer_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_not_found_commit_gate")
+    backend = RecordingBackend(
+        raw={
+            "facts": [{"text": "Hubble is not found in this local window.", "source_kind": "visual_fact", "confidence": 0.8}],
+            "verification_results": [
+                {
+                    "target_id": "hubble",
+                    "claim": "Hubble appears.",
+                    "verdict": "not_found_in_window",
+                    "confidence": 0.8,
+                    "rationale": "No Hubble reference is visible locally.",
+                }
+            ],
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    verified = registry.execute(
+        "verify_window",
+        {
+            "segment_id": "seg_0001",
+            "time_range": [0.0, 30.0],
+            "checks": [{"target_id": "hubble", "claim": "Hubble appears.", "polarity": "presence"}],
+        },
+    )
+    observation = workspace.write_observation(
+        tool_name="verify_window",
+        claim=str(verified["claim"]),
+        confidence=float(verified["confidence"]),
+        regions=verified["regions"],
+        limitations=str(verified["limitations"]),
+        raw_output=verified,
+    )
+    anchor_id = verified["produced_anchors"][0]["anchor_id"]
+
+    with pytest.raises(ValueError, match="not_found_in_window.*answer_support"):
+        workspace.commit_observation(
+            observation.observation_id,
+            writes={
+                "pinned_anchors": [
+                    {
+                        "anchor_id": anchor_id,
+                        "kind": "visual",
+                        "source_kind": "visual_fact",
+                        "excerpt": "Hubble is not found",
+                    }
+                ],
+                "memory": [
+                    {
+                        "kind": "answer_support",
+                        "claim": "Hubble is absent from the video.",
+                        "anchor_ids": [anchor_id],
+                        "confidence": "medium",
+                    }
+                ],
+            },
+        )
+
+
+def test_workspace_v2_answer_rejects_legacy_tool_answer_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_legacy_answer_gate")
     observation = workspace.write_observation(
         tool_name="read_clip",
-        claim="Austria-Hungary was seen as a buffer between Russia and Western Europe.",
+        claim="Legacy read_clip observation.",
         confidence=0.9,
     )
     workspace.commit_observation(
@@ -886,22 +988,32 @@ def test_workspace_v2_answer_accepts_answer_supporting_memory_kinds(tmp_path: Pa
         writes={
             "pinned_anchors": [
                 {
-                    "anchor_id": "anch_asr_206",
+                    "anchor_id": "anch_legacy",
                     "kind": "asr",
                     "source_kind": "audio_fact",
-                    "excerpt": "buffer between Russia and Western Europe",
+                    "excerpt": "Legacy read_clip observation",
                 }
             ],
             "memory": [
                 {
-                    "kind": kind,
-                    "claim": "A final-supporting memory entry exists.",
-                    "anchor_ids": ["anch_asr_206"],
+                    "kind": "answer_support",
+                    "claim": "Legacy read_clip memory should not be final-cited.",
+                    "anchor_ids": ["anch_legacy"],
                     "confidence": "high",
                 }
             ],
         },
     )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    with pytest.raises(ValueError, match="source provenance|removed legacy tool"):
+        registry.execute("answer", {"text": "D", "citations": ["mem_0001"], "confidence": "high"})
+
+
+@pytest.mark.parametrize("kind", ["answer_support", "answer_conflict_resolved"])
+def test_workspace_v2_answer_accepts_answer_supporting_memory_kinds(tmp_path: Path, kind: str) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, f"workspace_v2_answer_accepts_{kind}")
+    _commit_verified_memory(workspace, kind=kind)
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
 
     result = registry.execute("answer", {"text": "D", "citations": ["mem_0001"], "confidence": "high"})
@@ -911,33 +1023,24 @@ def test_workspace_v2_answer_accepts_answer_supporting_memory_kinds(tmp_path: Pa
 
 def test_workspace_v2_answer_rejects_mixed_final_citations_with_unsupported_memory(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_answer_rejects_mixed_memory")
-    observation = workspace.write_observation(
-        tool_name="read_clip",
-        claim="Austria-Hungary was seen as a buffer between Russia and Western Europe.",
-        confidence=0.9,
-    )
+    _commit_verified_memory(workspace)
+    observation = workspace.write_observation(tool_name="verify_window", claim="Extra observation.", confidence=0.5)
     workspace.commit_observation(
         observation.observation_id,
         writes={
             "pinned_anchors": [
                 {
-                    "anchor_id": "anch_asr_206",
+                    "anchor_id": "anch_extra",
                     "kind": "asr",
                     "source_kind": "audio_fact",
-                    "excerpt": "buffer between Russia and Western Europe",
+                    "excerpt": "Extra observation",
                 }
             ],
             "memory": [
                 {
-                    "kind": "answer_support",
-                    "claim": "Answer support exists.",
-                    "anchor_ids": ["anch_asr_206"],
-                    "confidence": "high",
-                },
-                {
                     "kind": "unverified_capture",
                     "claim": "Unverified capture must not be final-cited.",
-                    "anchor_ids": ["anch_asr_206"],
+                    "anchor_ids": ["anch_extra"],
                     "confidence": "low",
                 },
             ],
@@ -951,32 +1054,7 @@ def test_workspace_v2_answer_rejects_mixed_final_citations_with_unsupported_memo
 
 def test_workspace_v2_answer_rejects_mixed_final_citations_with_raw_observation(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_answer_rejects_raw_obs")
-    observation = workspace.write_observation(
-        tool_name="read_clip",
-        claim="Austria-Hungary was seen as a buffer between Russia and Western Europe.",
-        confidence=0.9,
-    )
-    workspace.commit_observation(
-        observation.observation_id,
-        writes={
-            "pinned_anchors": [
-                {
-                    "anchor_id": "anch_asr_206",
-                    "kind": "asr",
-                    "source_kind": "audio_fact",
-                    "excerpt": "buffer between Russia and Western Europe",
-                }
-            ],
-            "memory": [
-                {
-                    "kind": "answer_support",
-                    "claim": "Answer support exists.",
-                    "anchor_ids": ["anch_asr_206"],
-                    "confidence": "high",
-                }
-            ],
-        },
-    )
+    _commit_verified_memory(workspace)
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
 
     with pytest.raises(ValueError, match="final answer citations must be memory ids"):
@@ -1022,32 +1100,7 @@ def test_workspace_v2_synthesize_memory_rejects_unverified_support_laundering(tm
 
 def test_workspace_v2_synthesize_memory_derives_from_committed_memory(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_synthesize_memory")
-    observation = workspace.write_observation(
-        tool_name="read_clip",
-        claim="Austria-Hungary was seen as a buffer between Russia and Western Europe.",
-        confidence=0.9,
-    )
-    workspace.commit_observation(
-        observation.observation_id,
-        writes={
-            "pinned_anchors": [
-                {
-                    "anchor_id": "anch_asr_206",
-                    "kind": "asr",
-                    "source_kind": "audio_fact",
-                    "excerpt": "buffer between Russia and Western Europe",
-                }
-            ],
-            "memory": [
-                {
-                    "kind": "answer_support",
-                    "claim": "Narration says Austria-Hungary was a buffer.",
-                    "anchor_ids": ["anch_asr_206"],
-                    "confidence": "high",
-                }
-            ],
-        },
-    )
+    _commit_verified_memory(workspace)
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
 
     result = registry.execute(
@@ -1067,6 +1120,8 @@ def test_workspace_v2_synthesize_memory_derives_from_committed_memory(tmp_path: 
     assert entry is not None
     assert entry.kind == "synthesized_support"
     assert entry.previous_memory_refs == ("mem_0001",)
-    assert [anchor.anchor_id for anchor in entry.anchors] == ["anch_asr_206"]
+    assert [anchor.anchor_id for anchor in entry.anchors] == ["clip_anch_seg_0001_00000000_00030000"]
     assert entry.metadata["supports"] == ["mem_0001"]
-    assert entry.metadata["evidence_obs_ids"] == [observation.observation_id]
+    assert entry.metadata["evidence_obs_ids"] == ["obs_0001"]
+    answered = registry.execute("answer", {"text": "D", "citations": ["mem_0002"], "confidence": "high"})
+    assert answered["accepted"] is True

@@ -664,17 +664,15 @@ class WorkspaceVisualAgent:
 
 PLAN_SYSTEM_PROMPT = """You are exploring a video through a durable workspace.
 Output exactly one JSON object: {"tool":"...","args":{...}}.
-Available plan tools are scan_segment, verify_window, read_segment, search, list, read_workspace, synthesize_memory, and answer.
+Available plan tools are explore, verify_window, read_workspace, synthesize_memory, and answer.
 The Segment Cards are navigation-only summaries. Full Dense Video Caption beats are hidden from your default context.
-Use scan_segment to delegate one segment's raw index to IndexScout and obtain CandidateWindows.
-Use verify_window to delegate one CandidateWindow to EvidenceVerifier for answer-grade local facts with anchors.
-Use read_segment(index) only for debugging raw structured index payloads; prefer scan_segment during normal planning.
-Use read_segment(refine) only when a DVC beat or root interval is too broad or ambiguous; always include an explicit sub_window from the DVC timeline and never refine a refined child.
-Use read_segment(verify) only as a compatibility path when you already have an explicit DVC sub_window. Only committed memory from verify-capable observations may support an answer.
-Do not call the standalone verify tool during planning; it is a provenance gate, not a video-reading action. Use verify_window or read_segment with mode="verify" instead.
-Do not refine an already-refined root range at the same resolution.
-Use synthesize_memory only after Committed Memory contains answer-support mem_* ids.
-Use answer only after Committed Memory contains mem_* ids that directly support the answer.
+Use explore to find candidate windows when the relevant local window is unknown. Explore results are navigation only.
+Use verify_window to inspect a concrete candidate window and verify one or more factual checks using local video evidence.
+Use read_workspace to inspect committed memory, pending candidates, and verification coverage.
+Use synthesize_memory only after Committed Memory contains verified answer-support mem_* ids.
+Use answer only after Committed Memory contains verified mem_* ids that directly support the answer.
+For questions with multiple factual requirements, pass multiple checks to verify_window when they belong to the same local window.
+Treat every verify_window result as scoped to its inspected time window. A local miss is not global absence.
 For multiple-choice questions, answer text must be exactly one option letter: "A", "B", "C", or "D".
 Every answer call must include {"text": "A|B|C|D", "citations": ["mem_*"], "confidence": "..."}.
 If there is no committed memory, or if the last answer was rejected, choose an exploration tool instead of answer.
@@ -709,17 +707,15 @@ def compose_plan_prompt(
             "# Plan Protocol",
             "Return exactly one JSON object. Do not explain.",
             "Use Segment Cards as the starting navigation state. They are summaries only, not answer evidence.",
-            'To inspect one promising segment, call {"tool":"scan_segment","args":{"segment_id":"seg_0001","question":"...","scan_goal":"what to localize","preferred_modalities":["asr","visual"],"max_candidates":3}}.',
-            'For answer-grade evidence, call {"tool":"verify_window","args":{"candidate_id":"cand_seg_0001_001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"focus":["what must be verified"],"checks":[{"id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
-            'Do not call {"tool":"verify"} as a standalone planning action; use verify_window for video evidence.',
-            'If an old read_segment path is needed, first get a concrete sub_window from scan_segment or read_segment(index).',
-            "After search returns candidate hits, inspect a concrete segment with scan_segment or verify_window; do not answer directly from search candidates.",
-            'If Last Tool Result starts with "answer rejected", the next tool must be scan_segment, verify_window, read_segment, search, list, or read_workspace.',
+            'To find candidate windows, call {"tool":"explore","args":{"query":"what to localize","targets":[{"target_id":"target_1","claim":"fact to locate","aliases":[]}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
+            'For answer-grade local evidence, call {"tool":"verify_window","args":{"candidate_key":"obs_0001:cand_0001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
+            "Explore results are candidate-only and cannot support final answers.",
+            "Use verify_window to convert candidate windows into local evidence before committing answer-support memory.",
+            'If Last Tool Result starts with "answer rejected", the next tool must be explore, verify_window, read_workspace, or synthesize_memory.',
             'If Last Tool Result starts with "observation rejected", change candidate, segment, sub_window, evidence_mode, or focus; do not repeat the same verify.',
             'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',
-            'If Last Tool Result contains "refinement_output_invalid", switch to verify_window on a candidate or choose a different segment; do not repeat refine.',
             _synthesize_memory_availability(workspace),
-            'Use {"tool":"answer","args":{"text":"<option_letter>","citations":["mem_0001"],"confidence":"high"}} only when cited committed memory directly supports that option.',
+            "Use answer only when citations are existing committed mem_* ids that directly support the option; do not invent memory ids.",
             "",
             workspace.render_plan_view(question=question, video_map=video_map),
             "",
@@ -733,7 +729,7 @@ def _synthesize_memory_availability(workspace: EvidenceWorkspace) -> str:
     answer_supporting = {"answer_support", "synthesized_support", "answer_conflict_resolved"}
     if any(entry.kind in answer_supporting for entry in workspace.memory_entries()):
         return "synthesize_memory is available only for deriving from cited committed answer-support memory."
-    return "synthesize_memory is unavailable until committed memory exists; first commit answer-support memory from local reads."
+    return "synthesize_memory is unavailable until committed memory exists; first commit answer-support memory from verify_window."
 
 
 def compose_commit_prompt(
@@ -799,7 +795,7 @@ def compose_commit_prompt(
           "metadata": {"requires_local_read": true}
         }
       ],
-      "plan_update": "Next: read_clip the pinned candidate time range before final answer."
+      "plan_update": "Next: verify_window the pinned candidate time range before final answer."
     }
   }
 }""",
@@ -827,7 +823,8 @@ def compose_final_prompt(*, question: str, workspace: EvidenceWorkspace, video_m
             "# Forced Final Protocol",
             "The maximum round count has been reached. You must answer now.",
             "Return exactly one JSON object using the answer tool.",
-            'Use {"tool":"answer","args":{"text":"<option_letter>","citations":["mem_0001"],"confidence":"low"}}.',
+            "The answer args must include text, citations, and confidence.",
+            "Citations must be existing committed mem_* ids; use [] when no valid citation supports the answer.",
             "For multiple-choice questions, text must be exactly one option letter: A, B, C, or D.",
             "Choose the best supported option from committed memory; do not default to any option letter.",
             "Prefer committed mem_* citations. If no valid citation supports the answer, choose the most likely option with citations: [] and confidence: low; the framework will mark the answer unvalidated.",
@@ -1086,12 +1083,12 @@ def _legacy_commit_writes(
             memory["metadata"] = {
                 "requires_local_read": True,
                 "cannot_final_cite": True,
-                "recommended_next_tool": "read_clip",
+                "recommended_next_tool": "verify_window",
                 "recommended_scope": {"time_range": time_range} if time_range is not None else {},
             }
             if anchor_ids:
                 writes["plan_update"] = (
-                    f"Next: read_clip candidate {anchor_ids[0]} at {_format_scope_for_plan(time_range)} before final answer."
+                    f"Next: verify_window candidate {anchor_ids[0]} at {_format_scope_for_plan(time_range)} before final answer."
                 )
         writes["memory"] = [memory]
     return writes
@@ -1171,7 +1168,7 @@ def _retrieval_candidate_writes(
     anchors: Sequence[Mapping[str, Any]],
     reason: str,
 ) -> dict[str, Any]:
-    results = _mapping_items(raw_output.get("results"))
+    results = _mapping_items(raw_output.get("results")) or _mapping_items(raw_output.get("candidate_windows"))
     if not results:
         return {}
     anchor = dict(anchors[0])
@@ -1182,11 +1179,11 @@ def _retrieval_candidate_writes(
         (
             item
             for item in results
-            if str(item.get("candidate_anchor_id") or "").strip() == anchor_id
+            if str(item.get("candidate_anchor_id") or item.get("anchor_id") or "").strip() == anchor_id
         ),
         results[0],
     )
-    excerpt = str(anchor.get("excerpt") or result.get("excerpt") or "").strip()
+    excerpt = str(anchor.get("excerpt") or result.get("excerpt") or result.get("rationale") or "").strip()
     time_range = result.get("time_range") or anchor.get("time_range") or [anchor.get("start_sec"), anchor.get("end_sec")]
     segment_id = str(result.get("segment_id") or anchor.get("segment_id") or "").strip()
     claim = (
@@ -1215,12 +1212,14 @@ def _retrieval_candidate_writes(
                     "cannot_final_cite": True,
                     "auto_pinned": True,
                     "auto_pin_reason": reason,
-                    "recommended_next_tool": "read_clip",
+                    "recommended_next_tool": "verify_window",
+                    "candidate_key": str(result.get("candidate_key") or ""),
+                    "candidate_id": str(result.get("candidate_id") or ""),
                     "recommended_scope": {"time_range": time_range},
                 },
             }
         ],
-        "plan_update": f"Next: read_clip candidate {anchor_id} at {_format_scope_for_plan(time_range)} before final answer.",
+        "plan_update": f"Next: verify_window candidate {anchor_id} at {_format_scope_for_plan(time_range)} before final answer.",
     }
 
 

@@ -331,8 +331,8 @@ def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> N
     ]
 
 
-def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_read_segment_progressive")
+def test_workspace_agent_runs_verify_window_commit_answer(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_verify_window_commit")
     sampled = []
 
     def fake_frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
@@ -341,9 +341,7 @@ def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp
 
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"index"}}',
-            '{"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"refine","sub_window":{"start_sec":5,"end_sec":20},"resolution":"medium","focus":["buffer"]}}',
-            '{"tool":"read_segment","args":{"segment_id":"seg_0001","mode":"verify","sub_window":{"start_sec":5,"end_sec":20},"evidence_mode":"visual","focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[5,20],"evidence_mode":"visual","focus":["buffer"]}}',
             '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}',
         ],
         commit_responses=[
@@ -351,7 +349,7 @@ def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp
             {
               "tool": "commit_observation",
               "args": {
-                "observation_id": "obs_0003",
+                    "observation_id": "obs_0001",
                 "writes": {
                   "pinned_anchors": [{
                     "anchor_id": "clip_anch_seg_0001_00005000_00020000",
@@ -364,7 +362,7 @@ def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp
                     "claim": "Austria-Hungary is identified as the buffer.",
                     "supports_option": "D",
                     "anchor_ids": ["clip_anch_seg_0001_00005000_00020000"],
-                    "evidence_obs_ids": ["obs_0003"],
+                    "evidence_obs_ids": ["obs_0001"],
                     "confidence": "high"
                   }]
                 }
@@ -379,6 +377,7 @@ def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp
         backend=backend,
         workspace=workspace,
         index_refiner=IndexRefiner(backend=backend, frame_sampler=fake_frame_sampler),
+        frame_sampler=fake_frame_sampler,
     )
     agent = WorkspaceVisualAgent(
         backend=backend,
@@ -392,15 +391,10 @@ def test_workspace_agent_runs_read_segment_index_refine_verify_commit_answer(tmp
 
     assert not hasattr(agent, "runtime_host")
     assert result.answer == "D"
-    assert workspace.observation_status("obs_0001") == "acknowledged"
-    assert workspace.observation_status("obs_0002") == "acknowledged"
-    assert workspace.observation_status("obs_0003") == "committed"
+    assert workspace.observation_status("obs_0001") == "committed"
     assert workspace.memory_entries()[0].kind == "answer_support"
-    assert sampled == [("/videos/demo.mp4", 5.0, 20.0, 15)]
+    assert sampled == [("/videos/demo.mp4", 5.0, 20.0, 30)]
     assert [request.task for request in backend.requests] == [
-        "workspace_plan",
-        "workspace_plan",
-        "refine_segment_index",
         "workspace_plan",
         "vision_read",
         "workspace_commit",
@@ -417,22 +411,13 @@ def test_plan_prompt_renders_latest_refinement_from_video_map_store(tmp_path: Pa
         del video_path, start_sec, end_sec, max_frames
         return ["/frames/demo/00005.jpg"]
 
-    registry = build_workspace_v2_registry(
-        video_map=store,
-        backend=backend,
-        workspace=workspace,
-        index_refiner=IndexRefiner(backend=backend, frame_sampler=fake_frame_sampler),
-    )
-    registry.execute("read_segment", {"segment_id": "seg_0001", "mode": "index"})
-    registry.execute(
-        "read_segment",
-        {
-            "segment_id": "seg_0001",
-            "mode": "refine",
-            "sub_window": {"start_sec": 5.0, "end_sec": 20.0},
-            "resolution": "medium",
-            "focus": ["buffer"],
-        },
+    IndexRefiner(backend=backend, frame_sampler=fake_frame_sampler).refine(
+        store,
+        parent_segment_id="seg_0001",
+        requested_start_sec=5.0,
+        requested_end_sec=20.0,
+        resolution="medium",
+        focus=["buffer"],
     )
 
     prompt = compose_plan_prompt(question="Why?", workspace=workspace, video_map=store)
@@ -456,12 +441,12 @@ def test_workspace_agent_rejects_exploration_tool_during_commit_phase_then_auto_
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_bad_commit")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
         ],
         commit_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"}}}',
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"}}}',
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"}}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60]}}',
         ],
     )
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
@@ -486,7 +471,7 @@ def test_workspace_agent_retries_commit_and_validates_final_answer(tmp_path: Pat
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_retry_commit")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
             '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}',
         ],
         commit_responses=[
@@ -544,7 +529,7 @@ def test_workspace_agent_accepts_legacy_answer_field_after_commit(tmp_path: Path
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_legacy_answer_arg")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
             '{"tool":"answer","args":{"answer":"D","citations":["mem_0001"],"confidence":"high"}}',
         ],
         commit_responses=[
@@ -588,7 +573,7 @@ def test_workspace_agent_normalizes_legacy_commit_claim_to_answer_support(tmp_pa
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_legacy_commit_claim")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
             '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}',
         ],
         commit_responses=[
@@ -611,7 +596,7 @@ def test_workspace_agent_rejects_uncited_answer_and_continues(tmp_path: Path) ->
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
             '{"tool":"answer","args":{"answer":"B. Why the Austro-Hungarian Empire was divided."}}',
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
             '{"tool":"answer","args":{"answer":"D","citations":["mem_0001"],"confidence":"high"}}',
         ],
         commit_responses=[
@@ -753,19 +738,20 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     )
 
     assert "Available plan tools" in PLAN_SYSTEM_PROMPT
-    assert "scan_segment" in PLAN_SYSTEM_PROMPT
+    assert "explore" in PLAN_SYSTEM_PROMPT
     assert "verify_window" in PLAN_SYSTEM_PROMPT
-    assert "standalone verify" in PLAN_SYSTEM_PROMPT
     assert "Every answer call must include" in PLAN_SYSTEM_PROMPT
     assert '"text":"D"' not in PLAN_SYSTEM_PROMPT
+    for removed_tool in ("scan_segment", "read_clip", "read_segment", "standalone verify", "search", "list"):
+        assert removed_tool not in PLAN_SYSTEM_PROMPT
+        assert removed_tool not in prompt
     assert "Use Segment Cards as the starting navigation state" in prompt
-    assert '{"tool":"scan_segment"' in prompt
+    assert '{"tool":"explore"' in prompt
     assert '{"tool":"verify_window"' in prompt
     assert "synthesize_memory is unavailable until committed memory exists" in prompt
     assert "duplicate_tool_call" in prompt
     assert "do not repeat the same semantic request" in prompt
-    assert "refinement_output_invalid" in prompt
-    assert "candidate_id" in prompt
+    assert "candidate_key" in prompt
     assert '"text":"D"' not in prompt
     assert '"text":"A"' not in prompt
 
@@ -786,7 +772,7 @@ def test_workspace_agent_exports_downloadable_round_log(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_round_log")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
             '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}',
         ],
         commit_responses=[
@@ -823,7 +809,7 @@ def test_workspace_agent_round_log_includes_forced_final_io(tmp_path: Path) -> N
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_forced_final_round_log")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"search","args":{"query":"does-not-exist","modality":"asr"}}',
+            '{"tool":"read_workspace","args":{"section":"memory"}}',
         ],
         commit_responses=[],
     )
@@ -848,11 +834,11 @@ def test_workspace_agent_round_log_includes_forced_final_io(tmp_path: Path) -> N
     assert '"tool":"answer"' in markdown
 
 
-def test_workspace_agent_commits_search_hit_with_evidence_excerpt(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_search_commit")
+def test_workspace_agent_commits_verify_window_with_evidence_excerpt(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_verify_commit")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"search","args":{"query":"buffer Russia","modality":"asr"}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
             '{"tool":"answer","args":{"text":"D","citations":["mem_0001"],"confidence":"high"}}',
         ],
         commit_responses=[
@@ -863,7 +849,7 @@ def test_workspace_agent_commits_search_hit_with_evidence_excerpt(tmp_path: Path
                 "observation_id": "obs_0001",
                 "writes": {
                   "pinned_anchors": [{
-                    "anchor_id":"anch_search_seg_0001_001",
+                    "anchor_id":"clip_anch_seg_0001_00000000_00060000",
                     "kind":"asr",
                     "source_kind":"audio_fact",
                     "excerpt":"Austria-Hungary was seen as a buffer between Russia and Western Europe."
@@ -872,7 +858,7 @@ def test_workspace_agent_commits_search_hit_with_evidence_excerpt(tmp_path: Path
                     "kind":"answer_support",
                     "claim":"ASR says Austria-Hungary was the buffer.",
                     "supports_option":"D",
-                    "anchor_ids":["anch_search_seg_0001_001"],
+                    "anchor_ids":["clip_anch_seg_0001_00000000_00060000"],
                     "confidence":"high"
                   }]
                 }
@@ -891,16 +877,17 @@ def test_workspace_agent_commits_search_hit_with_evidence_excerpt(tmp_path: Path
     assert workspace.observation_status("obs_0001") == "committed"
     assert [request.task for request in backend.requests] == [
         "workspace_plan",
+        "vision_read",
         "workspace_commit",
         "workspace_plan",
     ]
 
 
-def test_workspace_agent_acknowledges_search_without_evidence_excerpt(tmp_path: Path) -> None:
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_search_no_evidence")
+def test_workspace_agent_acknowledges_workspace_read_without_commit(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_read_workspace_no_commit")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"search","args":{"query":"does-not-exist","modality":"asr"}}',
+            '{"tool":"read_workspace","args":{"section":"memory"}}',
         ],
         commit_responses=[],
     )
@@ -910,7 +897,7 @@ def test_workspace_agent_acknowledges_search_without_evidence_excerpt(tmp_path: 
     result = agent.run("Why was Austria-Hungary shown between Russia and Western Europe?")
 
     _assert_forced_final_metadata(result)
-    assert workspace.observation_status("obs_0001") == "acknowledged"
+    assert workspace.observation_status("obs_0001") == "auto_acknowledged"
     assert [request.task for request in backend.requests] == ["workspace_plan", "workspace_final"]
 
 
@@ -918,10 +905,10 @@ def test_workspace_agent_auto_pins_retrieval_candidate_after_bad_commit_schema(t
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_search_candidate_auto_pin")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"search","args":{"query":"buffer Russia","modality":"asr"}}',
+            '{"tool":"explore","args":{"query":"buffer Russia","modalities":["asr"],"top_k":1}}',
         ],
         commit_responses=[
-            '{"tool":"commit_observation","args":{"observation_id":"obs_0001","writes":"anch_search_seg_0001_001"}}',
+            '{"tool":"commit_observation","args":{"observation_id":"obs_0001","writes":"anch_explore_obs_0001_cand_0001"}}',
             '{"tool":"commit_observation","args":{"observation_id":"obs_0001","writes":"still invalid"}}',
             '{"tool":"commit_observation","args":{"observation_id":"obs_0001"}}',
         ],
@@ -936,7 +923,7 @@ def test_workspace_agent_auto_pins_retrieval_candidate_after_bad_commit_schema(t
     memory = workspace.memory_entries()
     assert memory[0].kind == "retrieval_candidate"
     assert memory[0].metadata["requires_local_read"] is True
-    assert "read_clip" in workspace.render_plan_view(question="Why?")
+    assert "verify_window" in workspace.render_plan_view(question="Why?")
     validation_errors = [
         event["payload"]["error"]
         for event in workspace._read_jsonl_dicts("trace.jsonl")
@@ -949,12 +936,12 @@ def test_workspace_agent_commit_shorthand_preserves_retrieval_candidate_kind(tmp
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_search_candidate_shorthand")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"search","args":{"query":"buffer Russia","modality":"asr"}}',
+            '{"tool":"explore","args":{"query":"buffer Russia","modalities":["asr"],"top_k":1}}',
         ],
         commit_responses=[
             (
                 '{"tool":"commit_observation","args":{'
-                '"anchor_id":"anch_search_seg_0001_001",'
+                '"anchor_id":"anch_explore_obs_0001_cand_0001",'
                 '"claim":"Candidate search hit requires local read before answer.",'
                 '"kind":"retrieval_candidate",'
                 '"confidence":"low"'
@@ -972,15 +959,15 @@ def test_workspace_agent_commit_shorthand_preserves_retrieval_candidate_kind(tmp
     assert memory[0].kind == "retrieval_candidate"
     assert memory[0].metadata["requires_local_read"] is True
     assert memory[0].metadata["cannot_final_cite"] is True
-    assert memory[0].metadata["recommended_next_tool"] == "read_clip"
-    assert "read_clip candidate anch_search_seg_0001_001" in workspace.render_plan_view(question="Why?")
+    assert memory[0].metadata["recommended_next_tool"] == "verify_window"
+    assert "verify_window candidate anch_explore_obs_0001_cand_0001" in workspace.render_plan_view(question="Why?")
 
 
 def test_workspace_agent_auto_pins_after_commit_retry_exhaustion(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_auto_pin")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
         ],
         commit_responses=[
             '{"tool":"commit_observation","args":{"observation_id":"obs_0001","writes":{"pinned_anchors":[{"anchor_id":"anch_bad","kind":"asr","source_kind":"audio_fact","excerpt":"missing"}]}}}',
@@ -1049,7 +1036,7 @@ def test_workspace_agent_auto_pins_after_malformed_disposition_args(tmp_path: Pa
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_auto_pin_tool_error")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
         ],
         commit_responses=[
             '{"tool":"commit_observation","args":{"observation_id":"obs_0001"}}',
@@ -1071,7 +1058,7 @@ def test_workspace_agent_treats_disposition_field_as_commit_tool(tmp_path: Path)
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_disposition_field")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
         ],
         commit_responses=[
             '{"disposition":"defer_observation"}',
@@ -1093,7 +1080,7 @@ def test_workspace_agent_accepts_obs_id_alias_and_surfaces_rejection_to_next_pla
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_commit_obs_id_alias")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
             '{"tool":"answer","args":{"text":"D","citations":[],"confidence":"low"}}',
         ],
         commit_responses=[
@@ -1121,7 +1108,7 @@ def test_workspace_agent_auto_pins_after_unparseable_commit_response(tmp_path: P
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_unparseable_commit")
     backend = ScriptedWorkspaceV2Backend(
         plan_responses=[
-            '{"tool":"read_clip","args":{"scope":{"segment_id":"seg_0001"},"focus":["buffer"]}}',
+            '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],"focus":["buffer"]}}',
         ],
         commit_responses=[
             "I should commit this observation, but here is prose instead.",

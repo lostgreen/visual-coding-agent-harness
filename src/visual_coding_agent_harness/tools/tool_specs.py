@@ -31,11 +31,8 @@ _CORE_TOOL_SPEC_TOOLS = (
     "reject_observation",
     "defer_observation",
     "no_commit_needed",
-    "read_clip",
-    "read_segment",
-    "search",
-    "list",
-    "verify",
+    "explore",
+    "verify_window",
     "synthesize_memory",
     "answer",
 )
@@ -252,7 +249,8 @@ def install_video_tool_specs(registry: ToolRegistry, *, required: bool = False) 
         duplicate_guard_policy=DuplicateGuardPolicy.OFF,
     )
     if required:
-        required_missing = [tool_name for tool_name in _CORE_TOOL_SPEC_TOOLS if tool_name in missing]
+        registered = {spec.name for spec in registry.list_specs()}
+        required_missing = [tool_name for tool_name in _CORE_TOOL_SPEC_TOOLS if tool_name not in registered]
         if required_missing:
             raise ToolError("Missing required tool spec tools: " + ", ".join(required_missing))
     return registry
