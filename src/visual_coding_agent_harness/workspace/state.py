@@ -669,7 +669,7 @@ class EvidenceWorkspace:
             memory_entries: list[dict[str, Any]] = []
             available_anchor_ids = [str(anchor.get("anchor_id")) for anchor in pinned_anchors if anchor.get("anchor_id")]
             for memory_payload in _mapping_list(normalized_writes.get("memory")):
-                memory_metadata = _memory_commit_metadata(memory_payload)
+                memory_metadata = _memory_commit_metadata(memory_payload, observation=observation)
                 anchor_ids = [
                     str(item).strip()
                     for item in _sequence_items(memory_payload.get("anchor_ids"))
@@ -856,13 +856,27 @@ class EvidenceWorkspace:
             "Pending Candidate Windows",
             _candidate_window_rows(self),
             lambda candidate: (
-                f"{candidate.get('candidate_id')} "
+                f"{candidate.get('candidate_key') or candidate.get('candidate_id')} "
                 f"{_format_time_range(candidate.get('time_range'))} "
                 f"segment={candidate.get('segment_id')} "
                 f"status={candidate.get('status') or 'pending'} "
-                f"goal={candidate.get('verification_goal') or '-'}"
+                f"targets={','.join(str(item) for item in _sequence_items(candidate.get('matched_targets'))) or '-'} "
+                f"modalities={','.join(str(item) for item in _sequence_items(candidate.get('source_modalities'))) or '-'}"
             ).rstrip(),
-            hint='verify_window(candidate_id="cand_*")',
+            hint='verify_window(candidate_key="obs_*:cand_*")',
+        )
+
+        render_section(
+            "Verification Results",
+            _verification_result_rows(self),
+            lambda result: (
+                f"{result.get('target_id') or '-'} "
+                f"verdict={result.get('verdict') or 'uncertain'} "
+                f"time={_format_time_range(result.get('scope', {}).get('time_range') if isinstance(result.get('scope'), Mapping) else None) or '-'} "
+                f"conf={result.get('confidence') or '-'} "
+                f"mem={result.get('committed_memory_id') or '-'}"
+            ).rstrip(),
+            hint='read_workspace(section="observations_by_id")',
         )
 
         render_section(
@@ -2778,7 +2792,8 @@ class EvidenceWorkspace:
                 raise ValueError("relation_validation_failed: unknown entity reference " + ", ".join(missing))
 
         for memory_payload in _mapping_list(writes.get("memory")):
-            _validate_memory_commit_payload(memory_payload)
+            _validate_memory_commit_payload(memory_payload, observation=observation)
+            _validate_memory_observation_provenance(observation, memory_payload)
             anchor_ids = [
                 str(item).strip()
                 for item in _sequence_items(memory_payload.get("anchor_ids"))
@@ -3414,12 +3429,13 @@ def _default_evidence_obs_ids(payload: Mapping[str, Any], default_observation_id
     return ids or [str(default_observation_id)]
 
 
-def _validate_memory_commit_payload(payload: Mapping[str, Any]) -> None:
+def _validate_memory_commit_payload(payload: Mapping[str, Any], *, observation: Observation | None = None) -> None:
     kind = str(payload.get("kind") or "support")
     if kind not in {
         "note",
         "support",
         "answer_support",
+        "answer_conflict",
         "locator",
         "conflict",
         "contradicting",
@@ -3433,13 +3449,15 @@ def _validate_memory_commit_payload(payload: Mapping[str, Any]) -> None:
         "unverified_capture",
         "retrieval_candidate",
         "local_negative",
+        "navigation_note",
+        "verification_uncertain",
     }:
         raise ValueError(f"memory_validation_failed: unknown kind={kind}")
     confidence = str(payload.get("confidence") or "medium")
     if confidence not in {"high", "medium", "low"}:
         raise ValueError(f"memory_validation_failed: unknown confidence={confidence}")
     if kind == "local_negative":
-        metadata = _memory_commit_metadata(payload)
+        metadata = _memory_commit_metadata(payload, observation=observation)
         scope = metadata.get("scope")
         if not _valid_local_negative_scope(scope):
             raise ValueError("memory_validation_failed: local_negative requires metadata.scope with segment_id and time_range")
@@ -3449,15 +3467,69 @@ def _validate_memory_commit_payload(payload: Mapping[str, Any]) -> None:
             raise ValueError("memory_validation_failed: local_negative cannot support an answer option")
 
 
-def _memory_commit_metadata(payload: Mapping[str, Any]) -> dict[str, object]:
+def _validate_memory_observation_provenance(observation: Observation, payload: Mapping[str, Any]) -> None:
+    kind = str(payload.get("kind") or "support")
+    if observation.tool == "explore" and kind not in {"retrieval_candidate", "navigation_note"}:
+        raise ValueError("commit_validation_failed: explore observations are candidate-only and cannot become answer_support")
+    if observation.tool != "verify_window":
+        return
+    metadata = _memory_commit_metadata(payload, observation=observation)
+    verdict = str(metadata.get("verdict") or "").strip()
+    if kind == "answer_support" and verdict and verdict != "supported":
+        raise ValueError(f"commit_validation_failed: {verdict} cannot become answer_support")
+    if kind == "answer_conflict" and verdict and verdict != "contradicted":
+        raise ValueError(f"commit_validation_failed: {verdict} cannot become answer_conflict")
+    if kind == "verification_uncertain" and verdict and verdict != "uncertain":
+        raise ValueError(f"commit_validation_failed: {verdict} cannot become verification_uncertain")
+    if kind == "local_negative" and verdict and verdict != "not_found_in_window":
+        raise ValueError(f"commit_validation_failed: {verdict} cannot become local_negative")
+
+
+def _memory_commit_metadata(payload: Mapping[str, Any], *, observation: Observation | None = None) -> dict[str, object]:
     metadata = dict(payload.get("metadata", {}) or {})
     if "scope" in payload and "scope" not in metadata:
         metadata["scope"] = payload["scope"]
     if "global_negation_allowed" in payload and "global_negation_allowed" not in metadata:
         metadata["global_negation_allowed"] = payload["global_negation_allowed"]
+    if observation is not None and observation.tool in {"explore", "verify_window"}:
+        metadata.setdefault("source_tool", observation.tool)
+        metadata.setdefault("source_observation_id", observation.observation_id)
+    if observation is not None and observation.tool == "verify_window":
+        result = _matching_verification_result(observation, payload)
+        if result is not None:
+            metadata.setdefault("target_id", str(result.get("target_id") or ""))
+            metadata.setdefault("verdict", str(result.get("verdict") or ""))
+            if isinstance(result.get("scope"), Mapping):
+                metadata.setdefault("scope", dict(result.get("scope", {}) or {}))
+            result_anchor_ids = [str(item).strip() for item in _sequence_items(result.get("anchor_ids")) if str(item).strip()]
+            payload_anchor_ids = [str(item).strip() for item in _sequence_items(payload.get("anchor_ids")) if str(item).strip()]
+            metadata.setdefault("anchor_ids", result_anchor_ids or payload_anchor_ids)
+            metadata.setdefault("local_only", True)
     if str(payload.get("kind") or "support") == "local_negative":
         metadata.setdefault("global_negation_allowed", False)
     return metadata
+
+
+def _matching_verification_result(observation: Observation, payload: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+    results = _mapping_list(raw_output.get("verification_results"))
+    if not results:
+        return None
+    metadata = dict(payload.get("metadata", {}) or {})
+    target_id = str(payload.get("target_id") or metadata.get("target_id") or "").strip()
+    if target_id:
+        for result in results:
+            if str(result.get("target_id") or "").strip() == target_id:
+                return result
+    anchor_ids = {str(item).strip() for item in _sequence_items(payload.get("anchor_ids")) if str(item).strip()}
+    if anchor_ids:
+        for result in results:
+            result_anchor_ids = {str(item).strip() for item in _sequence_items(result.get("anchor_ids")) if str(item).strip()}
+            if result_anchor_ids and anchor_ids.intersection(result_anchor_ids):
+                return result
+    if len(results) == 1:
+        return results[0]
+    return None
 
 
 def _valid_local_negative_scope(scope: object) -> bool:
@@ -3642,38 +3714,73 @@ def _answer_support_memory_entries(entries: Sequence[MemoryEntry]) -> list[Memor
 
 
 def _evidence_coverage_lines(workspace: "EvidenceWorkspace") -> list[str]:
-    anchors = workspace.read_pinned_anchors()
-    by_modality: dict[str, list[str]] = {}
-    for anchor in anchors:
-        modality = str(anchor.get("modality") or anchor.get("kind") or anchor.get("source_kind") or "unknown")
-        time_text = _format_time_range(anchor.get("time_range") or [anchor.get("start_sec"), anchor.get("end_sec")])
-        if time_text:
-            by_modality.setdefault(modality, []).append(time_text)
-    lines = []
-    for modality in ("visual", "ocr", "asr", "audio_fact", "visual_fact", "temporal"):
-        if modality in by_modality:
-            lines.append(f"verified {modality}: {', '.join(by_modality[modality][:6])}")
-    if not lines:
-        lines.append("verified visual: none")
-        lines.append("verified OCR: none")
+    candidate_count = sum(
+        len(_mapping_row_items((observation.raw_output if isinstance(observation.raw_output, Mapping) else {}).get("candidate_windows")))
+        for observation in workspace.read_observations()
+    )
+    verification_results = _verification_result_rows(workspace)
+    counts = {"supported": 0, "contradicted": 0, "local_negative": 0, "uncertain": 0}
+    for result in verification_results:
+        verdict = str(result.get("verdict") or "uncertain")
+        if verdict == "not_found_in_window":
+            counts["local_negative"] += 1
+        elif verdict in counts:
+            counts[verdict] += 1
+        else:
+            counts["uncertain"] += 1
     answer_support_count = sum(1 for entry in workspace.memory_entries() if entry.kind in {"answer_support", "synthesized_support", "answer_conflict_resolved"})
-    lines.append(f"committed answer-support memories: {answer_support_count}")
-    return lines
+    return [
+        f"candidate_windows: {candidate_count}",
+        f"verified_supported: {counts['supported']}",
+        f"contradicted: {counts['contradicted']}",
+        f"local_negative: {counts['local_negative']}",
+        f"uncertain: {counts['uncertain']}",
+        f"answer_support_memories: {answer_support_count}",
+    ]
 
 
 def _candidate_window_rows(workspace: "EvidenceWorkspace") -> list[dict[str, Any]]:
     verified_ids: set[str] = set()
+    verified_keys: set[str] = set()
     rows: list[dict[str, Any]] = []
     for observation in workspace.read_observations():
         raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
         candidate_id = str(raw_output.get("candidate_id") or "").strip()
+        candidate_key = str(raw_output.get("candidate_key") or "").strip()
         if candidate_id and str(raw_output.get("worker") or "") == "EvidenceVerifier":
             verified_ids.add(candidate_id)
+        if candidate_key and str(raw_output.get("worker") or "") == "EvidenceVerifier":
+            verified_keys.add(candidate_key)
         for candidate in _mapping_row_items(raw_output.get("candidate_windows")):
             row = dict(candidate)
             if not row.get("time_range"):
                 row["time_range"] = [row.get("start_sec"), row.get("end_sec")]
-            row["status"] = "verified" if str(row.get("candidate_id") or "") in verified_ids else row.get("status") or "pending"
+            row["status"] = (
+                "verified"
+                if str(row.get("candidate_key") or "") in verified_keys or str(row.get("candidate_id") or "") in verified_ids
+                else row.get("status") or "pending"
+            )
+            rows.append(row)
+    return rows
+
+
+def _verification_result_rows(workspace: "EvidenceWorkspace") -> list[dict[str, Any]]:
+    committed_by_target: dict[tuple[str, str], str] = {}
+    for entry in workspace.memory_entries():
+        metadata = dict(entry.metadata or {})
+        target_id = str(metadata.get("target_id") or "").strip()
+        verdict = str(metadata.get("verdict") or "").strip()
+        if target_id and verdict:
+            committed_by_target[(target_id, verdict)] = entry.entry_id
+    rows: list[dict[str, Any]] = []
+    for observation in workspace.read_observations():
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        for result in _mapping_row_items(raw_output.get("verification_results")):
+            row = dict(result)
+            target_id = str(row.get("target_id") or "").strip()
+            verdict = str(row.get("verdict") or "").strip()
+            row["source_observation_id"] = observation.observation_id
+            row["committed_memory_id"] = committed_by_target.get((target_id, verdict), "")
             rows.append(row)
     return rows
 

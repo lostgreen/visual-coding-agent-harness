@@ -543,7 +543,7 @@ def test_plan_view_renders_compact_root_ledger_and_index_evidence_coverage(tmp_p
     assert "refined: 10.0-20.0s" in plan_view
     assert "Index coverage != evidence coverage" in plan_view
     assert "## Evidence Coverage" in plan_view
-    assert "committed answer-support memories: 1" in plan_view
+    assert "answer_support_memories: 1" in plan_view
 
 
 def test_plan_view_does_not_truncate_root_index_summaries(tmp_path: Path):
