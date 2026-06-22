@@ -12,6 +12,8 @@ MemoryKind = Literal[
     "note",
     "support",
     "answer_support",
+    "caption_support",
+    "visual_support",
     "answer_conflict",
     "locator",
     "conflict",
@@ -28,6 +30,7 @@ MemoryKind = Literal[
     "local_negative",
     "navigation_note",
     "verification_uncertain",
+    "contradiction",
 ]
 MemoryConfidence = Literal["high", "medium", "low"]
 
@@ -113,6 +116,8 @@ def _memory_kind(value: Any) -> MemoryKind:
         "note",
         "support",
         "answer_support",
+        "caption_support",
+        "visual_support",
         "answer_conflict",
         "locator",
         "conflict",
@@ -129,6 +134,7 @@ def _memory_kind(value: Any) -> MemoryKind:
         "local_negative",
         "navigation_note",
         "verification_uncertain",
+        "contradiction",
     }:
         return text  # type: ignore[return-value]
     raise ValueError(f"memory_validation_failed: unknown kind={text}")

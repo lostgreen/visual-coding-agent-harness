@@ -25,7 +25,9 @@ from .tool_specs import (
 from .workspace_primitives import build_workspace_primitives_registry
 
 
-ANSWER_SUPPORTING_KINDS = frozenset({"answer_support", "synthesized_support", "answer_conflict_resolved"})
+ANSWER_SUPPORTING_KINDS = frozenset(
+    {"answer_support", "caption_support", "visual_support", "synthesized_support", "answer_conflict_resolved"}
+)
 VERIFY_WINDOW_DEFAULT_FPS = 2.0
 VERIFY_WINDOW_MAX_FRAMES = 128
 
@@ -484,7 +486,7 @@ class SegmentReadService:
             ][:top_k]
         result_by_segment = {result.segment.segment_id: result for result in search_results}
         candidate_windows: list[dict[str, object]] = []
-        anchors: list[dict[str, object]] = []
+        candidate_anchors: list[dict[str, object]] = []
         for segment in segments:
             if len(candidate_windows) >= top_k:
                 break
@@ -525,7 +527,7 @@ class SegmentReadService:
                 "status": "pending_verification",
             }
             candidate_windows.append(candidate)
-            anchors.append(
+            candidate_anchors.append(
                 {
                     "anchor_id": f"anch_explore_{source_observation_id}_{candidate_id}",
                     "observation_id": "__pending__",
@@ -538,12 +540,71 @@ class SegmentReadService:
                     "modality": source_modalities[0] if source_modalities else "index",
                 }
             )
+        caption_hits = _caption_hits_for_explore(search_results=search_results, segments=segments, top_k=top_k)
+        reasoning = _run_explore_caption_reasoning(
+            backend=self.backend,
+            query=search_query,
+            targets=normalized_targets,
+            caption_hits=caption_hits,
+            candidate_windows=candidate_windows,
+            source_observation_id=source_observation_id,
+        )
+        if reasoning is not None:
+            mode = str(reasoning.get("mode") or "").strip()
+            facts = _normalize_caption_facts(reasoning.get("facts"))
+            caption_anchors = _normalize_caption_anchors(
+                reasoning.get("anchors"),
+                facts=facts,
+                source_observation_id=source_observation_id,
+            )
+            if mode in {"caption_fact", "mixed"} and (facts or caption_anchors or str(reasoning.get("claim") or "").strip()):
+                candidate_payload = (
+                    _normalize_candidate_windows(
+                        reasoning.get("candidate_windows"),
+                        fallback=candidate_windows,
+                        source_observation_id=source_observation_id,
+                    )
+                    if mode == "mixed"
+                    else _normalize_candidate_windows(
+                        reasoning.get("candidate_windows"),
+                        fallback=(),
+                        source_observation_id=source_observation_id,
+                    )
+                )
+                produced_anchors = [*caption_anchors, *candidate_anchors_for_windows(candidate_payload)]
+                support_status = str(
+                    reasoning.get("support_status")
+                    or ("caption_supported" if mode == "caption_fact" else "partial_caption_supported")
+                )
+                claim = str(reasoning.get("claim") or _caption_fact_claim(facts) or "Explore found caption-level evidence.").strip()
+                return {
+                    "claim": claim,
+                    "confidence": _bounded_confidence(reasoning.get("confidence"), default=0.72),
+                    "mode": mode,
+                    "support_status": support_status,
+                    "cannot_final_cite": False,
+                    "needs_visual_verify": bool(reasoning.get("needs_visual_verify", mode == "mixed")),
+                    "purpose": str(purpose or "caption_reasoning"),
+                    "query": search_query,
+                    "targets": normalized_targets,
+                    "scope": scope_filter,
+                    "modalities_used": list(resolved_modalities),
+                    "facts": facts,
+                    "anchors": caption_anchors,
+                    "answer_mapping": _normalize_answer_mapping(reasoning.get("answer_mapping")),
+                    "candidate_windows": candidate_payload,
+                    "regions": [*caption_anchors, *candidate_payload],
+                    "produced_anchors": produced_anchors,
+                    "notes": ["Caption-level evidence may be committed; candidate windows still require verify_window."],
+                    "limitations": str(reasoning.get("limitations") or "Caption/index reasoning only; no new visual verification was performed."),
+                    "raw": {"explore_reasoning": reasoning, "caption_hits": caption_hits},
+                }
         return {
             "claim": f"Explore found {len(candidate_windows)} candidate window(s) for verification.",
             "confidence": 0.85 if candidate_windows else 0.2,
             "support_status": "candidate_only",
             "cannot_final_cite": True,
-            "mode": "explore",
+            "mode": "candidate_discovery",
             "purpose": str(purpose or "candidate_discovery"),
             "query": search_query,
             "targets": normalized_targets,
@@ -551,7 +612,11 @@ class SegmentReadService:
             "modalities_used": list(resolved_modalities),
             "candidate_windows": candidate_windows,
             "regions": candidate_windows,
-            "produced_anchors": anchors,
+            "facts": [],
+            "anchors": [],
+            "answer_mapping": {"supports_option": None, "opposes_options": [], "reason": None},
+            "needs_visual_verify": True,
+            "produced_anchors": candidate_anchors,
             "notes": ["Candidate windows are navigation only. Use verify_window before committing answer_support."],
             "limitations": "Explore results are navigation only and candidate_only; they cannot support final answers.",
         }
@@ -1206,6 +1271,288 @@ def _predicted_source_observation_id(workspace: EvidenceWorkspace | None) -> str
     return workspace._next_observation_id()  # noqa: SLF001 - candidate keys must match the imminent observation id.
 
 
+def _caption_hits_for_explore(
+    *,
+    search_results: Sequence[Any],
+    segments: Sequence[VideoMapSegment],
+    top_k: int,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    seen: set[tuple[str, str, str]] = set()
+    result_by_segment = {result.segment.segment_id: result for result in search_results}
+    for segment in segments[: max(1, int(top_k or 8))]:
+        result = result_by_segment.get(segment.segment_id)
+        for source_kind, text in (
+            ("dense_caption", segment.low_fps_caption),
+            ("asr", segment.asr_text),
+            ("ocr", segment.ocr_text),
+            ("index_summary", " ".join(beat.summary for beat in segment.timeline_beats if getattr(beat, "summary", ""))),
+        ):
+            excerpt = str(text or "").strip()
+            if not excerpt:
+                continue
+            key = (segment.segment_id, source_kind, excerpt)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                {
+                    "source_kind": source_kind,
+                    "segment_id": segment.segment_id,
+                    "time_range": [float(segment.start_sec), float(segment.end_sec)],
+                    "excerpt": excerpt,
+                    "score": float(getattr(result, "score", 0.0) or 0.0) if result is not None else 0.0,
+                    "matched_fields": list(getattr(result, "matched_fields", ()) or ()),
+                }
+            )
+    return rows
+
+
+def _run_explore_caption_reasoning(
+    *,
+    backend: VisionLanguageBackend,
+    query: str,
+    targets: Sequence[Mapping[str, object]],
+    caption_hits: Sequence[Mapping[str, object]],
+    candidate_windows: Sequence[Mapping[str, object]],
+    source_observation_id: str,
+) -> dict[str, Any] | None:
+    if not caption_hits:
+        return None
+    prompt = _explore_caption_reasoning_prompt(
+        query=query,
+        targets=targets,
+        caption_hits=caption_hits,
+        candidate_windows=candidate_windows,
+    )
+    response = backend.generate(
+        BackendRequest(
+            task="explore_caption_reasoning",
+            prompt=prompt,
+            max_new_tokens=1200,
+            temperature=0.0,
+            metadata={
+                "tool": "explore",
+                "source_observation_id": source_observation_id,
+                "caption_hit_count": len(caption_hits),
+                "candidate_window_count": len(candidate_windows),
+            },
+        )
+    )
+    payload: dict[str, Any]
+    if isinstance(response.raw, Mapping) and response.raw.get("mode"):
+        payload = dict(response.raw)
+    else:
+        try:
+            payload = _parse_json_object(response.text)
+        except ValueError:
+            return None
+    mode = str(payload.get("mode") or "").strip()
+    if mode not in {"caption_fact", "candidate_discovery", "mixed"}:
+        return None
+    return payload
+
+
+def _explore_caption_reasoning_prompt(
+    *,
+    query: str,
+    targets: Sequence[Mapping[str, object]],
+    caption_hits: Sequence[Mapping[str, object]],
+    candidate_windows: Sequence[Mapping[str, object]],
+) -> str:
+    return (
+        "You are the explore subagent. Use only dense captions, ASR, OCR, and index summaries below. "
+        "Do not use outside knowledge and do not inspect video frames. "
+        "Decide whether the planner query can be answered at caption/index level, or whether candidate windows need verify_window.\n"
+        "Return exactly one JSON object with keys: mode, support_status, claim, confidence, facts, anchors, "
+        "candidate_windows, answer_mapping, needs_visual_verify, limitations.\n"
+        "Allowed mode values: caption_fact, candidate_discovery, mixed. "
+        "Allowed support_status values: caption_supported, partial_caption_supported, candidate_only, uncertain, not_found.\n\n"
+        f"Planner query: {query}\n"
+        "Targets:\n"
+        + json.dumps(list(targets), ensure_ascii=False)
+        + "\nCaption/ASR/OCR/index hits:\n"
+        + json.dumps(list(caption_hits), ensure_ascii=False)
+        + "\nCandidate windows:\n"
+        + json.dumps(list(candidate_windows), ensure_ascii=False)
+    )
+
+
+def _normalize_caption_facts(value: Any) -> list[dict[str, object]]:
+    facts: list[dict[str, object]] = []
+    for item in _mapping_items(value):
+        claim = str(item.get("claim") or item.get("text") or "").strip()
+        if not claim:
+            continue
+        time_range = _optional_time_range(item.get("time_range"))
+        facts.append(
+            {
+                "claim": claim,
+                "confidence": _bounded_confidence(item.get("confidence"), default=0.7),
+                "source_kind": _caption_source_kind(item.get("source_kind")),
+                "segment_id": str(item.get("segment_id") or "").strip() or None,
+                "time_range": time_range,
+                "excerpt": str(item.get("excerpt") or claim).strip(),
+                "supports_option": str(item.get("supports_option") or "").strip() or None,
+                "opposes_options": [str(option).strip() for option in _sequence_items(item.get("opposes_options")) if str(option).strip()],
+            }
+        )
+    return facts
+
+
+def _normalize_caption_anchors(
+    value: Any,
+    *,
+    facts: Sequence[Mapping[str, object]],
+    source_observation_id: str,
+) -> list[dict[str, object]]:
+    raw_anchors = _mapping_items(value)
+    if not raw_anchors:
+        raw_anchors = [
+            {
+                "source_kind": fact.get("source_kind"),
+                "segment_id": fact.get("segment_id"),
+                "time_range": fact.get("time_range"),
+                "excerpt": fact.get("excerpt") or fact.get("claim"),
+                "reliability": "medium",
+            }
+            for fact in facts
+            if fact.get("segment_id") and fact.get("time_range")
+        ]
+    anchors: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_anchors, start=1):
+        segment_id = str(item.get("segment_id") or "").strip()
+        time_range = _optional_time_range(item.get("time_range"))
+        excerpt = str(item.get("excerpt") or "").strip()
+        if not segment_id or time_range is None or not excerpt:
+            continue
+        anchor_id = str(item.get("anchor_id") or f"anch_caption_{source_observation_id}_{index:03d}").strip()
+        if not anchor_id or anchor_id in seen:
+            continue
+        seen.add(anchor_id)
+        source_kind = _caption_source_kind(item.get("source_kind"))
+        anchors.append(
+            {
+                "anchor_id": anchor_id,
+                "observation_id": "__pending__",
+                "source_kind": source_kind,
+                "kind": source_kind,
+                "segment_id": segment_id,
+                "start_sec": float(time_range[0]),
+                "end_sec": float(time_range[1]),
+                "time_range": [float(time_range[0]), float(time_range[1])],
+                "field_path": "facts",
+                "excerpt": excerpt,
+                "reliability": _caption_reliability(item.get("reliability")),
+                "modality": source_kind,
+            }
+        )
+    return anchors
+
+
+def _normalize_candidate_windows(
+    value: Any,
+    *,
+    fallback: Sequence[Mapping[str, object]],
+    source_observation_id: str,
+) -> list[dict[str, object]]:
+    raw_candidates = _mapping_items(value) or [dict(item) for item in fallback]
+    candidates: list[dict[str, object]] = []
+    for index, item in enumerate(raw_candidates, start=1):
+        candidate = dict(item)
+        candidate_id = str(candidate.get("candidate_id") or f"cand_{index:04d}").strip()
+        candidate["candidate_id"] = candidate_id
+        candidate.setdefault("source_observation_id", source_observation_id)
+        candidate.setdefault("candidate_key", f"{source_observation_id}:{candidate_id}")
+        if "time_range" not in candidate:
+            start_sec = candidate.get("start_sec")
+            end_sec = candidate.get("end_sec")
+            if start_sec is not None and end_sec is not None:
+                candidate["time_range"] = [float(start_sec), float(end_sec)]
+        if "time_range" in candidate:
+            time_range = _time_range_argument(candidate["time_range"])  # type: ignore[arg-type]
+            candidate["time_range"] = [float(time_range[0]), float(time_range[1])]
+            candidate.setdefault("start_sec", float(time_range[0]))
+            candidate.setdefault("end_sec", float(time_range[1]))
+        candidate.setdefault("status", "pending_verification")
+        candidates.append(candidate)
+    return candidates
+
+
+def candidate_anchors_for_windows(candidate_windows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    anchors: list[dict[str, object]] = []
+    for candidate in candidate_windows:
+        candidate_key = str(candidate.get("candidate_key") or "")
+        candidate_id = str(candidate.get("candidate_id") or "")
+        source_observation_id = str(candidate.get("source_observation_id") or "obs_pending")
+        time_range = candidate.get("time_range") or [candidate.get("start_sec"), candidate.get("end_sec")]
+        try:
+            start_sec, end_sec = _time_range_argument(time_range)  # type: ignore[arg-type]
+        except ValueError:
+            continue
+        excerpt = str(candidate.get("rationale") or candidate.get("verification_goal") or "Candidate window requires verification.").strip()
+        anchors.append(
+            {
+                "anchor_id": f"anch_explore_{source_observation_id}_{candidate_id or len(anchors) + 1:>04}",
+                "observation_id": "__pending__",
+                "source_kind": "retrieval_hit",
+                "segment_id": str(candidate.get("segment_id") or ""),
+                "start_sec": float(start_sec),
+                "end_sec": float(end_sec),
+                "field_path": "candidate_windows",
+                "excerpt": excerpt,
+                "modality": "index",
+                "candidate_key": candidate_key,
+            }
+        )
+    return anchors
+
+
+def _caption_fact_claim(facts: Sequence[Mapping[str, object]]) -> str:
+    if not facts:
+        return ""
+    return "; ".join(str(fact.get("claim") or "").strip() for fact in facts if str(fact.get("claim") or "").strip())
+
+
+def _normalize_answer_mapping(value: Any) -> dict[str, object]:
+    payload = dict(value or {}) if isinstance(value, Mapping) else {}
+    return {
+        "supports_option": str(payload.get("supports_option") or "").strip() or None,
+        "opposes_options": [str(option).strip() for option in _sequence_items(payload.get("opposes_options")) if str(option).strip()],
+        "reason": str(payload.get("reason") or "").strip() or None,
+    }
+
+
+def _caption_source_kind(value: Any) -> str:
+    text = str(value or "dense_caption").strip()
+    if text in {"dense_caption", "asr", "ocr", "index_summary"}:
+        return text
+    return "dense_caption"
+
+
+def _caption_reliability(value: Any) -> str:
+    text = str(value or "medium").strip()
+    if text in {"high", "medium", "low"}:
+        return text
+    return "medium"
+
+
+def _bounded_confidence(value: Any, *, default: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float(default)
+    return max(0.0, min(1.0, number))
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y"}
+
+
 def _normalize_explore_targets(targets: Sequence[Mapping[str, Any] | str] | None) -> list[dict[str, object]]:
     normalized: list[dict[str, object]] = []
     for item in _sequence_items(targets):
@@ -1682,6 +2029,13 @@ def _search_has_evidence(output: Mapping[str, Any]) -> bool:
 
 
 def _explore_has_candidates(output: Mapping[str, Any]) -> bool:
+    if str(output.get("mode") or "") in {"caption_fact", "mixed"}:
+        facts = output.get("facts") or ()
+        anchors = output.get("anchors") or output.get("produced_anchors") or ()
+        if isinstance(facts, Sequence) and not isinstance(facts, (str, bytes)) and bool(facts):
+            return True
+        if isinstance(anchors, Sequence) and not isinstance(anchors, (str, bytes)) and bool(anchors):
+            return True
     candidates = output.get("candidate_windows") or ()
     return isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)) and bool(candidates)
 
@@ -1900,7 +2254,31 @@ def _invalid_final_citation_provenance(
         return f"final citation {entry.entry_id} lacks source provenance"
     if source_tool in removed_legacy_tools:
         return f"final citation {entry.entry_id} comes from removed legacy tool {source_tool}"
+    if entry.kind == "caption_support":
+        if source_tool != "explore":
+            return f"final citation {entry.entry_id} must come from explore caption provenance"
+        if _truthy(metadata.get("requires_visual_verify")):
+            return f"final citation {entry.entry_id} requires visual verification"
+        support_status = str(metadata.get("support_status") or "").strip()
+        if support_status and support_status not in {"caption_supported", "partial_caption_supported"}:
+            return f"final citation {entry.entry_id} has non-caption support status {support_status}"
+        return ""
+    if entry.kind == "visual_support":
+        if source_tool != "verify_window":
+            return f"final citation {entry.entry_id} must come from verify_window provenance"
+        verdict = str(metadata.get("verdict") or "").strip()
+        if verdict and verdict not in {"supported", "not_found_in_window"}:
+            return f"final citation {entry.entry_id} has unsupported visual verdict {verdict}"
+        return ""
     if entry.kind in {"answer_support", "answer_conflict_resolved"}:
+        if source_tool == "explore":
+            mode = str(metadata.get("mode") or "").strip()
+            support_status = str(metadata.get("support_status") or "").strip()
+            if mode not in {"caption_fact", "mixed"} or support_status not in {"caption_supported", "partial_caption_supported"}:
+                return f"final citation {entry.entry_id} must come from caption-supported explore provenance"
+            if _truthy(metadata.get("requires_visual_verify")):
+                return f"final citation {entry.entry_id} requires visual verification"
+            return ""
         if source_tool != "verify_window":
             return f"final citation {entry.entry_id} must come from verify_window provenance"
         if entry.kind == "answer_support" and str(metadata.get("verdict") or "") not in {"", "supported"}:

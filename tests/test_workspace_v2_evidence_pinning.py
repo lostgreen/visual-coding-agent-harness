@@ -24,6 +24,21 @@ class ScriptedWorkspaceV2Backend(VisionLanguageBackend):
         self.requests.append(request)
         if request.task == "workspace_commit":
             return BackendResponse(text=self.commit_responses.pop(0))
+        if request.task == "explore_caption_reasoning":
+            return BackendResponse(
+                text=json.dumps(
+                    {
+                        "mode": "candidate_discovery",
+                        "support_status": "candidate_only",
+                        "claim": "Candidate windows require verification.",
+                        "confidence": 0.2,
+                        "facts": [],
+                        "anchors": [],
+                        "answer_mapping": {"supports_options": [], "contradicts_options": []},
+                        "needs_visual_verify": True,
+                    }
+                )
+            )
         if request.task != "workspace_plan":
             return self.tool_responses.pop(0)
         return BackendResponse(text=self.plan_responses.pop(0))
@@ -177,6 +192,7 @@ def test_search_asr_cue_must_be_committed_before_final(tmp_path: Path) -> None:
     assert memory.metadata.get("source_tool") == "verify_window"
     assert [request.task for request in backend.requests] == [
         "workspace_plan",
+        "explore_caption_reasoning",
         "workspace_commit",
         "workspace_plan",
         "vision_read",

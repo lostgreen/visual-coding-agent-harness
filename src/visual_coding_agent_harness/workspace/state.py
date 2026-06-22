@@ -969,7 +969,7 @@ class EvidenceWorkspace:
         if facts:
             lines.extend(["", "## Facts"])
             for fact in facts[:8]:
-                text = str(fact.get("text") or "").strip()
+                text = str(fact.get("text") or fact.get("claim") or fact.get("excerpt") or "").strip()
                 source_kind = str(fact.get("source_kind") or fact.get("kind") or "fact")
                 time_range = _format_time_range(fact.get("time_range"))
                 confidence = str(fact.get("confidence") or "").strip()
@@ -3435,6 +3435,8 @@ def _validate_memory_commit_payload(payload: Mapping[str, Any], *, observation: 
         "note",
         "support",
         "answer_support",
+        "caption_support",
+        "visual_support",
         "answer_conflict",
         "locator",
         "conflict",
@@ -3451,6 +3453,7 @@ def _validate_memory_commit_payload(payload: Mapping[str, Any], *, observation: 
         "local_negative",
         "navigation_note",
         "verification_uncertain",
+        "contradiction",
     }:
         raise ValueError(f"memory_validation_failed: unknown kind={kind}")
     confidence = str(payload.get("confidence") or "medium")
@@ -3469,14 +3472,28 @@ def _validate_memory_commit_payload(payload: Mapping[str, Any], *, observation: 
 
 def _validate_memory_observation_provenance(observation: Observation, payload: Mapping[str, Any]) -> None:
     kind = str(payload.get("kind") or "support")
-    if observation.tool == "explore" and kind not in {"retrieval_candidate", "navigation_note"}:
-        raise ValueError("commit_validation_failed: explore observations are candidate-only and cannot become answer_support")
+    if observation.tool == "explore":
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        mode = str(raw_output.get("mode") or "").strip()
+        support_status = str(raw_output.get("support_status") or "").strip()
+        caption_supported = mode in {"caption_fact", "mixed"} and support_status in {
+            "caption_supported",
+            "partial_caption_supported",
+        }
+        if caption_supported:
+            if kind not in {"caption_support", "answer_support", "retrieval_candidate", "navigation_note"}:
+                raise ValueError(f"commit_validation_failed: explore {mode} cannot become {kind}")
+        elif kind not in {"retrieval_candidate", "navigation_note"}:
+            raise ValueError("commit_validation_failed: candidate-only explore observations cannot become answer support")
+        return
     if observation.tool != "verify_window":
         return
     metadata = _memory_commit_metadata(payload, observation=observation)
     verdict = str(metadata.get("verdict") or "").strip()
     if kind == "answer_support" and verdict and verdict != "supported":
         raise ValueError(f"commit_validation_failed: {verdict} cannot become answer_support")
+    if kind == "visual_support" and verdict and verdict not in {"supported", "not_found_in_window"}:
+        raise ValueError(f"commit_validation_failed: {verdict} cannot become visual_support")
     if kind == "answer_conflict" and verdict and verdict != "contradicted":
         raise ValueError(f"commit_validation_failed: {verdict} cannot become answer_conflict")
     if kind == "verification_uncertain" and verdict and verdict != "uncertain":
@@ -3494,6 +3511,13 @@ def _memory_commit_metadata(payload: Mapping[str, Any], *, observation: Observat
     if observation is not None and observation.tool in {"explore", "verify_window"}:
         metadata.setdefault("source_tool", observation.tool)
         metadata.setdefault("source_observation_id", observation.observation_id)
+    if observation is not None and observation.tool == "explore":
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        metadata.setdefault("mode", str(raw_output.get("mode") or ""))
+        metadata.setdefault("support_status", str(raw_output.get("support_status") or ""))
+        answer_mapping = raw_output.get("answer_mapping")
+        if isinstance(answer_mapping, Mapping):
+            metadata.setdefault("answer_mapping", dict(answer_mapping))
     if observation is not None and observation.tool == "verify_window":
         result = _matching_verification_result(observation, payload)
         if result is not None:
@@ -3709,7 +3733,7 @@ def _answer_support_memory_entries(entries: Sequence[MemoryEntry]) -> list[Memor
     return [
         entry
         for entry in entries
-        if entry.kind in {"answer_support", "synthesized_support", "answer_conflict_resolved"}
+        if entry.kind in {"answer_support", "caption_support", "visual_support", "synthesized_support", "answer_conflict_resolved"}
     ]
 
 
@@ -3728,7 +3752,11 @@ def _evidence_coverage_lines(workspace: "EvidenceWorkspace") -> list[str]:
             counts[verdict] += 1
         else:
             counts["uncertain"] += 1
-    answer_support_count = sum(1 for entry in workspace.memory_entries() if entry.kind in {"answer_support", "synthesized_support", "answer_conflict_resolved"})
+    answer_support_count = sum(
+        1
+        for entry in workspace.memory_entries()
+        if entry.kind in {"answer_support", "caption_support", "visual_support", "synthesized_support", "answer_conflict_resolved"}
+    )
     return [
         f"candidate_windows: {candidate_count}",
         f"verified_supported: {counts['supported']}",

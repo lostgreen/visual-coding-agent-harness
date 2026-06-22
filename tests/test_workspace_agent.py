@@ -43,6 +43,8 @@ class ScriptedWorkspaceV2Backend(VisionLanguageBackend):
         self.requests.append(request)
         if request.task == "vision_read":
             return BackendResponse(text="Austria-Hungary was seen as a buffer between Russia and Western Europe.")
+        if request.task == "explore_caption_reasoning":
+            return BackendResponse(text='{"mode":"candidate_discovery","support_status":"candidate_only","facts":[]}')
         if request.task == "refine_segment_index":
             return BackendResponse(
                 text=(
@@ -57,6 +59,49 @@ class ScriptedWorkspaceV2Backend(VisionLanguageBackend):
             return BackendResponse(text=self.commit_responses.pop(0))
         if request.task == "workspace_final" and not self.plan_responses:
             return BackendResponse(text='{"tool":"answer","args":{"text":"D","citations":[],"confidence":"low"}}')
+        return BackendResponse(text=self.plan_responses.pop(0))
+
+
+class StructuredVerifyFallbackBackend(VisionLanguageBackend):
+    def __init__(self, plan_responses: list[str], commit_responses: list[str]) -> None:
+        self.plan_responses = plan_responses
+        self.commit_responses = commit_responses
+        self.requests: list[BackendRequest] = []
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        if request.task == "vision_read":
+            return BackendResponse(
+                text="Structured verification found shoebox present and ruler not found in the inspected tool-making window.",
+                raw={
+                    "facts": [
+                        {"text": "A shoebox is present in the inspected tool-making window.", "source_kind": "visual_fact", "confidence": 0.92},
+                        {"text": "A ruler is not found in the inspected tool-making window.", "source_kind": "visual_fact", "confidence": 0.88},
+                    ],
+                    "verification_results": [
+                        {
+                            "target_id": "shoebox",
+                            "claim": "A shoebox is used to make the solar eclipse viewer.",
+                            "verdict": "supported",
+                            "source_kind": "visual_fact",
+                            "confidence": 0.92,
+                            "rationale": "The shoebox is visible in the local window.",
+                        },
+                        {
+                            "target_id": "ruler",
+                            "claim": "A ruler is used to make the solar eclipse viewer.",
+                            "verdict": "not_found_in_window",
+                            "source_kind": "visual_fact",
+                            "confidence": 0.88,
+                            "rationale": "No ruler is visible or mentioned in the inspected local window.",
+                        },
+                    ],
+                },
+            )
+        if request.task == "workspace_commit":
+            return BackendResponse(text=self.commit_responses.pop(0))
+        if request.task == "workspace_final":
+            return BackendResponse(text='{"tool":"answer","args":{"text":"B","citations":["mem_0001"],"confidence":"medium"}}')
         return BackendResponse(text=self.plan_responses.pop(0))
 
 
@@ -748,7 +793,7 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert "Use Segment Cards as the starting navigation state" in prompt
     assert '{"tool":"explore"' in prompt
     assert '{"tool":"verify_window"' in prompt
-    assert "synthesize_memory is unavailable until committed memory exists" in prompt
+    assert "synthesize_memory is unavailable until committed support memory exists" in prompt
     assert "duplicate_tool_call" in prompt
     assert "do not repeat the same semantic request" in prompt
     assert "candidate_key" in prompt
@@ -985,6 +1030,38 @@ def test_workspace_agent_auto_pins_after_commit_retry_exhaustion(tmp_path: Path)
     memory = workspace.memory_entries()
     assert memory[0].kind == "unverified_capture"
     assert memory[0].metadata["auto_pinned"] is True
+    assert any(event["type"] == "commit_auto_pinned" for event in workspace._read_jsonl_dicts("trace.jsonl"))
+
+
+def test_workspace_agent_auto_pins_structured_verify_results_after_commit_parse_failure(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_structured_verify_auto_pin")
+    backend = StructuredVerifyFallbackBackend(
+        plan_responses=[
+            (
+                '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],'
+                '"checks":[{"target_id":"shoebox","claim":"A shoebox is used to make the solar eclipse viewer."},'
+                '{"target_id":"ruler","claim":"A ruler is used to make the solar eclipse viewer."}]}}'
+            ),
+        ],
+        commit_responses=[
+            '{"tool":"commit_observation","args":{"observation_id":"obs_0001"}}',
+            'not json',
+            '{"tool":"no_commit_needed","args":{"observation_id":"obs_0001","comment":"bad alias"}}',
+        ],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Which item is not used to make the solar eclipse observing tool?")
+
+    assert result.answer == "B"
+    assert workspace.observation_status("obs_0001") == "committed"
+    memories = workspace.memory_entries()
+    assert [memory.kind for memory in memories] == ["visual_support", "visual_support"]
+    assert {memory.metadata["target_id"] for memory in memories} == {"shoebox", "ruler"}
+    assert {memory.metadata["verdict"] for memory in memories} == {"supported", "not_found_in_window"}
+    assert all(memory.metadata["source_tool"] == "verify_window" for memory in memories)
+    assert not any(memory.kind == "unverified_capture" for memory in memories)
     assert any(event["type"] == "commit_auto_pinned" for event in workspace._read_jsonl_dicts("trace.jsonl"))
 
 

@@ -353,6 +353,23 @@ class WorkspaceVisualAgent:
         raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
         fact_text = _first_fact_text(raw_output.get("facts"))
         anchors = _mapping_items(raw_output.get("produced_anchors"))
+        structured_verify_writes = _structured_verify_writes(raw_output, anchors=anchors, reason=reason)
+        if structured_verify_writes:
+            try:
+                self.workspace.commit_observation(observation.observation_id, writes=structured_verify_writes)
+            except (ToolError, ValueError) as exc:
+                self._defer_auto_pin_failure(observation.observation_id, reason=reason, error=str(exc))
+                return
+            self.workspace.write_trace_event(
+                "commit_auto_pinned",
+                {
+                    "observation_id": observation.observation_id,
+                    "reason": reason,
+                    "kind": "structured_verify_results",
+                    "memory_count": len(structured_verify_writes.get("memory", [])),
+                },
+            )
+            return
         if not fact_text and anchors:
             retrieval_writes = _retrieval_candidate_writes(raw_output, anchors=anchors, reason=reason)
             if retrieval_writes:
@@ -666,13 +683,15 @@ PLAN_SYSTEM_PROMPT = """You are exploring a video through a durable workspace.
 Output exactly one JSON object: {"tool":"...","args":{...}}.
 Available plan tools are explore, verify_window, read_workspace, synthesize_memory, and answer.
 The Segment Cards are navigation-only summaries. Full Dense Video Caption beats are hidden from your default context.
-Use explore to find candidate windows when the relevant local window is unknown. Explore results are navigation only.
+Use explore to reason over dense captions, ASR, OCR, and index summaries. It may return caption_fact, mixed, or candidate_discovery.
+caption_fact/mixed observations can provide caption-level facts for commit; candidate_discovery is navigation-only.
 Use verify_window to inspect a concrete candidate window and verify one or more factual checks using local video evidence.
 Use read_workspace to inspect committed memory, pending candidates, and verification coverage.
-Use synthesize_memory only after Committed Memory contains verified answer-support mem_* ids.
-Use answer only after Committed Memory contains verified mem_* ids that directly support the answer.
+Use synthesize_memory only after Committed Memory contains verified or caption-supported mem_* ids.
+Use answer only after Committed Memory contains mem_* ids that directly support the answer.
 For questions with multiple factual requirements, pass multiple checks to verify_window when they belong to the same local window.
 Treat every verify_window result as scoped to its inspected time window. A local miss is not global absence.
+For multiple-choice questions, first explore the question condition before option-biased queries.
 For multiple-choice questions, answer text must be exactly one option letter: "A", "B", "C", or "D".
 Every answer call must include {"text": "A|B|C|D", "citations": ["mem_*"], "confidence": "..."}.
 If there is no committed memory, or if the last answer was rejected, choose an exploration tool instead of answer.
@@ -707,10 +726,11 @@ def compose_plan_prompt(
             "# Plan Protocol",
             "Return exactly one JSON object. Do not explain.",
             "Use Segment Cards as the starting navigation state. They are summaries only, not answer evidence.",
-            'To find candidate windows, call {"tool":"explore","args":{"query":"what to localize","targets":[{"target_id":"target_1","claim":"fact to locate","aliases":[]}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
+            'To inspect dense captions/indexes or find candidate windows, call {"tool":"explore","args":{"query":"question-centered condition to resolve","targets":[{"target_id":"target_1","claim":"fact to locate or answer","aliases":[]}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
             'For answer-grade local evidence, call {"tool":"verify_window","args":{"candidate_key":"obs_0001:cand_0001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
-            "Explore results are candidate-only and cannot support final answers.",
-            "Use verify_window to convert candidate windows into local evidence before committing answer-support memory.",
+            "Explore can return caption_fact, mixed, or candidate_discovery. Commit caption_fact/mixed caption facts; verify candidate-only windows before final.",
+            "If Pending Candidate Windows exist and no answer-support/caption-support memory exists, prefer verify_window over repeating similar explore.",
+            "For MCQ, start with the question condition; map evidence to options only after evidence is retrieved.",
             'If Last Tool Result starts with "answer rejected", the next tool must be explore, verify_window, read_workspace, or synthesize_memory.',
             'If Last Tool Result starts with "observation rejected", change candidate, segment, sub_window, evidence_mode, or focus; do not repeat the same verify.',
             'If Last Tool Result starts with "tool rejected: duplicate_tool_call", change the tool scope/query/modality or inspect workspace state; do not repeat the same semantic request.',
@@ -726,10 +746,10 @@ def compose_plan_prompt(
 
 
 def _synthesize_memory_availability(workspace: EvidenceWorkspace) -> str:
-    answer_supporting = {"answer_support", "synthesized_support", "answer_conflict_resolved"}
+    answer_supporting = {"answer_support", "caption_support", "visual_support", "synthesized_support", "answer_conflict_resolved"}
     if any(entry.kind in answer_supporting for entry in workspace.memory_entries()):
-        return "synthesize_memory is available only for deriving from cited committed answer-support memory."
-    return "synthesize_memory is unavailable until committed memory exists; first commit answer-support memory from verify_window."
+        return "synthesize_memory is available only for deriving from cited committed support memory."
+    return "synthesize_memory is unavailable until committed support memory exists; first commit caption facts from explore or visual facts from verify_window."
 
 
 def compose_commit_prompt(
@@ -748,7 +768,9 @@ def compose_commit_prompt(
         f"# Commit Phase (attempt {attempt})",
         "# Commit Guidance",
         "Commit local factual evidence with its valid scope; do not convert local absence into full-video absence.",
-        "Use memory kind answer_support when the fact supports an answer option or subclaim needed for that option; include supports_option when clear.",
+        "Use memory kind caption_support for caption/asr/ocr facts returned by explore caption_fact or mixed observations.",
+        "Use memory kind visual_support for structured verify_window facts, including local supported or local not-found findings.",
+        "Use memory kind answer_support when verified or caption-supported facts directly support an answer option or subclaim needed for that option; include supports_option when clear.",
         "Use memory kind local_negative when a fact only says something was not found, not mentioned, or not visible inside one local window; include metadata.scope and metadata.global_negation_allowed=false.",
         "A local_negative cannot support a final answer or global negation by itself; it only tells the planner where to search next or what a checked local window did not contain.",
         "Reject only when the observation is corrupt, off-topic, duplicate, or has no usable factual anchor.",
@@ -1048,10 +1070,14 @@ def _legacy_commit_writes(
     memory_kind = str(args.get("kind") or args.get("output_type") or "answer_support").strip()
     if memory_kind not in {
         "answer_support",
+        "caption_support",
+        "visual_support",
         "synthesized_support",
         "answer_conflict_resolved",
         "retrieval_candidate",
         "local_negative",
+        "verification_uncertain",
+        "answer_conflict",
     }:
         memory_kind = "answer_support"
 
@@ -1221,6 +1247,123 @@ def _retrieval_candidate_writes(
         ],
         "plan_update": f"Next: verify_window candidate {anchor_id} at {_format_scope_for_plan(time_range)} before final answer.",
     }
+
+
+def _structured_verify_writes(
+    raw_output: Mapping[str, Any],
+    *,
+    anchors: Sequence[Mapping[str, Any]],
+    reason: str,
+) -> dict[str, Any]:
+    if str(raw_output.get("mode") or "") != "verify_window":
+        return {}
+    results = _mapping_items(raw_output.get("verification_results"))
+    if not results:
+        return {}
+    anchors_by_id = {str(anchor.get("anchor_id") or "").strip(): dict(anchor) for anchor in anchors if str(anchor.get("anchor_id") or "").strip()}
+    pinned: list[dict[str, Any]] = []
+    memory: list[dict[str, Any]] = []
+    for index, result in enumerate(results):
+        verdict = str(result.get("verdict") or "uncertain").strip()
+        kind = _memory_kind_for_verification_verdict(verdict)
+        anchor_ids = [str(item).strip() for item in _sequence_items(result.get("anchor_ids")) if str(item).strip()]
+        if not anchor_ids and index < len(anchors):
+            anchor_id = str(anchors[index].get("anchor_id") or "").strip()
+            if anchor_id:
+                anchor_ids = [anchor_id]
+        for anchor_id in anchor_ids:
+            anchor = dict(anchors_by_id.get(anchor_id, {}))
+            if not anchor:
+                continue
+            pinned.append(
+                {
+                    **anchor,
+                    "anchor_id": anchor_id,
+                    "kind": str(anchor.get("modality") or anchor.get("source_kind") or "visual_fact"),
+                    "source_kind": str(anchor.get("source_kind") or result.get("source_kind") or "visual_fact"),
+                    "excerpt": str(anchor.get("excerpt") or result.get("rationale") or result.get("claim") or ""),
+                }
+            )
+        claim = _verification_memory_claim(result)
+        if not claim:
+            continue
+        memory.append(
+            {
+                "kind": kind,
+                "claim": claim,
+                "anchor_ids": anchor_ids,
+                "confidence": _memory_confidence(result.get("confidence")),
+                "target_id": str(result.get("target_id") or ""),
+                "metadata": {
+                    "auto_pinned": True,
+                    "auto_pin_reason": reason,
+                    "verdict": verdict,
+                    "target_id": str(result.get("target_id") or ""),
+                    "scope": dict(result.get("scope", {}) or {}) if isinstance(result.get("scope"), Mapping) else {},
+                    "source_kind": str(result.get("source_kind") or ""),
+                },
+            }
+        )
+    if not memory:
+        return {}
+    return {"pinned_anchors": _dedupe_anchor_payloads(pinned), "memory": memory}
+
+
+def _memory_kind_for_verification_verdict(verdict: str) -> str:
+    if verdict in {"supported", "not_found_in_window"}:
+        return "visual_support"
+    if verdict == "contradicted":
+        return "answer_conflict"
+    return "verification_uncertain"
+
+
+def _verification_memory_claim(result: Mapping[str, Any]) -> str:
+    target_id = str(result.get("target_id") or "").strip()
+    claim = str(result.get("claim") or "").strip()
+    verdict = str(result.get("verdict") or "uncertain").strip()
+    rationale = str(result.get("rationale") or "").strip()
+    prefix = f"{target_id}: " if target_id else ""
+    if verdict == "supported":
+        return f"{prefix}{claim} is supported in the inspected window. {rationale}".strip()
+    if verdict == "not_found_in_window":
+        return f"{prefix}{claim} was not found in the inspected window. {rationale}".strip()
+    if verdict == "contradicted":
+        return f"{prefix}{claim} is contradicted in the inspected window. {rationale}".strip()
+    return f"{prefix}{claim} is uncertain in the inspected window. {rationale}".strip()
+
+
+def _memory_confidence(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "medium"
+    if number >= 0.8:
+        return "high"
+    if number >= 0.45:
+        return "medium"
+    return "low"
+
+
+def _sequence_items(value: Any) -> tuple[Any, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes)):
+        return (value,)
+    if isinstance(value, Sequence):
+        return tuple(value)
+    return (value,)
+
+
+def _dedupe_anchor_payloads(anchors: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for anchor in anchors:
+        anchor_id = str(anchor.get("anchor_id") or "").strip()
+        if not anchor_id or anchor_id in seen:
+            continue
+        seen.add(anchor_id)
+        deduped.append(dict(anchor))
+    return deduped
 
 
 def _format_scope_for_plan(time_range: Any) -> str:

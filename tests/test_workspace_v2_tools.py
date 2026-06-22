@@ -24,6 +24,18 @@ class RecordingBackend(VisionLanguageBackend):
         return BackendResponse(text=self.text, raw=self.raw)
 
 
+class ExploreReasoningBackend(RecordingBackend):
+    def __init__(self, reasoning: dict[str, object]) -> None:
+        super().__init__()
+        self.reasoning = reasoning
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        if request.task == "explore_caption_reasoning":
+            return BackendResponse(text=json.dumps(self.reasoning), raw=self.reasoning)
+        return super().generate(request)
+
+
 def _video_map() -> VideoMap:
     return VideoMap(
         video_path="/videos/demo.mp4",
@@ -52,6 +64,29 @@ def _video_map() -> VideoMap:
                 end_sec=120.0,
                 low_fps_caption="Closing map animation.",
                 asr_text="The story moves to another topic.",
+            ),
+        ],
+    )
+
+
+def _gypsy_video_map() -> VideoMap:
+    return VideoMap(
+        video_path="/videos/gypsy.mp4",
+        duration_sec=600.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=300.0,
+                low_fps_caption="The video introduces the migration of Gypsies into Europe.",
+                asr_text="When Gypsies migrated to Europe, they fought with Selic or Seljuk Turks.",
+            ),
+            VideoMapSegment(
+                segment_id="seg_0002",
+                start_sec=300.0,
+                end_sec=600.0,
+                low_fps_caption="A later section describes slavery in the Balkans under Ottoman expansion.",
+                asr_text="Later, many became enslaved in the Balkans as the Ottomans expanded territory.",
             ),
         ],
     )
@@ -155,6 +190,7 @@ def test_workspace_v2_explore_returns_candidate_only_windows(tmp_path: Path) -> 
 
     result = registry.execute("explore", {"query": "buffer Russia", "modalities": ["asr"], "top_k": 3})
 
+    assert result["mode"] == "candidate_discovery"
     assert result["support_status"] == "candidate_only"
     assert result["cannot_final_cite"] is True
     assert result["candidate_windows"][0]["candidate_id"] == "cand_0001"
@@ -164,6 +200,146 @@ def test_workspace_v2_explore_returns_candidate_only_windows(tmp_path: Path) -> 
     assert result["candidate_windows"][0]["status"] == "pending_verification"
     assert result["produced_anchors"][0]["observation_id"] == "__pending__"
     assert "navigation only" in result["limitations"]
+
+
+def test_workspace_v2_explore_can_return_caption_fact_and_final_citable_memory(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_explore_caption_fact")
+    backend = ExploreReasoningBackend(
+        {
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim": "When the Gypsies migrated to Europe, they fought with Selic/Seljuk Turks.",
+            "confidence": 0.82,
+            "facts": [
+                {
+                    "claim": "When the Gypsies migrated to Europe, they fought with Selic/Seljuk Turks.",
+                    "confidence": 0.82,
+                    "source_kind": "dense_caption",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 300.0],
+                    "excerpt": "When Gypsies migrated to Europe, they fought with Selic or Seljuk Turks.",
+                    "supports_option": "C",
+                    "opposes_options": ["B"],
+                }
+            ],
+            "anchors": [
+                {
+                    "source_kind": "dense_caption",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 300.0],
+                    "excerpt": "When Gypsies migrated to Europe, they fought with Selic or Seljuk Turks.",
+                    "reliability": "medium",
+                }
+            ],
+            "candidate_windows": [],
+            "answer_mapping": {
+                "supports_option": "C",
+                "opposes_options": ["B"],
+                "reason": "The slavery caption is a later section and does not answer the migration event.",
+            },
+            "needs_visual_verify": False,
+            "limitations": "Caption-level narration directly addresses the question condition.",
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_gypsy_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "what happened when the Gypsies migrated to Europe",
+            "targets": [{"target_id": "migration_event", "claim": "Event after Gypsies migrated to Europe"}],
+            "modalities": ["caption", "asr"],
+            "top_k": 4,
+        },
+    )
+
+    assert result["mode"] == "caption_fact"
+    assert result["support_status"] == "caption_supported"
+    assert result["cannot_final_cite"] is False
+    assert result["needs_visual_verify"] is False
+    assert result["facts"][0]["supports_option"] == "C"
+    assert result["answer_mapping"]["opposes_options"] == ["B"]
+    assert result["produced_anchors"][0]["anchor_id"] == "anch_caption_obs_0001_001"
+    assert backend.requests[0].task == "explore_caption_reasoning"
+
+    observation = workspace.write_observation(
+        tool_name="explore",
+        claim=str(result["claim"]),
+        confidence=float(result["confidence"]),
+        regions=result["regions"],
+        limitations=str(result["limitations"]),
+        raw_output=result,
+    )
+    anchor_id = result["produced_anchors"][0]["anchor_id"]
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": anchor_id,
+                    "kind": "dense_caption",
+                    "source_kind": "dense_caption",
+                    "excerpt": "When Gypsies migrated to Europe, they fought with Selic or Seljuk Turks.",
+                    "segment_id": "seg_0001",
+                    "start_sec": 0.0,
+                    "end_sec": 300.0,
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "caption_support",
+                    "claim": "Gypsies fought with Selic/Seljuk Turks after migrating to Europe.",
+                    "anchor_ids": [anchor_id],
+                    "supports_option": "C",
+                    "confidence": "medium",
+                    "metadata": {"visual_verified": False},
+                }
+            ],
+        },
+    )
+
+    memory = workspace.get_memory("mem_0001")
+    assert memory is not None
+    assert memory.kind == "caption_support"
+    assert memory.metadata["source_tool"] == "explore"
+    accepted = registry.execute("answer", {"text": "C", "citations": ["mem_0001"], "confidence": "medium"})
+    assert accepted["accepted"] is True
+
+
+def test_workspace_v2_answer_rejects_caption_support_when_visual_verify_required(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_caption_requires_visual")
+    observation = workspace.write_observation(
+        tool_name="explore",
+        claim="Caption mentions two timeouts. The caption mentions two possible HUN timeouts.",
+        confidence=0.8,
+        raw_output={"mode": "caption_fact", "support_status": "caption_supported"},
+    )
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": "anch_caption_timeout",
+                    "kind": "dense_caption",
+                    "source_kind": "dense_caption",
+                    "excerpt": "The caption mentions two possible HUN timeouts.",
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "caption_support",
+                    "claim": "Caption-only timeout count requires visual verification.",
+                    "anchor_ids": ["anch_caption_timeout"],
+                    "confidence": "medium",
+                    "metadata": {"requires_visual_verify": True},
+                }
+            ],
+        },
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    with pytest.raises(ValueError, match="requires visual verification"):
+        registry.execute("answer", {"text": "D", "citations": ["mem_0001"], "confidence": "medium"})
 
 
 def test_workspace_v2_explore_supports_scoped_segment_query(tmp_path: Path) -> None:
@@ -191,6 +367,7 @@ def test_workspace_v2_explore_commit_required_predicate_depends_on_candidates(tm
 
     assert predicate is not None
     assert predicate({"candidate_windows": [{"candidate_id": "cand_0001"}]}) is True
+    assert predicate({"mode": "caption_fact", "facts": [{"claim": "caption fact"}], "candidate_windows": []}) is True
     assert predicate({"candidate_windows": []}) is False
 
 
@@ -825,7 +1002,7 @@ def test_workspace_v2_commit_rejects_explore_answer_support(tmp_path: Path) -> N
     )
     anchor = explore["produced_anchors"][0]
 
-    with pytest.raises(ValueError, match="explore observations.*cannot become answer_support"):
+    with pytest.raises(ValueError, match="candidate-only explore observations cannot become answer support"):
         workspace.commit_observation(
             observation.observation_id,
             writes={
