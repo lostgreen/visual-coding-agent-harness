@@ -952,6 +952,7 @@ def test_workspace_v2_verify_window_uses_sampled_frames_when_available(tmp_path:
     assert request.media_type == "video"
     assert request.frames == ("/frames/demo/00001.jpg", "/frames/demo/00002.jpg")
     assert request.metadata["nframes"] == 2
+    assert request.max_new_tokens == 2048
 
 
 def test_workspace_v2_explore_and_verify_window_delegate_local_workers(tmp_path: Path) -> None:

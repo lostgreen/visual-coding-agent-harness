@@ -1018,7 +1018,7 @@ def _read_clip_evidence(
             media_path=media_path,
             media_type="video",
             frames=frame_paths,
-            max_new_tokens=384,
+            max_new_tokens=2048,
             metadata={
                 "tool": tool_name,
                 "segment_id": segment.segment_id,
