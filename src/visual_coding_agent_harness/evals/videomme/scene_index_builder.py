@@ -35,7 +35,6 @@ class RootIndexPolicy:
     root_window_sec: float = 300.0
     frame_cache_fps: float = 0.5
     max_pixels_per_frame: int = 360 * 420
-    max_beats_per_root: int = 12
     max_new_tokens: int = 6144
 
 
@@ -47,7 +46,6 @@ class SceneIndexBuilder:
         text_model_id: str,
         vl_model_id: str,
         window_sec: float = 300.0,
-        caption_nframes: int = 8,
         root_policy: Optional[RootIndexPolicy] = None,
         cache: Optional[SceneIndexCache] = None,
         clip_root: Optional[Path | str] = None,
@@ -61,7 +59,6 @@ class SceneIndexBuilder:
         self.vl_model_id = vl_model_id
         self.root_policy = root_policy or RootIndexPolicy(root_window_sec=float(window_sec))
         self.window_sec = self.root_policy.root_window_sec
-        self.caption_nframes = caption_nframes
         self.cache = cache
         self.clip_root = Path(clip_root) if clip_root is not None else None
         self.clip_extractor = clip_extractor or _extract_clip_ffmpeg
@@ -108,7 +105,6 @@ class SceneIndexBuilder:
                 root_data=root_data,
                 cues=segment_cues,
                 root_source=f"build_root_dvc_index:{self.vl_model_id}",
-                max_beats=self.root_policy.max_beats_per_root,
             )
         if self.root_concurrency <= 1 or len(base.segments) <= 1:
             segments = [build_segment(segment) for segment in base.segments]
@@ -137,7 +133,6 @@ class SceneIndexBuilder:
             "root_window_sec": round(float(self.root_policy.root_window_sec), 3),
             "frame_cache_fps": round(float(self.root_policy.frame_cache_fps), 3),
             "max_pixels_per_frame": int(self.root_policy.max_pixels_per_frame),
-            "max_beats_per_root": int(self.root_policy.max_beats_per_root),
             "max_new_tokens": int(self.root_policy.max_new_tokens),
             "subtitle_hash": subtitle_hash(subtitle_cues),
             "vl_model_id": self.vl_model_id,
@@ -188,14 +183,13 @@ class SceneIndexBuilder:
                     '  "topic_tags": ["optional"],\n'
                     '  "limitations": ["optional"]\n'
                     "}\n"
-                    "Use enough chronological non-overlapping beats to cover the interval; use MAX_BEATS when "
-                    "the scene, visual state, narration point, or event changes often. For each beat, provide "
+                    "Use enough chronological non-overlapping beats to cover the interval whenever "
+                    "the scene, visual state, narration point, or event changes. For each beat, provide "
                     "start_sec and end_sec as absolute video seconds within this segment. Each beat must describe "
                     "both the scene and a simple event/state/narration point. Do not collapse the interval into "
                     "only one broad overview. Summarize only visible or spoken content. Mark useful cues as "
                     "visual, asr, ocr, or temporal. Do not answer a downstream question. This is a navigation "
                     "index, not final evidence.\n\n"
-                    f"MAX_BEATS: {self.root_policy.max_beats_per_root}\n"
                     "Each beat summary must be one concise complete sentence, not an ellipsis.\n"
                     f"Segment: {segment.segment_id} {segment.start_sec:.3f}-{segment.end_sec:.3f}s\n"
                     f"Subtitles / ASR cues:\n{cue_text}"
@@ -217,7 +211,6 @@ class SceneIndexBuilder:
                     "max_pixels": self.root_policy.max_pixels_per_frame,
                     "fps": self.root_policy.frame_cache_fps,
                     "nframes": len(frame_paths),
-                    "max_beats_per_root": self.root_policy.max_beats_per_root,
                 },
             )
         )
@@ -272,13 +265,11 @@ def _merge_root_segment(
     root_data: Mapping[str, Any],
     cues: Sequence[SubtitleCue],
     root_source: str,
-    max_beats: int,
 ) -> VideoSegment:
     root_summary = _root_summary(root_data)
     beats, dropped_invalid_beats = _normalize_root_beats_with_diagnostics(
         segment=segment,
         beats=root_data.get("beats") or root_data.get("timeline_beats") or (),
-        max_beats=max_beats,
     )
     if not root_summary and beats:
         root_summary = _root_summary_from_beats(beats)
@@ -468,9 +459,8 @@ def _normalize_root_beats(
     *,
     segment: VideoSegment,
     beats: Any,
-    max_beats: int | None = None,
 ) -> tuple[TimelineBeat, ...]:
-    normalized, _ = _normalize_root_beats_with_diagnostics(segment=segment, beats=beats, max_beats=max_beats)
+    normalized, _ = _normalize_root_beats_with_diagnostics(segment=segment, beats=beats)
     return normalized
 
 
@@ -478,14 +468,11 @@ def _normalize_root_beats_with_diagnostics(
     *,
     segment: VideoSegment,
     beats: Any,
-    max_beats: int | None = None,
 ) -> tuple[tuple[TimelineBeat, ...], int]:
     try:
         raw_beats = list(beats)
     except TypeError as exc:
         raise ValueError(f"Root DVC beats for {segment.segment_id} must be a list") from exc
-    if max_beats is not None:
-        raw_beats = raw_beats[:max_beats]
 
     normalized: list[TimelineBeat] = []
     dropped_invalid_beats = 0

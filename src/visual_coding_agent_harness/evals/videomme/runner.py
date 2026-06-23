@@ -46,7 +46,7 @@ WORKSPACE_V2_STRATEGY = "workspace_v2"
 DEFAULT_STRATEGIES = (WORKSPACE_V2_STRATEGY,)
 STRATEGIES = (WORKSPACE_V2_STRATEGY,)
 WINDOW_SEC = 300.0
-SEGMENT_NFRAMES = 8
+DEFAULT_NFRAMES = 8
 FRAME_CACHE_FPS = 2.0
 TOOL_FRAME_CACHE_MAX_FPS = 2.0
 ROOT_DVC_FRAME_FPS = 0.5
@@ -85,10 +85,8 @@ class EvalConfig:
     window_sec: float = WINDOW_SEC
     scene_index_cache_dir: Path = DEFAULT_SCENE_INDEX_CACHE_DIR
     scene_index_cache_enabled: bool = True
-    scene_caption_nframes: int = SEGMENT_NFRAMES
     scene_index_concurrency: int = 1
     scene_index_frame_fps: float = ROOT_DVC_FRAME_FPS
-    scene_index_max_beats_per_root: int = RootIndexPolicy().max_beats_per_root
     scene_index_max_new_tokens: int = RootIndexPolicy().max_new_tokens
     frame_cache_fps: float = FRAME_CACHE_FPS
     frame_cache_root: Path | None = None
@@ -501,10 +499,8 @@ def run_eval_cases(
         "subtitle_dir": str(config.subtitle_dir),
         "scene_index_cache_dir": str(config.scene_index_cache_dir),
         "scene_index_cache_enabled": config.scene_index_cache_enabled,
-        "scene_caption_nframes": config.scene_caption_nframes,
         "scene_index_concurrency": config.scene_index_concurrency,
         "scene_index_frame_fps": config.scene_index_frame_fps,
-        "scene_index_max_beats_per_root": config.scene_index_max_beats_per_root,
         "scene_index_max_new_tokens": config.scene_index_max_new_tokens,
         "frame_cache_fps": config.frame_cache_fps,
         "frame_cache_root": str(_frame_cache_root(config)),
@@ -1250,11 +1246,9 @@ def run_strategy(
         text_model_id=config.planner_model_path or config.model_path,
         vl_model_id=config.model_path,
         window_sec=config.window_sec,
-        caption_nframes=config.scene_caption_nframes,
         root_policy=RootIndexPolicy(
             root_window_sec=float(config.window_sec),
             frame_cache_fps=float(config.scene_index_frame_fps),
-            max_beats_per_root=int(config.scene_index_max_beats_per_root),
             max_new_tokens=int(config.scene_index_max_new_tokens),
         ),
         root_concurrency=config.scene_index_concurrency,
@@ -1465,10 +1459,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--window-sec", type=float, default=None)
     parser.add_argument("--scene-index-cache-dir", type=Path, default=None)
     parser.add_argument("--no-scene-index-cache", action="store_true", default=None)
-    parser.add_argument("--scene-caption-nframes", type=int, default=None)
     parser.add_argument("--scene-index-concurrency", type=int, default=None)
     parser.add_argument("--scene-index-frame-fps", type=float, default=None)
-    parser.add_argument("--scene-index-max-beats-per-root", type=int, default=None)
     parser.add_argument("--scene-index-max-new-tokens", type=int, default=None)
     parser.add_argument("--frame-cache-root", type=Path, default=None)
     parser.add_argument("--frame-cache-fps", type=float, default=None)
@@ -1548,7 +1540,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
         "nframes",
         "budget.nframes",
         "budget.default_nframes",
-        default=SEGMENT_NFRAMES,
+        default=DEFAULT_NFRAMES,
     )
     contract_nframes = _arg_or_config(args, config_data, "contract_nframes", "budget.contract_nframes")
     default_nframes = contract_nframes if contract_nframes is not None else default_nframes_value
@@ -1814,16 +1806,6 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             _arg_or_config(args, config_data, "scene_index_cache_dir", default=DEFAULT_SCENE_INDEX_CACHE_DIR)
         ),
         scene_index_cache_enabled=_as_bool(scene_index_cache_enabled),
-        scene_caption_nframes=int(
-            _arg_or_config(
-                args,
-                config_data,
-                "scene_caption_nframes",
-                "scene_caption_nframes",
-                "caption_nframes",
-                default=SEGMENT_NFRAMES,
-            )
-        ),
         scene_index_concurrency=int(
             _arg_or_config(
                 args,
@@ -1835,18 +1817,6 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             )
         ),
         scene_index_frame_fps=scene_index_frame_fps,
-        scene_index_max_beats_per_root=int(
-            _arg_or_config(
-                args,
-                config_data,
-                "scene_index_max_beats_per_root",
-                "scene_index_max_beats_per_root",
-                "scene_index.max_beats_per_root",
-                "scene.max_beats_per_root",
-                "dense_video_caption.max_beats_per_root",
-                default=RootIndexPolicy().max_beats_per_root,
-            )
-        ),
         scene_index_max_new_tokens=int(
             _arg_or_config(
                 args,

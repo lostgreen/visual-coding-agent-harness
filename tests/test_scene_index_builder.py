@@ -66,6 +66,29 @@ class RecordingBackend:
         raise AssertionError(f"unexpected task: {request.task}")
 
 
+class ManyBeatBackend:
+    def __init__(self, beat_count: int) -> None:
+        self.beat_count = beat_count
+        self.requests: list[BackendRequest] = []
+
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        self.requests.append(request)
+        if request.task != "build_root_dvc_index":
+            raise AssertionError(f"unexpected task: {request.task}")
+        start_sec = float(request.metadata["start_sec"])
+        end_sec = float(request.metadata["end_sec"])
+        step = (end_sec - start_sec) / float(self.beat_count)
+        beats = [
+            {
+                "start_sec": start_sec + step * index,
+                "end_sec": start_sec + step * (index + 1),
+                "summary": f"Beat {index + 1}.",
+            }
+            for index in range(self.beat_count)
+        ]
+        return BackendResponse(text=json.dumps({"root_summary": "Many beat summary.", "beats": beats}))
+
+
 def _frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
     del video_path, end_sec
     return [f"/frames/video-1/{int(start_sec):04d}_{index:03d}.jpg" for index in range(max(1, min(max_frames, 2)))]
@@ -78,7 +101,6 @@ def test_builder_creates_single_call_root_dvc_manifest() -> None:
         text_model_id="text-mini",
         vl_model_id="vl-mini",
         window_sec=30.0,
-        caption_nframes=12,
         frame_sampler=_frame_sampler,
     )
 
@@ -99,8 +121,9 @@ def test_builder_creates_single_call_root_dvc_manifest() -> None:
     assert backend.requests[0].metadata["max_pixels"] == 360 * 420
     assert backend.requests[0].metadata["fps"] == 0.5
     assert backend.requests[0].metadata["nframes"] == 2
-    assert backend.requests[0].metadata["max_beats_per_root"] == 12
+    assert "max_beats_per_root" not in backend.requests[0].metadata
     assert backend.requests[0].max_new_tokens == RootIndexPolicy().max_new_tokens
+    assert "MAX_BEATS" not in backend.requests[0].prompt
     assert '"scene": "where the video is and what is visible"' in backend.requests[0].prompt
     assert '"event": "the simple action, narration point, or state change"' in backend.requests[0].prompt
     assert "Do not collapse the interval into only one broad overview" in backend.requests[0].prompt
@@ -167,7 +190,6 @@ def test_builder_prefers_frame_cache_over_physical_clips(tmp_path) -> None:
         text_model_id="text-mini",
         vl_model_id="vl-mini",
         window_sec=10.0,
-        caption_nframes=12,
         clip_root=tmp_path / "clips",
         clip_extractor=fake_extract,
         frame_sampler=fake_frame_sampler,
@@ -199,7 +221,7 @@ def test_builder_prefers_frame_cache_over_physical_clips(tmp_path) -> None:
     assert visual_requests[1].metadata["frame_cache_policy"] == "root_policy_fps"
 
 
-def test_builder_root_dvc_uses_policy_fps_without_caption_nframes_cap() -> None:
+def test_builder_root_dvc_uses_policy_fps_for_frame_sampling() -> None:
     backend = RecordingBackend()
     sampled = []
 
@@ -212,7 +234,6 @@ def test_builder_root_dvc_uses_policy_fps_without_caption_nframes_cap() -> None:
         text_model_id="text-mini",
         vl_model_id="vl-mini",
         window_sec=10.0,
-        caption_nframes=3,
         frame_sampler=fake_frame_sampler,
     )
 
@@ -225,6 +246,27 @@ def test_builder_root_dvc_uses_policy_fps_without_caption_nframes_cap() -> None:
 
     assert sampled == [("/tmp/video-1.mp4", 0.0, 10.0, 5)]
     assert backend.requests[0].metadata["nframes"] == 5
+
+
+def test_builder_preserves_all_root_dvc_beats_without_policy_cap() -> None:
+    backend = ManyBeatBackend(beat_count=15)
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    )
+
+    scene_index = builder.build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=30.0,
+        subtitle_cues=[],
+    )
+
+    assert len(scene_index.segments[0].timeline_beats) == 15
+    assert scene_index.segments[0].timeline_beats[-1].summary == "Beat 15."
 
 
 def test_summary_uses_one_line_map_not_full_dual_source_detail() -> None:
@@ -332,14 +374,14 @@ def test_scene_index_cache_rebuilds_damaged_root_dvc_caption(tmp_path) -> None:
     assert rebuilt.segments[0].map_summary == "Museum aircraft intro with a silver plane in a hangar."
 
 
-def test_root_dvc_policy_caps_timeline_beats() -> None:
-    backend = RecordingBackend()
+def test_root_dvc_policy_does_not_cap_timeline_beats() -> None:
+    backend = ManyBeatBackend(beat_count=15)
     builder = SceneIndexBuilder(
         backend=backend,
         text_model_id="text-mini",
         vl_model_id="vl-mini",
         window_sec=30.0,
-        root_policy=RootIndexPolicy(root_window_sec=30.0, max_beats_per_root=1),
+        root_policy=RootIndexPolicy(root_window_sec=30.0),
         frame_sampler=_frame_sampler,
     )
 
@@ -351,10 +393,8 @@ def test_root_dvc_policy_caps_timeline_beats() -> None:
     )
 
     segment = scene_index.segments[0]
-    assert len(segment.timeline_beats) == 2
-    assert segment.timeline_beats[0].summary == "A narrator introduces the aircraft museum."
-    assert segment.timeline_beats[1].limitations == ("root_dvc_synthesized_coverage_gap",)
-    assert "root_dvc_synthesized_coverage_beats" in segment.limitations
+    assert len(segment.timeline_beats) == 15
+    assert segment.timeline_beats[-1].summary == "Beat 15."
 
 
 def test_root_dvc_tolerates_beat_summary_aliases_and_drops_unusable_beats() -> None:
@@ -672,7 +712,6 @@ def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
         text_model_id="text-mini",
         vl_model_id="vl-mini",
         window_sec=30.0,
-        caption_nframes=99,
     )
     cues = [SubtitleCue(start_sec=0.0, end_sec=1.0, text="Museum aircraft.", cue_id="cue-1")]
 
@@ -688,7 +727,6 @@ def test_root_dvc_cache_key_uses_stable_policy_fields() -> None:
             "root_window_sec": 30.0,
             "frame_cache_fps": 0.5,
             "max_pixels_per_frame": 360 * 420,
-            "max_beats_per_root": 12,
             "max_new_tokens": 6144,
             "subtitle_hash": subtitle_hash(cues),
             "vl_model_id": "vl-mini",

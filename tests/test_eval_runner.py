@@ -636,7 +636,6 @@ class EvalRunnerTest(unittest.TestCase):
                 scene_index_cache_dir=cache_dir,
                 scene_index_concurrency=8,
                 scene_index_frame_fps=0.5,
-                scene_index_max_beats_per_root=9,
                 scene_index_max_new_tokens=7777,
                 frame_cache_fps=2.0,
                 budget=AgentBudget(),
@@ -658,7 +657,7 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(builder_inits[0]["vl_model_id"], "/models/vl")
             self.assertEqual(builder_inits[0]["cache"].cache_dir, cache_dir)
             self.assertEqual(builder_inits[0]["root_concurrency"], 8)
-            self.assertEqual(builder_inits[0]["root_policy"].max_beats_per_root, 9)
+            self.assertFalse(hasattr(builder_inits[0]["root_policy"], "max_beats_per_root"))
             self.assertEqual(builder_inits[0]["root_policy"].max_new_tokens, 7777)
             self.assertEqual(builder_inits[0]["root_policy"].frame_cache_fps, 0.5)
 
@@ -858,7 +857,7 @@ class EvalRunnerTest(unittest.TestCase):
         )
         self.assertEqual(config.scene_index_concurrency, 8)
 
-    def test_scene_index_concurrency_top_level_yaml_key_builds_agent_config(self):
+    def test_scene_index_yaml_ignores_retired_caption_frame_and_beat_limit_keys(self):
         from runs import eval_runner
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -882,10 +881,20 @@ class EvalRunnerTest(unittest.TestCase):
             config = eval_runner.config_from_args(args)
 
         self.assertEqual(config.scene_index_concurrency, 8)
-        self.assertEqual(config.scene_caption_nframes, 6)
+        self.assertFalse(hasattr(config, "scene_caption_nframes"))
         self.assertEqual(config.scene_index_frame_fps, 0.5)
-        self.assertEqual(config.scene_index_max_beats_per_root, 10)
+        self.assertFalse(hasattr(config, "scene_index_max_beats_per_root"))
         self.assertEqual(config.scene_index_max_new_tokens, 8192)
+
+    def test_retired_scene_caption_and_beat_limit_cli_flags_are_rejected(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--scene-caption-nframes", "6"])
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--scene-index-max-beats-per-root", "10"])
 
     def test_frame_cache_fps_caps_at_two_and_root_dvc_fps_cannot_exceed_cache(self):
         from runs import eval_runner
