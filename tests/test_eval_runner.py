@@ -711,6 +711,31 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(summary["avg_followups_per_case"], 2.0)
             self.assertEqual(summary["followup_success_rate"], 1.0)
             self.assertEqual(summary["low_confidence_final_rate"], 1.0)
+            self.assertEqual(summary["unvalidated_guess_rate"], 0.0)
+
+    def test_summary_payload_reports_unvalidated_guess_rate(self):
+        from runs import eval_runner
+
+        summary = eval_runner._summary_payload(
+            run_id="eval",
+            case_ids=["case_001", "case_002"],
+            config_payload={},
+            results=[
+                {
+                    "question_id": "case_001",
+                    "strategies": {"workspace_v2": {"status": "unvalidated_guess", "correct": True}},
+                    "raw_artifacts": {},
+                },
+                {
+                    "question_id": "case_002",
+                    "strategies": {"workspace_v2": {"status": "final", "correct": True, "citation_count": 1}},
+                    "raw_artifacts": {},
+                },
+            ],
+        )
+
+        self.assertEqual(summary["unvalidated_guess_rate"], 0.5)
+        self.assertEqual(summary["low_confidence_final_rate"], 0.0)
 
     def test_summary_payload_aggregates_context_budget_metrics(self):
         from runs import eval_runner

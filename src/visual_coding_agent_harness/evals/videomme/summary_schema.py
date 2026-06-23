@@ -25,6 +25,7 @@ class RunSummary:
     need_more_evidence_rate: float
     unsupported_final_rate: float
     low_confidence_final_rate: float
+    unvalidated_guess_rate: float
 
     # evidence quality
     evidence_provenance_completeness: float
@@ -80,6 +81,7 @@ class RunSummary:
             need_more_evidence_rate=0.0,
             unsupported_final_rate=0.0,
             low_confidence_final_rate=0.0,
+            unvalidated_guess_rate=0.0,
             evidence_provenance_completeness=0.0,
             tool_nframes_compliance=0.0,
             legacy_worker_vote_rows=0,

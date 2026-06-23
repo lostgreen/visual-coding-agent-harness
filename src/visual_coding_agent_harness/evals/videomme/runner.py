@@ -1015,6 +1015,9 @@ def _populate_run_summary_metrics(summary: RunSummary, results: Sequence[Mapping
     summary.low_confidence_final_rate = (
         sum(1 for item in strategy_results if item.get("status") == "low_confidence_final") / total
     )
+    summary.unvalidated_guess_rate = (
+        sum(1 for item in strategy_results if item.get("status") == "unvalidated_guess") / total
+    )
     summary.unsupported_final_rate = (
         sum(
             1
