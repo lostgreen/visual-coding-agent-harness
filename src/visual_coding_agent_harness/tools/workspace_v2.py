@@ -1014,6 +1014,7 @@ def _read_clip_evidence(
                 start_sec=start_sec,
                 end_sec=end_sec,
                 focus=ask_for,
+                verification_targets=targets,
             ),
             media_path=media_path,
             media_type="video",
@@ -2051,11 +2052,26 @@ def _time_range_from_scope(scope: Mapping[str, Any], segment: VideoMapSegment) -
     return float(segment.start_sec), float(segment.end_sec)
 
 
-def _read_clip_prompt(*, segment_id: str, start_sec: float, end_sec: float, focus: str) -> str:
-    return (
+def _read_clip_prompt(
+    *,
+    segment_id: str,
+    start_sec: float,
+    end_sec: float,
+    focus: str,
+    verification_targets: Sequence[Mapping[str, Any]] = (),
+) -> str:
+    prompt = (
         "Read only factual visual/audio/OCR evidence from this clip. "
         "Do not choose an answer option. "
         f"Segment {segment_id} [{start_sec:.1f}, {end_sec:.1f}], focus: {focus}"
+    )
+    if not verification_targets:
+        return prompt
+    return (
+        prompt
+        + "\nReturn exactly one JSON object. Do not wrap it in markdown fences or add prose."
+        + "\nSchema: {\"verification_results\":[{\"target_id\":\"...\",\"verdict\":\"supported|not_found_in_window|contradicted|uncertain\",\"evidence\":\"short local evidence\",\"confidence\":0.0,\"local_only\":true}],\"facts\":[{\"text\":\"short local fact\",\"source_kind\":\"visual_fact|audio_fact|ocr_fact\",\"target_ids\":[\"target_1\"]}]}"
+        + "\nFor every target_id, output exactly one verification_results item. Do not use custom fields like target_1, label, tag, polarity, or presence unless verdict is also filled."
     )
 
 
@@ -2206,6 +2222,36 @@ def _verification_results_from_backend(
         if normalized:
             return normalized
 
+    parsed_results = _verification_result_items_from_text(raw_backend=raw_backend, facts=facts)
+    if parsed_results:
+        normalized = []
+        for index, item in enumerate(parsed_results):
+            target = _target_for_parsed_result(targets, item=item, index=index)
+            verdict, raw_signal = _coerce_verdict(item, target=target)
+            normalized.append(
+                _verification_result(
+                    target_id=str(
+                        item.get("target_id")
+                        or item.get("id")
+                        or item.get("target")
+                        or item.get("label")
+                        or target.get("target_id")
+                        or "unknown"
+                    ),
+                    claim=str(item.get("claim") or target.get("claim") or ""),
+                    verdict=verdict,
+                    scope=dict(item.get("scope", {}) or scope) if isinstance(item.get("scope", {}), Mapping) else scope,
+                    anchor_ids=[str(value) for value in _sequence_items(item.get("anchor_ids")) if str(value)]
+                    or _anchor_ids_for_index(produced_anchors, index),
+                    source_kind=str(item.get("source_kind") or "multimodal_fact"),
+                    confidence=float(item.get("confidence", 0.5) or 0.5),
+                    rationale=str(item.get("rationale") or item.get("evidence") or item.get("text") or ""),
+                    raw_signal=raw_signal,
+                )
+            )
+        if normalized:
+            return normalized
+
     raw_facts = raw_backend.get("facts")
     if (
         isinstance(raw_facts, Sequence)
@@ -2279,6 +2325,120 @@ def _coerce_verdict(item: Mapping[str, Any], *, target: Mapping[str, Any]) -> tu
         elif verdict == "supported":
             verdict = "contradicted"
     return verdict, {"field": field, "value": value, "target_polarity": target_polarity}
+
+
+def _verification_result_items_from_text(
+    *,
+    raw_backend: Mapping[str, Any],
+    facts: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for text in _verification_text_sources(raw_backend=raw_backend, facts=facts):
+        payload = _extract_verification_json_from_text(text)
+        if payload is None:
+            continue
+        items.extend(_verification_items_from_payload(payload))
+    return items
+
+
+def _verification_text_sources(
+    *,
+    raw_backend: Mapping[str, Any],
+    facts: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    sources: list[str] = []
+    for key in ("response", "text", "content", "raw_text", "output"):
+        value = raw_backend.get(key)
+        if isinstance(value, str) and value.strip():
+            sources.append(value)
+    for fact in facts:
+        value = fact.get("text") if isinstance(fact, Mapping) else None
+        if isinstance(value, str) and value.strip():
+            sources.append(value)
+    return sources
+
+
+def _extract_verification_json_from_text(text: str) -> Any | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    for candidate in _json_candidates(raw):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _json_candidates(text: str) -> list[str]:
+    candidates = [
+        match.group(1).strip()
+        for match in re.finditer(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    ]
+    stripped = text.strip()
+    if stripped:
+        candidates.append(stripped)
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char not in "[{":
+            continue
+        try:
+            _, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        candidates.append(text[index : index + end])
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def _verification_items_from_payload(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+        return [dict(item) for item in payload if isinstance(item, Mapping)]
+    if not isinstance(payload, Mapping):
+        return []
+    verification_results = payload.get("verification_results")
+    if isinstance(verification_results, Sequence) and not isinstance(verification_results, (str, bytes)):
+        return [dict(item) for item in verification_results if isinstance(item, Mapping)]
+    labels = payload.get("labels")
+    if isinstance(labels, Mapping):
+        return [_verification_item_from_target_value(str(target_id), value) for target_id, value in labels.items()]
+    if any(key in payload for key in ("target_id", "target", "label", "tag", "polarity", "presence", "verdict")):
+        return [dict(payload)]
+    return [_verification_item_from_target_value(str(target_id), value) for target_id, value in payload.items()]
+
+
+def _verification_item_from_target_value(target_id: str, value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        item = dict(value)
+        item.setdefault("target_id", str(target_id))
+        return item
+    return {"target_id": str(target_id), "tag": str(value)}
+
+
+def _target_for_parsed_result(
+    targets: Sequence[Mapping[str, Any]],
+    *,
+    item: Mapping[str, Any],
+    index: int,
+) -> Mapping[str, Any]:
+    target_id = str(item.get("target_id") or item.get("id") or item.get("target") or item.get("label") or "").strip()
+    if target_id:
+        for target in targets:
+            if str(target.get("target_id") or "").strip() == target_id:
+                return target
+    return targets[index] if index < len(targets) else {}
+
+
+def _anchor_ids_for_index(produced_anchors: Sequence[Mapping[str, Any]], index: int) -> list[str]:
+    if index >= len(produced_anchors):
+        return []
+    anchor_id = str(produced_anchors[index].get("anchor_id") or "").strip()
+    return [anchor_id] if anchor_id else []
 
 
 def _verification_result(

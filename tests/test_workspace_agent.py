@@ -9,6 +9,7 @@ from visual_coding_agent_harness.agents.workspace_agent import (
     compose_commit_prompt,
     compose_final_prompt,
     compose_plan_prompt,
+    _structured_verify_writes,
     _parse_action,
 )
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
@@ -362,6 +363,60 @@ def test_workspace_agent_repeated_explore_emits_recovery_observation(tmp_path: P
     assert any(event["type"] == "planner_recovery_hint_emitted" for event in events)
 
 
+def test_workspace_agent_repeated_explore_auto_verifies_after_recovery_hint(tmp_path: Path) -> None:
+    @tool(name="explore", description="Explore candidate windows.")
+    def explore(query: str, original_question: str = "", answer_options: dict[str, str] | None = None) -> dict[str, object]:
+        del original_question, answer_options
+        return {
+            "claim": "Candidate windows found.",
+            "confidence": 0.5,
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "query": query,
+            "candidate_windows": [
+                {"candidate_key": "obs_0001:cand_0001", "segment_id": "seg_0001", "time_range": [0.0, 10.0]}
+            ],
+        }
+
+    @tool(name="verify_window", description="Verify a pending candidate.")
+    def verify_window(candidate_key: str, focus: list[str] | None = None) -> dict[str, object]:
+        return {
+            "claim": f"Auto-verified {candidate_key}.",
+            "confidence": 0.8,
+            "mode": "verify_window",
+            "worker": "EvidenceVerifier",
+            "candidate_key": candidate_key,
+            "focus": focus or [],
+        }
+
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_repeated_explore_auto_verify")
+    registry = ToolRegistry()
+    registry.register(
+        ToolRuntimeSpec(
+            tool_spec=explore,
+            semantic_key_builder=lambda _ctx, request: f"explore:{request.arguments['query']}",
+        )
+    )
+    registry.register(ToolRuntimeSpec(tool_spec=verify_window))
+    backend = ScriptedWorkspaceBackend(
+        [
+            '{"tool":"explore","args":{"query":"same query"}}',
+            '{"tool":"explore","args":{"query":"same query"}}',
+            '{"tool":"explore","args":{"query":"same query"}}',
+        ]
+    )
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=3)
+
+    agent.run("Question: demo")
+    observations = workspace.read_observations()
+    assert observations[-1].raw_output["mode"] == "verify_window"
+    assert observations[-1].raw_output["worker"] == "EvidenceVerifier"
+    assert observations[-1].raw_output["candidate_key"] == "obs_0001:cand_0001"
+    events = workspace._read_jsonl_dicts("trace.jsonl")
+    assert any(event["type"] == "planner_recovery_hint_emitted" for event in events)
+    assert any(event["type"] == "candidate_auto_verify_triggered" for event in events)
+
+
 def test_workspace_agent_forces_answer_at_max_rounds(tmp_path: Path) -> None:
     @tool(name="probe", description="Gather one clue.")
     def probe() -> dict[str, object]:
@@ -405,14 +460,123 @@ def test_workspace_agent_forced_answer_validation_rejection_returns_unvalidated_
     assert result.confidence == "low"
     assert result.citations == ()
     assert result.metadata is not None
-    assert result.metadata["status"] == "low_confidence_final"
+    assert result.metadata["status"] == "unvalidated_guess"
     assert result.metadata["forced_final"] is True
     assert result.metadata["validated"] is False
     assert result.metadata["attempted_answer"] == "C"
     assert result.metadata["attempted_citations"] == []
-    assert "answer_validation_failed" in str(result.metadata["validation_error"])
+    assert result.metadata["validation_error"] == ""
     trace_events = workspace._read_jsonl_dicts("trace.jsonl")
-    assert any(event["type"] == "workspace_forced_answer_unvalidated" for event in trace_events)
+    assert any(event["type"] == "workspace_forced_unvalidated_guess" for event in trace_events)
+
+
+def test_workspace_agent_forced_final_autocites_valid_support_memory(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_forced_final_autocite")
+    observation = workspace.write_observation(
+        tool_name="explore",
+        claim="Caption directly supports option C.",
+        confidence=0.8,
+        raw_output={"mode": "caption_fact", "support_status": "caption_supported"},
+    )
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": "anch_caption_c",
+                    "kind": "dense_caption",
+                    "source_kind": "dense_caption",
+                    "excerpt": "Caption directly supports option C.",
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "caption_support",
+                    "claim": "Caption directly supports option C.",
+                    "anchor_ids": ["anch_caption_c"],
+                    "supports_option": "C",
+                    "confidence": "medium",
+                    "metadata": {
+                        "source_tool": "explore",
+                        "mode": "caption_fact",
+                        "support_status": "caption_supported",
+                        "condition_match": {"matches_original_question": True, "match_level": "direct"},
+                    },
+                }
+            ],
+        },
+    )
+    backend = ScriptedWorkspaceBackend(
+        [
+            '{"tool":"read_workspace","args":{"section":"memory"}}',
+            '{"tool":"answer","args":{"text":"C","citations":[],"confidence":"low"}}',
+        ]
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Question: demo\nA. one\nB. two\nC. three\nD. four")
+
+    assert result.answer == "C"
+    assert result.citations == ("mem_0001",)
+    assert result.metadata is not None
+    assert result.metadata["validated"] is True
+    assert result.metadata["auto_cited"] is True
+
+
+def test_structured_verify_writes_false_option_negative_as_answer_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_false_option_truth_table")
+    raw_output = {
+        "claim": "The inspected frame contradicts the white-hat option.",
+        "mode": "verify_window",
+        "produced_anchors": [
+            {
+                "anchor_id": "anch_option_c",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The inspected frame contradicts the white-hat option.",
+            }
+        ],
+        "verification_results": [
+            {
+                "target_id": "option_C",
+                "claim": "Ferdinand was wearing a white hat.",
+                "verdict": "contradicted",
+                "supports_option": "C",
+                "answer_polarity": "select_false_option",
+                "anchor_ids": ["anch_option_c"],
+                "scope": {"segment_id": "seg_0001", "time_range": [0.0, 20.0]},
+                "confidence": 0.92,
+            }
+        ],
+    }
+    observation = workspace.write_observation(
+        tool_name="verify_window",
+        claim="The inspected frame contradicts the white-hat option.",
+        confidence=0.9,
+        raw_output=raw_output,
+    )
+    writes = _structured_verify_writes(
+        raw_output,
+        anchors=[
+            {
+                "anchor_id": "anch_option_c",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The inspected frame contradicts the white-hat option.",
+            }
+        ],
+        reason="test",
+    )
+
+    workspace.commit_observation(observation.observation_id, writes=writes)
+    memory = workspace.memory_entries()[0]
+    assert memory.kind == "answer_conflict_resolved"
+    assert memory.supports_option == "C"
+    assert memory.metadata["option_truth_status"] == "contradicted"
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=ScriptedWorkspaceBackend([]), workspace=workspace)
+    accepted = registry.execute("answer", {"text": "C", "citations": ["mem_0001"], "confidence": "medium"})
+    assert accepted["accepted"] is True
 
 
 def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> None:

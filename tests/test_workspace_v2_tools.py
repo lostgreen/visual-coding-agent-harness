@@ -228,6 +228,39 @@ def test_verify_backend_absent_under_absence_polarity_is_supported() -> None:
     assert out[0]["verdict"] == "supported"
 
 
+def test_verify_window_text_json_target_absent_becomes_not_found() -> None:
+    out = _verification_results_from_backend(
+        targets=[{"target_id": "target_1", "claim": "A red sock is present.", "polarity": "presence"}],
+        raw_backend={},
+        facts=[{"text": '```json\n{"target_1": "absent"}\n```', "source_kind": "visual_fact"}],
+        produced_anchors=[{"anchor_id": "anch_1"}],
+        segment_id="seg_0001",
+        time_range=[0.0, 10.0],
+    )
+
+    assert out[0]["target_id"] == "target_1"
+    assert out[0]["verdict"] == "not_found_in_window"
+    assert out[0]["anchor_ids"] == ["anch_1"]
+    assert out[0]["raw_signal"]["field"] == "tag"
+    assert out[0]["raw_signal"]["value"] == "absent"
+
+
+def test_verify_window_text_json_label_tag_becomes_supported() -> None:
+    out = _verification_results_from_backend(
+        targets=[{"target_id": "target_1", "claim": "The shoebox appears.", "polarity": "presence"}],
+        raw_backend={"response": '[{"label": "target_1", "tag": "present"}]'},
+        facts=[],
+        produced_anchors=[],
+        segment_id="seg_0001",
+        time_range=[0.0, 10.0],
+    )
+
+    assert out[0]["target_id"] == "target_1"
+    assert out[0]["verdict"] == "supported"
+    assert out[0]["raw_signal"]["field"] == "tag"
+    assert out[0]["raw_signal"]["value"] == "present"
+
+
 def test_synthesize_memory_normalizer_uses_derived_from_as_supports_fallback(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_synth_fallback")
     registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
@@ -1066,6 +1099,8 @@ def test_workspace_v2_verify_window_accepts_multiple_verification_targets(tmp_pa
     assert {result["verdict"] for result in verified["verification_results"]} == {"uncertain"}
     request = backend.requests[-1]
     assert "Verification targets" in request.prompt
+    assert "Return exactly one JSON object" in request.prompt
+    assert "verification_results" in request.prompt
     assert "Hubble Telescope is mentioned or shown" in request.prompt
     assert "A telescope appears in the local window" in request.prompt
     assert request.metadata["verification_targets"] == verified["verification_targets"]

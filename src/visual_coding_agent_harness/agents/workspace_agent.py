@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -152,7 +153,8 @@ class WorkspaceVisualAgent:
             if observation is not None:
                 last_tool_result = f"{observation.observation_id}: {observation.claim}"
 
-            if observation_id and self._commit_required(_tool_name(plan_action), observation):
+            commit_tool_name = str(getattr(observation, "tool_name", "") or _tool_name(plan_action))
+            if observation_id and self._commit_required(commit_tool_name, observation):
                 commit_result = self._run_commit_phase(
                     question=question,
                     observation_id=observation_id,
@@ -564,6 +566,14 @@ class WorkspaceVisualAgent:
         semantic_key = self._duplicate_guard_key(request, ctx=ctx)
         if semantic_key and semantic_key in seen_tool_semantic_keys:
             if request.tool == "explore":
+                auto_verified = self._maybe_auto_verify_pending_candidate(
+                    question=question,
+                    query=str(request.arguments.get("query") or ""),
+                    round_number=round_number,
+                    seen_tool_semantic_keys=seen_tool_semantic_keys,
+                )
+                if auto_verified:
+                    return auto_verified
                 raw_output = {
                     "mode": "planner_recovery_hint",
                     "support_status": "no_new_evidence",
@@ -623,6 +633,76 @@ class WorkspaceVisualAgent:
                 "tool": request.tool,
                 "observation_id": observation.observation_id,
             },
+        )
+        observation_ids = [observation.observation_id]
+        result = ToolResult.from_mapping(request=request, output=raw_output)
+        for observation_id in self._adapted_observation_ids(request, result, ctx=ctx):
+            if observation_id not in observation_ids:
+                observation_ids.append(observation_id)
+        return tuple(observation_ids)
+
+    def _maybe_auto_verify_pending_candidate(
+        self,
+        *,
+        question: str,
+        query: str,
+        round_number: int,
+        seen_tool_semantic_keys: set[str],
+    ) -> tuple[str, ...]:
+        if not _has_prior_recovery_hint(self.workspace, query=query):
+            return ()
+        candidate_key = ""
+        for action in _recommended_actions_from_search_ledger(self.workspace):
+            if str(action.get("tool") or "") == "verify_window" and str(action.get("candidate_key") or "").strip():
+                candidate_key = str(action.get("candidate_key") or "").strip()
+                break
+        if not candidate_key:
+            return ()
+        try:
+            self.registry.get_runtime_spec("verify_window")
+        except ToolError:
+            return ()
+        ctx = self._execution_context(
+            round_number=round_number,
+            seen_tool_semantic_keys=seen_tool_semantic_keys,
+        )
+        request = self._normalize_tool_action(
+            "verify_window",
+            {"candidate_key": candidate_key, "focus": [question]},
+            ctx=ctx,
+            request_id="auto_verify",
+        )
+        self.workspace.write_trace_event(
+            "candidate_auto_verify_triggered",
+            {
+                "round": round_number,
+                "reason": "pending_candidate_not_consumed",
+                "candidate_key": candidate_key,
+                "query": query,
+            },
+        )
+        self.workspace.write_trace_event(
+            "tool_use",
+            {"step": 1, "tool": request.tool, "arguments": dict(request.arguments), "auto": True},
+        )
+        ctx.increment_tool_calls()
+        raw_output = dict(self.registry.execute(request.tool, request.arguments))
+        semantic_key = self._duplicate_guard_key(request, ctx=ctx)
+        if semantic_key:
+            seen_tool_semantic_keys.add(semantic_key)
+        observation = self.workspace.write_observation(
+            tool_name=request.tool,
+            input_artifacts=raw_output.get("input_artifacts", []),
+            claim=str(raw_output.get("claim", "")),
+            confidence=float(raw_output.get("confidence", 0.0)),
+            regions=raw_output.get("regions", []),
+            limitations=str(raw_output.get("limitations", "")),
+            confidence_signal=str(raw_output.get("confidence_signal", "")),
+            raw_output=raw_output,
+        )
+        self.workspace.write_trace_event(
+            "tool_result",
+            {"step": 1, "tool": request.tool, "observation_id": observation.observation_id, "auto": True},
         )
         observation_ids = [observation.observation_id]
         result = ToolResult.from_mapping(request=request, output=raw_output)
@@ -732,6 +812,42 @@ class WorkspaceVisualAgent:
         seen_tool_semantic_keys: set[str],
     ) -> WorkspaceRunResult:
         action = _coerce_answer_action(self._decide_final(question=question, round_number=rounds))
+        attempted_args = _action_args(action)
+        attempted_citations = _string_sequence(attempted_args.get("citations", []) or [])
+        attempted_answer = str(attempted_args.get("text", ""))
+        if _answer_tool_available(self.registry) and not attempted_citations:
+            autocited = self._try_forced_answer_autocite(
+                action,
+                question=question,
+                rounds=rounds,
+                seen_tool_semantic_keys=seen_tool_semantic_keys,
+            )
+            if autocited is not None:
+                return autocited
+            metadata: dict[str, Any] = {
+                "status": "unvalidated_guess",
+                "forced_final": True,
+                "reason": "max_rounds_reached",
+                "validated": False,
+                "validation_error": "",
+                "attempted_answer": attempted_answer,
+                "attempted_citations": attempted_citations,
+            }
+            self.workspace.write_trace_event(
+                "workspace_forced_unvalidated_guess",
+                {
+                    "round": rounds,
+                    "reason": "no_valid_final_citation",
+                    "action": {"tool": _tool_name(action), "args": attempted_args},
+                },
+            )
+            return WorkspaceRunResult(
+                answer=attempted_answer,
+                citations=(),
+                confidence=str(attempted_args.get("confidence") or "low"),
+                rounds=rounds,
+                metadata=metadata,
+            )
         try:
             result = self._finalize_answer(
                 action,
@@ -740,8 +856,6 @@ class WorkspaceVisualAgent:
                 seen_tool_semantic_keys=seen_tool_semantic_keys,
             )
         except (ToolError, ValueError) as exc:
-            attempted_args = _action_args(action)
-            attempted_answer = str(attempted_args.get("text", ""))
             metadata: dict[str, Any] = {}
             metadata.update(
                 {
@@ -768,7 +882,7 @@ class WorkspaceVisualAgent:
                 confidence="low",
                 rounds=rounds,
                 metadata=metadata,
-            )
+        )
         metadata = dict(result.metadata or {})
         metadata.update({"forced_final": True, "reason": "max_rounds_reached", "validated": True})
         return WorkspaceRunResult(
@@ -778,6 +892,52 @@ class WorkspaceVisualAgent:
             rounds=result.rounds,
             metadata=metadata,
         )
+
+    def _try_forced_answer_autocite(
+        self,
+        action: Mapping[str, Any],
+        *,
+        question: str,
+        rounds: int,
+        seen_tool_semantic_keys: set[str],
+    ) -> WorkspaceRunResult | None:
+        args = _action_args(action)
+        choice = str(args.get("text") or args.get("answer") or "").strip().upper()[:1]
+        if not choice:
+            return None
+        for memory_id in _support_memory_ids_for_choice(self.workspace, choice):
+            patched_action = {"tool": "answer", "args": {**args, "text": choice, "citations": [memory_id]}}
+            try:
+                result = self._finalize_answer(
+                    patched_action,
+                    question=question,
+                    rounds=rounds,
+                    seen_tool_semantic_keys=seen_tool_semantic_keys,
+                )
+            except (ToolError, ValueError):
+                continue
+            metadata = dict(result.metadata or {})
+            metadata.update(
+                {
+                    "forced_final": True,
+                    "reason": "max_rounds_reached",
+                    "validated": True,
+                    "auto_cited": True,
+                    "attempted_citations": [],
+                }
+            )
+            self.workspace.write_trace_event(
+                "workspace_forced_answer_autocited",
+                {"round": rounds, "answer": choice, "citation": memory_id},
+            )
+            return WorkspaceRunResult(
+                answer=result.answer,
+                citations=result.citations,
+                confidence=result.confidence,
+                rounds=result.rounds,
+                metadata=metadata,
+            )
+        return None
 
 
 PLAN_SYSTEM_PROMPT = """You are exploring a video through a durable workspace.
@@ -874,6 +1034,53 @@ def _recommended_actions_from_search_ledger(workspace: EvidenceWorkspace) -> lis
             if isinstance(candidate, Mapping) and candidate.get("status") == "pending":
                 return [{"tool": "verify_window", "candidate_key": candidate.get("candidate_key") or candidate.get("event_id")}]
     return [{"tool": "read_workspace", "section": "pending_candidates"}]
+
+
+def _has_prior_recovery_hint(workspace: EvidenceWorkspace, *, query: str) -> bool:
+    query_norm = _norm_query(query)
+    for observation in workspace.read_observations():
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        if str(raw_output.get("mode") or "") != "planner_recovery_hint":
+            continue
+        if query_norm and _norm_query(raw_output.get("query")) != query_norm:
+            continue
+        return True
+    return False
+
+
+def _norm_query(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _answer_tool_available(registry: ToolRegistry) -> bool:
+    try:
+        registry.get_runtime_spec("answer")
+    except ToolError:
+        return False
+    return True
+
+
+def _support_memory_ids_for_choice(workspace: EvidenceWorkspace, choice: str) -> list[str]:
+    target = str(choice or "").strip().upper()[:1]
+    if not target:
+        return []
+    priority = {
+        "answer_conflict_resolved": 0,
+        "answer_support": 1,
+        "visual_support": 2,
+        "caption_support": 3,
+        "synthesized_support": 4,
+    }
+    rows: list[tuple[int, str]] = []
+    for entry in workspace.memory_entries():
+        option = str(getattr(entry, "supports_option", "") or "").strip().upper()[:1]
+        if option != target:
+            continue
+        kind = str(getattr(entry, "kind", "") or "")
+        if kind not in priority:
+            continue
+        rows.append((priority[kind], str(entry.entry_id)))
+    return [entry_id for _, entry_id in sorted(rows)]
 
 
 def _with_original_question_context(args: Mapping[str, Any], *, question: str) -> dict[str, Any]:
@@ -1597,6 +1804,13 @@ def _structured_verify_writes(
     for index, result in enumerate(results):
         verdict = str(result.get("verdict") or "uncertain").strip()
         kind = _memory_kind_for_verification_verdict(verdict)
+        supports_option = _verification_supports_option(result, verdict=verdict)
+        option_truth_status = _option_truth_status(verdict)
+        if supports_option and _verification_selects_false_option(result) and verdict in {
+            "contradicted",
+            "not_found_in_window",
+        }:
+            kind = "answer_conflict_resolved"
         anchor_ids = [str(item).strip() for item in _sequence_items(result.get("anchor_ids")) if str(item).strip()]
         if not anchor_ids and index < len(anchors):
             anchor_id = str(anchors[index].get("anchor_id") or "").strip()
@@ -1618,28 +1832,36 @@ def _structured_verify_writes(
         claim = _verification_memory_claim(result)
         if not claim:
             continue
-        memory.append(
-            {
-                "kind": kind,
-                "claim": claim,
-                "anchor_ids": anchor_ids,
-                "confidence": _memory_confidence(result.get("confidence")),
+        item: dict[str, Any] = {
+            "kind": kind,
+            "claim": claim,
+            "anchor_ids": anchor_ids,
+            "confidence": _memory_confidence(result.get("confidence")),
+            "target_id": str(result.get("target_id") or ""),
+            "metadata": {
+                "auto_pinned": True,
+                "auto_pin_reason": reason,
+                "verdict": verdict,
                 "target_id": str(result.get("target_id") or ""),
-                "metadata": {
-                    "auto_pinned": True,
-                    "auto_pin_reason": reason,
-                    "verdict": verdict,
-                    "target_id": str(result.get("target_id") or ""),
-                    "scope": dict(result.get("scope", {}) or {}) if isinstance(result.get("scope"), Mapping) else {},
-                    "source_kind": str(result.get("source_kind") or ""),
-                    "claim_scope": "window_negative" if verdict == "not_found_in_window" else "direct_answer",
-                    "global_answer_support": verdict == "supported",
-                    "local_only": True,
-                    "event_id": str(result.get("event_id") or ""),
-                    "event_type": str(result.get("event_type") or ""),
-                },
-            }
-        )
+                "scope": dict(result.get("scope", {}) or {}) if isinstance(result.get("scope"), Mapping) else {},
+                "source_kind": str(result.get("source_kind") or ""),
+                "claim_scope": "window_negative" if verdict == "not_found_in_window" else "direct_answer",
+                "global_answer_support": verdict == "supported",
+                "local_only": True,
+                "event_id": str(result.get("event_id") or ""),
+                "event_type": str(result.get("event_type") or ""),
+                "answer_polarity": str(
+                    result.get("answer_polarity")
+                    or result.get("question_polarity")
+                    or result.get("selection_polarity")
+                    or ""
+                ),
+                "option_truth_status": option_truth_status,
+            },
+        }
+        if supports_option:
+            item["supports_option"] = supports_option
+        memory.append(item)
     if not memory:
         return {}
     return {"pinned_anchors": _dedupe_anchor_payloads(pinned), "memory": memory}
@@ -1651,6 +1873,64 @@ def _memory_kind_for_verification_verdict(verdict: str) -> str:
     if verdict == "contradicted":
         return "answer_conflict"
     return "verification_uncertain"
+
+
+def _verification_supports_option(result: Mapping[str, Any], *, verdict: str) -> str:
+    explicit = str(
+        result.get("supports_option")
+        or result.get("matched_option")
+        or result.get("option_id")
+        or result.get("option")
+        or ""
+    ).strip().upper()[:1]
+    if explicit:
+        return explicit
+    target_id = str(result.get("target_id") or "").strip()
+    match = re.search(r"(?:^|[^A-Za-z])option[_\-\s]*([A-D])(?:[^A-Za-z]|$)", target_id, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    if str(verdict or "") == "supported":
+        match = re.search(r"(?:^|[^A-Za-z])([A-D])(?:[_\-\s]*check|[_\-\s]*option)(?:[^A-Za-z]|$)", target_id, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+    return ""
+
+
+def _verification_selects_false_option(result: Mapping[str, Any]) -> bool:
+    text = " ".join(
+        str(result.get(key) or "")
+        for key in (
+            "answer_polarity",
+            "question_polarity",
+            "selection_polarity",
+            "selection_mode",
+            "question_type",
+            "verification_goal",
+        )
+    ).lower()
+    false_markers = (
+        "select_false",
+        "incorrect",
+        "not correct",
+        "false",
+        "except",
+        "not mentioned",
+        "not discussed",
+        "not used",
+        "does not",
+        "least likely",
+    )
+    return any(marker in text for marker in false_markers)
+
+
+def _option_truth_status(verdict: str) -> str:
+    if verdict == "supported":
+        return "supported_true"
+    if verdict == "contradicted":
+        return "contradicted"
+    if verdict == "not_found_in_window":
+        return "not_found"
+    return "unknown"
 
 
 def _verification_memory_claim(result: Mapping[str, Any]) -> str:
