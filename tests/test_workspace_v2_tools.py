@@ -8,6 +8,7 @@ from visual_coding_agent_harness.backends.base import BackendRequest, BackendRes
 from visual_coding_agent_harness.core.protocol import ToolRequest
 from visual_coding_agent_harness.core.registry import ToolError, ToolRegistry
 from visual_coding_agent_harness.tools.workspace_v2 import (
+    _explore_candidate_beats,
     _verification_results_from_backend,
     build_workspace_v2_registry,
 )
@@ -68,6 +69,52 @@ def _video_map() -> VideoMap:
                 low_fps_caption="Closing map animation.",
                 asr_text="The story moves to another topic.",
             ),
+        ],
+    )
+
+
+def _christmas_video_map() -> VideoMap:
+    return VideoMap(
+        video_path="/videos/christmas.mp4",
+        duration_sec=74.3,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=74.3,
+                low_fps_caption="A news report about Christmas decorations, apples, candles, berries, red socks, and a fireplace.",
+                entities=["Christmas tree", "apples", "candles", "berries", "red socks", "fireplace"],
+                timeline_beats=(
+                    TimelineBeat(
+                        beat_id="seg_0001_b00",
+                        start_sec=0.0,
+                        end_sec=8.88,
+                        summary="News anchors introduce the story from the studio desk.",
+                        entity_hints=("news", "anchors"),
+                    ),
+                    TimelineBeat(
+                        beat_id="seg_0001_b01",
+                        start_sec=8.88,
+                        end_sec=30.0,
+                        summary="A Christmas tree is decorated with apples and candles.",
+                        entity_hints=("christmas tree", "apples", "candles"),
+                    ),
+                    TimelineBeat(
+                        beat_id="seg_0001_b02",
+                        start_sec=30.0,
+                        end_sec=50.0,
+                        summary="Berries appear in a close-up on the Christmas tree.",
+                        entity_hints=("berries", "tree"),
+                    ),
+                    TimelineBeat(
+                        beat_id="seg_0001_b03",
+                        start_sec=50.0,
+                        end_sec=74.3,
+                        summary="The ending shows red socks hanging above the fireplace.",
+                        entity_hints=("red socks", "fireplace"),
+                    ),
+                ),
+            )
         ],
     )
 
@@ -291,6 +338,96 @@ def test_workspace_v2_explore_returns_candidate_only_windows(tmp_path: Path) -> 
     assert result["candidate_windows"][0]["status"] == "pending_verification"
     assert result["produced_anchors"][0]["observation_id"] == "__pending__"
     assert "navigation only" in result["limitations"]
+
+
+def test_explore_candidate_beats_ranks_by_token_overlap() -> None:
+    segment = _christmas_video_map().segments[0]
+
+    ranked = _explore_candidate_beats(
+        segment,
+        query="apples candles berries christmas tree",
+        targets=(),
+        matched_terms=(),
+        max_beats=3,
+        window_sec=0,
+    )
+
+    time_ranges = [(start, end) for start, end, *_ in ranked]
+    assert (8.88, 30.0) in time_ranges
+    assert (30.0, 50.0) in time_ranges
+    assert time_ranges[0] != (0.0, 8.88)
+
+
+def test_explore_candidate_beats_falls_back_to_even_sweep_when_no_match() -> None:
+    segment = VideoMapSegment(
+        segment_id="seg_0001",
+        start_sec=0.0,
+        end_sec=74.3,
+        low_fps_caption="A generic news segment.",
+        timeline_beats=(
+            TimelineBeat(
+                beat_id="seg_0001_b00",
+                start_sec=0.0,
+                end_sec=8.88,
+                summary="News anchors introduce the story from the studio desk.",
+            ),
+        ),
+    )
+
+    ranked = _explore_candidate_beats(
+        segment,
+        query="apples candles berries",
+        targets=(),
+        matched_terms=(),
+        max_beats=3,
+        window_sec=0,
+    )
+
+    assert len(ranked) >= 2
+    assert len({(start, end) for start, end, *_ in ranked}) >= 2
+
+
+def test_workspace_v2_explore_returns_multiple_candidates_for_single_segment_beats(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_explore_multi_beat")
+    registry = build_workspace_v2_registry(video_map=_christmas_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {"query": "How many red socks are above the fireplace at the end?", "modalities": ["index"], "top_k": 4},
+    )
+
+    time_ranges = [tuple(candidate["time_range"]) for candidate in result["candidate_windows"]]
+    assert len(time_ranges) >= 2
+    assert len(set(time_ranges)) >= 2
+    assert any(start >= 50.0 and end <= 74.3 for start, end in time_ranges)
+    assert set(time_ranges) != {(0.0, 8.88)}
+
+
+def test_workspace_v2_explore_marks_duplicate_candidate_set_without_new_windows(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_explore_duplicate_windows")
+    registry = build_workspace_v2_registry(video_map=_christmas_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    first = registry.execute(
+        "explore",
+        {"query": "red socks above the fireplace", "modalities": ["index"], "top_k": 3},
+    )
+    workspace.write_observation(
+        tool_name="explore",
+        claim=str(first["claim"]),
+        confidence=float(first["confidence"]),
+        regions=first["regions"],
+        limitations=str(first["limitations"]),
+        raw_output=first,
+    )
+    second = registry.execute(
+        "explore",
+        {"query": "red stockings shown over the fireplace", "modalities": ["index"], "top_k": 3},
+    )
+
+    assert second["duplicate_post_run"] is True
+    assert second["candidate_windows"] == []
+    assert "no new candidate windows" in second["claim"]
+    assert "verify_window" in second["claim"]
 
 
 def test_workspace_v2_explore_can_return_caption_fact_and_final_citable_memory(tmp_path: Path) -> None:
@@ -1036,11 +1173,11 @@ def test_workspace_v2_explore_and_verify_window_delegate_local_workers(tmp_path:
     assert verified["worker"] == "EvidenceVerifier"
     assert verified["candidate_key"] == "obs_0001:cand_0001"
     assert verified["mode"] == "verify_window"
-    assert sampled == [("/videos/demo.mp4", 0.0, 30.0, 32)]
+    assert sampled == [("/videos/demo.mp4", 5.0, 25.0, 32)]
     assert backend.requests[-1].metadata["tool"] == "verify_window"
     plan_view = workspace.render_plan_view(question="Why?", video_map=_video_map())
     assert "## Pending Candidate Windows" in plan_view
-    assert "obs_0001:cand_0001 [0.0-30.0] segment=seg_0001 status=pending_verification" in plan_view
+    assert "obs_0001:cand_0001 [5.0-25.0] segment=seg_0001 status=pending_verification" in plan_view
 
 
 def test_workspace_v2_verify_window_accepts_multiple_verification_targets(tmp_path: Path) -> None:

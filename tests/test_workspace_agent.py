@@ -1023,6 +1023,8 @@ def test_prompts_keep_generic_planning_and_scope_local_negatives(tmp_path: Path)
     assert "scope" in commit_prompt
     assert "cannot support a final answer" in commit_prompt
     assert "answer_support" in commit_prompt
+    assert 'mode is "caption_fact" or "mixed"' in commit_prompt
+    assert "condition_match.matches_original_question is true" in commit_prompt
     assert "Reject only when" in commit_prompt
 
 
@@ -1046,6 +1048,9 @@ def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Pat
     assert "Use Segment Cards as the starting navigation state" in prompt
     assert '{"tool":"explore"' in prompt
     assert '{"tool":"verify_window"' in prompt
+    assert '"segment_id":"seg_0001","time_range":[20.0,40.0]' in prompt
+    assert "sweep unexplored regions" in PLAN_SYSTEM_PROMPT
+    assert "different part of the segment" in prompt
     assert "synthesize_memory is unavailable until committed support memory exists" in prompt
     assert "duplicate_tool_call" in prompt
     assert "do not repeat the same semantic request" in prompt

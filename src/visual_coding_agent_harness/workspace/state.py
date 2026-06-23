@@ -3667,7 +3667,7 @@ def _root_index_lines(root_segments: Sequence[Any]) -> list[str]:
     lines: list[str] = [
         "",
         "## Segment Cards",
-        "Video map is navigation-only. Full RawSegmentIndex / dense_video_caption beats stay in workspace and are expanded through scan_segment or read_segment(index).",
+        "Video map is navigation-only. Use explore to retrieve candidate windows ranked by token overlap, then verify_window to inspect each. You may also call verify_window with {segment_id, time_range} to sweep unexplored regions of this segment.",
     ]
     if not root_segments:
         return [*lines, "(none)"]
@@ -3692,7 +3692,7 @@ def _root_segment_index_lines(segment: Any) -> list[str]:
     lines.append(f"  Entities: {', '.join(entities) if entities else '-'}")
     lines.append(f"  Modalities: {', '.join(modalities) if modalities else '-'}")
     lines.append(
-        "  Expand: scan_segment chooses CandidateWindows; read_segment(index) returns the raw structured index for this segment."
+        "  Coverage: explore proposes up to 3 candidate windows per segment. If those are exhausted without visual_support, call verify_window with an explicit time_range to scan other parts of the segment."
     )
     return lines
 

@@ -947,6 +947,7 @@ The Segment Cards are navigation-only summaries. Full Dense Video Caption beats 
 Use explore to reason over dense captions, ASR, OCR, and index summaries. It may return caption_fact, mixed, or candidate_discovery.
 caption_fact/mixed observations can provide caption-level facts for commit; candidate_discovery is navigation-only.
 Use verify_window to inspect a concrete candidate window and verify one or more factual checks using local video evidence.
+verify_window also accepts {segment_id, time_range} directly. Use this form to sweep unexplored regions of a segment when explore keeps proposing the same time window.
 Use read_workspace to inspect committed memory, pending candidates, and verification coverage.
 Use synthesize_memory only after Committed Memory contains verified or caption-supported mem_* ids.
 Use answer only after Committed Memory contains mem_* ids that directly support the answer.
@@ -1000,6 +1001,8 @@ def compose_plan_prompt(
             'To inspect dense captions/indexes or find candidate windows, call {"tool":"explore","args":{"query":"question-centered condition to resolve","targets":[{"target_id":"target_1","question":"question condition to verify","verification_goal":"identify the fact that directly answers the original question condition"}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
             'When testing an option, use a target like {"target_id":"option_B_check","claim":"option B claim","verification_goal":"Check whether option B answers the original question condition.","option_id":"B"}.',
             'For answer-grade local evidence, call {"tool":"verify_window","args":{"candidate_key":"obs_0001:cand_0001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
+            'You may also call verify_window with an explicit time slice when pending candidates are exhausted: {"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[20.0,40.0],"evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":64},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
+            "If every pending candidate window in the current segment has already been verified with not_found_in_window and the question still requires visual_support, do not call explore again with a paraphrased query; instead call verify_window with segment_id + a new time_range that covers a different part of the segment.",
             "Explore can return caption_fact, mixed, or candidate_discovery. Commit caption_fact/mixed caption facts; verify candidate-only windows before final.",
             "Inspect explore condition_match and answer_mapping: if condition_match is false or unknown, do not answer from that memory.",
             "For counting/object/spatial/scoreboard/fine-action/visual-text tasks, use caption/index evidence only for navigation; final citations need visual_support.",
@@ -1114,6 +1117,7 @@ def compose_commit_prompt(
         "# Commit Guidance",
         "Commit local factual evidence with its valid scope; do not convert local absence into full-video absence.",
         "Use memory kind caption_support for caption/asr/ocr facts returned by explore caption_fact or mixed observations.",
+        'Caption/index facts may be committed as caption_support only when the explore payload mode is "caption_fact" or "mixed" and condition_match.matches_original_question is true.',
         "Use memory kind visual_support for structured verify_window facts, including local supported or local not-found findings.",
         "Use memory kind answer_support when verified or caption-supported facts directly support an answer option or subclaim needed for that option; include supports_option when clear.",
         "Use memory kind local_negative when a fact only says something was not found, not mentioned, or not visible inside one local window; include metadata.scope and metadata.global_negation_allowed=false.",

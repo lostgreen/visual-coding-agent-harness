@@ -87,8 +87,8 @@ def test_search_asr_cue_must_be_committed_before_final(tmp_path: Path) -> None:
                                     "source_kind": "retrieval_hit",
                                     "excerpt": "Matched query terms buffer, russia in asr indexes.",
                                     "segment_id": "seg_0001",
-                                    "start_sec": 0.0,
-                                    "end_sec": 20.0,
+                                    "start_sec": 20.0,
+                                    "end_sec": 40.0,
                                 }
                             ],
                             "memory": [
@@ -111,7 +111,7 @@ def test_search_asr_cue_must_be_committed_before_final(tmp_path: Path) -> None:
                         "writes": {
                             "pinned_anchors": [
                                 {
-                                    "anchor_id": "clip_anch_seg_0001_00000000_00020000",
+                                    "anchor_id": "clip_anch_seg_0001_00020000_00040000",
                                     "kind": "asr",
                                     "source_kind": "audio_fact",
                                     "excerpt": (
@@ -119,15 +119,15 @@ def test_search_asr_cue_must_be_committed_before_final(tmp_path: Path) -> None:
                                         "Russia and Western Europe."
                                     ),
                                     "segment_id": "seg_0001",
-                                    "start_sec": 0.0,
-                                    "end_sec": 20.0,
+                                    "start_sec": 20.0,
+                                    "end_sec": 40.0,
                                 }
                             ],
                             "memory": [
                                 {
                                     "kind": "answer_support",
                                     "claim": "ASR narration verifies Austria-Hungary is the buffer.",
-                                    "anchor_ids": ["clip_anch_seg_0001_00000000_00020000"],
+                                    "anchor_ids": ["clip_anch_seg_0001_00020000_00040000"],
                                     "supports_option": "D",
                                     "confidence": "high",
                                     "target_id": "buffer",
@@ -163,7 +163,7 @@ def test_search_asr_cue_must_be_committed_before_final(tmp_path: Path) -> None:
                                 "Western Europe."
                             ),
                             "verdict": "supported",
-                            "anchor_ids": ["clip_anch_seg_0001_00000000_00020000"],
+                            "anchor_ids": ["clip_anch_seg_0001_00020000_00040000"],
                             "source_kind": "audio_fact",
                             "confidence": 0.93,
                             "rationale": "The ASR sentence explicitly states the buffer relation.",

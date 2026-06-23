@@ -535,6 +535,10 @@ def test_plan_view_renders_compact_root_ledger_and_index_evidence_coverage(tmp_p
 
     assert "## Segment Cards" in plan_view
     assert "seg_0001 [0.0-60.0s] navigation_only=true index_status=available" in plan_view
+    assert "scan_segment" not in plan_view
+    assert "read_segment(index)" not in plan_view
+    assert "verify_window" in plan_view
+    assert "explicit time_range" in plan_view
     assert "Summary: Root overview" in plan_view
     assert "dense_video_caption:" not in plan_view
     assert "This beat should only appear through read_segment(index)." not in plan_view

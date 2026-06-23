@@ -14,6 +14,7 @@ from ..video.map import (
     VideoMapSegment,
     VideoMapStore,
     _resolve_search_modalities,
+    _tokens,
     search_modality_limitations,
 )
 from ..workspace import EvidenceWorkspace
@@ -30,6 +31,7 @@ ANSWER_SUPPORTING_KINDS = frozenset(
 )
 VERIFY_WINDOW_DEFAULT_FPS = 2.0
 VERIFY_WINDOW_MAX_FRAMES = 128
+EXPLORE_MAX_BEATS_PER_SEGMENT = 3
 
 
 def build_workspace_v2_registry(
@@ -503,10 +505,6 @@ class SegmentReadService:
             if len(candidate_windows) >= top_k:
                 break
             result = result_by_segment.get(segment.segment_id)
-            index = len(candidate_windows) + 1
-            time_range = _explore_time_range(segment, window_sec=window_sec)
-            candidate_id = f"cand_{index:04d}"
-            candidate_key = f"{source_observation_id}:{candidate_id}"
             match = _first_match(result.to_dict()) if result is not None else {}
             matched_terms = [str(item) for item in _sequence_items(match.get("matched_terms")) if str(item)]
             source_modalities = _unique_nonempty(
@@ -517,41 +515,63 @@ class SegmentReadService:
                 ]
             )
             matched_target_ids = _matched_target_ids(segment, matched_terms=matched_terms, targets=normalized_targets)
-            rationale = str(result.relevance_reason if result is not None else "").strip()
-            if not rationale:
-                rationale = "Scoped index window selected for verification."
-            candidate = {
-                "candidate_key": candidate_key,
-                "candidate_id": candidate_id,
-                "source_observation_id": source_observation_id,
-                "segment_id": segment.segment_id,
-                "time_range": time_range,
-                "start_sec": time_range[0],
-                "end_sec": time_range[1],
-                "matched_targets": matched_target_ids,
-                "matched_terms": matched_terms,
-                "source_modalities": source_modalities,
-                "source_beat_ids": _beat_ids_for_window(segment, time_range),
-                "entities": list(segment.entities),
-                "verification_goal": search_query or "Verify local facts in this window.",
-                "recommended_evidence_mode": "multimodal",
-                "rationale": rationale,
-                "status": "pending_verification",
-            }
-            candidate_windows.append(candidate)
-            candidate_anchors.append(
-                {
-                    "anchor_id": f"anch_explore_{source_observation_id}_{candidate_id}",
-                    "observation_id": "__pending__",
-                    "source_kind": "retrieval_hit",
+            ranked_windows = _explore_candidate_beats(
+                segment,
+                query=search_query,
+                targets=normalized_targets,
+                matched_terms=matched_terms,
+                max_beats=min(EXPLORE_MAX_BEATS_PER_SEGMENT, top_k - len(candidate_windows)),
+                window_sec=window_sec,
+            )
+            for start_sec, end_sec, beat, score in ranked_windows:
+                if len(candidate_windows) >= top_k:
+                    break
+                index = len(candidate_windows) + 1
+                time_range = [float(start_sec), float(end_sec)]
+                candidate_id = f"cand_{index:04d}"
+                candidate_key = f"{source_observation_id}:{candidate_id}"
+                rationale = _candidate_window_rationale(
+                    result_reason=str(result.relevance_reason if result is not None else ""),
+                    beat=beat,
+                    score=score,
+                )
+                source_beat_ids = [str(getattr(beat, "beat_id", ""))] if beat is not None else []
+                if not source_beat_ids:
+                    source_beat_ids = _beat_ids_for_window(segment, time_range)
+                candidate = {
+                    "candidate_key": candidate_key,
+                    "candidate_id": candidate_id,
+                    "source_observation_id": source_observation_id,
                     "segment_id": segment.segment_id,
+                    "time_range": time_range,
                     "start_sec": time_range[0],
                     "end_sec": time_range[1],
-                    "field_path": "candidate_windows",
-                    "excerpt": rationale,
-                    "modality": source_modalities[0] if source_modalities else "index",
+                    "segment_start_sec": float(segment.start_sec),
+                    "segment_end_sec": float(segment.end_sec),
+                    "matched_targets": matched_target_ids,
+                    "matched_terms": matched_terms,
+                    "source_modalities": source_modalities,
+                    "source_beat_ids": _unique_nonempty(source_beat_ids),
+                    "entities": list(segment.entities),
+                    "verification_goal": search_query or "Verify local facts in this window.",
+                    "recommended_evidence_mode": "multimodal",
+                    "rationale": rationale,
+                    "status": "pending_verification",
                 }
-            )
+                candidate_windows.append(candidate)
+                candidate_anchors.append(
+                    {
+                        "anchor_id": f"anch_explore_{source_observation_id}_{candidate_id}",
+                        "observation_id": "__pending__",
+                        "source_kind": "retrieval_hit" if beat is not None else "time_sweep",
+                        "segment_id": segment.segment_id,
+                        "start_sec": time_range[0],
+                        "end_sec": time_range[1],
+                        "field_path": "candidate_windows",
+                        "excerpt": rationale,
+                        "modality": source_modalities[0] if source_modalities else "index",
+                    }
+                )
         caption_hits = _caption_hits_for_explore(search_results=search_results, segments=segments, top_k=top_k)
         reasoning = _run_explore_caption_reasoning(
             backend=self.backend,
@@ -622,7 +642,7 @@ class SegmentReadService:
                     "raw": {"explore_reasoning": reasoning, "caption_hits": caption_hits},
                 }
                 return _validated_caption_explore_payload(payload)
-        return {
+        payload = {
             "claim": f"Explore found {len(candidate_windows)} candidate window(s) for verification.",
             "confidence": 0.85 if candidate_windows else 0.2,
             "support_status": "candidate_only",
@@ -648,6 +668,7 @@ class SegmentReadService:
             "notes": ["Candidate windows are navigation only. Use verify_window before committing answer_support."],
             "limitations": "Explore results are navigation only and candidate_only; they cannot support final answers.",
         }
+        return _dedupe_candidate_discovery_payload(payload, workspace=self.workspace)
 
     def read_index(self, *, segment_id: str) -> Mapping[str, object]:
         current = self.video_map_store.current
@@ -1910,14 +1931,224 @@ def _explore_search_modalities(modalities: Sequence[str]) -> tuple[str, ...]:
     return tuple(mapped)
 
 
+def _explore_candidate_beats(
+    segment: VideoMapSegment,
+    *,
+    query: str,
+    targets: Sequence[Mapping[str, Any]],
+    matched_terms: Sequence[str],
+    max_beats: int,
+    window_sec: float,
+) -> list[tuple[float, float, Any | None, float]]:
+    max_beats = max(1, int(max_beats or 1))
+    segment_start = float(segment.start_sec)
+    segment_end = float(segment.end_sec)
+    duration = max(0.1, segment_end - segment_start)
+    query_terms = _explore_query_terms(query=query, targets=targets, matched_terms=matched_terms)
+    out: list[tuple[float, float, Any | None, float]] = []
+    seen: set[tuple[float, float]] = set()
+
+    scored = []
+    for beat in segment.timeline_beats or ():
+        haystack = " ".join(
+            [
+                str(getattr(beat, "summary", "") or ""),
+                " ".join(str(item) for item in getattr(beat, "entity_hints", ()) or ()),
+            ]
+        )
+        beat_terms = _tokens(haystack)
+        overlap = query_terms & beat_terms
+        score = len(overlap) / max(len(query_terms), 1) if query_terms else 0.0
+        scored.append((score, float(getattr(beat, "start_sec", segment_start)), beat))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+
+    for score, _start, beat in scored:
+        if score <= 0:
+            break
+        start_sec, end_sec = _clamped_time_range(
+            float(getattr(beat, "start_sec", segment_start)),
+            float(getattr(beat, "end_sec", segment_end)),
+            segment_start=segment_start,
+            segment_end=segment_end,
+            window_sec=window_sec,
+        )
+        key = (round(start_sec, 3), round(end_sec, 3))
+        if key in seen:
+            continue
+        out.append((start_sec, end_sec, beat, round(float(score), 6)))
+        seen.add(key)
+        if len(out) >= max_beats:
+            return out
+
+    _fill_even_sweep_windows(
+        out,
+        seen=seen,
+        segment_start=segment_start,
+        segment_end=segment_end,
+        window_sec=window_sec,
+        max_beats=max_beats,
+    )
+    if not out:
+        return [(segment_start, segment_end, None, 0.0)]
+    return out
+
+
 def _explore_time_range(segment: VideoMapSegment, *, window_sec: float) -> list[float]:
-    beats = list(segment.timeline_beats or ())
-    if beats:
-        beat = beats[0]
-        return [float(getattr(beat, "start_sec", segment.start_sec)), float(getattr(beat, "end_sec", segment.end_sec))]
-    duration = max(0.1, float(segment.end_sec) - float(segment.start_sec))
-    width = min(duration, max(0.1, float(window_sec or duration)))
-    return [float(segment.start_sec), float(segment.start_sec) + width]
+    ranked = _explore_candidate_beats(
+        segment,
+        query="",
+        targets=(),
+        matched_terms=(),
+        max_beats=1,
+        window_sec=window_sec,
+    )
+    start_sec, end_sec, *_ = ranked[0]
+    return [float(start_sec), float(end_sec)]
+
+
+def _explore_query_terms(
+    *,
+    query: str,
+    targets: Sequence[Mapping[str, Any]],
+    matched_terms: Sequence[str],
+) -> set[str]:
+    terms = set(_tokens(str(query or "")))
+    for target in targets:
+        terms.update(_tokens(str(target.get("claim") or target.get("question") or target.get("text") or "")))
+        for alias in _sequence_items(target.get("aliases")):
+            terms.update(_tokens(str(alias or "")))
+    for term in matched_terms:
+        terms.update(_tokens(str(term or "")))
+    return terms
+
+
+def _clamped_time_range(
+    start_sec: float,
+    end_sec: float,
+    *,
+    segment_start: float,
+    segment_end: float,
+    window_sec: float,
+) -> tuple[float, float]:
+    start_sec = max(segment_start, float(start_sec))
+    end_sec = min(segment_end, float(end_sec))
+    if end_sec <= start_sec:
+        end_sec = min(segment_end, start_sec + 0.1)
+    requested_width = float(window_sec or 0.0)
+    if requested_width > 0 and (end_sec - start_sec) > requested_width:
+        center = (start_sec + end_sec) / 2.0
+        half_width = requested_width / 2.0
+        start_sec = max(segment_start, center - half_width)
+        end_sec = min(segment_end, start_sec + requested_width)
+        start_sec = max(segment_start, end_sec - requested_width)
+    return (round(start_sec, 3), round(end_sec, 3))
+
+
+def _fill_even_sweep_windows(
+    out: list[tuple[float, float, Any | None, float]],
+    *,
+    seen: set[tuple[float, float]],
+    segment_start: float,
+    segment_end: float,
+    window_sec: float,
+    max_beats: int,
+) -> None:
+    duration = max(0.1, segment_end - segment_start)
+    fallback_width = min(duration, max(0.1, float(window_sec) if window_sec else duration / max(max_beats, 1)))
+    for slot in range(1, max_beats + 1):
+        if len(out) >= max_beats:
+            return
+        center = segment_start + duration * (slot / (max_beats + 1))
+        start_sec = max(segment_start, center - fallback_width / 2.0)
+        end_sec = min(segment_end, start_sec + fallback_width)
+        start_sec = max(segment_start, end_sec - fallback_width)
+        key = (round(start_sec, 3), round(end_sec, 3))
+        if key in seen:
+            continue
+        out.append((key[0], key[1], None, 0.0))
+        seen.add(key)
+
+
+def _candidate_window_rationale(*, result_reason: str, beat: Any | None, score: float) -> str:
+    if beat is not None:
+        summary = str(getattr(beat, "summary", "") or "").strip()
+        prefix = f"Timeline beat matched query terms (score={float(score):.2f})."
+        return f"{prefix} {summary}".strip()
+    reason = str(result_reason or "").strip()
+    if reason:
+        return f"{reason} Even-sweep fallback selected a distinct time window for verification."
+    return "Even-sweep fallback selected a distinct time window for verification."
+
+
+def _dedupe_candidate_discovery_payload(
+    payload: Mapping[str, Any],
+    *,
+    workspace: EvidenceWorkspace | None,
+) -> dict[str, object]:
+    result = dict(payload)
+    candidate_signatures = {
+        signature
+        for signature in (_candidate_window_signature(candidate) for candidate in _mapping_items(result.get("candidate_windows")))
+        if signature is not None
+    }
+    if not candidate_signatures or workspace is None:
+        return result
+    existing = _existing_candidate_window_signatures(workspace)
+    if not existing or not candidate_signatures.issubset(existing):
+        return result
+    result.update(
+        {
+            "claim": (
+                "Explore produced no new candidate windows; existing pending candidates already cover these regions. "
+                "Switch to verify_window with segment_id + a new time_range on a different part of the segment."
+            ),
+            "confidence": 0.0,
+            "support_status": "candidate_only",
+            "cannot_final_cite": True,
+            "duplicate_post_run": True,
+            "duplicate_candidate_count": len(candidate_signatures),
+            "candidate_windows": [],
+            "regions": [],
+            "produced_anchors": [],
+            "notes": [
+                "No new candidate windows were added.",
+                "Use verify_window(segment_id, time_range) to sweep a different part of the segment.",
+            ],
+            "limitations": "Explore returned no new navigation windows; this cannot support final answers.",
+        }
+    )
+    return result
+
+
+def _existing_candidate_window_signatures(workspace: EvidenceWorkspace) -> set[tuple[str, float, float]]:
+    signatures: set[tuple[str, float, float]] = set()
+    snapshot = workspace.search_ledger_snapshot()
+    for candidate in _mapping_items(snapshot.get("candidates")):
+        signature = _candidate_window_signature(candidate)
+        if signature is not None:
+            signatures.add(signature)
+    for observation in workspace.read_observations():
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        for candidate in _mapping_items(raw_output.get("candidate_windows")):
+            signature = _candidate_window_signature(candidate)
+            if signature is not None:
+                signatures.add(signature)
+    return signatures
+
+
+def _candidate_window_signature(candidate: Mapping[str, Any]) -> tuple[str, float, float] | None:
+    segment_id = str(candidate.get("segment_id") or "").strip()
+    if not segment_id:
+        return None
+    try:
+        start_sec, end_sec = _time_range_argument(candidate.get("time_range"))
+    except ValueError:
+        start_value = candidate.get("start_sec")
+        end_value = candidate.get("end_sec")
+        if start_value is None or end_value is None:
+            return None
+        start_sec, end_sec = float(start_value), float(end_value)
+    return (segment_id, round(float(start_sec), 3), round(float(end_sec), 3))
 
 
 def _beat_ids_for_window(segment: VideoMapSegment, time_range: Sequence[float]) -> list[str]:

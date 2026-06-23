@@ -93,6 +93,12 @@ def render_search_ledger(snapshot: Mapping[str, Any], *, max_items: int = 3) -> 
         for action in recommended[:max_items]:
             if action.get("candidate_key"):
                 lines.append(f"- {action.get('tool')}({action.get('candidate_key')})")
+            elif action.get("segment_id") and action.get("time_range"):
+                suffix = f": {action.get('focus')}" if action.get("focus") else ""
+                lines.append(
+                    f"- {action.get('tool')} segment={action.get('segment_id')} "
+                    f"time={_format_time_range(action.get('time_range'))}{suffix}"
+                )
             elif action.get("focus"):
                 lines.append(f"- {action.get('tool')}: {action.get('focus')}")
             else:
@@ -246,6 +252,8 @@ def _candidate_records(*, observation_id: str, query_norm: str, raw_output: Mapp
                 "source_observation_id": observation_id,
                 "segment_id": str(item.get("segment_id") or ""),
                 "time_range": _time_range(item.get("time_range")),
+                "segment_start_sec": _optional_float(item.get("segment_start_sec")),
+                "segment_end_sec": _optional_float(item.get("segment_end_sec")),
                 "query_norm": query_norm,
                 "status": "pending",
                 "checked_claims": [],
@@ -334,12 +342,82 @@ def _recommended_next_actions(ledger: Mapping[str, Any]) -> list[dict[str, Any]]
     for candidate in ledger.get("candidates", []):
         if isinstance(candidate, Mapping) and candidate.get("status") == "pending":
             return [{"tool": "verify_window", "candidate_key": candidate.get("candidate_key") or candidate.get("event_id")}]
+    sweep = _negative_only_sweep_action(ledger)
+    if sweep is not None:
+        return [sweep]
     options = ledger.get("options")
     if isinstance(options, Mapping) and any(
         isinstance(option, Mapping) and option.get("status") == "untested" for option in options.values()
     ):
         return [{"tool": "explore", "focus": "test untested options against the original condition"}]
     return []
+
+
+def _negative_only_sweep_action(ledger: Mapping[str, Any]) -> dict[str, Any] | None:
+    candidates = [candidate for candidate in _mapping_list(ledger.get("candidates")) if str(candidate.get("segment_id") or "").strip()]
+    if not candidates:
+        return None
+    if any(str(candidate.get("status") or "") == "verified_supported" for candidate in candidates):
+        return None
+    negatives = [candidate for candidate in candidates if str(candidate.get("status") or "") == "verified_negative"]
+    if not negatives:
+        return None
+    seed = negatives[-1]
+    segment_id = str(seed.get("segment_id") or "").strip()
+    segment_candidates = [candidate for candidate in candidates if str(candidate.get("segment_id") or "").strip() == segment_id]
+    covered = sorted(
+        time_range
+        for time_range in (_time_range(candidate.get("time_range")) for candidate in segment_candidates)
+        if time_range is not None
+    )
+    if not covered:
+        return None
+    last_width = max(0.1, covered[-1][1] - covered[-1][0])
+    segment_start = _first_present_float([candidate.get("segment_start_sec") for candidate in segment_candidates])
+    segment_end = _first_present_float([candidate.get("segment_end_sec") for candidate in segment_candidates])
+    if segment_start is None:
+        segment_start = min(start for start, _end in covered)
+    if segment_end is None:
+        segment_end = max(end for _start, end in covered) + last_width
+    next_range = _largest_uncovered_range(
+        covered,
+        segment_start=float(segment_start),
+        segment_end=float(segment_end),
+        preferred_width=last_width,
+    )
+    if next_range is None:
+        start = covered[-1][1]
+        next_range = [start, start + last_width]
+    return {
+        "tool": "verify_window",
+        "segment_id": segment_id,
+        "time_range": next_range,
+        "focus": "extend visual coverage beyond already-verified regions",
+    }
+
+
+def _largest_uncovered_range(
+    covered: Sequence[Sequence[float]],
+    *,
+    segment_start: float,
+    segment_end: float,
+    preferred_width: float,
+) -> list[float] | None:
+    cursor = float(segment_start)
+    gaps: list[tuple[float, float]] = []
+    for start, end in covered:
+        start = max(float(segment_start), float(start))
+        end = min(float(segment_end), float(end))
+        if start > cursor:
+            gaps.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < segment_end:
+        gaps.append((cursor, float(segment_end)))
+    if not gaps:
+        return None
+    start, end = max(gaps, key=lambda item: item[1] - item[0])
+    width = min(max(0.1, float(preferred_width)), max(0.1, end - start))
+    return [round(start, 3), round(min(end, start + width), 3)]
 
 
 def _upsert_candidate(ledger: dict[str, Any], candidate: Mapping[str, Any]) -> None:
@@ -388,6 +466,23 @@ def _unique(values: Any) -> list[Any]:
 def _time_range(value: Any) -> list[float] | None:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) >= 2:
         return [float(value[0]), float(value[1])]
+    return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_present_float(values: Sequence[Any]) -> float | None:
+    for value in values:
+        parsed = _optional_float(value)
+        if parsed is not None:
+            return parsed
     return None
 
 

@@ -81,6 +81,53 @@ def test_verify_window_updates_candidate_status_and_trace(tmp_path: Path) -> Non
     assert any(event["type"] == "exploration_ledger_update" for event in events)
 
 
+def test_negative_only_candidate_status_recommends_time_range_sweep(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "search_ledger_negative_sweep")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found candidate windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "query": "berries on the Christmas tree",
+            "candidate_windows": [
+                {
+                    "candidate_key": "obs_0001:cand_0001",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 8.88],
+                    "segment_start_sec": 0.0,
+                    "segment_end_sec": 74.3,
+                }
+            ],
+        },
+    )
+    workspace.write_observation(
+        tool_name="verify_window",
+        claim="berries not found locally",
+        confidence=0.8,
+        raw_output={
+            "mode": "verify_window",
+            "candidate_key": "obs_0001:cand_0001",
+            "segment_id": "seg_0001",
+            "time_range": [0.0, 8.88],
+            "verification_results": [
+                {
+                    "target_id": "target_1",
+                    "claim": "Berries are visible.",
+                    "verdict": "not_found_in_window",
+                    "scope": {"segment_id": "seg_0001", "time_range": [0.0, 8.88]},
+                }
+            ],
+        },
+    )
+
+    rendered = workspace.render_search_ledger_view()
+
+    assert "verify_window segment=seg_0001 time=[8.9-17.8]" in rendered
+    assert "extend visual coverage" in rendered
+
+
 def test_wrong_scope_caption_updates_option_coverage(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "search_ledger_options")
 
