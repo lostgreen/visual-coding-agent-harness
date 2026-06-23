@@ -635,6 +635,118 @@ def run_eval_cases(
     return summary
 
 
+def _build_scene_index(
+    *,
+    backend: Any,
+    video_path: str,
+    video_id: str,
+    duration_sec: float,
+    config: EvalConfig,
+    frame_sampler: FrameSampler | None = None,
+) -> SceneIndex:
+    cache = SceneIndexCache(config.scene_index_cache_dir) if config.scene_index_cache_enabled else None
+    builder = SceneIndexBuilder(
+        backend=backend,
+        text_model_id=config.planner_model_path or config.model_path,
+        vl_model_id=config.model_path,
+        window_sec=config.window_sec,
+        root_policy=RootIndexPolicy(
+            root_window_sec=float(config.window_sec),
+            frame_cache_fps=float(config.scene_index_frame_fps),
+            max_new_tokens=int(config.scene_index_max_new_tokens),
+        ),
+        root_concurrency=config.scene_index_concurrency,
+        cache=cache,
+        clip_root=None if frame_sampler is not None else config.scene_index_cache_dir / "clips",
+        frame_sampler=frame_sampler,
+    )
+    return builder.build(
+        video_id=video_id,
+        video_path=video_path,
+        duration_sec=duration_sec,
+        subtitle_cues=parse_srt_cues(config.subtitle_dir / f"{video_id}.srt"),
+    )
+
+
+def prewarm_scene_indexes(
+    *,
+    backend: Any,
+    rows_by_id: Mapping[str, Any],
+    config: EvalConfig,
+    duration_fn: Callable[[Path], float] = ffprobe_duration,
+) -> dict[str, Any]:
+    config.run_root.mkdir(parents=True, exist_ok=True)
+    config.scene_index_cache_dir.mkdir(parents=True, exist_ok=True)
+    seen: set[str] = set()
+    videos: list[dict[str, Any]] = []
+    for qid in config.cases:
+        row = rows_by_id[str(qid)]
+        video_id = str(row_get(row, "videoID") or row_get(row, "video_id"))
+        if video_id in seen:
+            continue
+        seen.add(video_id)
+        videos.append({"question_id": str(qid), "videoID": video_id})
+
+    summary_path = config.run_root / "scene_index_prewarm_summary.json"
+    print(
+        "START scene_index_prewarm "
+        + json.dumps({"videos": len(videos), "cases": len(config.cases)}, ensure_ascii=True, sort_keys=True),
+        flush=True,
+    )
+    results: list[dict[str, Any]] = []
+    for item in videos:
+        started = time.time()
+        video_id = item["videoID"]
+        video_path = str(config.video_dir / f"{video_id}.mp4")
+        duration_sec = duration_fn(Path(video_path))
+        frame_cache = build_frame_cache_for_video(
+            video_path=Path(video_path),
+            frame_dir=_frame_cache_dir(config=config, video_id=video_id),
+            fps=float(config.frame_cache_fps),
+            duration_sec=duration_sec,
+        )
+        scene_index = _build_scene_index(
+            backend=backend,
+            video_path=video_path,
+            video_id=video_id,
+            duration_sec=duration_sec,
+            config=config,
+            frame_sampler=frame_cache.sample_paths,
+        )
+        record = {
+            "question_id": item["question_id"],
+            "videoID": video_id,
+            "duration_sec": round(duration_sec, 1),
+            "segments": len(scene_index.segments),
+            "frame_cache": str(frame_cache.frame_dir),
+            "seconds": round(time.time() - started, 3),
+            "status": "done",
+        }
+        results.append(record)
+        summary = {
+            "run_id": config.run_root.name,
+            "cases": list(config.cases),
+            "videos_total": len(videos),
+            "videos_done": len(results),
+            "scene_index_cache_dir": str(config.scene_index_cache_dir),
+            "videos": results,
+        }
+        summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
+        print("SCENE_INDEX_DONE " + json.dumps(record, ensure_ascii=True, sort_keys=True), flush=True)
+    if not results:
+        summary = {
+            "run_id": config.run_root.name,
+            "cases": list(config.cases),
+            "videos_total": 0,
+            "videos_done": 0,
+            "scene_index_cache_dir": str(config.scene_index_cache_dir),
+            "videos": [],
+        }
+        summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
+    print("DONE scene_index_prewarm_summary=" + str(summary_path), flush=True)
+    return json.loads(summary_path.read_text(encoding="utf-8"))
+
+
 def _summary_payload(
     *,
     run_id: str,
@@ -1240,27 +1352,13 @@ def run_strategy(
 ) -> dict[str, Any]:
     if strategy not in STRATEGIES:
         raise ValueError(f"Unknown strategy: {strategy}")
-    cache = SceneIndexCache(config.scene_index_cache_dir) if config.scene_index_cache_enabled else None
-    builder = SceneIndexBuilder(
+    scene_index = _build_scene_index(
         backend=backend,
-        text_model_id=config.planner_model_path or config.model_path,
-        vl_model_id=config.model_path,
-        window_sec=config.window_sec,
-        root_policy=RootIndexPolicy(
-            root_window_sec=float(config.window_sec),
-            frame_cache_fps=float(config.scene_index_frame_fps),
-            max_new_tokens=int(config.scene_index_max_new_tokens),
-        ),
-        root_concurrency=config.scene_index_concurrency,
-        cache=cache,
-        clip_root=None if frame_sampler is not None else config.scene_index_cache_dir / "clips",
-        frame_sampler=frame_sampler,
-    )
-    scene_index = builder.build(
-        video_id=video_id,
         video_path=video_path,
+        video_id=video_id,
         duration_sec=duration_sec,
-        subtitle_cues=parse_srt_cues(config.subtitle_dir / f"{video_id}.srt"),
+        config=config,
+        frame_sampler=frame_sampler,
     )
     return run_loop(
         backend,
@@ -1521,6 +1619,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--free-max-rounds", type=int, default=None)
     parser.add_argument("--free-max-tool-calls-per-round", type=int, default=None)
     parser.add_argument("--export-training", action="store_true", default=None, help="Export compact TrainingTrajectory JSON per case.")
+    parser.add_argument(
+        "--scene-index-only",
+        action="store_true",
+        help="Only build cached root dense-video captions / scene indexes; do not run workspace QA.",
+    )
     parser.add_argument("--allow-any-python", action="store_true", help="Skip the remote Python executable assertion.")
     return parser
 
@@ -1901,7 +2004,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     config = config_from_args(args)
     rows_by_id = load_rows_by_id(config.parquet_path, config.cases)
     backend = build_backend(config)
-    run_eval_cases(backend=backend, rows_by_id=rows_by_id, config=config)
+    if args.scene_index_only:
+        prewarm_scene_indexes(backend=backend, rows_by_id=rows_by_id, config=config)
+    else:
+        run_eval_cases(backend=backend, rows_by_id=rows_by_id, config=config)
 
 
 if __name__ == "__main__":

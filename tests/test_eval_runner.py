@@ -267,6 +267,106 @@ class EvalRunnerTest(unittest.TestCase):
         )
         self.assertEqual(summary["cases"][0]["raw_artifacts"]["frame_cache"], "/tmp/frame-cache/video605_2fps")
 
+    def test_prewarm_scene_indexes_deduplicates_videos_without_running_agent_loop(self):
+        from runs import eval_runner
+
+        build_calls = []
+        frame_cache_calls = []
+
+        class FakeBuilder:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def build(self, **kwargs):
+                build_calls.append(kwargs)
+                return SceneIndex(
+                    video_path=kwargs["video_path"],
+                    duration_sec=kwargs["duration_sec"],
+                    segments=[
+                        VideoSegment(
+                            segment_id="seg_0001",
+                            start_sec=0.0,
+                            end_sec=300.0,
+                            source="dual_source_scene_index",
+                        )
+                    ],
+                )
+
+        def fake_build_frame_cache_for_video(*, video_path, frame_dir, fps, duration_sec):
+            frame_cache_calls.append((video_path, frame_dir, fps, duration_sec))
+            return FakeFrameCache()
+
+        rows_by_id = {
+            "605-1": {"question_id": "605-1", "videoID": "video605", "video_id": "vid605"},
+            "605-2": {"question_id": "605-2", "videoID": "video605", "video_id": "vid605"},
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "caption"
+            config = eval_runner.EvalConfig(
+                run_root=run_root,
+                workspace_root=run_root / "workspaces",
+                model_path="/model",
+                data_root=Path("/dataset"),
+                parquet_path=Path("/dataset/videomme/test.parquet"),
+                video_dir=Path("/dataset/video"),
+                subtitle_dir=Path("/dataset/subtitle"),
+                cases=("605-1", "605-2"),
+                strategies=("workspace_v2",),
+                window_sec=300.0,
+                scene_index_cache_dir=run_root / "scene_index_cache",
+                budget=AgentBudget(),
+            )
+
+            with patch.object(eval_runner, "build_frame_cache_for_video", side_effect=fake_build_frame_cache_for_video):
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=AssertionError("agent loop must not run")):
+                        summary = eval_runner.prewarm_scene_indexes(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 1896.0,
+                        )
+            summary_exists = (run_root / "scene_index_prewarm_summary.json").exists()
+
+        self.assertEqual([call["video_id"] for call in build_calls], ["video605"])
+        self.assertEqual(len(frame_cache_calls), 1)
+        self.assertEqual(summary["videos_total"], 1)
+        self.assertEqual(summary["videos_done"], 1)
+        self.assertEqual(summary["videos"][0]["videoID"], "video605")
+        self.assertTrue(summary_exists)
+
+    def test_scene_index_only_cli_dispatches_without_eval_cases(self):
+        from runs import eval_runner
+
+        config = eval_runner.EvalConfig(
+            run_root=Path("/tmp/caption-only"),
+            workspace_root=Path("/tmp/caption-only/workspaces"),
+            model_path="/model",
+            data_root=Path("/dataset"),
+            parquet_path=Path("/dataset/videomme/test.parquet"),
+            video_dir=Path("/dataset/video"),
+            subtitle_dir=Path("/dataset/subtitle"),
+            cases=("605-1",),
+            strategies=("workspace_v2",),
+        )
+        calls = []
+
+        def fake_prewarm_scene_indexes(**kwargs):
+            calls.append(kwargs)
+            return {"videos_done": 1}
+
+        with patch.object(eval_runner, "validate_python"):
+            with patch.object(eval_runner, "config_from_args", return_value=config):
+                with patch.object(eval_runner, "load_rows_by_id", return_value={"605-1": {"videoID": "video605"}}):
+                    with patch.object(eval_runner, "build_backend", return_value=object()):
+                        with patch.object(eval_runner, "prewarm_scene_indexes", side_effect=fake_prewarm_scene_indexes):
+                            with patch.object(eval_runner, "run_eval_cases", side_effect=AssertionError("eval must not run")):
+                                eval_runner.main(["--scene-index-only", "--allow-any-python"])
+
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0]["config"], config)
+
     def test_config_file_values_are_loaded_cli_overrides_and_resolved_config_is_written(self):
         from runs import eval_runner
 
