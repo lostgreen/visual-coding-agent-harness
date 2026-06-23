@@ -18,7 +18,10 @@ class RunSummary:
 
     # accuracy
     accuracy: float
+    raw_choice_accuracy: float
+    grounded_choice_accuracy: float
     final_rate: float
+    cited_answer_rate: float
     need_more_evidence_rate: float
     unsupported_final_rate: float
     low_confidence_final_rate: float
@@ -49,6 +52,9 @@ class RunSummary:
     caption_fact_downgrade_rate: float
     caption_support_final_rate: float
     visual_required_but_caption_final_rate: float
+    planner_recovery_hint_rate: float
+    repeated_explore_rate: float
+    ledger_pending_candidate_rate: float
 
     # diagnostics
     route_violations: int
@@ -67,7 +73,10 @@ class RunSummary:
             git_commit="",
             contract_version=CONTRACT_VERSION,
             accuracy=0.0,
+            raw_choice_accuracy=0.0,
+            grounded_choice_accuracy=0.0,
             final_rate=0.0,
+            cited_answer_rate=0.0,
             need_more_evidence_rate=0.0,
             unsupported_final_rate=0.0,
             low_confidence_final_rate=0.0,
@@ -90,6 +99,9 @@ class RunSummary:
             caption_fact_downgrade_rate=0.0,
             caption_support_final_rate=0.0,
             visual_required_but_caption_final_rate=0.0,
+            planner_recovery_hint_rate=0.0,
+            repeated_explore_rate=0.0,
+            ledger_pending_candidate_rate=0.0,
             route_violations=0,
             nframes_histogram={},
             map_reflux_commit_count=0,

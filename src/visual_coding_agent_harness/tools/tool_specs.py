@@ -566,10 +566,15 @@ def _normalize_workspace_v2_verify(_ctx: ToolSpecContext, request: ToolRequest) 
 
 def _normalize_workspace_v2_synthesize_memory(_ctx: ToolSpecContext, request: ToolRequest) -> Mapping[str, Any]:
     args = dict(request.arguments)
+    supports = _string_list(args.get("supports"))
+    derived_from = _string_list(args.get("derived_from"))
+    if not supports and derived_from:
+        supports = derived_from
+        derived_from = []
     return {
         "claim": _text(args.get("claim")),
-        "supports": _string_list(args.get("supports")),
-        "derived_from": _string_list(args.get("derived_from")),
+        "supports": supports,
+        "derived_from": derived_from,
         "confidence": _text(args.get("confidence")) or "medium",
         "supports_option": _text(args.get("supports_option")),
         "tags": _string_list(args.get("tags")),

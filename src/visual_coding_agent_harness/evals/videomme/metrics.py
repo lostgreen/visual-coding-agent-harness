@@ -104,6 +104,10 @@ def _case_strategy_report(
         "observation_count": int(trace["observation_count"]),
         "normalization_note_count": int(trace["normalization_note_count"]),
         "normalization_round_count": int(trace["normalization_round_count"]),
+        "planner_recovery_hint_count": int(trace["planner_recovery_hint_count"]),
+        "repeated_explore_count": int(trace["repeated_explore_count"]),
+        "ledger_pending_candidate_count": int(trace["ledger_pending_candidate_count"]),
+        "grounded_correct": bool(raw.get("correct", False)) and final and int(raw.get("citation_count", 0) or len(citations) or 0) > 0,
         **arbitration,
     }
 
@@ -112,7 +116,9 @@ def _strategy_report(cases: Sequence[Mapping[str, Any]], strategy: str) -> dict[
     rows = [case["strategies"][strategy] for case in cases if strategy in case["strategies"]]
     total = len(rows)
     correct = sum(1 for row in rows if row["correct"])
+    grounded_correct = sum(1 for row in rows if row["grounded_correct"])
     finals = sum(1 for row in rows if row["final"])
+    cited_finals = sum(1 for row in rows if row["final"] and int(row["citation_count"]) > 0)
     incomplete = sum(1 for row in rows if row["incomplete"])
     conflict = sum(1 for row in rows if row["has_conflict"])
     final_with_conflict = sum(1 for row in rows if row["final_with_conflict"])
@@ -125,13 +131,20 @@ def _strategy_report(cases: Sequence[Mapping[str, Any]], strategy: str) -> dict[
     observations = sum(int(row["observation_count"]) for row in rows)
     normalization_notes = sum(int(row["normalization_note_count"]) for row in rows)
     normalization_rounds = sum(int(row["normalization_round_count"]) for row in rows)
+    planner_recovery_hints = sum(int(row["planner_recovery_hint_count"]) for row in rows)
+    repeated_explores = sum(int(row["repeated_explore_count"]) for row in rows)
+    ledger_pending_candidates = sum(int(row["ledger_pending_candidate_count"]) for row in rows)
     legacy_worker_vote_rows = sum(int(row["legacy_worker_vote_rows"]) for row in rows)
     consistency_rows = [row for row in rows if row["option_support_consistency"] is not None]
     consistent = sum(1 for row in consistency_rows if row["option_support_consistency"])
     seconds = [row["seconds"] for row in rows if row["seconds"] is not None]
     return {
         "accuracy": f"{correct}/{total}",
+        "raw_choice_accuracy": f"{correct}/{total}",
+        "grounded_choice_accuracy": f"{grounded_correct}/{total}",
         "accuracy_rate": correct / total if total else 0.0,
+        "grounded_choice_accuracy_rate": grounded_correct / total if total else 0.0,
+        "cited_answer_rate": cited_finals / total if total else 0.0,
         "final_rate": finals / total if total else 0.0,
         "incomplete_rate": incomplete / total if total else 0.0,
         "conflict_rate": conflict / total if total else 0.0,
@@ -144,6 +157,9 @@ def _strategy_report(cases: Sequence[Mapping[str, Any]], strategy: str) -> dict[
         "normalization_notes_per_round": (
             normalization_notes / normalization_rounds if normalization_rounds else 0.0
         ),
+        "planner_recovery_hint_rate": planner_recovery_hints / total if total else 0.0,
+        "repeated_explore_rate": repeated_explores / total if total else 0.0,
+        "ledger_pending_candidate_rate": ledger_pending_candidates / total if total else 0.0,
         "legacy_worker_vote_rows": legacy_worker_vote_rows,
         "option_support_consistency_rate": consistent / len(consistency_rows) if consistency_rows else 0.0,
         "avg_seconds": round(sum(seconds) / len(seconds), 3) if seconds else None,
@@ -162,6 +178,9 @@ def _trace_summary(workspace_path: Path | None) -> dict[str, Any]:
         "observation_count": 0,
         "normalization_note_count": 0,
         "normalization_round_count": 0,
+        "planner_recovery_hint_count": 0,
+        "repeated_explore_count": 0,
+        "ledger_pending_candidate_count": 0,
     }
     if workspace_path is None:
         return default
@@ -184,6 +203,9 @@ def _trace_summary(workspace_path: Path | None) -> dict[str, Any]:
     anonymous_degenerate_events = 0
     normalization_note_count = 0
     normalization_round_count = 0
+    planner_recovery_hint_count = 0
+    repeated_explore_count = 0
+    ledger_pending_candidate_count = 0
     with trace_path.open("r", encoding="utf-8") as handle:
         for line in handle:
             if not line.strip():
@@ -238,6 +260,12 @@ def _trace_summary(workspace_path: Path | None) -> dict[str, Any]:
                     normalization_round_count += 1
                     normalization_note_count += len(notes)
                 continue
+            if event_type == "planner_recovery_hint_emitted":
+                planner_recovery_hint_count += 1
+                continue
+            if event_type == "repeated_explore_detected":
+                repeated_explore_count += 1
+                continue
             if event_type != "tool_use":
                 continue
             tool = str(payload.get("tool", ""))
@@ -247,6 +275,17 @@ def _trace_summary(workspace_path: Path | None) -> dict[str, Any]:
             segment_id = arguments.get("segment_id")
             if segment_id and tool in VISUAL_SEGMENT_TOOLS:
                 inspected_segments.append(str(segment_id))
+    ledger_path = workspace_path / "search_ledger.json"
+    if ledger_path.exists():
+        try:
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            ledger = {}
+        candidates = ledger.get("candidates", []) if isinstance(ledger, Mapping) else []
+        if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
+            ledger_pending_candidate_count = sum(
+                1 for candidate in candidates if isinstance(candidate, Mapping) and candidate.get("status") == "pending"
+            )
     return {
         "tool_sequence": tools,
         "unique_inspected_segments": _unique(inspected_segments),
@@ -258,6 +297,9 @@ def _trace_summary(workspace_path: Path | None) -> dict[str, Any]:
         "observation_count": len(observations),
         "normalization_note_count": normalization_note_count,
         "normalization_round_count": normalization_round_count,
+        "planner_recovery_hint_count": planner_recovery_hint_count,
+        "repeated_explore_count": repeated_explore_count,
+        "ledger_pending_candidate_count": ledger_pending_candidate_count,
     }
 
 

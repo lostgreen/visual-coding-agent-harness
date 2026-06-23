@@ -752,7 +752,26 @@ def _populate_run_summary_metrics(summary: RunSummary, results: Sequence[Mapping
         return
     total = len(strategy_results)
     summary.accuracy = sum(1 for item in strategy_results if bool(item.get("correct"))) / total
+    summary.raw_choice_accuracy = summary.accuracy
+    summary.grounded_choice_accuracy = (
+        sum(
+            1
+            for item in strategy_results
+            if bool(item.get("correct"))
+            and item.get("status") == "final"
+            and int(item.get("citation_count", 0) or 0) > 0
+        )
+        / total
+    )
     summary.final_rate = sum(1 for item in strategy_results if item.get("status") == "final") / total
+    summary.cited_answer_rate = (
+        sum(
+            1
+            for item in strategy_results
+            if item.get("status") == "final" and int(item.get("citation_count", 0) or 0) > 0
+        )
+        / total
+    )
     summary.need_more_evidence_rate = (
         sum(1 for item in strategy_results if item.get("status") == "need_more_evidence") / total
     )
@@ -790,6 +809,9 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
     caption_support_finals = 0
     visual_required_caption_finals = 0
     final_cases = 0
+    planner_recovery_hints = 0
+    repeated_explores = 0
+    pending_candidate_workspaces = 0
 
     for workspace in workspaces:
         events = _load_trace_events(workspace)
@@ -819,6 +841,9 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         caption_support_finals += caption_metrics["caption_support_final"]
         visual_required_caption_finals += caption_metrics["visual_required_but_caption_final"]
         final_cases += caption_metrics["final_case"]
+        planner_recovery_hints += sum(1 for event in events if _event_type(event) == "planner_recovery_hint_emitted")
+        repeated_explores += sum(1 for event in events if _event_type(event) == "repeated_explore_detected")
+        pending_candidate_workspaces += int(_search_ledger_pending_candidates(workspace) > 0)
 
     summary.route_violations = route_violations
     summary.context_budget_overflow_count = context_overflows
@@ -845,6 +870,18 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
     if final_cases:
         summary.caption_support_final_rate = caption_support_finals / final_cases
         summary.visual_required_but_caption_final_rate = visual_required_caption_finals / final_cases
+    if workspaces:
+        summary.planner_recovery_hint_rate = planner_recovery_hints / len(workspaces)
+        summary.repeated_explore_rate = repeated_explores / len(workspaces)
+        summary.ledger_pending_candidate_rate = pending_candidate_workspaces / len(workspaces)
+
+
+def _search_ledger_pending_candidates(workspace: EvidenceWorkspace) -> int:
+    snapshot = workspace.search_ledger_snapshot()
+    candidates = snapshot.get("candidates", [])
+    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+        return 0
+    return sum(1 for candidate in candidates if isinstance(candidate, Mapping) and candidate.get("status") == "pending")
 
 
 def _caption_explore_trace_metrics(workspace: EvidenceWorkspace) -> dict[str, int]:

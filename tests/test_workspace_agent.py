@@ -320,6 +320,48 @@ def test_workspace_agent_duplicate_guard_persists_across_rounds(tmp_path: Path) 
     assert rejected[0]["payload"]["error"] == "duplicate_tool_call: probe repeats semantic key probe:same."
 
 
+def test_workspace_agent_repeated_explore_emits_recovery_observation(tmp_path: Path) -> None:
+    @tool(name="explore", description="Explore candidate windows.")
+    def explore(query: str, original_question: str = "", answer_options: dict[str, str] | None = None) -> dict[str, object]:
+        del original_question, answer_options
+        return {
+            "claim": "Candidate windows found.",
+            "confidence": 0.5,
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "query": query,
+            "candidate_windows": [
+                {"candidate_key": "obs_0001:cand_0001", "segment_id": "seg_0001", "time_range": [0.0, 10.0]}
+            ],
+        }
+
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_repeated_explore_hint")
+    registry = ToolRegistry()
+    registry.register(
+        ToolRuntimeSpec(
+            tool_spec=explore,
+            semantic_key_builder=lambda _ctx, request: f"explore:{request.arguments['query']}",
+        )
+    )
+    backend = ScriptedWorkspaceBackend(
+        [
+            '{"tool":"explore","args":{"query":"same query"}}',
+            '{"tool":"explore","args":{"query":"same query"}}',
+            '{"tool":"answer","args":{"text":"done","citations":[],"confidence":"low"}}',
+        ]
+    )
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=3)
+
+    result = agent.run("Question: demo")
+
+    assert result.answer == "done"
+    observations = workspace.read_observations()
+    assert len(observations) == 2
+    assert observations[-1].raw_output["mode"] == "planner_recovery_hint"
+    events = workspace._read_jsonl_dicts("trace.jsonl")
+    assert any(event["type"] == "planner_recovery_hint_emitted" for event in events)
+
+
 def test_workspace_agent_forces_answer_at_max_rounds(tmp_path: Path) -> None:
     @tool(name="probe", description="Gather one clue.")
     def probe() -> dict[str, object]:
@@ -1115,7 +1157,35 @@ def test_workspace_agent_auto_pins_structured_verify_results_after_commit_parse_
     assert {memory.metadata["verdict"] for memory in memories} == {"supported", "not_found_in_window"}
     assert all(memory.metadata["source_tool"] == "verify_window" for memory in memories)
     assert not any(memory.kind == "unverified_capture" for memory in memories)
-    assert any(event["type"] == "commit_auto_pinned" for event in workspace._read_jsonl_dicts("trace.jsonl"))
+    assert any(event["type"] == "deterministic_verify_commit" for event in workspace._read_jsonl_dicts("trace.jsonl"))
+
+
+def test_workspace_agent_deterministically_commits_structured_verify_before_llm_commit(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_structured_verify_deterministic")
+    backend = StructuredVerifyFallbackBackend(
+        plan_responses=[
+            (
+                '{"tool":"verify_window","args":{"segment_id":"seg_0001","time_range":[0,60],'
+                '"checks":[{"target_id":"shoebox","claim":"A shoebox is used to make the solar eclipse viewer."},'
+                '{"target_id":"ruler","claim":"A ruler is used to make the solar eclipse viewer."}]}}'
+            ),
+        ],
+        commit_responses=['{"tool":"commit_observation","args":{"observation_id":"obs_0001"}}'],
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+    agent = WorkspaceVisualAgent(backend=backend, registry=registry, workspace=workspace, max_rounds=1)
+
+    result = agent.run("Which item is not used to make the solar eclipse observing tool?")
+
+    assert result.answer == "B"
+    assert "workspace_commit" not in [request.task for request in backend.requests]
+    assert workspace.observation_status("obs_0001") == "committed"
+    memories = workspace.memory_entries()
+    assert [memory.metadata["verdict"] for memory in memories] == ["supported", "not_found_in_window"]
+    ruler_memory = next(memory for memory in memories if memory.metadata["target_id"] == "ruler")
+    assert ruler_memory.metadata["claim_scope"] == "window_negative"
+    assert ruler_memory.metadata["global_answer_support"] is False
+    assert any(event["type"] == "deterministic_verify_commit" for event in workspace._read_jsonl_dicts("trace.jsonl"))
 
 
 def test_workspace_agent_auto_pins_caption_fact_after_commit_parse_failure(tmp_path: Path) -> None:

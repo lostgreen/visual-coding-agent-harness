@@ -75,6 +75,9 @@ class ReportMetricsTest(unittest.TestCase):
 
             agent = report["strategies"]["workspace_v2"]
             self.assertEqual(agent["accuracy"], "1/2")
+            self.assertEqual(agent["raw_choice_accuracy"], "1/2")
+            self.assertEqual(agent["grounded_choice_accuracy"], "0/2")
+            self.assertEqual(agent["cited_answer_rate"], 0.5)
             self.assertEqual(agent["final_rate"], 0.5)
             self.assertEqual(agent["incomplete_rate"], 0.5)
             self.assertEqual(agent["avg_seconds"], 30.0)
@@ -86,6 +89,7 @@ class ReportMetricsTest(unittest.TestCase):
             self.assertEqual(detail["tool_sequence"], ["video_ls", "inspect_segment"])
             self.assertEqual(detail["unique_inspected_segments"], ["seg_0002"])
             self.assertEqual(detail["citation_count"], 2)
+            self.assertFalse(detail["grounded_correct"])
 
             rendered = report_metrics.render_markdown(report)
             self.assertIn("workspace_v2", rendered)

@@ -299,7 +299,7 @@ def build_workspace_v2_registry(
     @tool(name="synthesize_memory", description="Derive planner memory from committed workspace memory.")
     def synthesize_memory(
         claim: str,
-        supports: Sequence[str],
+        supports: Sequence[str] = (),
         derived_from: Sequence[str] = (),
         evidence_obs_ids: Sequence[str] = (),
         confidence: str = "medium",
@@ -310,6 +310,9 @@ def build_workspace_v2_registry(
             raise ValueError("synthesize_memory_failed: workspace is required")
         support_ids = _unique_nonempty(supports)
         derived_ids = _unique_nonempty(derived_from)
+        if not support_ids and derived_ids:
+            support_ids = list(derived_ids)
+            derived_ids = []
         if not support_ids:
             raise ValueError("synthesize_memory_failed: supports must include committed memory ids")
 
@@ -1558,6 +1561,8 @@ def _normalize_answer_mapping(value: Any) -> dict[str, object]:
     payload = dict(value or {}) if isinstance(value, Mapping) else {}
     return {
         "supports_option": str(payload.get("supports_option") or "").strip() or None,
+        "related_option": str(payload.get("related_option") or "").strip() or None,
+        "option_relation": str(payload.get("option_relation") or "").strip() or None,
         "neutral_options": [str(option).strip() for option in _sequence_items(payload.get("neutral_options")) if str(option).strip()],
         "opposes_options": [str(option).strip() for option in _sequence_items(payload.get("opposes_options")) if str(option).strip()],
         "reason": str(payload.get("reason") or "").strip() or None,
@@ -1633,6 +1638,7 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
     visual_required = _task_requires_visual_verification(task_type)
     grounded = _caption_fact_is_grounded(result, facts=facts, anchors=anchors, produced_anchors=produced_anchors)
     condition_ok = bool(condition_match.get("matches_original_question")) and str(condition_match.get("match_level") or "") == "direct"
+    claim_scope = _normalize_claim_scope(result.get("claim_scope"), condition_match=condition_match, grounded=grounded)
 
     if not grounded:
         result.update(
@@ -1646,6 +1652,7 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
                 "produced_anchors": candidate_anchors_for_windows(_mapping_items(result.get("candidate_windows"))),
                 "answer_mapping": _clear_answer_support(answer_mapping, reason="Caption fact downgraded because it lacks grounded facts/anchors."),
                 "condition_match": condition_match,
+                "claim_scope": "candidate_only",
                 "query_analysis": query_analysis,
                 "task_type": task_type,
                 "caption_fact_downgraded": True,
@@ -1666,8 +1673,13 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
                 else f"Task type {task_type} requires visual verification."
             ),
         )
+        if str(condition_match.get("match_level") or "") == "related_but_wrong_scope":
+            answer_mapping["related_option"] = answer_mapping.get("related_option") or answer_mapping.get("supports_option")
+            answer_mapping["option_relation"] = "wrong_scope"
+            claim_scope = "wrong_scope"
         for fact in facts:
             fact["supports_option"] = None
+            fact["claim_scope"] = claim_scope
         result["facts"] = facts
         result["caption_fact_downgraded"] = True
     else:
@@ -1685,9 +1697,23 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
         answer_mapping = _clear_answer_support(answer_mapping, reason="Option match removed because evidence does not satisfy original question condition.")
     result["answer_mapping"] = answer_mapping
     result["condition_match"] = condition_match
+    result["claim_scope"] = claim_scope
     result["query_analysis"] = query_analysis
     result["task_type"] = task_type
     return result
+
+
+def _normalize_claim_scope(value: Any, *, condition_match: Mapping[str, Any], grounded: bool) -> str:
+    scope = str(value or "").strip()
+    if scope in {"direct_answer", "subclaim_support", "wrong_scope", "candidate_only", "uncertain"}:
+        return scope
+    if not grounded:
+        return "candidate_only"
+    if str(condition_match.get("match_level") or "") == "related_but_wrong_scope":
+        return "wrong_scope"
+    if bool(condition_match.get("matches_original_question")) and str(condition_match.get("match_level") or "") == "direct":
+        return "direct_answer"
+    return "uncertain"
 
 
 def _caption_fact_is_grounded(
@@ -1714,6 +1740,9 @@ def _caption_fact_is_grounded(
 def _clear_answer_support(answer_mapping: Mapping[str, object], *, reason: str) -> dict[str, object]:
     mapping = dict(answer_mapping)
     existing_reason = str(mapping.get("reason") or "").strip()
+    supports_option = str(mapping.get("supports_option") or "").strip()
+    if supports_option and not mapping.get("related_option"):
+        mapping["related_option"] = supports_option
     mapping["supports_option"] = None
     mapping["reason"] = (existing_reason + " " + reason).strip() if existing_reason else reason
     return mapping
@@ -2141,16 +2170,18 @@ def _verification_results_from_backend(
             if not isinstance(item, Mapping):
                 continue
             target = targets[index] if index < len(targets) else {}
+            verdict, raw_signal = _coerce_verdict(item, target=target)
             normalized.append(
                 _verification_result(
                     target_id=str(item.get("target_id") or item.get("id") or target.get("target_id") or "unknown"),
                     claim=str(item.get("claim") or target.get("claim") or ""),
-                    verdict=str(item.get("verdict") or "uncertain"),
+                    verdict=verdict,
                     scope=dict(item.get("scope", {}) or scope) if isinstance(item.get("scope", {}), Mapping) else scope,
                     anchor_ids=[str(value) for value in _sequence_items(item.get("anchor_ids")) if str(value)],
                     source_kind=str(item.get("source_kind") or "multimodal_fact"),
                     confidence=float(item.get("confidence", 0.5) or 0.5),
                     rationale=str(item.get("rationale") or ""),
+                    raw_signal=raw_signal,
                 )
             )
         if normalized:
@@ -2176,6 +2207,7 @@ def _verification_results_from_backend(
                     source_kind=str(fact.get("source_kind") or "multimodal_fact"),
                     confidence=float(fact.get("confidence", 0.74) or 0.74),
                     rationale=str(fact.get("text") or ""),
+                    raw_signal={},
                 )
             )
         return aligned
@@ -2190,9 +2222,44 @@ def _verification_results_from_backend(
             source_kind="multimodal_fact",
             confidence=0.5,
             rationale="Backend output was not structured enough to assign this check a supported verdict.",
+            raw_signal={},
         )
         for index, target in enumerate(targets)
     ]
+
+
+def _coerce_verdict(item: Mapping[str, Any], *, target: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    valid = {"supported", "contradicted", "not_found_in_window", "uncertain"}
+    explicit = str(item.get("verdict") or "").strip().lower()
+    if explicit in valid:
+        return explicit, {"field": "verdict", "value": explicit, "target_polarity": str(target.get("polarity") or "")}
+    field = ""
+    value = ""
+    for key in ("tag", "polarity", "evidence", "presence"):
+        raw = item.get(key)
+        if raw is None:
+            continue
+        text = str(raw).strip().lower()
+        if not text:
+            continue
+        field = key
+        value = text
+        break
+    target_polarity = str(target.get("polarity") or "presence").strip().lower()
+    if value in {"present", "presence", "supported", "yes", "true"}:
+        verdict = "supported"
+    elif value in {"absent", "missing", "not_found", "no", "false"}:
+        verdict = "not_found_in_window"
+    elif value in {"contradicted", "conflict", "contradict"}:
+        verdict = "contradicted"
+    else:
+        verdict = "uncertain"
+    if target_polarity == "absence":
+        if verdict == "not_found_in_window":
+            verdict = "supported"
+        elif verdict == "supported":
+            verdict = "contradicted"
+    return verdict, {"field": field, "value": value, "target_polarity": target_polarity}
 
 
 def _verification_result(
@@ -2205,11 +2272,12 @@ def _verification_result(
     source_kind: str,
     confidence: float,
     rationale: str,
+    raw_signal: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_verdict = str(verdict or "uncertain").strip()
     if normalized_verdict not in {"supported", "contradicted", "not_found_in_window", "uncertain"}:
         normalized_verdict = "uncertain"
-    return {
+    result = {
         "target_id": str(target_id or "unknown"),
         "claim": str(claim or ""),
         "verdict": normalized_verdict,
@@ -2219,6 +2287,9 @@ def _verification_result(
         "confidence": float(confidence),
         "rationale": str(rationale or ""),
     }
+    if raw_signal:
+        result["raw_signal"] = dict(raw_signal)
+    return result
 
 
 def _verification_summary(results: Sequence[Mapping[str, Any]], *, fallback: str) -> str:

@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 
 from ..core.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
 from .output_quality import is_unsupported_claim
+from .search_ledger import empty_search_ledger, render_search_ledger, update_search_ledger
 from .transcript_binder import TranscriptEvidenceBinder
 from ..contracts import (
     ClaimModality,
@@ -321,6 +322,13 @@ class EvidenceWorkspace:
         )
         if produced_anchors:
             raw_payload["produced_anchors"] = [anchor.to_dict() for anchor in produced_anchors]
+        ledger, raw_payload, ledger_events = update_search_ledger(
+            self.search_ledger_snapshot(),
+            observation_id=observation_id,
+            tool_name=tool_name,
+            raw_output=raw_payload,
+        )
+        self._write_search_ledger_snapshot(ledger)
         observation = Observation(
             observation_id=observation_id,
             tool=tool_name,
@@ -336,6 +344,18 @@ class EvidenceWorkspace:
         )
         self._append_jsonl("observations.jsonl", asdict(observation))
         self._append_jsonl("observations/observations.jsonl", asdict(observation))
+        for event_type, payload in ledger_events:
+            self.write_trace_event(event_type, payload)
+        claim_scope = str(raw_payload.get("claim_scope") or "").strip()
+        if tool_name == "explore" and claim_scope and claim_scope != "direct_answer":
+            self.write_trace_event(
+                "caption_scope_downgrade",
+                {
+                    "observation_id": observation_id,
+                    "claim_scope": claim_scope,
+                    "task_type": str(raw_payload.get("task_type") or ""),
+                },
+            )
         if produced_anchors:
             written_anchors = self.write_produced_anchors(produced_anchors)
             self.write_trace_event(
@@ -455,6 +475,29 @@ class EvidenceWorkspace:
 
     def memory_entries(self) -> list[MemoryEntry]:
         return [MemoryEntry.from_mapping(row) for row in self._read_jsonl_dicts("memory.jsonl")]
+
+    def search_ledger_snapshot(self) -> dict[str, Any]:
+        path = self.root / "search_ledger.json"
+        if not path.exists():
+            return empty_search_ledger()
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return empty_search_ledger()
+        if not isinstance(payload, Mapping):
+            return empty_search_ledger()
+        return {
+            "records": list(payload.get("records", [])) if isinstance(payload.get("records", []), Sequence) else [],
+            "candidates": list(payload.get("candidates", [])) if isinstance(payload.get("candidates", []), Sequence) else [],
+            "options": dict(payload.get("options", {})) if isinstance(payload.get("options", {}), Mapping) else {},
+        }
+
+    def render_search_ledger_view(self) -> str:
+        return render_search_ledger(self.search_ledger_snapshot())
+
+    def _write_search_ledger_snapshot(self, snapshot: Mapping[str, Any]) -> None:
+        path = self.root / "search_ledger.json"
+        path.write_text(json.dumps(dict(snapshot), ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
 
     def get_memory(self, entry_id: str) -> MemoryEntry | None:
         for entry in self.memory_entries():
@@ -878,6 +921,10 @@ class EvidenceWorkspace:
             ).rstrip(),
             hint='read_workspace(section="observations_by_id")',
         )
+
+        ledger_view = self.render_search_ledger_view()
+        if ledger_view.strip():
+            lines.extend(["", ledger_view])
 
         render_section(
             "Deferred Observations",
@@ -2905,6 +2952,7 @@ class EvidenceWorkspace:
             "memory/memory.jsonl",
             "observations/disposition.jsonl",
             "pinned/pinned_anchors.jsonl",
+            "search_ledger.json",
             "notes/plan.md",
             "notes/open_questions.md",
         )

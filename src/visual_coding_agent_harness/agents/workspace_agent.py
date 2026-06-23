@@ -106,6 +106,14 @@ class WorkspaceVisualAgent:
                             "action": {"tool": _tool_name(plan_action), "args": _action_args(plan_action)},
                         },
                     )
+                    self.workspace.write_trace_event(
+                        "answer_gate_rejection",
+                        {
+                            "round": round_number,
+                            "reason_code": str(exc),
+                            "attempted_citations": _action_args(plan_action).get("citations", []),
+                        },
+                    )
                     continue
             if _tool_name(plan_action) in DISPOSITION_TOOLS:
                 raise ValueError("plan phase does not accept disposition tools")
@@ -128,6 +136,16 @@ class WorkspaceVisualAgent:
                         "error": str(exc),
                     },
                 )
+                if _tool_name(plan_action) == "synthesize_memory":
+                    self.workspace.write_trace_event(
+                        "synthesis_gate_rejection",
+                        {
+                            "round": round_number,
+                            "supports": _action_args(plan_action).get("supports", []),
+                            "tags": _action_args(plan_action).get("tags", []),
+                            "reason": str(exc),
+                        },
+                    )
                 continue
             observation_id = obs_ids[-1] if obs_ids else ""
             observation = self.workspace.get_observation(observation_id) if observation_id else None
@@ -287,6 +305,8 @@ class WorkspaceVisualAgent:
             return {"tool": "answer", "args": {"text": str(response.text or "").strip(), "citations": [], "confidence": "low"}}
 
     def _run_commit_phase(self, *, question: str, observation_id: str, round_number: int) -> str:
+        if self._try_deterministic_commit(observation_id):
+            return _latest_disposition_summary(self.workspace, observation_id)
         validation_error = ""
         for attempt in range(1, 4):
             prompt_mode = "minimal" if attempt == 3 else "full"
@@ -350,6 +370,36 @@ class WorkspaceVisualAgent:
             reason=f"commit_format_failure: {validation_error}",
         )
         return _latest_disposition_summary(self.workspace, observation_id)
+
+    def _try_deterministic_commit(self, observation_id: str) -> bool:
+        observation = self.workspace.get_observation(observation_id)
+        if observation is None:
+            return False
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        if str(raw_output.get("mode") or "") != "verify_window":
+            return False
+        if self.workspace.observation_status(observation_id) in {"committed", "rejected", "acknowledged", "auto_acknowledged"}:
+            return False
+        anchors = _mapping_items(raw_output.get("produced_anchors"))
+        writes = _structured_verify_writes(raw_output, anchors=anchors, reason="deterministic_verify_commit")
+        if not writes:
+            return False
+        try:
+            self.workspace.commit_observation(observation_id, writes=writes)
+        except (ToolError, ValueError) as exc:
+            self.workspace.write_trace_event(
+                "deterministic_verify_commit_failed",
+                {"observation_id": observation_id, "error": str(exc)},
+            )
+            return False
+        self.workspace.write_trace_event(
+            "deterministic_verify_commit",
+            {
+                "observation_id": observation_id,
+                "memory_count": len(writes.get("memory", [])),
+            },
+        )
+        return True
 
     def _auto_pin_observation(self, observation: Any, *, reason: str) -> None:
         raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
@@ -513,6 +563,35 @@ class WorkspaceVisualAgent:
         )
         semantic_key = self._duplicate_guard_key(request, ctx=ctx)
         if semantic_key and semantic_key in seen_tool_semantic_keys:
+            if request.tool == "explore":
+                raw_output = {
+                    "mode": "planner_recovery_hint",
+                    "support_status": "no_new_evidence",
+                    "claim": "Similar explore already exists; inspect pending candidates instead.",
+                    "confidence": 0.0,
+                    "query": str(request.arguments.get("query") or ""),
+                    "message": f"explore repeats semantic key {semantic_key}.",
+                    "recommended_next_actions": _recommended_actions_from_search_ledger(self.workspace),
+                    "cannot_final_cite": True,
+                }
+                observation = self.workspace.write_observation(
+                    tool_name=request.tool,
+                    claim=str(raw_output["claim"]),
+                    confidence=0.0,
+                    raw_output=raw_output,
+                )
+                self.workspace.write_trace_event(
+                    "planner_recovery_hint_emitted",
+                    {
+                        "observation_id": observation.observation_id,
+                        "recommended_next_actions": raw_output["recommended_next_actions"],
+                    },
+                )
+                self.workspace.write_trace_event(
+                    "tool_result",
+                    {"step": 1, "tool": request.tool, "observation_id": observation.observation_id},
+                )
+                return (observation.observation_id,)
             rejection = {
                 "step": 1,
                 "tool": request.tool,
@@ -785,6 +864,16 @@ def _synthesize_memory_availability(workspace: EvidenceWorkspace) -> str:
     if any(entry.kind in answer_supporting for entry in workspace.memory_entries()):
         return "synthesize_memory is available only for deriving from cited committed support memory."
     return "synthesize_memory is unavailable until committed support memory exists; first commit caption facts from explore or visual facts from verify_window."
+
+
+def _recommended_actions_from_search_ledger(workspace: EvidenceWorkspace) -> list[dict[str, object]]:
+    snapshot = workspace.search_ledger_snapshot()
+    candidates = snapshot.get("candidates", [])
+    if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
+        for candidate in candidates:
+            if isinstance(candidate, Mapping) and candidate.get("status") == "pending":
+                return [{"tool": "verify_window", "candidate_key": candidate.get("candidate_key") or candidate.get("event_id")}]
+    return [{"tool": "read_workspace", "section": "pending_candidates"}]
 
 
 def _with_original_question_context(args: Mapping[str, Any], *, question: str) -> dict[str, Any]:
@@ -1502,6 +1591,9 @@ def _structured_verify_writes(
                     "target_id": str(result.get("target_id") or ""),
                     "scope": dict(result.get("scope", {}) or {}) if isinstance(result.get("scope"), Mapping) else {},
                     "source_kind": str(result.get("source_kind") or ""),
+                    "claim_scope": "window_negative" if verdict == "not_found_in_window" else "direct_answer",
+                    "global_answer_support": verdict == "supported",
+                    "local_only": True,
                 },
             }
         )

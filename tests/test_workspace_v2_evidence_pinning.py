@@ -187,8 +187,9 @@ def test_search_asr_cue_must_be_committed_before_final(tmp_path: Path) -> None:
     assert candidate.kind == "retrieval_candidate"
     memory = workspace.get_memory("mem_0002")
     assert memory is not None
-    assert memory.kind == "answer_support"
-    assert memory.supports_option == "D"
+    assert memory.kind == "visual_support"
+    assert memory.metadata["verdict"] == "supported"
+    assert memory.metadata["global_answer_support"] is True
     assert memory.metadata.get("source_tool") == "verify_window"
     assert [request.task for request in backend.requests] == [
         "workspace_plan",
@@ -196,6 +197,5 @@ def test_search_asr_cue_must_be_committed_before_final(tmp_path: Path) -> None:
         "workspace_commit",
         "workspace_plan",
         "vision_read",
-        "workspace_commit",
         "workspace_plan",
     ]

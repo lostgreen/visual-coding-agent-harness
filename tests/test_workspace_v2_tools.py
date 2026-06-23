@@ -7,7 +7,10 @@ import pytest
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.core.protocol import ToolRequest
 from visual_coding_agent_harness.core.registry import ToolError, ToolRegistry
-from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
+from visual_coding_agent_harness.tools.workspace_v2 import (
+    _verification_results_from_backend,
+    build_workspace_v2_registry,
+)
 from visual_coding_agent_harness.video.index import TimelineBeat
 from visual_coding_agent_harness.video.map import IndexRefiner, VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
@@ -182,6 +185,61 @@ def _commit_verified_memory(workspace: EvidenceWorkspace, *, kind: str = "answer
             ],
         },
     )
+
+
+def test_verify_backend_present_tag_is_supported() -> None:
+    out = _verification_results_from_backend(
+        targets=[{"target_id": "target_1", "claim": "X", "polarity": "presence"}],
+        raw_backend={"verification_results": [{"target_id": "target_1", "tag": "present"}]},
+        facts=[],
+        produced_anchors=[],
+        segment_id="seg_0001",
+        time_range=[0.0, 10.0],
+    )
+
+    assert out[0]["verdict"] == "supported"
+    assert out[0]["raw_signal"]["field"] == "tag"
+    assert out[0]["raw_signal"]["value"] == "present"
+
+
+def test_verify_backend_absent_polarity_is_not_found_for_presence_target() -> None:
+    out = _verification_results_from_backend(
+        targets=[{"target_id": "target_4", "claim": "ruler", "polarity": "presence"}],
+        raw_backend={"verification_results": [{"target_id": "target_4", "polarity": "absent"}]},
+        facts=[],
+        produced_anchors=[],
+        segment_id="seg_0001",
+        time_range=[0.0, 10.0],
+    )
+
+    assert out[0]["verdict"] == "not_found_in_window"
+
+
+def test_verify_backend_absent_under_absence_polarity_is_supported() -> None:
+    out = _verification_results_from_backend(
+        targets=[{"target_id": "t1", "claim": "no umbrella", "polarity": "absence"}],
+        raw_backend={"verification_results": [{"target_id": "t1", "polarity": "absent"}]},
+        facts=[],
+        produced_anchors=[],
+        segment_id="seg_0001",
+        time_range=[0.0, 10.0],
+    )
+
+    assert out[0]["verdict"] == "supported"
+
+
+def test_synthesize_memory_normalizer_uses_derived_from_as_supports_fallback(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_synth_fallback")
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+    normalizer = registry.get_runtime_spec("synthesize_memory").argument_normalizer
+
+    normalized = normalizer(
+        _tool_spec_context(workspace, registry),
+        ToolRequest(tool="synthesize_memory", arguments={"claim": "Combined fact.", "derived_from": ["mem_0001"]}),
+    )
+
+    assert tuple(normalized["supports"]) == ("mem_0001",)
+    assert tuple(normalized["derived_from"]) == ()
 
 
 def test_workspace_v2_explore_returns_candidate_only_windows(tmp_path: Path) -> None:
@@ -384,6 +442,9 @@ def test_workspace_v2_explore_downgrades_wrong_scope_caption_support(tmp_path: P
     assert result["condition_match"]["matches_original_question"] is False
     assert result["condition_match"]["match_level"] == "related_but_wrong_scope"
     assert result["answer_mapping"]["supports_option"] is None
+    assert result["answer_mapping"]["related_option"] == "B"
+    assert result["answer_mapping"]["option_relation"] == "wrong_scope"
+    assert result["claim_scope"] == "wrong_scope"
     assert result["facts"][0]["supports_option"] is None
 
 
@@ -1517,3 +1578,57 @@ def test_workspace_v2_synthesize_memory_derives_from_committed_memory(tmp_path: 
     assert entry.metadata["evidence_obs_ids"] == ["obs_0001"]
     answered = registry.execute("answer", {"text": "D", "citations": ["mem_0002"], "confidence": "high"})
     assert answered["accepted"] is True
+
+
+def test_workspace_v2_synthesize_accepts_subclaim_support_memory(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_synthesize_subclaims")
+    anchor = {
+        "anchor_id": "anch_order_1",
+        "observation_id": "obs_0001",
+        "kind": "asr",
+        "source_kind": "asr",
+        "excerpt": "The Big Bang is followed by the Hubble Telescope discussion.",
+        "segment_id": "seg_0001",
+        "start_sec": 0.0,
+        "end_sec": 20.0,
+    }
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Ordering subclaim.",
+        confidence=0.8,
+        raw_output={
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim_scope": "subclaim_support",
+            "facts": [{"claim": "The Big Bang is followed by the Hubble Telescope discussion."}],
+            "anchors": [{"excerpt": "The Big Bang is followed by the Hubble Telescope discussion."}],
+        },
+    )
+    workspace.commit_observation(
+        "obs_0001",
+        writes={
+            "pinned_anchors": [anchor],
+            "memory": [
+                {
+                    "kind": "caption_support",
+                    "claim": "The Hubble Telescope is introduced after the Big Bang.",
+                    "anchor_ids": ["anch_order_1"],
+                    "confidence": "medium",
+                    "metadata": {
+                        "claim_scope": "subclaim_support",
+                        "task_type": "ordering",
+                        "can_support_synthesis": True,
+                    },
+                }
+            ],
+        },
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    result = registry.execute(
+        "synthesize_memory",
+        {"claim": "The ordering is Big Bang before Hubble Telescope.", "derived_from": ["mem_0001"]},
+    )
+
+    assert result["memory_id"] == "mem_0002"
+    assert workspace.get_memory("mem_0002").metadata["supports"] == ["mem_0001"]
