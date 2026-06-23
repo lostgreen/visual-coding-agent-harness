@@ -337,6 +337,78 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(summary["videos"][0]["videoID"], "video605")
         self.assertTrue(summary_exists)
 
+    def test_prewarm_scene_indexes_can_run_videos_concurrently(self):
+        from runs import eval_runner
+
+        lock = threading.Lock()
+        barrier = threading.Barrier(2, timeout=2)
+        active = 0
+        max_active = 0
+
+        class FakeBuilder:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def build(self, **kwargs):
+                nonlocal active, max_active
+                with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                try:
+                    barrier.wait()
+                    return SceneIndex(
+                        video_path=kwargs["video_path"],
+                        duration_sec=kwargs["duration_sec"],
+                        segments=[
+                            VideoSegment(
+                                segment_id="seg_0001",
+                                start_sec=0.0,
+                                end_sec=300.0,
+                                source="dual_source_scene_index",
+                            )
+                        ],
+                    )
+                finally:
+                    with lock:
+                        active -= 1
+
+        rows_by_id = {
+            "605-1": {"question_id": "605-1", "videoID": "video605", "video_id": "vid605"},
+            "611-1": {"question_id": "611-1", "videoID": "video611", "video_id": "vid611"},
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "caption"
+            config = eval_runner.EvalConfig(
+                run_root=run_root,
+                workspace_root=run_root / "workspaces",
+                model_path="/model",
+                data_root=Path("/dataset"),
+                parquet_path=Path("/dataset/videomme/test.parquet"),
+                video_dir=Path("/dataset/video"),
+                subtitle_dir=Path("/dataset/subtitle"),
+                cases=("605-1", "611-1"),
+                strategies=("workspace_v2",),
+                window_sec=300.0,
+                scene_index_cache_dir=run_root / "scene_index_cache",
+                scene_index_video_concurrency=2,
+                budget=AgentBudget(),
+            )
+
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=AssertionError("agent loop must not run")):
+                        summary = eval_runner.prewarm_scene_indexes(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 30.0,
+                        )
+
+        self.assertGreaterEqual(max_active, 2)
+        self.assertEqual(summary["videos_done"], 2)
+        self.assertEqual([item["videoID"] for item in summary["videos"]], ["video605", "video611"])
+
     def test_run_eval_cases_can_run_cases_concurrently(self):
         from runs import eval_runner
 
@@ -972,6 +1044,17 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(default_config.eval_case_concurrency, 1)
         self.assertEqual(capped_config.eval_case_concurrency, 16)
+
+    def test_scene_index_video_concurrency_cli_is_capped_at_sixteen(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+
+        default_config = eval_runner.config_from_args(parser.parse_args([]))
+        capped_config = eval_runner.config_from_args(parser.parse_args(["--scene-index-video-concurrency", "99"]))
+
+        self.assertEqual(default_config.scene_index_video_concurrency, 1)
+        self.assertEqual(capped_config.scene_index_video_concurrency, 16)
 
     def test_context_budget_cli_flags_build_agent_config(self):
         from runs import eval_runner

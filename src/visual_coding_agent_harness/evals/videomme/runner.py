@@ -52,6 +52,7 @@ FRAME_CACHE_FPS = 2.0
 TOOL_FRAME_CACHE_MAX_FPS = 2.0
 ROOT_DVC_FRAME_FPS = 0.5
 MAX_EVAL_CASE_CONCURRENCY = 16
+MAX_SCENE_INDEX_VIDEO_CONCURRENCY = 16
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class EvalConfig:
     scene_index_max_new_tokens: int = RootIndexPolicy().max_new_tokens
     frame_cache_fps: float = FRAME_CACHE_FPS
     frame_cache_root: Path | None = None
+    scene_index_video_concurrency: int = 1
     eval_case_concurrency: int = 1
     budget: AgentBudget = AgentBudget()
     export_training: bool = False
@@ -507,6 +509,7 @@ def run_eval_cases(
         "scene_index_max_new_tokens": config.scene_index_max_new_tokens,
         "frame_cache_fps": config.frame_cache_fps,
         "frame_cache_root": str(_frame_cache_root(config)),
+        "scene_index_video_concurrency": config.scene_index_video_concurrency,
         "eval_case_concurrency": config.eval_case_concurrency,
         "export_training": config.export_training,
         "ablation_flags": dict(config.ablation_flags or {}),
@@ -743,14 +746,90 @@ def prewarm_scene_indexes(
     summary_path = config.run_root / "scene_index_prewarm_summary.json"
     print(
         "START scene_index_prewarm "
-        + json.dumps({"videos": len(videos), "cases": len(config.cases)}, ensure_ascii=True, sort_keys=True),
+        + json.dumps(
+            {
+                "videos": len(videos),
+                "cases": len(config.cases),
+                "scene_index_video_concurrency": config.scene_index_video_concurrency,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        ),
         flush=True,
     )
-    results: list[dict[str, Any]] = []
-    for item in videos:
-        started = time.time()
-        video_id = item["videoID"]
-        video_path = str(config.video_dir / f"{video_id}.mp4")
+    completed: dict[str, dict[str, Any]] = {}
+
+    def write_progress(record: dict[str, Any]) -> None:
+        video_id = str(record.get("videoID", ""))
+        completed[video_id] = record
+        results = [completed[str(item["videoID"])] for item in videos if str(item["videoID"]) in completed]
+        summary = {
+            "run_id": config.run_root.name,
+            "cases": list(config.cases),
+            "videos_total": len(videos),
+            "videos_done": len(results),
+            "videos_ok": sum(1 for item in results if item.get("status") == "done"),
+            "videos_error": sum(1 for item in results if item.get("status") == "error"),
+            "scene_index_cache_dir": str(config.scene_index_cache_dir),
+            "scene_index_video_concurrency": config.scene_index_video_concurrency,
+            "videos": results,
+        }
+        summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
+        marker = "SCENE_INDEX_DONE" if record.get("status") == "done" else "SCENE_INDEX_ERROR"
+        print(marker + " " + json.dumps(record, ensure_ascii=True, sort_keys=True), flush=True)
+
+    if config.scene_index_video_concurrency <= 1 or len(videos) <= 1:
+        for item in videos:
+            write_progress(
+                _prewarm_scene_index_video(
+                    backend=backend,
+                    item=item,
+                    config=config,
+                    duration_fn=duration_fn,
+                )
+            )
+    else:
+        with ThreadPoolExecutor(max_workers=config.scene_index_video_concurrency) as executor:
+            futures = {
+                executor.submit(
+                    _prewarm_scene_index_video,
+                    backend=backend,
+                    item=item,
+                    config=config,
+                    duration_fn=duration_fn,
+                ): str(item["videoID"])
+                for item in videos
+            }
+            for future in as_completed(futures):
+                write_progress(future.result())
+    if not completed:
+        summary = {
+            "run_id": config.run_root.name,
+            "cases": list(config.cases),
+            "videos_total": 0,
+            "videos_done": 0,
+            "videos_ok": 0,
+            "videos_error": 0,
+            "scene_index_cache_dir": str(config.scene_index_cache_dir),
+            "scene_index_video_concurrency": config.scene_index_video_concurrency,
+            "videos": [],
+        }
+        summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
+    print("DONE scene_index_prewarm_summary=" + str(summary_path), flush=True)
+    return json.loads(summary_path.read_text(encoding="utf-8"))
+
+
+def _prewarm_scene_index_video(
+    *,
+    backend: Any,
+    item: Mapping[str, str],
+    config: EvalConfig,
+    duration_fn: Callable[[Path], float],
+) -> dict[str, Any]:
+    started = time.time()
+    video_id = str(item["videoID"])
+    video_path = str(config.video_dir / f"{video_id}.mp4")
+    try:
         duration_sec = duration_fn(Path(video_path))
         frame_cache = build_frame_cache_for_video(
             video_path=Path(video_path),
@@ -766,7 +845,7 @@ def prewarm_scene_indexes(
             config=config,
             frame_sampler=frame_cache.sample_paths,
         )
-        record = {
+        return {
             "question_id": item["question_id"],
             "videoID": video_id,
             "duration_sec": round(duration_sec, 1),
@@ -775,29 +854,17 @@ def prewarm_scene_indexes(
             "seconds": round(time.time() - started, 3),
             "status": "done",
         }
-        results.append(record)
-        summary = {
-            "run_id": config.run_root.name,
-            "cases": list(config.cases),
-            "videos_total": len(videos),
-            "videos_done": len(results),
-            "scene_index_cache_dir": str(config.scene_index_cache_dir),
-            "videos": results,
+    except Exception as exc:
+        return {
+            "question_id": item["question_id"],
+            "videoID": video_id,
+            "duration_sec": None,
+            "segments": 0,
+            "frame_cache": str(_frame_cache_dir(config=config, video_id=video_id)),
+            "seconds": round(time.time() - started, 3),
+            "status": "error",
+            "error": type(exc).__name__ + ": " + str(exc)[:500],
         }
-        summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
-        print("SCENE_INDEX_DONE " + json.dumps(record, ensure_ascii=True, sort_keys=True), flush=True)
-    if not results:
-        summary = {
-            "run_id": config.run_root.name,
-            "cases": list(config.cases),
-            "videos_total": 0,
-            "videos_done": 0,
-            "scene_index_cache_dir": str(config.scene_index_cache_dir),
-            "videos": [],
-        }
-        summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
-    print("DONE scene_index_prewarm_summary=" + str(summary_path), flush=True)
-    return json.loads(summary_path.read_text(encoding="utf-8"))
 
 
 def _summary_payload(
@@ -1611,6 +1678,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scene-index-cache-dir", type=Path, default=None)
     parser.add_argument("--no-scene-index-cache", action="store_true", default=None)
     parser.add_argument("--scene-index-concurrency", type=int, default=None)
+    parser.add_argument("--scene-index-video-concurrency", type=int, default=None)
     parser.add_argument("--eval-case-concurrency", type=int, default=None)
     parser.add_argument("--scene-index-frame-fps", type=float, default=None)
     parser.add_argument("--scene-index-max-new-tokens", type=int, default=None)
@@ -1854,6 +1922,22 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             ),
         ),
     )
+    scene_index_video_concurrency = min(
+        MAX_SCENE_INDEX_VIDEO_CONCURRENCY,
+        max(
+            1,
+            int(
+                _arg_or_config(
+                    args,
+                    config_data,
+                    "scene_index_video_concurrency",
+                    "scene_index.video_concurrency",
+                    "dense_video_caption.video_concurrency",
+                    default=1,
+                )
+            ),
+        ),
+    )
     return EvalConfig(
         run_root=run_root,
         workspace_root=workspace_root,
@@ -2009,6 +2093,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             if _arg_or_config(args, config_data, "frame_cache_root") is not None
             else None
         ),
+        scene_index_video_concurrency=scene_index_video_concurrency,
         eval_case_concurrency=eval_case_concurrency,
         budget=budget,
         export_training=_as_bool(_arg_or_config(args, config_data, "export_training", default=False)),
