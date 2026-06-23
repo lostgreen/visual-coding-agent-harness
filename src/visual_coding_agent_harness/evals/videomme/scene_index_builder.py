@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import re
@@ -81,10 +81,17 @@ class SceneIndexBuilder:
             duration_sec=duration_sec,
             subtitle_cues=cues,
         )
+        cached_segments: dict[str, VideoSegment] = {}
         if self.cache is not None:
             cached = self.cache.load(cache_key)
             if cached is not None and _usable_root_dvc_cache(cached):
                 return cached
+            if cached is not None:
+                cached_segments = {
+                    segment.segment_id: segment
+                    for segment in cached.segments
+                    if _usable_root_dvc_segment(segment)
+                }
 
         base = fixed_window_scene_index(
             video_path=video_path,
@@ -92,6 +99,7 @@ class SceneIndexBuilder:
             window_sec=self.window_sec,
             source=self.schema_version,
         )
+
         def build_segment(segment: VideoSegment) -> VideoSegment:
             segment_cues = _cues_for_segment(cues, segment)
             root_data = self._build_root_dvc(
@@ -106,13 +114,36 @@ class SceneIndexBuilder:
                 cues=segment_cues,
                 root_source=f"build_root_dvc_index:{self.vl_model_id}",
             )
-        if self.root_concurrency <= 1 or len(base.segments) <= 1:
-            segments = [build_segment(segment) for segment in base.segments]
+
+        segments: list[VideoSegment] = []
+        missing: list[tuple[int, VideoSegment]] = []
+        for index, segment in enumerate(base.segments):
+            cached_segment = cached_segments.get(segment.segment_id)
+            if cached_segment is not None:
+                segments.append(cached_segment)
+            else:
+                segments.append(segment)
+                missing.append((index, segment))
+
+        def store_progress() -> None:
+            if self.cache is not None:
+                self.cache.store(
+                    cache_key,
+                    SceneIndex(video_path=video_path, duration_sec=duration_sec, segments=tuple(segments)),
+                )
+
+        if self.root_concurrency <= 1 or len(missing) <= 1:
+            for index, segment in missing:
+                segments[index] = build_segment(segment)
+                store_progress()
         else:
             with ThreadPoolExecutor(max_workers=min(self.root_concurrency, len(base.segments))) as executor:
-                segments = list(executor.map(build_segment, base.segments))
+                futures = {executor.submit(build_segment, segment): index for index, segment in missing}
+                for future in as_completed(futures):
+                    segments[futures[future]] = future.result()
+                    store_progress()
 
-        scene_index = SceneIndex(video_path=video_path, duration_sec=duration_sec, segments=segments)
+        scene_index = SceneIndex(video_path=video_path, duration_sec=duration_sec, segments=tuple(segments))
         if self.cache is not None:
             self.cache.store(cache_key, scene_index)
         return scene_index
@@ -585,16 +616,19 @@ def _looks_jsonish(text: str) -> bool:
 def _usable_root_dvc_cache(scene_index: SceneIndex) -> bool:
     if not scene_index.segments:
         return False
-    for segment in scene_index.segments:
-        summary = segment.map_summary or segment.low_fps_caption
-        if not summary or _damaged_root_caption(summary):
-            return False
-        if getattr(segment, "source", "") != SCENE_INDEX_BUILDER_SCHEMA_VERSION:
-            return False
-        if getattr(segment, "index_level", "root") != "root":
-            return False
-        if not getattr(segment, "timeline_beats", ()):
-            return False
+    return all(_usable_root_dvc_segment(segment) for segment in scene_index.segments)
+
+
+def _usable_root_dvc_segment(segment: VideoSegment) -> bool:
+    summary = segment.map_summary or segment.low_fps_caption
+    if not summary or _damaged_root_caption(summary):
+        return False
+    if getattr(segment, "source", "") != SCENE_INDEX_BUILDER_SCHEMA_VERSION:
+        return False
+    if getattr(segment, "index_level", "root") != "root":
+        return False
+    if not getattr(segment, "timeline_beats", ()):
+        return False
     return True
 
 

@@ -89,6 +89,13 @@ class ManyBeatBackend:
         return BackendResponse(text=json.dumps({"root_summary": "Many beat summary.", "beats": beats}))
 
 
+class FailsAfterFirstRootBackend(RecordingBackend):
+    def generate(self, request: BackendRequest) -> BackendResponse:
+        if request.task == "build_root_dvc_index" and len(self.requests) >= 1:
+            raise RuntimeError("simulated root caption failure")
+        return super().generate(request)
+
+
 def _frame_sampler(video_path: str, start_sec: float, end_sec: float, max_frames: int) -> list[str]:
     del video_path, end_sec
     return [f"/frames/video-1/{int(start_sec):04d}_{index:03d}.jpg" for index in range(max(1, min(max_frames, 2)))]
@@ -337,6 +344,59 @@ def test_scene_index_cache_avoids_duplicate_backend_calls(tmp_path) -> None:
 
     assert len(backend.requests) == 1
     assert first.to_dict() == second.to_dict()
+
+
+def test_scene_index_cache_persists_and_resumes_partial_roots(tmp_path) -> None:
+    cache = SceneIndexCache(tmp_path)
+    failing_backend = FailsAfterFirstRootBackend()
+    first_builder = SceneIndexBuilder(
+        backend=failing_backend,
+        cache=cache,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    )
+    cache_key = first_builder.cache_key(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=60.0,
+        subtitle_cues=(),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated root caption failure"):
+        first_builder.build(
+            video_id="video-1",
+            video_path="/tmp/video-1.mp4",
+            duration_sec=60.0,
+            subtitle_cues=[],
+        )
+
+    partial = cache.load(cache_key)
+    assert partial is not None
+    assert partial.segments[0].source == SCENE_INDEX_BUILDER_SCHEMA_VERSION
+    assert partial.segments[0].timeline_beats
+    assert partial.segments[1].source == SCENE_INDEX_BUILDER_SCHEMA_VERSION
+    assert not partial.segments[1].timeline_beats
+
+    resume_backend = RecordingBackend()
+    resumed = SceneIndexBuilder(
+        backend=resume_backend,
+        cache=cache,
+        text_model_id="text-mini",
+        vl_model_id="vl-mini",
+        window_sec=30.0,
+        frame_sampler=_frame_sampler,
+    ).build(
+        video_id="video-1",
+        video_path="/tmp/video-1.mp4",
+        duration_sec=60.0,
+        subtitle_cues=[],
+    )
+
+    assert len(resume_backend.requests) == 1
+    assert all(segment.source == SCENE_INDEX_BUILDER_SCHEMA_VERSION for segment in resumed.segments)
+    assert all(segment.timeline_beats for segment in resumed.segments)
 
 
 def test_scene_index_cache_rebuilds_damaged_root_dvc_caption(tmp_path) -> None:
