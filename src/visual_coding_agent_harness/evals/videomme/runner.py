@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -50,6 +51,7 @@ DEFAULT_NFRAMES = 8
 FRAME_CACHE_FPS = 2.0
 TOOL_FRAME_CACHE_MAX_FPS = 2.0
 ROOT_DVC_FRAME_FPS = 0.5
+MAX_EVAL_CASE_CONCURRENCY = 16
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,7 @@ class EvalConfig:
     scene_index_max_new_tokens: int = RootIndexPolicy().max_new_tokens
     frame_cache_fps: float = FRAME_CACHE_FPS
     frame_cache_root: Path | None = None
+    eval_case_concurrency: int = 1
     budget: AgentBudget = AgentBudget()
     export_training: bool = False
     ablation_flags: Mapping[str, Any] | None = None
@@ -504,6 +507,7 @@ def run_eval_cases(
         "scene_index_max_new_tokens": config.scene_index_max_new_tokens,
         "frame_cache_fps": config.frame_cache_fps,
         "frame_cache_root": str(_frame_cache_root(config)),
+        "eval_case_concurrency": config.eval_case_concurrency,
         "export_training": config.export_training,
         "ablation_flags": dict(config.ablation_flags or {}),
         "source_config_path": str(config.source_config_path) if config.source_config_path else "",
@@ -524,95 +528,22 @@ def run_eval_cases(
     )
     print(
         "START videomme_eval "
-        + json.dumps({"cases": list(config.cases), "strategies": list(config.strategies)}, sort_keys=True),
+        + json.dumps(
+            {
+                "cases": list(config.cases),
+                "strategies": list(config.strategies),
+                "eval_case_concurrency": config.eval_case_concurrency,
+            },
+            sort_keys=True,
+        ),
         flush=True,
     )
-    for qid in config.cases:
-        row = rows_by_id[str(qid)]
-        video_id = str(row_get(row, "videoID") or row_get(row, "video_id"))
-        video_path = str(config.video_dir / f"{video_id}.mp4")
-        duration_sec = duration_fn(Path(video_path))
-        frame_cache = None
-        frame_cache = build_frame_cache_for_video(
-            video_path=Path(video_path),
-            frame_dir=_frame_cache_dir(config=config, video_id=video_id),
-            fps=float(config.frame_cache_fps),
-            duration_sec=duration_sec,
-        )
-        frame_sampler = frame_cache.sample_paths if frame_cache is not None else None
-        question = make_question(row)
-        gt = str(row_get(row, "answer")).strip().upper()
-        case_prefix = f"{qid}_{video_id}"
-        case = {
-            "question_id": str(qid),
-            "video_id": str(row_get(row, "video_id", video_id)),
-            "videoID": video_id,
-            "task_type": str(row_get(row, "task_type")),
-            "duration_sec": round(duration_sec, 1),
-            "gt": gt,
-            "question": question,
-            "options": normalize_options(row_get(row, "options", [])),
-            "question_excerpt": compact_text(str(row_get(row, "question")), limit=220),
-            "strategies": {},
-            "raw_artifacts": {"workspaces": {}},
-        }
-        if frame_cache is not None:
-            case["raw_artifacts"]["frame_cache"] = str(frame_cache.frame_dir)
-        print(
-            "CASE_START "
-            + json.dumps(
-                {k: case[k] for k in ["question_id", "videoID", "task_type", "duration_sec", "gt"]},
-                sort_keys=True,
-            ),
-            flush=True,
-        )
-        for strategy in config.strategies:
-            try:
-                raw = run_strategy(
-                    strategy=strategy,
-                    backend=backend,
-                    video_path=video_path,
-                    video_id=video_id,
-                    question=question,
-                    duration_sec=duration_sec,
-                    run_id=f"{case_prefix}_{strategy}",
-                    config=config,
-                    frame_sampler=frame_sampler,
-                )
-                case["strategies"][strategy] = summarize_strategy(raw, gt)
-                workspace_path = config.workspace_root / "runs" / f"{case_prefix}_{strategy}"
-                case["raw_artifacts"]["workspaces"][strategy] = str(workspace_path)
-                if config.export_training:
-                    trajectory_path = _export_training_trajectory(
-                        workspace_path=workspace_path,
-                        run_root=config.run_root,
-                        case_id=str(qid),
-                        strategy=strategy,
-                        question=question,
-                        options=case["options"],
-                        gt=gt,
-                        strategy_summary=case["strategies"][strategy],
-                    )
-                    if trajectory_path is not None:
-                        markdown_path = trajectory_path.with_suffix(".md")
-                        case["raw_artifacts"].setdefault("training_trajectories", {})[strategy] = str(trajectory_path)
-                        case["raw_artifacts"].setdefault("training_trajectory_markdown", {})[strategy] = str(markdown_path)
-                        case["strategies"][strategy]["training_trajectory_path"] = str(trajectory_path)
-                        case["strategies"][strategy]["training_trajectory_markdown_path"] = str(markdown_path)
-            except Exception as exc:
-                case["strategies"][strategy] = {
-                    "choice": "",
-                    "correct": False,
-                    "seconds": None,
-                    "status": "error",
-                    "rounds": None,
-                    "tools": [],
-                    "segments": [],
-                    "citation_count": 0,
-                    "answer_excerpt": "",
-                    "error": type(exc).__name__ + ": " + str(exc)[:500],
-                }
-        results.append(case)
+    completed: dict[str, dict[str, Any]] = {}
+
+    def record_case(qid: str, case: dict[str, Any]) -> None:
+        nonlocal summary
+        completed[str(qid)] = case
+        results[:] = [completed[str(case_id)] for case_id in config.cases if str(case_id) in completed]
         summary = _summary_payload(
             run_id=config.run_root.name,
             case_ids=config.cases,
@@ -622,8 +553,37 @@ def run_eval_cases(
         evidence_chains_path = _write_run_evidence_chains(config.run_root, results)
         summary["evidence_chains_path"] = str(evidence_chains_path)
         summary_path.write_text(json.dumps(summary, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
-        compact = {"question_id": qid, "gt": gt, "strategies": case.get("strategies", {})}
+        compact = {"question_id": qid, "gt": case.get("gt"), "strategies": case.get("strategies", {})}
         print("CASE_DONE " + json.dumps(compact, ensure_ascii=True, sort_keys=True), flush=True)
+
+    if config.eval_case_concurrency <= 1 or len(config.cases) <= 1:
+        for qid in config.cases:
+            record_case(
+                str(qid),
+                _run_eval_case(
+                    qid=str(qid),
+                    backend=backend,
+                    row=rows_by_id[str(qid)],
+                    config=config,
+                    duration_fn=duration_fn,
+                ),
+            )
+    else:
+        with ThreadPoolExecutor(max_workers=config.eval_case_concurrency) as executor:
+            futures = {
+                executor.submit(
+                    _run_eval_case,
+                    qid=str(qid),
+                    backend=backend,
+                    row=rows_by_id[str(qid)],
+                    config=config,
+                    duration_fn=duration_fn,
+                ): str(qid)
+                for qid in config.cases
+            }
+            for future in as_completed(futures):
+                qid = futures[future]
+                record_case(qid, future.result())
     violations = validate_run_summary(RunSummary.from_dict(summary))
     if violations:
         (config.run_root / "summary_violations.json").write_text(
@@ -633,6 +593,99 @@ def run_eval_cases(
         raise SystemExit(2)
     print("DONE summary=" + str(summary_path), flush=True)
     return summary
+
+
+def _run_eval_case(
+    *,
+    qid: str,
+    backend: Any,
+    row: Any,
+    config: EvalConfig,
+    duration_fn: Callable[[Path], float],
+) -> dict[str, Any]:
+    video_id = str(row_get(row, "videoID") or row_get(row, "video_id"))
+    video_path = str(config.video_dir / f"{video_id}.mp4")
+    duration_sec = duration_fn(Path(video_path))
+    frame_cache = build_frame_cache_for_video(
+        video_path=Path(video_path),
+        frame_dir=_frame_cache_dir(config=config, video_id=video_id),
+        fps=float(config.frame_cache_fps),
+        duration_sec=duration_sec,
+    )
+    frame_sampler = frame_cache.sample_paths if frame_cache is not None else None
+    question = make_question(row)
+    gt = str(row_get(row, "answer")).strip().upper()
+    case_prefix = f"{qid}_{video_id}"
+    case = {
+        "question_id": str(qid),
+        "video_id": str(row_get(row, "video_id", video_id)),
+        "videoID": video_id,
+        "task_type": str(row_get(row, "task_type")),
+        "duration_sec": round(duration_sec, 1),
+        "gt": gt,
+        "question": question,
+        "options": normalize_options(row_get(row, "options", [])),
+        "question_excerpt": compact_text(str(row_get(row, "question")), limit=220),
+        "strategies": {},
+        "raw_artifacts": {"workspaces": {}},
+    }
+    if frame_cache is not None:
+        case["raw_artifacts"]["frame_cache"] = str(frame_cache.frame_dir)
+    print(
+        "CASE_START "
+        + json.dumps(
+            {k: case[k] for k in ["question_id", "videoID", "task_type", "duration_sec", "gt"]},
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    for strategy in config.strategies:
+        try:
+            raw = run_strategy(
+                strategy=strategy,
+                backend=backend,
+                video_path=video_path,
+                video_id=video_id,
+                question=question,
+                duration_sec=duration_sec,
+                run_id=f"{case_prefix}_{strategy}",
+                config=config,
+                frame_sampler=frame_sampler,
+            )
+            case["strategies"][strategy] = summarize_strategy(raw, gt)
+            workspace_path = config.workspace_root / "runs" / f"{case_prefix}_{strategy}"
+            case["raw_artifacts"]["workspaces"][strategy] = str(workspace_path)
+            if config.export_training:
+                trajectory_path = _export_training_trajectory(
+                    workspace_path=workspace_path,
+                    run_root=config.run_root,
+                    case_id=str(qid),
+                    strategy=strategy,
+                    question=question,
+                    options=case["options"],
+                    gt=gt,
+                    strategy_summary=case["strategies"][strategy],
+                )
+                if trajectory_path is not None:
+                    markdown_path = trajectory_path.with_suffix(".md")
+                    case["raw_artifacts"].setdefault("training_trajectories", {})[strategy] = str(trajectory_path)
+                    case["raw_artifacts"].setdefault("training_trajectory_markdown", {})[strategy] = str(markdown_path)
+                    case["strategies"][strategy]["training_trajectory_path"] = str(trajectory_path)
+                    case["strategies"][strategy]["training_trajectory_markdown_path"] = str(markdown_path)
+        except Exception as exc:
+            case["strategies"][strategy] = {
+                "choice": "",
+                "correct": False,
+                "seconds": None,
+                "status": "error",
+                "rounds": None,
+                "tools": [],
+                "segments": [],
+                "citation_count": 0,
+                "answer_excerpt": "",
+                "error": type(exc).__name__ + ": " + str(exc)[:500],
+            }
+    return case
 
 
 def _build_scene_index(
@@ -1558,6 +1611,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scene-index-cache-dir", type=Path, default=None)
     parser.add_argument("--no-scene-index-cache", action="store_true", default=None)
     parser.add_argument("--scene-index-concurrency", type=int, default=None)
+    parser.add_argument("--eval-case-concurrency", type=int, default=None)
     parser.add_argument("--scene-index-frame-fps", type=float, default=None)
     parser.add_argument("--scene-index-max-new-tokens", type=int, default=None)
     parser.add_argument("--frame-cache-root", type=Path, default=None)
@@ -1783,6 +1837,23 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             ),
         ),
     )
+    eval_case_concurrency = min(
+        MAX_EVAL_CASE_CONCURRENCY,
+        max(
+            1,
+            int(
+                _arg_or_config(
+                    args,
+                    config_data,
+                    "eval_case_concurrency",
+                    "eval.case_concurrency",
+                    "eval.concurrency",
+                    "case_concurrency",
+                    default=1,
+                )
+            ),
+        ),
+    )
     return EvalConfig(
         run_root=run_root,
         workspace_root=workspace_root,
@@ -1938,6 +2009,7 @@ def config_from_args(args: argparse.Namespace) -> EvalConfig:
             if _arg_or_config(args, config_data, "frame_cache_root") is not None
             else None
         ),
+        eval_case_concurrency=eval_case_concurrency,
         budget=budget,
         export_training=_as_bool(_arg_or_config(args, config_data, "export_training", default=False)),
         ablation_flags=ablation_flags,

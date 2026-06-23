@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -335,6 +336,89 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(summary["videos_done"], 1)
         self.assertEqual(summary["videos"][0]["videoID"], "video605")
         self.assertTrue(summary_exists)
+
+    def test_run_eval_cases_can_run_cases_concurrently(self):
+        from runs import eval_runner
+
+        lock = threading.Lock()
+        barrier = threading.Barrier(2, timeout=2)
+        active = 0
+        max_active = 0
+
+        def fake_run_loop(backend, **kwargs):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                barrier.wait()
+                return {
+                    "answer": "B. The visual evidence supports option B.",
+                    "choice": "B",
+                    "status": "final",
+                    "confidence": 0.8,
+                    "citations": ["obs_0001"],
+                    "rounds": 1,
+                    "tools": ["caption_segment"],
+                    "segments": ["seg_0001"],
+                    "seconds": 1.0,
+                }
+            finally:
+                with lock:
+                    active -= 1
+
+        rows_by_id = {
+            "605-1": {
+                "question_id": "605-1",
+                "video_id": "vid605",
+                "videoID": "video605",
+                "task_type": "Information Synopsis",
+                "question": "What is shown?",
+                "options": ["A. one", "B. two", "C. three", "D. four"],
+                "answer": "B",
+            },
+            "611-1": {
+                "question_id": "611-1",
+                "video_id": "vid611",
+                "videoID": "video611",
+                "task_type": "Information Synopsis",
+                "question": "What is shown next?",
+                "options": ["A. one", "B. two", "C. three", "D. four"],
+                "answer": "B",
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "eval"
+            config = eval_runner.EvalConfig(
+                run_root=run_root,
+                workspace_root=run_root / "workspaces",
+                model_path="/model",
+                data_root=Path("/dataset"),
+                parquet_path=Path("/dataset/videomme/test.parquet"),
+                video_dir=Path("/dataset/video"),
+                subtitle_dir=Path("/dataset/subtitle"),
+                cases=("605-1", "611-1"),
+                strategies=("workspace_v2",),
+                window_sec=300.0,
+                scene_index_cache_dir=run_root / "scene_index_cache",
+                eval_case_concurrency=2,
+                budget=AgentBudget(),
+            )
+
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeSceneIndexBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                        summary = eval_runner.run_eval_cases(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 30.0,
+                        )
+
+        self.assertGreaterEqual(max_active, 2)
+        self.assertEqual([case["question_id"] for case in summary["cases"]], ["605-1", "611-1"])
+        self.assertEqual(summary["accuracy"], 1.0)
 
     def test_scene_index_only_cli_dispatches_without_eval_cases(self):
         from runs import eval_runner
@@ -877,6 +961,17 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(config.budget.max_rounds, 20)
         self.assertFalse(hasattr(config.budget, "expensive_tool_budget"))
+
+    def test_eval_case_concurrency_cli_is_capped_at_sixteen(self):
+        from runs import eval_runner
+
+        parser = eval_runner.build_arg_parser()
+
+        default_config = eval_runner.config_from_args(parser.parse_args([]))
+        capped_config = eval_runner.config_from_args(parser.parse_args(["--eval-case-concurrency", "99"]))
+
+        self.assertEqual(default_config.eval_case_concurrency, 1)
+        self.assertEqual(capped_config.eval_case_concurrency, 16)
 
     def test_context_budget_cli_flags_build_agent_config(self):
         from runs import eval_runner
