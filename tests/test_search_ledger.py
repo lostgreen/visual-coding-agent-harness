@@ -94,6 +94,12 @@ def test_wrong_scope_caption_updates_option_coverage(tmp_path: Path) -> None:
             "query": "option B Balkans slavery",
             "condition_match": {"matches_original_question": False, "match_level": "related_but_wrong_scope"},
             "answer_mapping": {"related_option": "B", "option_relation": "wrong_scope"},
+            "answer_options": {
+                "A": "They settled peacefully",
+                "B": "They became enslaved in the Balkans",
+                "C": "They fought with Selic or Seljuk Turks",
+                "D": "They returned to India",
+            },
         },
     )
 
@@ -101,10 +107,13 @@ def test_wrong_scope_caption_updates_option_coverage(tmp_path: Path) -> None:
 
     assert snapshot["options"]["B"]["status"] == "wrong_scope"
     assert snapshot["options"]["B"]["related_observation_ids"] == ["obs_0001"]
-    assert "B: wrong_scope" in workspace.render_search_ledger_view()
+    rendered = workspace.render_search_ledger_view()
+    assert "B: wrong_scope" in rendered
+    assert "Untested: A, C, D" in rendered
+    assert "test untested options" in rendered
 
 
-def test_repeated_explore_emits_soft_recovery_hint_not_fatal(tmp_path: Path) -> None:
+def test_repeated_explore_with_new_candidate_keeps_raw_output_and_warns(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "search_ledger_repeat")
     raw_output = {
         "mode": "candidate_discovery",
@@ -116,14 +125,25 @@ def test_repeated_explore_emits_soft_recovery_hint_not_fatal(tmp_path: Path) -> 
     }
     workspace.write_observation(tool_name="explore", claim="Timeout candidates.", confidence=0.5, raw_output=raw_output)
     workspace.write_observation(tool_name="explore", claim="Timeout candidates.", confidence=0.5, raw_output=raw_output)
-    third = workspace.write_observation(tool_name="explore", claim="Timeout candidates.", confidence=0.5, raw_output=raw_output)
+    third = workspace.write_observation(
+        tool_name="explore",
+        claim="Timeout candidates.",
+        confidence=0.5,
+        raw_output={
+            **raw_output,
+            "candidate_windows": [
+                {"candidate_key": "obs_0003:cand_0002", "segment_id": "seg_0002", "time_range": [20.0, 30.0]}
+            ],
+        },
+    )
 
-    assert third.raw_output["mode"] == "planner_recovery_hint"
-    assert third.raw_output["support_status"] == "no_new_evidence"
-    assert third.raw_output["recommended_next_actions"][0]["tool"] == "verify_window"
+    assert third.raw_output["mode"] == "candidate_discovery"
+    assert third.raw_output["candidate_windows"][0]["candidate_key"] == "obs_0003:cand_0002"
+    snapshot = workspace.search_ledger_snapshot()
+    assert any(candidate["candidate_key"] == "obs_0003:cand_0002" for candidate in snapshot["candidates"])
     events = workspace._read_jsonl_dicts("trace.jsonl")
     assert any(event["type"] == "repeated_explore_detected" for event in events)
-    assert any(event["type"] == "planner_recovery_hint_emitted" for event in events)
+    assert not any(event["type"] == "planner_recovery_hint_emitted" for event in events)
 
 
 def test_event_candidate_discovery_updates_counting_ledger(tmp_path: Path) -> None:

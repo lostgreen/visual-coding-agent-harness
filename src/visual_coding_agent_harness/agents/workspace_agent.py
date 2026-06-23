@@ -1419,6 +1419,12 @@ def _caption_fact_writes(
     condition_match = raw_output.get("condition_match") if isinstance(raw_output.get("condition_match"), Mapping) else {}
     query_analysis = raw_output.get("query_analysis") if isinstance(raw_output.get("query_analysis"), Mapping) else {}
     question_condition = raw_output.get("question_condition") if isinstance(raw_output.get("question_condition"), Mapping) else {}
+    raw_claim_scope = str(raw_output.get("claim_scope") or "").strip()
+    required_entities = [
+        str(item).strip()
+        for item in _sequence_items(raw_output.get("required_entities") or raw_output.get("ordering_required_entities"))
+        if str(item).strip()
+    ]
     memory: list[dict[str, Any]] = []
     for index, fact in enumerate(facts):
         claim = str(fact.get("claim") or fact.get("text") or fact.get("excerpt") or "").strip()
@@ -1437,6 +1443,21 @@ def _caption_fact_writes(
             or (answer_mapping.get("supports_option") if isinstance(answer_mapping, Mapping) else "")
             or ""
         ).strip()
+        claim_scope = str(fact.get("claim_scope") or raw_claim_scope or "").strip()
+        if not claim_scope:
+            claim_scope = _caption_claim_scope_for_commit(
+                task_type=str(raw_output.get("task_type") or ""),
+                condition_match=condition_match,
+                cannot_final_cite=bool(raw_output.get("cannot_final_cite", False)),
+            )
+        covered_entities = [
+            str(item).strip()
+            for item in _sequence_items(fact.get("covered_entities") or fact.get("ordering_entities"))
+            if str(item).strip()
+        ]
+        if required_entities and not covered_entities:
+            claim_text = claim.lower()
+            covered_entities = [entity for entity in required_entities if entity.lower() in claim_text]
         metadata: dict[str, Any] = {
             "auto_pinned": True,
             "auto_pin_reason": reason,
@@ -1452,7 +1473,12 @@ def _caption_fact_writes(
             "question_condition": dict(question_condition),
             "answer_mapping": dict(answer_mapping),
             "source_kind": str(fact.get("source_kind") or ""),
+            "claim_scope": claim_scope,
         }
+        if required_entities:
+            metadata["required_entities"] = required_entities
+        if covered_entities:
+            metadata["covered_entities"] = covered_entities
         scope = _caption_fact_scope(fact)
         if scope:
             metadata["scope"] = scope
@@ -1469,6 +1495,21 @@ def _caption_fact_writes(
     if not memory:
         return {}
     return {"pinned_anchors": normalized_anchors, "memory": memory}
+
+
+def _caption_claim_scope_for_commit(
+    *,
+    task_type: str,
+    condition_match: Mapping[str, Any],
+    cannot_final_cite: bool,
+) -> str:
+    if str(condition_match.get("match_level") or "") == "related_but_wrong_scope":
+        return "wrong_scope"
+    if task_type == "ordering" and cannot_final_cite:
+        return "subclaim_support"
+    if bool(condition_match.get("matches_original_question")) and str(condition_match.get("match_level") or "") == "direct":
+        return "direct_answer"
+    return "uncertain"
 
 
 def _caption_fact_from_claim(
@@ -1594,6 +1635,8 @@ def _structured_verify_writes(
                     "claim_scope": "window_negative" if verdict == "not_found_in_window" else "direct_answer",
                     "global_answer_support": verdict == "supported",
                     "local_only": True,
+                    "event_id": str(result.get("event_id") or ""),
+                    "event_type": str(result.get("event_type") or ""),
                 },
             }
         )

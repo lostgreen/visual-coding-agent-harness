@@ -490,6 +490,9 @@ class EvidenceWorkspace:
             "records": list(payload.get("records", [])) if isinstance(payload.get("records", []), Sequence) else [],
             "candidates": list(payload.get("candidates", [])) if isinstance(payload.get("candidates", []), Sequence) else [],
             "options": dict(payload.get("options", {})) if isinstance(payload.get("options", {}), Mapping) else {},
+            "answer_options": (
+                dict(payload.get("answer_options", {})) if isinstance(payload.get("answer_options", {}), Mapping) else {}
+            ),
         }
 
     def render_search_ledger_view(self) -> str:

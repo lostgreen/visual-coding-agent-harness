@@ -1632,3 +1632,242 @@ def test_workspace_v2_synthesize_accepts_subclaim_support_memory(tmp_path: Path)
 
     assert result["memory_id"] == "mem_0002"
     assert workspace.get_memory("mem_0002").metadata["supports"] == ["mem_0001"]
+
+
+def test_workspace_v2_answer_rejects_window_negative_direct_final_citation(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_window_negative_final_gate")
+    observation = workspace.write_observation(
+        tool_name="verify_window",
+        claim="A ruler was not found locally.",
+        confidence=0.8,
+        raw_output={
+            "mode": "verify_window",
+            "verification_results": [
+                {
+                    "target_id": "ruler",
+                    "claim": "A ruler is used.",
+                    "verdict": "not_found_in_window",
+                    "scope": {"segment_id": "seg_0001", "time_range": [0.0, 10.0]},
+                }
+            ],
+            "produced_anchors": [
+                {
+                    "anchor_id": "anch_ruler_absent",
+                    "kind": "visual_fact",
+                    "source_kind": "visual_fact",
+                    "excerpt": "No ruler is visible in the inspected local window.",
+                    "segment_id": "seg_0001",
+                    "start_sec": 0.0,
+                    "end_sec": 10.0,
+                }
+            ],
+        },
+    )
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": "anch_ruler_absent",
+                    "kind": "visual_fact",
+                    "source_kind": "visual_fact",
+                    "excerpt": "No ruler is visible in the inspected local window.",
+                    "segment_id": "seg_0001",
+                    "start_sec": 0.0,
+                    "end_sec": 10.0,
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "visual_support",
+                    "claim": "A ruler was not found in the inspected window.",
+                    "anchor_ids": ["anch_ruler_absent"],
+                    "confidence": "medium",
+                    "metadata": {
+                        "source_tool": "verify_window",
+                        "verdict": "not_found_in_window",
+                        "claim_scope": "window_negative",
+                        "global_answer_support": False,
+                        "local_only": True,
+                    },
+                }
+            ],
+        },
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    with pytest.raises(ValueError, match="local window negative"):
+        registry.execute("answer", {"text": "The ruler was not used.", "citations": ["mem_0001"]})
+
+
+def test_workspace_v2_explore_auto_classifies_ordering_caption_as_subclaim(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_ordering_scope")
+    backend = ExploreReasoningBackend(
+        {
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim": "The Hubble Telescope is introduced after the Big Bang.",
+            "confidence": 0.82,
+            "condition_match": {
+                "matches_original_question": False,
+                "match_level": "related",
+                "reason": "This is one ordering subclaim, not the complete ordering answer.",
+            },
+            "facts": [
+                {
+                    "claim": "The Hubble Telescope is introduced after the Big Bang.",
+                    "source_kind": "asr",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 20.0],
+                    "excerpt": "After the Big Bang, the video introduces the Hubble Telescope.",
+                }
+            ],
+            "anchors": [
+                {
+                    "source_kind": "asr",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 20.0],
+                    "excerpt": "After the Big Bang, the video introduces the Hubble Telescope.",
+                }
+            ],
+            "required_entities": ["Big Bang", "Hubble Telescope", "Redshift", "Dark Energy"],
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "order Big Bang Hubble Telescope Redshift Dark Energy",
+            "original_question": "Put these topics in the order introduced: Big Bang, Hubble Telescope, Redshift, Dark Energy.",
+            "modalities": ["asr"],
+            "top_k": 1,
+        },
+    )
+
+    assert result["task_type"] == "ordering"
+    assert result["claim_scope"] == "subclaim_support"
+    assert result["facts"][0]["claim_scope"] == "subclaim_support"
+
+
+def test_workspace_v2_ordering_synthesis_requires_required_entity_coverage(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_ordering_coverage_gate")
+    anchor = {
+        "anchor_id": "anch_order_gap",
+        "observation_id": "obs_0001",
+        "kind": "asr",
+        "source_kind": "asr",
+        "excerpt": "After the Big Bang, the video introduces the Hubble Telescope.",
+        "segment_id": "seg_0001",
+        "start_sec": 0.0,
+        "end_sec": 20.0,
+    }
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Ordering subclaim.",
+        confidence=0.8,
+        raw_output={
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim_scope": "subclaim_support",
+            "facts": [{"claim": "After the Big Bang, the video introduces the Hubble Telescope."}],
+            "anchors": [{"excerpt": "After the Big Bang, the video introduces the Hubble Telescope."}],
+        },
+    )
+    workspace.commit_observation(
+        "obs_0001",
+        writes={
+            "pinned_anchors": [anchor],
+            "memory": [
+                {
+                    "kind": "caption_support",
+                    "claim": "The Hubble Telescope is introduced after the Big Bang.",
+                    "anchor_ids": ["anch_order_gap"],
+                    "confidence": "medium",
+                    "metadata": {
+                        "claim_scope": "subclaim_support",
+                        "task_type": "ordering",
+                        "required_entities": ["Big Bang", "Hubble Telescope", "Redshift", "Dark Energy"],
+                        "covered_entities": ["Big Bang", "Hubble Telescope"],
+                    },
+                }
+            ],
+        },
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    with pytest.raises(ValueError, match="ordering coverage"):
+        registry.execute(
+            "synthesize_memory",
+            {"claim": "The full ordering is complete.", "supports": ["mem_0001"], "tags": ["ordering"]},
+        )
+
+
+def test_workspace_v2_count_synthesis_requires_distinct_verified_events(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_count_synthesis_events")
+    for index, event_id in enumerate(["ev_001", "ev_001"], start=1):
+        observation = workspace.write_observation(
+            tool_name="verify_window",
+            claim=f"HUN timeout event {index} is verified.",
+            confidence=0.9,
+            raw_output={
+                "mode": "verify_window",
+                "verification_results": [
+                    {
+                        "target_id": f"timeout_{index}",
+                        "claim": f"HUN consumed timeout event {index}.",
+                        "verdict": "supported",
+                        "event_id": event_id,
+                        "event_type": "timeout_consumed",
+                    }
+                ],
+                "produced_anchors": [
+                    {
+                        "anchor_id": f"anch_timeout_{index}",
+                        "kind": "visual_fact",
+                        "source_kind": "visual_fact",
+                        "excerpt": f"HUN timeout event {index} is visible.",
+                        "segment_id": "seg_0001",
+                        "start_sec": float(index * 10),
+                        "end_sec": float(index * 10 + 5),
+                    }
+                ],
+            },
+        )
+        workspace.commit_observation(
+            observation.observation_id,
+            writes={
+                "pinned_anchors": [
+                    {
+                        "anchor_id": f"anch_timeout_{index}",
+                        "kind": "visual_fact",
+                        "source_kind": "visual_fact",
+                        "excerpt": f"HUN timeout event {index} is visible.",
+                        "segment_id": "seg_0001",
+                        "start_sec": float(index * 10),
+                        "end_sec": float(index * 10 + 5),
+                    }
+                ],
+                "memory": [
+                    {
+                        "kind": "visual_support",
+                        "claim": f"HUN consumed timeout event {index}.",
+                        "anchor_ids": [f"anch_timeout_{index}"],
+                        "confidence": "high",
+                        "metadata": {
+                            "source_tool": "verify_window",
+                            "verdict": "supported",
+                            "event_id": event_id,
+                            "event_type": "timeout_consumed",
+                        },
+                    }
+                ],
+            },
+        )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    with pytest.raises(ValueError, match="distinct event_id"):
+        registry.execute(
+            "synthesize_memory",
+            {"claim": "HUN consumed 2 timeouts.", "supports": ["mem_0001", "mem_0002"], "tags": ["count_synthesis"]},
+        )

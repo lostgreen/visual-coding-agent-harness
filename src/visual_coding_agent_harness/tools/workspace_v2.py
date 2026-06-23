@@ -328,6 +328,7 @@ def build_workspace_v2_registry(
         if unsupported_supports:
             kinds = ", ".join(f"{memory_id}:{memory_by_id[memory_id].kind}" for memory_id in unsupported_supports)
             raise ValueError("synthesize_memory_failed: supporting memory kind required for " + kinds)
+        _validate_synthesis_coverage(memory_by_id, support_ids, tags=tags)
 
         del evidence_obs_ids
 
@@ -1638,7 +1639,12 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
     visual_required = _task_requires_visual_verification(task_type)
     grounded = _caption_fact_is_grounded(result, facts=facts, anchors=anchors, produced_anchors=produced_anchors)
     condition_ok = bool(condition_match.get("matches_original_question")) and str(condition_match.get("match_level") or "") == "direct"
-    claim_scope = _normalize_claim_scope(result.get("claim_scope"), condition_match=condition_match, grounded=grounded)
+    claim_scope = _normalize_claim_scope(
+        result.get("claim_scope"),
+        condition_match=condition_match,
+        grounded=grounded,
+        task_type=task_type,
+    )
 
     if not grounded:
         result.update(
@@ -1683,6 +1689,9 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
         result["facts"] = facts
         result["caption_fact_downgraded"] = True
     else:
+        for fact in facts:
+            fact["claim_scope"] = claim_scope
+        result["facts"] = facts
         result["cannot_final_cite"] = False
         result["needs_visual_verify"] = bool(result.get("needs_visual_verify", False))
         result["caption_fact_downgraded"] = False
@@ -1703,7 +1712,13 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
     return result
 
 
-def _normalize_claim_scope(value: Any, *, condition_match: Mapping[str, Any], grounded: bool) -> str:
+def _normalize_claim_scope(
+    value: Any,
+    *,
+    condition_match: Mapping[str, Any],
+    grounded: bool,
+    task_type: str,
+) -> str:
     scope = str(value or "").strip()
     if scope in {"direct_answer", "subclaim_support", "wrong_scope", "candidate_only", "uncertain"}:
         return scope
@@ -1711,6 +1726,10 @@ def _normalize_claim_scope(value: Any, *, condition_match: Mapping[str, Any], gr
         return "candidate_only"
     if str(condition_match.get("match_level") or "") == "related_but_wrong_scope":
         return "wrong_scope"
+    if task_type == "ordering" and not (
+        bool(condition_match.get("matches_original_question")) and str(condition_match.get("match_level") or "") == "direct"
+    ):
+        return "subclaim_support"
     if bool(condition_match.get("matches_original_question")) and str(condition_match.get("match_level") or "") == "direct":
         return "direct_answer"
     return "uncertain"
@@ -2622,6 +2641,8 @@ def _invalid_final_citation_provenance(
             return f"final citation {entry.entry_id} does not match the original question condition"
         elif "question_condition_match" not in metadata:
             return f"final citation {entry.entry_id} lacks condition-match provenance"
+        if str(metadata.get("claim_scope") or "") == "subclaim_support":
+            return f"final citation {entry.entry_id} is subclaim support and must be synthesized first"
         if entry.supports_option is None:
             answer_mapping = metadata.get("answer_mapping")
             mapped_option = answer_mapping.get("supports_option") if isinstance(answer_mapping, Mapping) else None
@@ -2635,6 +2656,10 @@ def _invalid_final_citation_provenance(
         if source_tool != "verify_window":
             return f"final citation {entry.entry_id} must come from verify_window provenance"
         verdict = str(metadata.get("verdict") or "").strip()
+        if verdict == "not_found_in_window" or str(metadata.get("claim_scope") or "") == "window_negative":
+            return f"final citation {entry.entry_id} is a local window negative and must be synthesized with coverage before final"
+        if metadata.get("global_answer_support") is False:
+            return f"final citation {entry.entry_id} is not marked as global answer support"
         if verdict and verdict not in {"supported", "not_found_in_window"}:
             return f"final citation {entry.entry_id} has unsupported visual verdict {verdict}"
         return ""
@@ -2669,6 +2694,58 @@ def _invalid_final_citation_provenance(
                 return reason
         return ""
     return f"final citation {entry.entry_id} has unsupported provenance kind {entry.kind}"
+
+
+def _validate_synthesis_coverage(
+    memory_by_id: Mapping[str, Any],
+    support_ids: Sequence[str],
+    *,
+    tags: Sequence[str],
+) -> None:
+    support_entries = [memory_by_id[memory_id] for memory_id in support_ids]
+    if any(str(tag) == "count_synthesis" for tag in tags):
+        _validate_count_synthesis_supports(support_entries)
+    is_ordering = any(str(tag) == "ordering" for tag in tags) or any(
+        str(dict(entry.metadata or {}).get("task_type") or "") == "ordering" for entry in support_entries
+    )
+    if not is_ordering:
+        return
+    required: list[str] = []
+    covered: list[str] = []
+    for entry in support_entries:
+        metadata = dict(entry.metadata or {})
+        required.extend(str(item) for item in _sequence_items(metadata.get("required_entities") or metadata.get("ordering_required_entities")) if str(item))
+        covered.extend(str(item) for item in _sequence_items(metadata.get("covered_entities")) if str(item))
+        ordering_entity = str(metadata.get("ordering_entity") or "").strip()
+        if ordering_entity:
+            covered.append(ordering_entity)
+        claim = str(entry.claim or "")
+        for entity in required:
+            if entity.lower() in claim.lower():
+                covered.append(entity)
+    required_set = set(_unique_nonempty(required))
+    if not required_set:
+        return
+    covered_set = set(_unique_nonempty(covered))
+    missing = sorted(required_set - covered_set)
+    if missing:
+        raise ValueError("synthesize_memory_failed: ordering coverage missing required entities: " + ", ".join(missing))
+
+
+def _validate_count_synthesis_supports(support_entries: Sequence[Any]) -> None:
+    event_ids: list[str] = []
+    for entry in support_entries:
+        metadata = dict(entry.metadata or {})
+        if str(metadata.get("source_tool") or "") != "verify_window":
+            raise ValueError("synthesize_memory_failed: count_synthesis supports must come from verify_window")
+        if str(metadata.get("verdict") or "") != "supported":
+            raise ValueError("synthesize_memory_failed: count_synthesis supports must be verified_supported")
+        event_id = str(metadata.get("event_id") or "").strip()
+        if not event_id:
+            raise ValueError("synthesize_memory_failed: count_synthesis supports must include event_id")
+        event_ids.append(event_id)
+    if len(set(event_ids)) != len(event_ids):
+        raise ValueError("synthesize_memory_failed: count_synthesis supports must have distinct event_id values")
 
 
 def _provenance_observation_ids(memory_by_id: Mapping[str, Any], memory_ids: Sequence[str]) -> list[str]:

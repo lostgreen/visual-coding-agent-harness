@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 
 
 def empty_search_ledger() -> dict[str, Any]:
-    return {"records": [], "candidates": [], "options": {}}
+    return {"records": [], "candidates": [], "options": {}, "answer_options": {}}
 
 
 def norm_query(value: Any) -> str:
@@ -68,6 +68,13 @@ def render_search_ledger(snapshot: Mapping[str, Any], *, max_items: int = 3) -> 
             reason = str(option.get("reason") or "").strip()
             suffix = f" reason={reason}" if reason else ""
             lines.append(f"- {option_id}: {option.get('status') or 'unknown'}{suffix}")
+        untested = [
+            option_id
+            for option_id in sorted(ledger.get("answer_options", {}))
+            if str(ledger["options"].get(option_id, {}).get("status") or "untested") == "untested"
+        ]
+        if untested:
+            lines.append("Untested: " + ", ".join(untested))
 
     event_candidates = [item for item in ledger["candidates"] if item.get("event_id") or item.get("event_type")]
     if event_candidates:
@@ -86,6 +93,8 @@ def render_search_ledger(snapshot: Mapping[str, Any], *, max_items: int = 3) -> 
         for action in recommended[:max_items]:
             if action.get("candidate_key"):
                 lines.append(f"- {action.get('tool')}({action.get('candidate_key')})")
+            elif action.get("focus"):
+                lines.append(f"- {action.get('tool')}: {action.get('focus')}")
             else:
                 lines.append(f"- {action.get('tool')}")
     return "\n".join(lines)
@@ -103,6 +112,9 @@ def _coerce_snapshot(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
             ledger["candidates"] = [dict(item) for item in candidates if isinstance(item, Mapping)]
         if isinstance(options, Mapping):
             ledger["options"] = {str(key): dict(value) for key, value in options.items() if isinstance(value, Mapping)}
+        answer_options = snapshot.get("answer_options")
+        if isinstance(answer_options, Mapping):
+            ledger["answer_options"] = {str(key): str(value) for key, value in answer_options.items()}
     return ledger
 
 
@@ -131,20 +143,7 @@ def _maybe_soft_recovery_hint(
             },
         )
     ]
-    if repeat_count < 2 or not pending:
-        return dict(raw_output), events
-    actions = _recommended_next_actions(ledger) or [{"tool": "read_workspace", "section": "pending_candidates"}]
-    hinted = {
-        "mode": "planner_recovery_hint",
-        "support_status": "no_new_evidence",
-        "message": "Similar explore already exists with pending candidates.",
-        "query": str(raw_output.get("query") or ""),
-        "query_norm": query_norm,
-        "recommended_next_actions": actions,
-        "cannot_final_cite": True,
-    }
-    events.append(("planner_recovery_hint_emitted", {"observation_id": observation_id, "recommended_next_actions": actions}))
-    return hinted, events
+    return dict(raw_output), events
 
 
 def _update_after_explore(
@@ -174,6 +173,7 @@ def _update_after_explore(
     ledger["records"].append(record)
     for candidate in candidates:
         _upsert_candidate(ledger, candidate)
+    _record_answer_options(ledger, raw_output=raw_output)
     _update_option_status_from_explore(ledger, observation_id=observation_id, raw_output=raw_output)
     return [
         (
@@ -309,10 +309,36 @@ def _update_option_status_from_explore(
     ledger["options"][option_id] = existing
 
 
+def _record_answer_options(ledger: dict[str, Any], *, raw_output: Mapping[str, Any]) -> None:
+    options = raw_output.get("answer_options")
+    if not isinstance(options, Mapping):
+        return
+    for option_id, text in options.items():
+        key = str(option_id).strip().upper()[:1]
+        if not key:
+            continue
+        ledger["answer_options"][key] = str(text)
+        ledger["options"].setdefault(
+            key,
+            {
+                "option_id": key,
+                "status": "untested",
+                "related_memory_ids": [],
+                "related_observation_ids": [],
+                "reason": None,
+            },
+        )
+
+
 def _recommended_next_actions(ledger: Mapping[str, Any]) -> list[dict[str, Any]]:
     for candidate in ledger.get("candidates", []):
         if isinstance(candidate, Mapping) and candidate.get("status") == "pending":
             return [{"tool": "verify_window", "candidate_key": candidate.get("candidate_key") or candidate.get("event_id")}]
+    options = ledger.get("options")
+    if isinstance(options, Mapping) and any(
+        isinstance(option, Mapping) and option.get("status") == "untested" for option in options.values()
+    ):
+        return [{"tool": "explore", "focus": "test untested options against the original condition"}]
     return []
 
 
