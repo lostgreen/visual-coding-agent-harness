@@ -701,10 +701,11 @@ def _build_scene_index(
     frame_sampler: FrameSampler | None = None,
 ) -> SceneIndex:
     cache = SceneIndexCache(config.scene_index_cache_dir) if config.scene_index_cache_enabled else None
+    vl_model_id = _scene_index_vl_model_id(config)
     builder = SceneIndexBuilder(
         backend=backend,
         text_model_id=config.planner_model_path or config.model_path,
-        vl_model_id=config.model_path,
+        vl_model_id=vl_model_id,
         window_sec=config.window_sec,
         root_policy=RootIndexPolicy(
             root_window_sec=float(config.window_sec),
@@ -722,6 +723,14 @@ def _build_scene_index(
         duration_sec=duration_sec,
         subtitle_cues=parse_srt_cues(config.subtitle_dir / f"{video_id}.srt"),
     )
+
+
+def _scene_index_vl_model_id(config: EvalConfig) -> str:
+    if config.planner_api_use_for_tools and config.planner_api_model:
+        return config.planner_api_model
+    if config.planner_api_use_for_tools and config.planner_model_path:
+        return config.planner_model_path
+    return config.model_path
 
 
 def prewarm_scene_indexes(

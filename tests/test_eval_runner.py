@@ -917,6 +917,71 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(builder_inits[0]["root_policy"].max_new_tokens, 7777)
             self.assertEqual(builder_inits[0]["root_policy"].frame_cache_fps, 0.5)
 
+    def test_run_eval_cases_labels_tool_api_scene_index_with_api_model(self):
+        from runs import eval_runner
+
+        builder_inits = []
+
+        class FakeBuilder(FakeSceneIndexBuilder):
+            def __init__(self, **kwargs):
+                builder_inits.append(kwargs)
+                super().__init__(**kwargs)
+
+        def fake_run_loop(backend, **kwargs):
+            return {
+                "answer": "B.",
+                "choice": "B",
+                "status": "final",
+                "confidence": 0.8,
+                "citations": ["obs_0001"],
+                "rounds": 1,
+                "tools": ["caption_segment"],
+                "segments": ["seg_0001"],
+                "seconds": 1.0,
+            }
+
+        rows_by_id = {
+            "611-2": {
+                "question_id": "611-2",
+                "video_id": "vid611",
+                "videoID": "video611",
+                "task_type": "Information Synopsis",
+                "question": "What is shown?",
+                "options": ["A. one", "B. two", "C. three", "D. four"],
+                "answer": "B",
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp) / "eval"
+            config = eval_runner.EvalConfig(
+                run_root=run_root,
+                workspace_root=run_root / "workspaces",
+                model_path="/models/local-vl",
+                planner_api_model="pa/gmn-2.5-pr",
+                planner_api_use_for_tools=True,
+                data_root=Path("/dataset"),
+                parquet_path=Path("/dataset/videomme/test.parquet"),
+                video_dir=Path("/dataset/video"),
+                subtitle_dir=Path("/dataset/subtitle"),
+                cases=("611-2",),
+                strategies=("workspace_v2",),
+                scene_index_cache_dir=run_root / "scene_index_cache",
+                budget=AgentBudget(),
+            )
+
+            with patch.object(eval_runner, "build_frame_cache_for_video", return_value=FakeFrameCache()):
+                with patch.object(eval_runner, "SceneIndexBuilder", FakeBuilder):
+                    with patch.object(eval_runner, "run_loop", side_effect=fake_run_loop):
+                        eval_runner.run_eval_cases(
+                            backend=object(),
+                            rows_by_id=rows_by_id,
+                            config=config,
+                            duration_fn=lambda path: 1805.0,
+                        )
+
+        self.assertEqual(builder_inits[0]["vl_model_id"], "pa/gmn-2.5-pr")
+
     def test_free_explore_cli_builds_budgetless_agent_config(self):
         from runs import eval_runner
 
