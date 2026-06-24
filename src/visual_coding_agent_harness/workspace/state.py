@@ -13,6 +13,7 @@ from typing import Any, Mapping, Sequence
 
 from ..core.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
 from .output_quality import is_unsupported_claim
+from .open_questions import extract_candidate_options
 from .search_ledger import empty_search_ledger, render_search_ledger, update_search_ledger
 from .transcript_binder import TranscriptEvidenceBinder
 from ..contracts import (
@@ -174,6 +175,18 @@ class EvidenceWorkspace:
         "synthesize_memory",
     }
     GROUNDED_MEMORY_KINDS = frozenset(
+        {
+            "visual_support",
+            "answer_support",
+            "synthesized_support",
+            "answer_conflict_resolved",
+            "caption_support",
+            # Intentionally excludes local_negative, answer_conflict,
+            # verification_uncertain, and retrieval_candidate: those are useful
+            # search-state facts, not final grounding.
+        }
+    )
+    POSITIVE_SUPPORT_KINDS = frozenset(
         {
             "visual_support",
             "answer_support",
@@ -524,10 +537,10 @@ class EvidenceWorkspace:
         ]
         if len(pending) < min_pending:
             return None
-        support_kinds = {"visual_support", "answer_support", "synthesized_support"}
-        if any(entry.kind in support_kinds for entry in self.memory_entries()):
+        if any(entry.kind in self.POSITIVE_SUPPORT_KINDS for entry in self.memory_entries()):
             return None
-        candidate_key = str(pending[0].get("candidate_key") or pending[0].get("event_id") or "").strip()
+        candidate = _highest_score_pending_candidate(pending)
+        candidate_key = str(candidate.get("candidate_key") or candidate.get("event_id") or "").strip()
         return candidate_key or None
 
     def _write_search_ledger_snapshot(self, snapshot: Mapping[str, Any]) -> None:
@@ -978,6 +991,10 @@ class EvidenceWorkspace:
             ),
             hint='read_workspace(section="memory")',
         )
+
+        option_evidence_map = _render_option_evidence_map(question=question, memory_entries=self.memory_entries())
+        if option_evidence_map:
+            lines.extend(["", option_evidence_map])
 
         render_section(
             "Pinned Anchors",
@@ -3890,6 +3907,62 @@ def _candidate_window_rows(workspace: "EvidenceWorkspace") -> list[dict[str, Any
             )
             rows.append(row)
     return rows
+
+
+def _highest_score_pending_candidate(pending: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+    def sort_key(candidate: Mapping[str, Any]) -> tuple[float, str]:
+        try:
+            score = float(candidate.get("score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        candidate_key = str(candidate.get("candidate_key") or candidate.get("event_id") or "")
+        return (-score, candidate_key)
+
+    return sorted(pending, key=sort_key)[0]
+
+
+def _render_option_evidence_map(*, question: str, memory_entries: Sequence[MemoryEntry]) -> str:
+    options = _options_from_question(question)
+    if not options:
+        return ""
+    positive_kinds = EvidenceWorkspace.POSITIVE_SUPPORT_KINDS
+    by_option: dict[str, list[MemoryEntry]] = {option: [] for option in options}
+    for entry in memory_entries:
+        option = str(entry.supports_option or "").strip().upper()[:1]
+        if option in by_option and entry.kind in positive_kinds:
+            by_option[option].append(entry)
+
+    lines = [
+        "# Option Evidence Map",
+        "Choose the option whose Supporting facts include at least one visual_support, answer_support, caption_support, synthesized_support, or answer_conflict_resolved memory. local_negative does NOT support absence at global scope.",
+    ]
+    for option in sorted(options):
+        lines.append(f"{option}. {options[option]}")
+        entries = by_option[option]
+        if not entries:
+            lines.append("   - Supporting facts: (none)")
+            continue
+        for entry in entries[:6]:
+            lines.append(f"   - {entry.entry_id} [{entry.kind}]: {_compact_line(entry.claim, limit=180)}")
+        if len(entries) > 6:
+            lines.append(f"   - ... shown 6/{len(entries)}")
+    return "\n".join(lines)
+
+
+def _options_from_question(question: str) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for raw_option in extract_candidate_options(str(question or "")):
+        match = re.match(r"^\s*([A-H])[\).]\s*(.+?)\s*$", str(raw_option), flags=re.IGNORECASE)
+        if match:
+            options[match.group(1).upper()] = " ".join(match.group(2).split())
+    return options
+
+
+def _compact_line(text: str, *, limit: int) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
 
 
 def _verification_result_rows(workspace: "EvidenceWorkspace") -> list[dict[str, Any]]:

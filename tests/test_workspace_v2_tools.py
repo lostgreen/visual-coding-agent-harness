@@ -695,12 +695,20 @@ def test_workspace_v2_explore_counting_caption_fact_requires_visual_verify(tmp_p
         {
             "mode": "caption_fact",
             "support_status": "caption_supported",
-            "claim": "The caption says there are two timeouts.",
+            "claim": "A map shows Central Europe with a shield icon.",
             "confidence": 0.9,
-            "condition_match": {"matches_original_question": True, "match_level": "direct", "reason": "Caption mentions a count."},
-            "answer_mapping": {"supports_option": "D", "opposes_options": [], "reason": "Count text matches option D."},
-            "facts": [{"claim": "There are two timeouts.", "source_kind": "dense_caption", "excerpt": "two timeouts", "supports_option": "D"}],
-            "anchors": [{"source_kind": "dense_caption", "excerpt": "two timeouts"}],
+            "condition_match": {"matches_original_question": True, "match_level": "direct", "reason": "Caption mentions the shield icon."},
+            "answer_mapping": {"supports_option": "B", "opposes_options": [], "reason": "Shield icon text matches option B."},
+            "facts": [
+                {
+                    "claim": "A map shows Central Europe with a shield icon.",
+                    "evidence_text": "A map shows Central Europe with a shield icon.",
+                    "source_kind": "dense_caption",
+                    "excerpt": "A map shows Central Europe with a shield icon.",
+                    "supports_option": "B",
+                }
+            ],
+            "anchors": [{"source_kind": "dense_caption", "excerpt": "A map shows Central Europe with a shield icon."}],
             "needs_visual_verify": False,
         }
     )
@@ -709,12 +717,12 @@ def test_workspace_v2_explore_counting_caption_fact_requires_visual_verify(tmp_p
     result = registry.execute(
         "explore",
         {
-            "query": "How many timeouts did HUN call?",
-            "original_question": "How many timeouts did HUN call?\nA. 0\nB. 1\nC. 3\nD. 2",
-            "answer_options": {"A": "0", "B": "1", "C": "3", "D": "2"},
-            "modalities": ["caption"],
-        },
-    )
+                "query": "How many shield icons appear on the map?",
+                "original_question": "How many shield icons appear on the map?\nA. 0\nB. 1\nC. 2\nD. 3",
+                "answer_options": {"A": "0", "B": "1", "C": "2", "D": "3"},
+                "modalities": ["caption"],
+            },
+        )
 
     assert result["mode"] == "mixed"
     assert result["cannot_final_cite"] is True
@@ -785,13 +793,82 @@ def test_workspace_v2_caption_fact_downgrade_preserves_navigation_windows(tmp_pa
     )
 
     assert result["mode"] == "candidate_discovery"
-    assert result["caption_fact_downgraded"] is True
+    assert result["caption_fact_structurally_rejected"] is True
     assert result["navigation_windows_restored"] is True
     assert len(result["candidate_windows"]) >= 2
     assert result["regions"] == result["candidate_windows"]
-    assert result["produced_anchors"] == candidate_anchors_for_windows(result["candidate_windows"])
+    assert [anchor["anchor_id"] for anchor in result["produced_anchors"]] == [
+        anchor["anchor_id"] for anchor in candidate_anchors_for_windows(result["candidate_windows"])
+    ]
     assert "_navigation_candidate_windows" not in result
     assert "_navigation_candidate_anchors" not in result
+
+
+def test_workspace_v2_explore_persists_candidate_score_and_source_kind(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_candidate_scores")
+    registry = build_workspace_v2_registry(
+        video_map=_christmas_video_map(),
+        backend=ExploreReasoningBackend({"mode": "candidate_discovery", "support_status": "candidate_only", "facts": []}),
+        workspace=workspace,
+    )
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "apples candles berries",
+            "targets": [{"target_id": "target_1", "claim": "Find apples candles and berries"}],
+            "modalities": ["caption", "index"],
+            "top_k": 3,
+        },
+    )
+
+    assert result["candidate_windows"]
+    assert all("score" in candidate for candidate in result["candidate_windows"])
+    assert all("source_kind" in candidate for candidate in result["candidate_windows"])
+    assert result["candidate_windows"][0]["score"] >= result["candidate_windows"][-1]["score"]
+
+
+def test_workspace_v2_caption_fact_structural_rejects_non_verbatim_fact(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_caption_structural_reject")
+    backend = ExploreReasoningBackend(
+        {
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim": "A narrator explains the historical standardization of hamburgers.",
+            "confidence": 0.8,
+            "facts": [
+                {
+                    "claim": "A narrator explains the historical standardization of hamburgers.",
+                    "excerpt": "A narrator explains the historical standardization of hamburgers.",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 10.0],
+                }
+            ],
+            "anchors": [],
+            "candidate_windows": [],
+            "condition_match": {"matches_original_question": True, "match_level": "direct"},
+            "answer_mapping": {"supports_option": "D"},
+            "needs_visual_verify": False,
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_christmas_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "hamburger standardization",
+            "original_question": "What historical detail does the narration mention?",
+            "targets": [{"target_id": "target_1", "claim": "Find hamburger standardization narration"}],
+            "modalities": ["caption", "index"],
+            "top_k": 3,
+        },
+    )
+
+    assert result["mode"] == "candidate_discovery"
+    assert result.get("caption_fact_downgraded") is not True
+    assert result.get("caption_fact_structurally_rejected") is True
+    events = workspace._read_jsonl_dicts("trace.jsonl")
+    assert any(event["type"] == "caption_fact_structurally_rejected" for event in events)
 
 
 def test_workspace_v2_answer_rejects_caption_support_when_visual_verify_required(tmp_path: Path) -> None:
@@ -1764,6 +1841,7 @@ def test_workspace_v2_synthesize_memory_rejects_unverified_support_laundering(tm
             "synthesize_memory",
             {"claim": "laundered", "supports": ["mem_0001"], "confidence": "high"},
         )
+    assert [entry.entry_id for entry in workspace.memory_entries()] == ["mem_0001"]
 
 
 def test_workspace_v2_synthesize_memory_derives_from_committed_memory(tmp_path: Path) -> None:
@@ -1921,7 +1999,7 @@ def test_workspace_v2_explore_auto_classifies_ordering_caption_as_subclaim(tmp_p
         {
             "mode": "caption_fact",
             "support_status": "caption_supported",
-            "claim": "The Hubble Telescope is introduced after the Big Bang.",
+            "claim": "Austria-Hungary was seen as a buffer between Russia and Western Europe.",
             "confidence": 0.82,
             "condition_match": {
                 "matches_original_question": False,
@@ -1930,11 +2008,12 @@ def test_workspace_v2_explore_auto_classifies_ordering_caption_as_subclaim(tmp_p
             },
             "facts": [
                 {
-                    "claim": "The Hubble Telescope is introduced after the Big Bang.",
+                    "claim": "Austria-Hungary was seen as a buffer between Russia and Western Europe.",
+                    "evidence_text": "Austria-Hungary was seen as a buffer between Russia and Western Europe.",
                     "source_kind": "asr",
                     "segment_id": "seg_0001",
                     "time_range": [0.0, 20.0],
-                    "excerpt": "After the Big Bang, the video introduces the Hubble Telescope.",
+                    "excerpt": "Austria-Hungary was seen as a buffer between Russia and Western Europe.",
                 }
             ],
             "anchors": [
@@ -1942,7 +2021,7 @@ def test_workspace_v2_explore_auto_classifies_ordering_caption_as_subclaim(tmp_p
                     "source_kind": "asr",
                     "segment_id": "seg_0001",
                     "time_range": [0.0, 20.0],
-                    "excerpt": "After the Big Bang, the video introduces the Hubble Telescope.",
+                    "excerpt": "Austria-Hungary was seen as a buffer between Russia and Western Europe.",
                 }
             ],
             "required_entities": ["Big Bang", "Hubble Telescope", "Redshift", "Dark Energy"],

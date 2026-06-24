@@ -22,6 +22,16 @@ DISPOSITION_TOOLS = {
     "no_commit_needed",
 }
 
+POSITIVE_SUPPORT_KINDS = frozenset(
+    {
+        "visual_support",
+        "answer_support",
+        "synthesized_support",
+        "answer_conflict_resolved",
+        "caption_support",
+    }
+)
+
 
 @dataclass(frozen=True)
 class WorkspaceRunResult:
@@ -698,10 +708,10 @@ class WorkspaceVisualAgent:
         ]
         if len(pending) < min_pending:
             return ()
-        support_kinds = {"visual_support", "answer_support", "synthesized_support"}
-        if any(entry.kind in support_kinds for entry in self.workspace.memory_entries()):
+        if any(entry.kind in POSITIVE_SUPPORT_KINDS for entry in self.workspace.memory_entries()):
             return ()
-        candidate_key = str(pending[0].get("candidate_key") or pending[0].get("event_id") or "").strip()
+        selected = _highest_score_pending_candidate(pending)
+        candidate_key = str(selected.get("candidate_key") or selected.get("event_id") or "").strip()
         if not candidate_key:
             return ()
         return self._auto_verify_candidate_key(
@@ -710,7 +720,7 @@ class WorkspaceVisualAgent:
             round_number=round_number,
             seen_tool_semantic_keys=seen_tool_semantic_keys,
             reason="pending_candidate_saturation",
-            trace_payload={"pending_count": len(pending)},
+            trace_payload={"pending_count": len(pending), "selected_score": selected.get("score")},
         )
 
     def _auto_verify_candidate_key(
@@ -1063,7 +1073,7 @@ def compose_plan_prompt(
             "Return exactly one JSON object. Do not explain.",
             "Use Segment Cards as the starting navigation state. They are summaries only, not answer evidence.",
             "Query Framing Policy: for the first explore call, ask the question the user asked; do not merge in a candidate answer unless explicitly checking that option.",
-            "HARD RULE: If Pending Candidate Windows count >= 3 and Committed Memory contains zero visual_support / answer_support / synthesized_support entries, your next tool MUST be verify_window using either candidate_key or segment_id + time_range. Do not call explore.",
+            "HARD RULE: If Pending Candidate Windows count >= 3 and Committed Memory contains zero positive support entries (visual_support / answer_support / synthesized_support / answer_conflict_resolved / caption_support), your next tool MUST be verify_window using the highest-score candidate_key or segment_id + time_range. local_negative / answer_conflict / verification_uncertain do not disarm this rule. Do not call explore.",
             'To inspect dense captions/indexes or find candidate windows, call {"tool":"explore","args":{"query":"question-centered condition to resolve","targets":[{"target_id":"target_1","question":"question condition to verify","verification_goal":"identify the fact that directly answers the original question condition"}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
             'When testing an option, use a target like {"target_id":"option_B_check","claim":"option B claim","verification_goal":"Check whether option B answers the original question condition.","option_id":"B"}.',
             'For answer-grade local evidence, call {"tool":"verify_window","args":{"candidate_key":"obs_0001:cand_0001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
@@ -1182,12 +1192,12 @@ def compose_commit_prompt(
         f"# Commit Phase (attempt {attempt})",
         "# Commit Guidance",
         "Commit local factual evidence with its valid scope; do not convert local absence into full-video absence.",
+        "Use memory kind visual_support ONLY for verify_window facts whose verdict is 'supported'. The framework auto-assigns this kind; do not override.",
+        "Use memory kind local_negative ONLY for verify_window facts whose verdict is 'not_found_in_window'. The framework auto-assigns this kind; do not override. It must carry metadata.scope and metadata.global_negation_allowed=false. A local_negative cannot support a final answer or global negation by itself; it only tells the planner where to search next or what a checked local window did not contain.",
+        "Use memory kind answer_conflict ONLY for verify_window facts whose verdict is 'contradicted'.",
+        "Use memory kind answer_support when verified or caption-supported facts directly support an answer option or subclaim needed for that option; include supports_option when clear.",
         "Use memory kind caption_support for caption/asr/ocr facts returned by explore caption_fact or mixed observations.",
         'Caption/index facts may be committed as caption_support only when the explore payload mode is "caption_fact" or "mixed" and condition_match.matches_original_question is true.',
-        "Use memory kind visual_support for structured verify_window facts, including local supported or local not-found findings.",
-        "Use memory kind answer_support when verified or caption-supported facts directly support an answer option or subclaim needed for that option; include supports_option when clear.",
-        "Use memory kind local_negative when a fact only says something was not found, not mentioned, or not visible inside one local window; include metadata.scope and metadata.global_negation_allowed=false.",
-        "A local_negative cannot support a final answer or global negation by itself; it only tells the planner where to search next or what a checked local window did not contain.",
         "Reject only when the observation is corrupt, off-topic, duplicate, or has no usable factual anchor.",
         "",
         workspace.render_commit_view(question=question, observation_id=observation_id),
@@ -1929,7 +1939,7 @@ def _structured_verify_writes(
                 "option_truth_status": option_truth_status,
             },
         }
-        if supports_option:
+        if supports_option and kind != "local_negative":
             item["supports_option"] = supports_option
         memory.append(item)
     if not memory:
@@ -1938,11 +1948,26 @@ def _structured_verify_writes(
 
 
 def _memory_kind_for_verification_verdict(verdict: str) -> str:
-    if verdict in {"supported", "not_found_in_window"}:
+    normalized = str(verdict or "").strip().lower()
+    if normalized == "supported":
         return "visual_support"
-    if verdict == "contradicted":
+    if normalized == "not_found_in_window":
+        return "local_negative"
+    if normalized == "contradicted":
         return "answer_conflict"
     return "verification_uncertain"
+
+
+def _highest_score_pending_candidate(pending: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+    def sort_key(candidate: Mapping[str, Any]) -> tuple[float, str]:
+        try:
+            score = float(candidate.get("score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        candidate_key = str(candidate.get("candidate_key") or candidate.get("event_id") or "")
+        return (-score, candidate_key)
+
+    return sorted(pending, key=sort_key)[0]
 
 
 def _verification_supports_option(result: Mapping[str, Any], *, verdict: str) -> str:

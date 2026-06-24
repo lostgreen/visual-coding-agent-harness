@@ -553,6 +553,8 @@ class SegmentReadService:
                     "source_modalities": source_modalities,
                     "source_beat_ids": _unique_nonempty(source_beat_ids),
                     "entities": list(segment.entities),
+                    "score": float(score),
+                    "source_kind": "retrieval_hit" if beat is not None else "time_sweep",
                     "verification_goal": search_query or "Verify local facts in this window.",
                     "recommended_evidence_mode": "multimodal",
                     "rationale": rationale,
@@ -583,9 +585,25 @@ class SegmentReadService:
             original_question=original_question,
             answer_options=normalized_options,
         )
+        caption_fact_structural_rejection: dict[str, object] | None = None
         if reasoning is not None:
             mode = str(reasoning.get("mode") or "").strip()
             facts = _normalize_caption_facts(reasoning.get("facts"))
+            if mode in {"caption_fact", "mixed"}:
+                grounded_facts, ungrounded_facts = _caption_facts_are_verbatim_grounded(facts, caption_hits)
+                if not grounded_facts:
+                    caption_fact_structural_rejection = {
+                        "reason": "no_verbatim_grounding",
+                        "mode": mode,
+                        "fact_count": len(facts),
+                        "ungrounded_fact_count": len(ungrounded_facts),
+                    }
+                    if self.workspace is not None:
+                        self.workspace.write_trace_event("caption_fact_structurally_rejected", caption_fact_structural_rejection)
+                    mode = "candidate_discovery"
+                    facts = []
+                else:
+                    facts = grounded_facts
             answer_mapping = _normalize_answer_mapping(reasoning.get("answer_mapping"))
             query_analysis = _normalize_query_analysis(reasoning.get("query_analysis"), query=search_query, answer_options=normalized_options)
             question_condition = _normalize_question_condition(reasoning.get("question_condition"), original_question=original_question)
@@ -665,6 +683,11 @@ class SegmentReadService:
             "notes": ["Candidate windows are navigation only. Use verify_window before committing answer_support."],
             "limitations": "Explore results are navigation only and candidate_only; they cannot support final answers.",
         }
+        if caption_fact_structural_rejection is not None:
+            payload["caption_fact_structurally_rejected"] = True
+            payload["structural_rejection"] = caption_fact_structural_rejection
+            payload["support_status"] = "uncertain"
+            payload["navigation_windows_restored"] = bool(candidate_windows)
         return _dedupe_candidate_discovery_payload(payload, workspace=self.workspace)
 
     def read_index(self, *, segment_id: str) -> Mapping[str, object]:
@@ -1456,6 +1479,7 @@ def _normalize_caption_facts(value: Any) -> list[dict[str, object]]:
         facts.append(
             {
                 "claim": claim,
+                "evidence_text": str(item.get("evidence_text") or item.get("quote") or item.get("text") or item.get("excerpt") or claim).strip(),
                 "confidence": _bounded_confidence(item.get("confidence"), default=0.7),
                 "source_kind": _caption_source_kind(item.get("source_kind")),
                 "segment_id": str(item.get("segment_id") or "").strip() or None,
@@ -1466,6 +1490,46 @@ def _normalize_caption_facts(value: Any) -> list[dict[str, object]]:
             }
         )
     return facts
+
+
+def _caption_facts_are_verbatim_grounded(
+    facts: Sequence[Mapping[str, Any]],
+    caption_hits: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    corpus_parts: list[str] = []
+    for item in caption_hits:
+        if not isinstance(item, Mapping):
+            continue
+        corpus_parts.append(
+            " ".join(
+                str(item.get(key) or "")
+                for key in ("text", "caption", "summary", "excerpt", "low_fps_caption", "asr_text")
+                if item.get(key)
+            )
+        )
+    corpus = _verbatim_norm(" || ".join(corpus_parts))
+    grounded: list[dict[str, object]] = []
+    ungrounded: list[dict[str, object]] = []
+    for fact in facts:
+        payload = dict(fact)
+        evidence = str(
+            fact.get("evidence_text")
+            or fact.get("quote")
+            or fact.get("text")
+            or fact.get("excerpt")
+            or fact.get("claim")
+            or ""
+        ).strip()
+        needle = _verbatim_norm(evidence)
+        if len(needle) >= 20 and needle in corpus:
+            grounded.append(payload)
+        else:
+            ungrounded.append(payload)
+    return grounded, ungrounded
+
+
+def _verbatim_norm(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
 def _normalize_caption_anchors(

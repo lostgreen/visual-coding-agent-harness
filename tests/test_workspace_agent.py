@@ -9,6 +9,7 @@ from visual_coding_agent_harness.agents.workspace_agent import (
     compose_commit_prompt,
     compose_final_prompt,
     compose_plan_prompt,
+    _memory_kind_for_verification_verdict,
     _structured_verify_writes,
     _parse_action,
 )
@@ -118,11 +119,14 @@ class ExploreCaptionFallbackBackend(VisionLanguageBackend):
             return BackendResponse(
                 text=(
                     '{"mode":"caption_fact","support_status":"caption_supported",'
-                    '"claim":"The narration says Austria-Hungary was a buffer between Russia and Western Europe.",'
+                    '"claim":"Austria-Hungary was seen as a buffer between Russia and Western Europe.",'
                     '"confidence":0.86,'
-                    '"facts":[],'
+                    '"facts":[{"claim":"Austria-Hungary was seen as a buffer between Russia and Western Europe.",'
+                    '"evidence_text":"Austria-Hungary was seen as a buffer between Russia and Western Europe.",'
+                    '"source_kind":"asr","segment_id":"seg_0001","time_range":[0,60],'
+                    '"excerpt":"Austria-Hungary was seen as a buffer between Russia and Western Europe.","supports_option":"C"}],'
                     '"anchors":[{"source_kind":"asr","segment_id":"seg_0001","time_range":[0,60],'
-                    '"excerpt":"Austria-Hungary was therefore seen as a good buffer between Russia and Western Europe."}],'
+                    '"excerpt":"Austria-Hungary was seen as a buffer between Russia and Western Europe."}],'
                     '"condition_match":{"matches_original_question":true,"match_level":"direct",'
                     '"reason":"The ASR directly answers why Austria-Hungary is between Russia and Western Europe."},'
                     '"answer_mapping":{"supports_option":"C"},"needs_visual_verify":false}'
@@ -485,6 +489,147 @@ def test_workspace_agent_auto_verifies_when_pending_candidates_saturate(tmp_path
         for event in events
     )
     assert any(event["type"] == "explore_replaced_by_auto_verify" for event in events)
+
+
+def test_memory_kind_for_verdict_splits_supported_and_not_found() -> None:
+    assert _memory_kind_for_verification_verdict("supported") == "visual_support"
+    assert _memory_kind_for_verification_verdict("not_found_in_window") == "local_negative"
+    assert _memory_kind_for_verification_verdict("contradicted") == "answer_conflict"
+    assert _memory_kind_for_verification_verdict("uncertain") == "verification_uncertain"
+    assert _memory_kind_for_verification_verdict("") == "verification_uncertain"
+
+
+def test_saturation_gate_treats_local_negative_as_no_grounding(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_saturation_local_negative")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found several pending windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "candidate_windows": [
+                {"candidate_key": "obs_0001:cand_0001", "segment_id": "seg_0001", "time_range": [0.0, 10.0]},
+                {"candidate_key": "obs_0001:cand_0002", "segment_id": "seg_0001", "time_range": [10.0, 20.0]},
+                {"candidate_key": "obs_0001:cand_0003", "segment_id": "seg_0001", "time_range": [20.0, 30.0]},
+            ],
+        },
+    )
+    observation = workspace.write_observation(tool_name="verify_window", claim="Not found locally.", confidence=0.8)
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [{"anchor_id": "anch_neg", "kind": "visual_fact", "source_kind": "visual_fact", "excerpt": "Not found locally."}],
+            "memory": [
+                {
+                    "kind": "local_negative",
+                    "claim": "The object was not found in the inspected window.",
+                    "anchor_ids": ["anch_neg"],
+                    "metadata": {"scope": {"segment_id": "seg_0001", "time_range": [0.0, 10.0]}},
+                }
+            ],
+        },
+    )
+
+    assert workspace._pending_saturation_candidate_key() == "obs_0001:cand_0001"
+
+
+def test_saturation_gate_disarmed_by_positive_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_saturation_positive_support")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found several pending windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "candidate_windows": [
+                {"candidate_key": "obs_0001:cand_0001", "segment_id": "seg_0001", "time_range": [0.0, 10.0]},
+                {"candidate_key": "obs_0001:cand_0002", "segment_id": "seg_0001", "time_range": [10.0, 20.0]},
+                {"candidate_key": "obs_0001:cand_0003", "segment_id": "seg_0001", "time_range": [20.0, 30.0]},
+            ],
+        },
+    )
+    observation = workspace.write_observation(tool_name="verify_window", claim="The object is visible in the inspected window.", confidence=0.8)
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [{"anchor_id": "anch_pos", "kind": "visual_fact", "source_kind": "visual_fact", "excerpt": "visible"}],
+            "memory": [{"kind": "visual_support", "claim": "The object is visible in the inspected window.", "anchor_ids": ["anch_pos"]}],
+        },
+    )
+
+    assert workspace._pending_saturation_candidate_key() is None
+
+
+def test_saturation_picks_highest_score_pending(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_saturation_score")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found scored windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "candidate_windows": [
+                {"candidate_key": "obs_0001:cand_low", "segment_id": "seg_0001", "time_range": [0.0, 10.0], "score": 0.1},
+                {"candidate_key": "obs_0001:cand_high", "segment_id": "seg_0001", "time_range": [10.0, 20.0], "score": 0.8},
+                {"candidate_key": "obs_0001:cand_mid", "segment_id": "seg_0001", "time_range": [20.0, 30.0], "score": 0.4},
+            ],
+        },
+    )
+
+    assert workspace._pending_saturation_candidate_key() == "obs_0001:cand_high"
+
+
+def test_final_prompt_groups_positive_memory_by_option(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_final_option_evidence_map")
+    obs = workspace.write_observation(
+        tool_name="verify_window",
+        claim="steak burgers spread throughout the United States; target_2 was not found in the inspected window.",
+        confidence=0.9,
+    )
+    workspace.commit_observation(
+        obs.observation_id,
+        writes={
+            "pinned_anchors": [
+                {"anchor_id": "anch_c", "kind": "visual_fact", "source_kind": "visual_fact", "excerpt": "steak burgers spread"},
+                {"anchor_id": "anch_d_neg", "kind": "visual_fact", "source_kind": "visual_fact", "excerpt": "not found"},
+            ],
+            "memory": [
+                {
+                    "kind": "visual_support",
+                    "claim": "target_4 supported: narration says steak burgers spread throughout the United States.",
+                    "supports_option": "C",
+                    "anchor_ids": ["anch_c"],
+                },
+                {
+                    "kind": "local_negative",
+                    "claim": "target_2 was not found in the inspected window.",
+                    "anchor_ids": ["anch_d_neg"],
+                    "metadata": {"scope": {"segment_id": "seg_0001", "time_range": [0.0, 10.0]}},
+                },
+            ]
+        },
+    )
+
+    prompt = compose_final_prompt(
+        question=(
+            "Which happened next?\n"
+            "A. Beef with spices came from Russia to Germany.\n"
+            "B. The steak began to be sandwiched between bread.\n"
+            "C. Steak burgers spread throughout the United States.\n"
+            "D. The standardization of hamburgers."
+        ),
+        workspace=workspace,
+    )
+
+    assert "# Option Evidence Map" in prompt
+    assert "C. Steak burgers spread throughout the United States." in prompt
+    assert "mem_0001 [visual_support]" in prompt
+    assert "D. The standardization of hamburgers." in prompt
+    assert "mem_0002" not in prompt.split("D. The standardization of hamburgers.", 1)[1].split("\n\n", 1)[0]
+    assert "local_negative does NOT support absence at global scope" in prompt
 
 
 def test_workspace_agent_forces_answer_at_max_rounds(tmp_path: Path) -> None:
@@ -1440,7 +1585,7 @@ def test_workspace_agent_auto_pins_structured_verify_results_after_commit_parse_
     assert result.answer == "B"
     assert workspace.observation_status("obs_0001") == "committed"
     memories = workspace.memory_entries()
-    assert [memory.kind for memory in memories] == ["visual_support", "visual_support"]
+    assert [memory.kind for memory in memories] == ["visual_support", "local_negative"]
     assert {memory.metadata["target_id"] for memory in memories} == {"shoebox", "ruler"}
     assert {memory.metadata["verdict"] for memory in memories} == {"supported", "not_found_in_window"}
     assert all(memory.metadata["source_tool"] == "verify_window" for memory in memories)
