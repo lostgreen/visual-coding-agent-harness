@@ -9,6 +9,7 @@ from visual_coding_agent_harness.core.protocol import ToolRequest
 from visual_coding_agent_harness.core.registry import ToolError, ToolRegistry
 from visual_coding_agent_harness.tools.workspace_v2 import (
     _explore_candidate_beats,
+    _read_clip_prompt,
     _verification_results_from_backend,
     build_workspace_v2_registry,
     candidate_anchors_for_windows,
@@ -1207,6 +1208,46 @@ def test_workspace_v2_verify_window_normalizes_facts_only(tmp_path: Path) -> Non
     assert result["facts"][0]["text"] == "The shield icon remains over Central Europe."
     assert "supported_option" not in result
     assert backend.requests[0].task == "vision_read"
+
+
+def test_read_clip_prompt_always_requires_structured_json() -> None:
+    prompt = _read_clip_prompt(
+        segment_id="seg_0001",
+        start_sec=0.0,
+        end_sec=10.0,
+        focus="What is visible?",
+        verification_targets=(),
+    )
+
+    assert "Return exactly one JSON object" in prompt
+    assert "verification_results" in prompt
+    assert "Do not output detection boxes" in prompt
+
+
+def test_verify_window_synthesizes_default_check_from_focus(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_verify_default_check")
+    backend = RecordingBackend("The shield icon remains over Central Europe.")
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "verify_window",
+        {
+            "segment_id": "seg_0001",
+            "time_range": [0.0, 60.0],
+            "focus": ["Which symbol appears on the map?"],
+        },
+    )
+
+    assert result["verification_targets"] == [
+        {
+            "target_id": "focus_check",
+            "claim": "Which symbol appears on the map?",
+            "polarity": "presence",
+            "expected_evidence": [],
+        }
+    ]
+    assert "focus_check" in backend.requests[0].prompt
+    assert "verification_results" in backend.requests[0].prompt
 
 
 def test_workspace_v2_verify_window_uses_sampled_frames_when_available(tmp_path: Path) -> None:

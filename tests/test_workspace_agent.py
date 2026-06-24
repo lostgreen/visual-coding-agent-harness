@@ -434,7 +434,11 @@ def test_workspace_agent_auto_verifies_when_pending_candidates_saturate(tmp_path
         }
 
     @tool(name="verify_window", description="Verify a pending candidate.")
-    def verify_window(candidate_key: str, focus: list[str] | None = None) -> dict[str, object]:
+    def verify_window(
+        candidate_key: str,
+        focus: list[str] | None = None,
+        checks: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
         return {
             "claim": f"Auto-verified {candidate_key}.",
             "confidence": 0.8,
@@ -442,6 +446,7 @@ def test_workspace_agent_auto_verifies_when_pending_candidates_saturate(tmp_path
             "worker": "EvidenceVerifier",
             "candidate_key": candidate_key,
             "focus": focus or [],
+            "checks": checks or [],
         }
 
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_pending_saturation_auto_verify")
@@ -453,6 +458,14 @@ def test_workspace_agent_auto_verifies_when_pending_candidates_saturate(tmp_path
             "mode": "candidate_discovery",
             "support_status": "candidate_only",
             "query": "decorations in the scene",
+            "targets": [
+                {
+                    "target_id": "option_A_check",
+                    "claim": "Option A directly answers the decoration question.",
+                    "polarity": "presence",
+                    "option_id": "A",
+                }
+            ],
             "candidate_windows": [
                 {"candidate_key": "obs_0001:cand_0001", "segment_id": "seg_0001", "time_range": [0.0, 10.0]},
                 {"candidate_key": "obs_0001:cand_0002", "segment_id": "seg_0001", "time_range": [10.0, 20.0]},
@@ -482,6 +495,14 @@ def test_workspace_agent_auto_verifies_when_pending_candidates_saturate(tmp_path
     assert observations[-1].tool == "verify_window"
     assert observations[-1].raw_output["candidate_key"] == "obs_0001:cand_0001"
     assert observations[-1].raw_output["focus"] == ["How many decorations are in the scene?"]
+    assert observations[-1].raw_output["checks"] == [
+        {
+            "target_id": "option_A_check",
+            "claim": "Option A directly answers the decoration question.",
+            "polarity": "presence",
+            "option_id": "A",
+        }
+    ]
     events = workspace._read_jsonl_dicts("trace.jsonl")
     assert any(
         event["type"] == "candidate_auto_verify_triggered"
@@ -489,6 +510,70 @@ def test_workspace_agent_auto_verifies_when_pending_candidates_saturate(tmp_path
         for event in events
     )
     assert any(event["type"] == "explore_replaced_by_auto_verify" for event in events)
+
+
+def test_saturation_auto_verify_drains_multiple_pending_candidates(tmp_path: Path) -> None:
+    verified_keys: list[str] = []
+
+    @tool(name="verify_window", description="Verify a pending candidate.")
+    def verify_window(
+        candidate_key: str,
+        focus: list[str] | None = None,
+        checks: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        del focus
+        verified_keys.append(candidate_key)
+        return {
+            "claim": f"Did not find the target in {candidate_key}.",
+            "confidence": 0.8,
+            "mode": "verify_window",
+            "worker": "EvidenceVerifier",
+            "candidate_key": candidate_key,
+            "verification_results": [
+                {
+                    "target_id": (checks or [{"target_id": "target_1"}])[0]["target_id"],
+                    "claim": "The requested evidence is present.",
+                    "verdict": "not_found_in_window",
+                    "confidence": 0.8,
+                    "scope": {"segment_id": "seg_0001", "time_range": [0.0, 10.0]},
+                }
+            ],
+        }
+
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_pending_saturation_drain")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found five pending windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "targets": [{"target_id": "target_1", "claim": "The requested evidence is present."}],
+            "candidate_windows": [
+                {"candidate_key": f"obs_0001:cand_{index:04d}", "segment_id": "seg_0001", "time_range": [index, index + 1]}
+                for index in range(1, 6)
+            ],
+        },
+    )
+    registry = ToolRegistry()
+    registry.register(ToolRuntimeSpec(tool_spec=verify_window, commit_required=True))
+    registry.extend(build_workspace_primitives_registry())
+    agent = WorkspaceVisualAgent(
+        backend=ScriptedWorkspaceBackend([]),
+        registry=registry,
+        workspace=workspace,
+        max_rounds=1,
+    )
+
+    observation_ids = agent._maybe_auto_verify_on_saturation(
+        question="What evidence is present?",
+        round_number=2,
+        seen_tool_semantic_keys=set(),
+    )
+
+    assert len(observation_ids) == 3
+    assert verified_keys == ["obs_0001:cand_0001", "obs_0001:cand_0002", "obs_0001:cand_0003"]
+    assert all(obs.tool == "verify_window" for obs in workspace.read_observations()[-3:])
 
 
 def test_memory_kind_for_verdict_splits_supported_and_not_found() -> None:
@@ -1238,6 +1323,8 @@ def test_prompts_keep_generic_planning_and_scope_local_negatives(tmp_path: Path)
     assert "scope" in commit_prompt
     assert "cannot support a final answer" in commit_prompt
     assert "answer_support" in commit_prompt
+    assert "Preserve option_id" in commit_prompt
+    assert "supports_option" in commit_prompt
     assert 'mode is "caption_fact" or "mixed"' in commit_prompt
     assert "condition_match.matches_original_question is true" in commit_prompt
     assert "Reject only when" in commit_prompt
@@ -1266,6 +1353,8 @@ def test_compose_plan_prompt_includes_pending_saturation_hard_rule(tmp_path: Pat
     assert "HARD RULE" in prompt
     assert "Pending Candidate Windows count >= 3" in prompt
     assert "MUST be verify_window" in prompt
+    assert "option_<letter>_check" in prompt
+    assert "option_id" in prompt
 
 
 def test_render_plan_view_marks_pending_saturation_recommendation_as_must(tmp_path: Path) -> None:

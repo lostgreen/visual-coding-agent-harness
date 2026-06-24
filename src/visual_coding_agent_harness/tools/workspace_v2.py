@@ -907,6 +907,11 @@ class SegmentReadService:
             raise ValueError("verify_window_failed: candidate time_range must be non-empty and within its root segment")
         sampling_payload = _verification_sampling_payload(sampling, start_sec=start_sec, end_sec=end_sec)
         targets = _normalize_verification_targets((*_sequence_items(checks), *_sequence_items(verification_targets)))
+        if not targets:
+            targets = _default_verification_targets(
+                focus=focus,
+                verification_goal=str(candidate.get("verification_goal") or ""),
+            )
         if self.workspace is not None:
             self.workspace.write_trace_event(
                 "evidence_verifier_dispatched",
@@ -2371,19 +2376,20 @@ def _read_clip_prompt(
     focus: str,
     verification_targets: Sequence[Mapping[str, Any]] = (),
 ) -> str:
-    prompt = (
+    base = (
         "Read only factual visual/audio/OCR evidence from this clip. "
         "Do not choose an answer option. "
         f"Segment {segment_id} [{start_sec:.1f}, {end_sec:.1f}], focus: {focus}"
     )
-    if not verification_targets:
-        return prompt
-    return (
-        prompt
-        + "\nReturn exactly one JSON object. Do not wrap it in markdown fences or add prose."
+    schema_instruction = (
+        "\nReturn exactly one JSON object. Do not wrap it in markdown fences or add prose."
         + "\nSchema: {\"verification_results\":[{\"target_id\":\"...\",\"verdict\":\"supported|not_found_in_window|contradicted|uncertain\",\"evidence\":\"short local evidence\",\"confidence\":0.0,\"local_only\":true}],\"facts\":[{\"text\":\"short local fact\",\"source_kind\":\"visual_fact|audio_fact|ocr_fact\",\"target_ids\":[\"target_1\"]}]}"
+        + "\nDo not output detection boxes, MCQ letters, or freeform descriptions outside this schema."
         + "\nFor every target_id, output exactly one verification_results item. Do not use custom fields like target_1, label, tag, polarity, or presence unless verdict is also filled."
     )
+    if not verification_targets:
+        return base + schema_instruction
+    return base + "\nVerification targets:" + "\n" + "\n".join(_format_verification_target_lines(verification_targets)) + schema_instruction
 
 
 def _normalize_verification_targets(targets: Sequence[Mapping[str, Any] | str] | None) -> list[dict[str, object]]:
@@ -2411,15 +2417,27 @@ def _normalize_verification_targets(targets: Sequence[Mapping[str, Any] | str] |
             expected_evidence = []
         if not target_id:
             target_id = f"target_{len(normalized) + 1}"
-        normalized.append(
-            {
-                "target_id": target_id,
-                "claim": claim,
-                "polarity": polarity or "presence",
-                "expected_evidence": expected_evidence,
-            }
-        )
+        target = {
+            "target_id": target_id,
+            "claim": claim,
+            "polarity": polarity or "presence",
+            "expected_evidence": expected_evidence,
+        }
+        if isinstance(item, Mapping):
+            option_id = str(item.get("option_id") or item.get("option") or "").strip().upper()[:1]
+            if option_id:
+                target["option_id"] = option_id
+        normalized.append(target)
     return normalized
+
+
+def _default_verification_targets(*, focus: Sequence[str], verification_goal: str = "") -> list[dict[str, object]]:
+    claim = " ".join(str(item).strip() for item in focus if str(item).strip()).strip()
+    if not claim:
+        claim = str(verification_goal or "").strip()
+    if not claim:
+        claim = "Verify the requested local evidence in this window."
+    return [{"target_id": "focus_check", "claim": claim, "polarity": "presence", "expected_evidence": []}]
 
 
 def _format_verification_target_lines(targets: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -2428,8 +2446,10 @@ def _format_verification_target_lines(targets: Sequence[Mapping[str, Any]]) -> l
         target_id = str(target.get("target_id") or target.get("id") or "").strip()
         claim = str(target.get("claim") or "").strip()
         polarity = str(target.get("polarity") or "presence").strip()
+        option_id = str(target.get("option_id") or target.get("option") or "").strip().upper()[:1]
         if claim:
-            lines.append(f"- {target_id}: {claim} (polarity={polarity})")
+            suffix = f", option_id={option_id}" if option_id else ""
+            lines.append(f"- {target_id}: {claim} (polarity={polarity}{suffix})")
     return lines
 
 
@@ -2528,6 +2548,7 @@ def _verification_results_from_backend(
                     confidence=float(item.get("confidence", 0.5) or 0.5),
                     rationale=str(item.get("rationale") or ""),
                     raw_signal=raw_signal,
+                    option_id=str(item.get("option_id") or item.get("option") or target.get("option_id") or ""),
                 )
             )
         if normalized:
@@ -2558,6 +2579,7 @@ def _verification_results_from_backend(
                     confidence=float(item.get("confidence", 0.5) or 0.5),
                     rationale=str(item.get("rationale") or item.get("evidence") or item.get("text") or ""),
                     raw_signal=raw_signal,
+                    option_id=str(item.get("option_id") or item.get("option") or target.get("option_id") or ""),
                 )
             )
         if normalized:
@@ -2584,10 +2606,13 @@ def _verification_results_from_backend(
                     confidence=float(fact.get("confidence", 0.74) or 0.74),
                     rationale=str(fact.get("text") or ""),
                     raw_signal={},
+                    option_id=str(target.get("option_id") or target.get("option") or ""),
                 )
             )
         return aligned
 
+    if _targets_are_default_focus_check(targets):
+        return []
     return [
         _verification_result(
             target_id=str(target.get("target_id") or f"target_{index + 1}"),
@@ -2599,9 +2624,17 @@ def _verification_results_from_backend(
             confidence=0.5,
             rationale="Backend output was not structured enough to assign this check a supported verdict.",
             raw_signal={},
+            option_id=str(target.get("option_id") or target.get("option") or ""),
         )
         for index, target in enumerate(targets)
     ]
+
+
+def _targets_are_default_focus_check(targets: Sequence[Mapping[str, Any]]) -> bool:
+    if len(targets) != 1:
+        return False
+    target = targets[0]
+    return str(target.get("target_id") or "") == "focus_check"
 
 
 def _coerce_verdict(item: Mapping[str, Any], *, target: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -2763,6 +2796,7 @@ def _verification_result(
     confidence: float,
     rationale: str,
     raw_signal: Mapping[str, Any] | None = None,
+    option_id: str = "",
 ) -> dict[str, Any]:
     normalized_verdict = str(verdict or "uncertain").strip()
     if normalized_verdict not in {"supported", "contradicted", "not_found_in_window", "uncertain"}:
@@ -2779,6 +2813,9 @@ def _verification_result(
     }
     if raw_signal:
         result["raw_signal"] = dict(raw_signal)
+    option = str(option_id or "").strip().upper()[:1]
+    if option:
+        result["option_id"] = option
     return result
 
 

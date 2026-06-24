@@ -696,32 +696,48 @@ class WorkspaceVisualAgent:
         round_number: int,
         seen_tool_semantic_keys: set[str],
         min_pending: int = 3,
+        max_drain: int = 3,
     ) -> tuple[str, ...]:
-        snapshot = self.workspace.search_ledger_snapshot()
-        raw_candidates = snapshot.get("candidates", [])
-        if not isinstance(raw_candidates, Sequence) or isinstance(raw_candidates, (str, bytes)):
-            return ()
-        pending = [
-            candidate
-            for candidate in raw_candidates
-            if isinstance(candidate, Mapping) and str(candidate.get("status") or "") == "pending"
-        ]
-        if len(pending) < min_pending:
-            return ()
-        if any(entry.kind in POSITIVE_SUPPORT_KINDS for entry in self.workspace.memory_entries()):
-            return ()
-        selected = _highest_score_pending_candidate(pending)
-        candidate_key = str(selected.get("candidate_key") or selected.get("event_id") or "").strip()
-        if not candidate_key:
-            return ()
-        return self._auto_verify_candidate_key(
-            candidate_key=candidate_key,
-            question=question,
-            round_number=round_number,
-            seen_tool_semantic_keys=seen_tool_semantic_keys,
-            reason="pending_candidate_saturation",
-            trace_payload={"pending_count": len(pending), "selected_score": selected.get("score")},
-        )
+        drained: list[str] = []
+        attempted: set[str] = set()
+        for _ in range(max(1, int(max_drain))):
+            snapshot = self.workspace.search_ledger_snapshot()
+            raw_candidates = snapshot.get("candidates", [])
+            if not isinstance(raw_candidates, Sequence) or isinstance(raw_candidates, (str, bytes)):
+                break
+            pending = [
+                candidate
+                for candidate in raw_candidates
+                if isinstance(candidate, Mapping) and str(candidate.get("status") or "") == "pending"
+            ]
+            if len(pending) < min_pending:
+                break
+            if any(entry.kind in POSITIVE_SUPPORT_KINDS for entry in self.workspace.memory_entries()):
+                break
+            available = [
+                candidate
+                for candidate in pending
+                if str(candidate.get("candidate_key") or candidate.get("event_id") or "").strip() not in attempted
+            ]
+            if not available:
+                break
+            selected = _highest_score_pending_candidate(available)
+            candidate_key = str(selected.get("candidate_key") or selected.get("event_id") or "").strip()
+            if not candidate_key:
+                break
+            attempted.add(candidate_key)
+            observation_ids = self._auto_verify_candidate_key(
+                candidate_key=candidate_key,
+                question=question,
+                round_number=round_number,
+                seen_tool_semantic_keys=seen_tool_semantic_keys,
+                reason="pending_candidate_saturation",
+                trace_payload={"pending_count": len(pending), "selected_score": selected.get("score")},
+            )
+            if not observation_ids:
+                break
+            drained.extend(observation_ids)
+        return tuple(drained)
 
     def _auto_verify_candidate_key(
         self,
@@ -734,16 +750,20 @@ class WorkspaceVisualAgent:
         trace_payload: Mapping[str, Any] | None = None,
     ) -> tuple[str, ...]:
         try:
-            self.registry.get_runtime_spec("verify_window")
+            runtime_spec = self.registry.get_runtime_spec("verify_window")
         except ToolError:
             return ()
         ctx = self._execution_context(
             round_number=round_number,
             seen_tool_semantic_keys=seen_tool_semantic_keys,
         )
+        checks = self._derive_checks_for_auto_verify(candidate_key=candidate_key, question=question)
+        verify_args: dict[str, Any] = {"candidate_key": candidate_key, "focus": [question]}
+        if "checks" in runtime_spec.tool_spec.parameters:
+            verify_args["checks"] = checks
         request = self._normalize_tool_action(
             "verify_window",
-            {"candidate_key": candidate_key, "focus": [question]},
+            verify_args,
             ctx=ctx,
             request_id="auto_verify",
         )
@@ -785,6 +805,43 @@ class WorkspaceVisualAgent:
             if observation_id not in observation_ids:
                 observation_ids.append(observation_id)
         return tuple(observation_ids)
+
+    def _derive_checks_for_auto_verify(self, *, candidate_key: str, question: str) -> list[dict[str, Any]]:
+        source_observation_id = str(candidate_key or "").split(":", 1)[0] if ":" in str(candidate_key or "") else ""
+        if source_observation_id:
+            for observation in self.workspace.read_observations():
+                if observation.observation_id != source_observation_id:
+                    continue
+                raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+                checks: list[dict[str, Any]] = []
+                for target in _mapping_items(raw_output.get("targets")):
+                    claim = str(target.get("claim") or target.get("question") or target.get("text") or "").strip()
+                    if not claim:
+                        continue
+                    check: dict[str, Any] = {
+                        "target_id": str(
+                            target.get("target_id")
+                            or target.get("id")
+                            or target.get("target_ref")
+                            or f"target_{len(checks) + 1}"
+                        ),
+                        "claim": claim,
+                        "polarity": str(target.get("polarity") or target.get("kind") or "presence"),
+                    }
+                    option_id = str(target.get("option_id") or target.get("option") or "").strip().upper()[:1]
+                    if option_id:
+                        check["option_id"] = option_id
+                    checks.append(check)
+                if checks:
+                    return checks
+                break
+        return [
+            {
+                "target_id": "auto_question_check",
+                "claim": str(question or "").strip(),
+                "polarity": "presence",
+            }
+        ]
 
     def _normalize_tool_action(
         self,
@@ -1074,6 +1131,7 @@ def compose_plan_prompt(
             "Use Segment Cards as the starting navigation state. They are summaries only, not answer evidence.",
             "Query Framing Policy: for the first explore call, ask the question the user asked; do not merge in a candidate answer unless explicitly checking that option.",
             "HARD RULE: If Pending Candidate Windows count >= 3 and Committed Memory contains zero positive support entries (visual_support / answer_support / synthesized_support / answer_conflict_resolved / caption_support), your next tool MUST be verify_window using the highest-score candidate_key or segment_id + time_range. local_negative / answer_conflict / verification_uncertain do not disarm this rule. Do not call explore.",
+            'HARD RULE: When testing an answer option, every check target_id must follow option_<letter>_check and carry option_id="<letter>"; generic target_1/target_2 names are only allowed for question-centered checks that are not testing a specific option.',
             'To inspect dense captions/indexes or find candidate windows, call {"tool":"explore","args":{"query":"question-centered condition to resolve","targets":[{"target_id":"target_1","question":"question condition to verify","verification_goal":"identify the fact that directly answers the original question condition"}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
             'When testing an option, use a target like {"target_id":"option_B_check","claim":"option B claim","verification_goal":"Check whether option B answers the original question condition.","option_id":"B"}.',
             'For answer-grade local evidence, call {"tool":"verify_window","args":{"candidate_key":"obs_0001:cand_0001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
@@ -1196,6 +1254,7 @@ def compose_commit_prompt(
         "Use memory kind local_negative ONLY for verify_window facts whose verdict is 'not_found_in_window'. The framework auto-assigns this kind; do not override. It must carry metadata.scope and metadata.global_negation_allowed=false. A local_negative cannot support a final answer or global negation by itself; it only tells the planner where to search next or what a checked local window did not contain.",
         "Use memory kind answer_conflict ONLY for verify_window facts whose verdict is 'contradicted'.",
         "Use memory kind answer_support when verified or caption-supported facts directly support an answer option or subclaim needed for that option; include supports_option when clear.",
+        "Preserve option_id from verification targets/results; if a supported target follows option_<letter>_check, write supports_option=<letter> for answer-grade memory.",
         "Use memory kind caption_support for caption/asr/ocr facts returned by explore caption_fact or mixed observations.",
         'Caption/index facts may be committed as caption_support only when the explore payload mode is "caption_fact" or "mixed" and condition_match.matches_original_question is true.',
         "Reject only when the observation is corrupt, off-topic, duplicate, or has no usable factual anchor.",
@@ -1884,6 +1943,8 @@ def _structured_verify_writes(
     for index, result in enumerate(results):
         verdict = str(result.get("verdict") or "uncertain").strip()
         kind = _memory_kind_for_verification_verdict(verdict)
+        if kind == "verification_uncertain":
+            continue
         supports_option = _verification_supports_option(result, verdict=verdict)
         option_truth_status = _option_truth_status(verdict)
         if supports_option and _verification_selects_false_option(result) and verdict in {
@@ -1981,11 +2042,25 @@ def _verification_supports_option(result: Mapping[str, Any], *, verdict: str) ->
     if explicit:
         return explicit
     target_id = str(result.get("target_id") or "").strip()
-    match = re.search(r"(?:^|[^A-Za-z])option[_\-\s]*([A-D])(?:[^A-Za-z]|$)", target_id, flags=re.IGNORECASE)
+    option = _option_letter_from_target(target_id)
+    if option:
+        return option
+    if str(verdict or "") == "supported":
+        return _option_letter_from_target(target_id, allow_short_form=True)
+    return ""
+
+
+def _option_letter_from_target(target_id: str, *, allow_short_form: bool = False) -> str:
+    target_text = str(target_id or "").strip()
+    match = re.search(r"(?:^|[^A-Za-z])option[_\-\s]*([A-D])(?:[^A-Za-z]|$)", target_text, flags=re.IGNORECASE)
     if match:
         return match.group(1).upper()
-    if str(verdict or "") == "supported":
-        match = re.search(r"(?:^|[^A-Za-z])([A-D])(?:[_\-\s]*check|[_\-\s]*option)(?:[^A-Za-z]|$)", target_id, flags=re.IGNORECASE)
+    if allow_short_form:
+        match = re.search(
+            r"(?:^|[^A-Za-z])([A-D])(?:[_\-\s]*check|[_\-\s]*option)(?:[^A-Za-z]|$)",
+            target_text,
+            flags=re.IGNORECASE,
+        )
         if match:
             return match.group(1).upper()
     return ""
