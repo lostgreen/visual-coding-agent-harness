@@ -942,6 +942,14 @@ class EvidenceWorkspace:
 
             lines.extend(["", "## Evidence Coverage"])
             lines.extend(_evidence_coverage_lines(self))
+            segment_time_coverage = _segment_time_coverage_lines(self, root_segments)
+            if segment_time_coverage:
+                lines.extend(["", "## Segment Time Coverage"])
+                lines.extend(segment_time_coverage)
+            sweep_recommendation = _sweep_recommendation_lines(self, root_segments)
+            if sweep_recommendation:
+                lines.extend(["", "## Recommended Next"])
+                lines.extend(sweep_recommendation)
 
         render_section(
             "Pending Candidate Windows",
@@ -3884,6 +3892,124 @@ def _evidence_coverage_lines(workspace: "EvidenceWorkspace") -> list[str]:
     ]
 
 
+def _segment_time_coverage_lines(workspace: "EvidenceWorkspace", root_segments: Sequence[Any]) -> list[str]:
+    lines: list[str] = []
+    for segment in root_segments:
+        segment_id = str(getattr(segment, "segment_id", "") or "").strip()
+        if not segment_id:
+            continue
+        start_sec = float(getattr(segment, "start_sec", 0.0) or 0.0)
+        end_sec = float(getattr(segment, "end_sec", start_sec) or start_sec)
+        verified = _verified_intervals_for_segment(workspace, segment_id=segment_id, start_sec=start_sec, end_sec=end_sec)
+        verified_union = _merge_intervals(verified)
+        total_sec = max(0.001, end_sec - start_sec)
+        covered_sec = sum(max(0.0, b - a) for a, b in verified_union)
+        pct = covered_sec / total_sec * 100.0
+        uncovered = _complement_intervals(verified_union, start_sec=start_sec, end_sec=end_sec)
+        covered_text = ", ".join(f"[{a:.1f}-{b:.1f}]" for a, b in verified_union) or "(none)"
+        uncovered_text = ", ".join(f"[{a:.1f}-{b:.1f}] ({b - a:.1f}s)" for a, b in uncovered) or "(none)"
+        lines.append(f"- {segment_id} [{start_sec:.1f}-{end_sec:.1f}]: verified {pct:.1f}%")
+        lines.append(f"    covered: {covered_text}")
+        lines.append(f"    uncovered: {uncovered_text}")
+    return lines
+
+
+def _sweep_recommendation_lines(workspace: "EvidenceWorkspace", root_segments: Sequence[Any]) -> list[str]:
+    snapshot = workspace.search_ledger_snapshot()
+    raw_candidates = snapshot.get("candidates", [])
+    pending = [
+        candidate
+        for candidate in raw_candidates
+        if isinstance(candidate, Mapping) and str(candidate.get("status") or "") == "pending"
+    ] if isinstance(raw_candidates, Sequence) and not isinstance(raw_candidates, (str, bytes)) else []
+    if pending:
+        return []
+    if any(entry.kind in workspace.POSITIVE_SUPPORT_KINDS for entry in workspace.memory_entries()):
+        return []
+    best: tuple[str, float, float] | None = None
+    for segment in root_segments:
+        segment_id = str(getattr(segment, "segment_id", "") or "").strip()
+        if not segment_id:
+            continue
+        start_sec = float(getattr(segment, "start_sec", 0.0) or 0.0)
+        end_sec = float(getattr(segment, "end_sec", start_sec) or start_sec)
+        verified = _verified_intervals_for_segment(workspace, segment_id=segment_id, start_sec=start_sec, end_sec=end_sec)
+        gaps = _complement_intervals(_merge_intervals(verified), start_sec=start_sec, end_sec=end_sec)
+        for gap_start, gap_end in gaps:
+            if best is None or (gap_end - gap_start) > (best[2] - best[1]):
+                best = (segment_id, gap_start, gap_end)
+    if best is None or best[2] <= best[1]:
+        return []
+    segment_id, start_sec, end_sec = best
+    return [
+        (
+            f"- MUST verify_window(segment_id='{segment_id}', time_range=[{start_sec:.2f},{end_sec:.2f}]) "
+            f"-- sweep largest uncovered region ({end_sec - start_sec:.1f}s) before declaring global negation."
+        )
+    ]
+
+
+def _verified_intervals_for_segment(
+    workspace: "EvidenceWorkspace",
+    *,
+    segment_id: str,
+    start_sec: float,
+    end_sec: float,
+) -> list[tuple[float, float]]:
+    intervals: list[tuple[float, float]] = []
+    for observation in workspace.read_observations():
+        if observation.tool != "verify_window":
+            continue
+        raw_output = observation.raw_output if isinstance(observation.raw_output, Mapping) else {}
+        raw_segment_id = str(raw_output.get("segment_id") or "").strip()
+        raw_time_range = raw_output.get("time_range")
+        if not raw_segment_id:
+            for region in observation.regions:
+                if not isinstance(region, Mapping):
+                    continue
+                if str(region.get("segment_id") or "").strip() == segment_id:
+                    raw_segment_id = segment_id
+                    raw_time_range = region.get("time_range") or [region.get("start_sec"), region.get("end_sec")]
+                    break
+        if raw_segment_id != segment_id:
+            continue
+        time_range = _normalize_optional_time_range(raw_time_range)
+        if time_range is None:
+            continue
+        a = max(start_sec, float(time_range[0]))
+        b = min(end_sec, float(time_range[1]))
+        if b > a:
+            intervals.append((a, b))
+    return intervals
+
+
+def _merge_intervals(intervals: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    merged: list[tuple[float, float]] = []
+    for start_sec, end_sec in sorted((float(a), float(b)) for a, b in intervals if b > a):
+        if merged and start_sec <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end_sec))
+        else:
+            merged.append((start_sec, end_sec))
+    return merged
+
+
+def _complement_intervals(
+    intervals: Sequence[tuple[float, float]],
+    *,
+    start_sec: float,
+    end_sec: float,
+) -> list[tuple[float, float]]:
+    gaps: list[tuple[float, float]] = []
+    cursor = float(start_sec)
+    for gap_start, gap_end in sorted(intervals):
+        if gap_start > cursor:
+            gaps.append((cursor, gap_start))
+        cursor = max(cursor, gap_end)
+    if cursor < end_sec:
+        gaps.append((cursor, float(end_sec)))
+    return gaps
+
+
 def _candidate_window_rows(workspace: "EvidenceWorkspace") -> list[dict[str, Any]]:
     verified_ids: set[str] = set()
     verified_keys: set[str] = set()
@@ -3936,6 +4062,10 @@ def _render_option_evidence_map(*, question: str, memory_entries: Sequence[Memor
         "# Option Evidence Map",
         "Choose the option whose Supporting facts include at least one visual_support, answer_support, caption_support, synthesized_support, or answer_conflict_resolved memory. local_negative does NOT support absence at global scope.",
     ]
+    if _question_is_comparison_type(question):
+        lines.append(
+            "Note: this is a comparison question. Multiple option_<letter>_check memories do not prove equality; prefer synthesized or direct comparison evidence such as greater than, most, earliest, or largest."
+        )
     for option in sorted(options):
         lines.append(f"{option}. {options[option]}")
         entries = by_option[option]
@@ -3947,6 +4077,26 @@ def _render_option_evidence_map(*, question: str, memory_entries: Sequence[Memor
         if len(entries) > 6:
             lines.append(f"   - ... shown 6/{len(entries)}")
     return "\n".join(lines)
+
+
+def _question_is_comparison_type(question: str) -> bool:
+    text = str(question or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "largest",
+            "smallest",
+            "most",
+            "least",
+            "fewest",
+            "earliest",
+            "latest",
+            "greater",
+            "more than",
+            "less than",
+            "same number",
+        )
+    )
 
 
 def _options_from_question(question: str) -> dict[str, str]:

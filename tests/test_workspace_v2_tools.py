@@ -1914,6 +1914,153 @@ def test_workspace_v2_synthesize_memory_derives_from_committed_memory(tmp_path: 
     assert answered["accepted"] is True
 
 
+def _commit_local_negative_memory(
+    workspace: EvidenceWorkspace,
+    *,
+    index: int,
+    target_id: str,
+    segment_id: str,
+    time_range: tuple[float, float],
+) -> None:
+    observation = workspace.write_observation(
+        tool_name="verify_window",
+        claim=f"{target_id} not found in local window {index}.",
+        confidence=0.8,
+        raw_output={
+            "mode": "verify_window",
+            "segment_id": segment_id,
+            "time_range": list(time_range),
+            "verification_results": [
+                {
+                    "target_id": target_id,
+                    "claim": f"{target_id} is mentioned or shown.",
+                    "verdict": "not_found_in_window",
+                    "scope": {"segment_id": segment_id, "time_range": list(time_range)},
+                }
+            ],
+        },
+    )
+    anchor_id = f"anch_neg_{index}"
+    workspace.commit_observation(
+        observation.observation_id,
+        writes={
+            "pinned_anchors": [
+                {
+                    "anchor_id": anchor_id,
+                    "kind": "visual",
+                    "source_kind": "visual_fact",
+                    "excerpt": f"{target_id} not found in local window {index}.",
+                    "segment_id": segment_id,
+                    "start_sec": time_range[0],
+                    "end_sec": time_range[1],
+                }
+            ],
+            "memory": [
+                {
+                    "kind": "local_negative",
+                    "claim": f"{target_id} was not found in this local window.",
+                    "anchor_ids": [anchor_id],
+                    "confidence": "medium",
+                    "metadata": {
+                        "target_id": target_id,
+                        "scope": {"segment_id": segment_id, "time_range": list(time_range)},
+                        "global_negation_allowed": False,
+                    },
+                }
+            ],
+        },
+    )
+
+
+def test_workspace_v2_synthesize_global_negation_accepts_local_negatives(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_global_negation")
+    _commit_local_negative_memory(
+        workspace,
+        index=1,
+        target_id="option_C_mention",
+        segment_id="seg_0001",
+        time_range=(0.0, 20.0),
+    )
+    _commit_local_negative_memory(
+        workspace,
+        index=2,
+        target_id="option_C_mention",
+        segment_id="seg_0001",
+        time_range=(20.0, 40.0),
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    result = registry.execute(
+        "synthesize_memory",
+        {
+            "claim": "Option C is globally absent from the verified windows.",
+            "supports": ["mem_0001", "mem_0002"],
+            "supports_option": "C",
+            "tags": ["global_negation"],
+        },
+    )
+
+    entry = workspace.get_memory(str(result["memory_id"]))
+    assert entry is not None
+    assert entry.kind == "synthesized_support"
+    assert entry.supports_option == "C"
+    assert entry.tags == ("global_negation",)
+    answered = registry.execute("answer", {"text": "C", "citations": [entry.entry_id], "confidence": "medium"})
+    assert answered["accepted"] is True
+
+
+def test_workspace_v2_synthesize_global_negation_rejects_low_coverage(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_global_negation_low_coverage")
+    _commit_local_negative_memory(
+        workspace,
+        index=1,
+        target_id="option_C_mention",
+        segment_id="seg_0001",
+        time_range=(0.0, 10.0),
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    with pytest.raises(ValueError, match="global_negation requires >= 60%"):
+        registry.execute(
+            "synthesize_memory",
+            {
+                "claim": "Option C is globally absent from the verified windows.",
+                "supports": ["mem_0001"],
+                "supports_option": "C",
+                "tags": ["global_negation"],
+            },
+        )
+
+
+def test_workspace_v2_synthesize_global_negation_rejects_mixed_targets(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_global_negation_mixed_targets")
+    _commit_local_negative_memory(
+        workspace,
+        index=1,
+        target_id="option_C_mention",
+        segment_id="seg_0001",
+        time_range=(0.0, 20.0),
+    )
+    _commit_local_negative_memory(
+        workspace,
+        index=2,
+        target_id="option_D_mention",
+        segment_id="seg_0001",
+        time_range=(20.0, 40.0),
+    )
+    registry = build_workspace_v2_registry(video_map=_video_map(), backend=RecordingBackend(), workspace=workspace)
+
+    with pytest.raises(ValueError, match="share a single target_id"):
+        registry.execute(
+            "synthesize_memory",
+            {
+                "claim": "One option is globally absent from the verified windows.",
+                "supports": ["mem_0001", "mem_0002"],
+                "tags": ["global_negation"],
+            },
+        )
+
+
 def test_workspace_v2_synthesize_accepts_subclaim_support_memory(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_synthesize_subclaims")
     anchor = {

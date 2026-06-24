@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
 from ..core.registry import DuplicateGuardPolicy, ToolRegistry, ToolRuntimeSpec, tool
@@ -29,6 +29,7 @@ from .workspace_primitives import build_workspace_primitives_registry
 ANSWER_SUPPORTING_KINDS = frozenset(
     {"answer_support", "caption_support", "visual_support", "synthesized_support", "answer_conflict_resolved"}
 )
+GLOBAL_NEGATION_SUPPORTING_KINDS = frozenset({*ANSWER_SUPPORTING_KINDS, "local_negative"})
 VERIFY_WINDOW_DEFAULT_FPS = 2.0
 VERIFY_WINDOW_MAX_FRAMES = 128
 EXPLORE_MAX_BEATS_PER_SEGMENT = 3
@@ -322,15 +323,22 @@ def build_workspace_v2_registry(
         missing = [memory_id for memory_id in support_ids + derived_ids if memory_id not in memory_by_id]
         if missing:
             raise ValueError("synthesize_memory_failed: unknown memory id: " + ", ".join(missing))
+        is_global_negation = _has_tag(tags, "global_negation")
+        allowed_support_kinds = GLOBAL_NEGATION_SUPPORTING_KINDS if is_global_negation else ANSWER_SUPPORTING_KINDS
         unsupported_supports = [
             memory_id
             for memory_id in support_ids
-            if memory_by_id[memory_id].kind not in ANSWER_SUPPORTING_KINDS
+            if memory_by_id[memory_id].kind not in allowed_support_kinds
         ]
         if unsupported_supports:
             kinds = ", ".join(f"{memory_id}:{memory_by_id[memory_id].kind}" for memory_id in unsupported_supports)
             raise ValueError("synthesize_memory_failed: supporting memory kind required for " + kinds)
-        _validate_synthesis_coverage(memory_by_id, support_ids, tags=tags)
+        _validate_synthesis_coverage(
+            memory_by_id,
+            support_ids,
+            tags=tags,
+            segment_bounds_lookup=_segment_bounds_lookup(video_map_store),
+        )
 
         del evidence_obs_ids
 
@@ -3193,6 +3201,14 @@ def _invalid_final_citation_provenance(
             refs = [str(ref).strip() for ref in _sequence_items(metadata.get("supports")) if str(ref).strip()]
         if not refs:
             return f"final citation {entry.entry_id} lacks synthesized source memory refs"
+        if _has_tag(entry.tags, "global_negation"):
+            missing = [ref for ref in refs if ref not in memory_by_id]
+            if missing:
+                return f"final citation {entry.entry_id} references unknown source memory {missing[0]}"
+            bad_refs = [ref for ref in refs if str(memory_by_id[ref].kind) != "local_negative"]
+            if bad_refs:
+                return f"final citation {entry.entry_id} global_negation references non-local-negative source {bad_refs[0]}"
+            return ""
         for ref in refs:
             source = memory_by_id.get(ref)
             if source is None:
@@ -3209,8 +3225,11 @@ def _validate_synthesis_coverage(
     support_ids: Sequence[str],
     *,
     tags: Sequence[str],
+    segment_bounds_lookup: Callable[[str], tuple[float, float] | None] | None = None,
 ) -> None:
     support_entries = [memory_by_id[memory_id] for memory_id in support_ids]
+    if _has_tag(tags, "global_negation"):
+        _validate_global_negation_supports(support_entries, segment_bounds_lookup=segment_bounds_lookup)
     if any(str(tag) == "count_synthesis" for tag in tags):
         _validate_count_synthesis_supports(support_entries)
     is_ordering = any(str(tag) == "ordering" for tag in tags) or any(
@@ -3240,6 +3259,51 @@ def _validate_synthesis_coverage(
         raise ValueError("synthesize_memory_failed: ordering coverage missing required entities: " + ", ".join(missing))
 
 
+def _validate_global_negation_supports(
+    support_entries: Sequence[Any],
+    *,
+    segment_bounds_lookup: Callable[[str], tuple[float, float] | None] | None = None,
+) -> None:
+    negative_entries = [entry for entry in support_entries if str(entry.kind) == "local_negative"]
+    if not negative_entries:
+        raise ValueError("synthesize_memory_failed: global_negation requires at least one local_negative support")
+    target_ids = {
+        str(dict(entry.metadata or {}).get("target_id") or "").strip()
+        for entry in negative_entries
+        if str(dict(entry.metadata or {}).get("target_id") or "").strip()
+    }
+    if len(target_ids) > 1:
+        raise ValueError(
+            "synthesize_memory_failed: global_negation supports must share a single target_id; got "
+            + ", ".join(sorted(target_ids))
+        )
+    intervals_by_segment: dict[str, list[tuple[float, float]]] = {}
+    for entry in negative_entries:
+        metadata = dict(entry.metadata or {})
+        scope = metadata.get("scope")
+        scope_map = dict(scope or {}) if isinstance(scope, Mapping) else {}
+        segment_id = str(scope_map.get("segment_id") or "").strip()
+        time_range = _time_range_pair(scope_map.get("time_range"))
+        if not segment_id or time_range is None:
+            continue
+        intervals_by_segment.setdefault(segment_id, []).append(time_range)
+    if not intervals_by_segment:
+        raise ValueError("synthesize_memory_failed: global_negation supports must carry scope.segment_id and time_range")
+    covered_sec = 0.0
+    total_sec = 0.0
+    for segment_id, intervals in intervals_by_segment.items():
+        bounds = segment_bounds_lookup(segment_id) if segment_bounds_lookup is not None else None
+        if bounds is None:
+            raise ValueError(f"synthesize_memory_failed: global_negation cannot resolve segment bounds for {segment_id}")
+        start_sec, end_sec = bounds
+        clipped = [(max(start_sec, a), min(end_sec, b)) for a, b in intervals if min(end_sec, b) > max(start_sec, a)]
+        covered_sec += sum(b - a for a, b in _merge_time_ranges(clipped))
+        total_sec += max(0.0, end_sec - start_sec)
+    coverage = covered_sec / max(0.001, total_sec)
+    if coverage < 0.60:
+        raise ValueError(f"synthesize_memory_failed: global_negation requires >= 60% segment coverage; got {coverage * 100:.1f}%")
+
+
 def _validate_count_synthesis_supports(support_entries: Sequence[Any]) -> None:
     event_ids: list[str] = []
     for entry in support_entries:
@@ -3254,6 +3318,43 @@ def _validate_count_synthesis_supports(support_entries: Sequence[Any]) -> None:
         event_ids.append(event_id)
     if len(set(event_ids)) != len(event_ids):
         raise ValueError("synthesize_memory_failed: count_synthesis supports must have distinct event_id values")
+
+
+def _segment_bounds_lookup(video_map_store: VideoMapStore) -> Callable[[str], tuple[float, float] | None]:
+    def lookup(segment_id: str) -> tuple[float, float] | None:
+        try:
+            segment = video_map_store.current.get(segment_id)
+        except ValueError:
+            return None
+        return float(segment.start_sec), float(segment.end_sec)
+
+    return lookup
+
+
+def _time_range_pair(value: Any) -> tuple[float, float] | None:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) >= 2:
+        try:
+            start_sec = float(value[0])
+            end_sec = float(value[1])
+        except (TypeError, ValueError):
+            return None
+        if end_sec > start_sec:
+            return start_sec, end_sec
+    return None
+
+
+def _merge_time_ranges(intervals: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    merged: list[tuple[float, float]] = []
+    for start_sec, end_sec in sorted(intervals):
+        if merged and start_sec <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end_sec))
+        else:
+            merged.append((start_sec, end_sec))
+    return merged
+
+
+def _has_tag(tags: Sequence[str], expected: str) -> bool:
+    return any(str(tag) == expected for tag in tags)
 
 
 def _provenance_observation_ids(memory_by_id: Mapping[str, Any], memory_ids: Sequence[str]) -> list[str]:

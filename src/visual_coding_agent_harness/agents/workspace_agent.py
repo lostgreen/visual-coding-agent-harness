@@ -1131,7 +1131,16 @@ def compose_plan_prompt(
             "Use Segment Cards as the starting navigation state. They are summaries only, not answer evidence.",
             "Query Framing Policy: for the first explore call, ask the question the user asked; do not merge in a candidate answer unless explicitly checking that option.",
             "HARD RULE: If Pending Candidate Windows count >= 3 and Committed Memory contains zero positive support entries (visual_support / answer_support / synthesized_support / answer_conflict_resolved / caption_support), your next tool MUST be verify_window using the highest-score candidate_key or segment_id + time_range. local_negative / answer_conflict / verification_uncertain do not disarm this rule. Do not call explore.",
-            'HARD RULE: When testing an answer option, every check target_id must follow option_<letter>_check and carry option_id="<letter>"; generic target_1/target_2 names are only allowed for question-centered checks that are not testing a specific option.',
+            "HARD RULE: When Pending Candidate Windows count = 0 and Committed Memory has zero positive support entries, your next tool MUST be verify_window with segment_id + time_range on the largest uncovered slice shown in Segment Time Coverage. Do not call explore.",
+            "",
+            "# Question Decomposition Tactics",
+            "Pick the matching tactic; do not force option_X_check on every question type.",
+            "Tactic A: Presence / Object Recognition. Use option_<letter>_check targets carrying option_id when directly testing whether an option is visible, mentioned, or true in a local window.",
+            "Tactic B: Comparison. For largest/most/earliest/fewest questions, verify pairwise comparison claims like berries_more_than_apples with option_id for the winning option. Do NOT use option_X_check here; every option may merely exist while only one wins.",
+            "Tactic C: Global Synopsis / Genre. Decompose the genre into local features, sweep multiple windows, then synthesize_memory with tags=['genre_synthesis'] from supporting visual/caption memories.",
+            "Tactic D: NOT-discussed / Global Absence. Verify mention/showing checks for each option across candidate and uncovered windows until segment coverage is >= 60%; synthesize local_negative memories for one option with tags=['global_negation'] and supports_option=<letter>.",
+            "Tactic E: Motivation / Reasoning. Phrase checks as visual or narration clues for each option; when pending=0 with no positive support, sweep uncovered regions because the clue may be elsewhere.",
+            "For visually-grounded answer options, phrase verify_window checks as 'is X shown / visible / mentioned in this window' instead of broad narrator-style claims such as 'the video is explaining that X'.",
             'To inspect dense captions/indexes or find candidate windows, call {"tool":"explore","args":{"query":"question-centered condition to resolve","targets":[{"target_id":"target_1","question":"question condition to verify","verification_goal":"identify the fact that directly answers the original question condition"}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
             'When testing an option, use a target like {"target_id":"option_B_check","claim":"option B claim","verification_goal":"Check whether option B answers the original question condition.","option_id":"B"}.',
             'For answer-grade local evidence, call {"tool":"verify_window","args":{"candidate_key":"obs_0001:cand_0001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',
@@ -1160,6 +1169,8 @@ def _synthesize_memory_availability(workspace: EvidenceWorkspace) -> str:
     answer_supporting = {"answer_support", "caption_support", "visual_support", "synthesized_support", "answer_conflict_resolved"}
     if any(entry.kind in answer_supporting for entry in workspace.memory_entries()):
         return "synthesize_memory is available only for deriving from cited committed support memory."
+    if any(entry.kind == "local_negative" for entry in workspace.memory_entries()):
+        return "synthesize_memory is available for global_negation only when cited local_negative memories share one target and cover >=60% of the segment."
     return "synthesize_memory is unavailable until committed support memory exists; first commit caption facts from explore or visual facts from verify_window."
 
 

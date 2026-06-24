@@ -550,6 +550,65 @@ def test_plan_view_renders_compact_root_ledger_and_index_evidence_coverage(tmp_p
     assert "answer_support_memories: 1" in plan_view
 
 
+def test_plan_view_includes_segment_time_coverage_and_gaps(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_time_coverage")
+    video_map = VideoMap(
+        video_path="/videos/demo.mp4",
+        duration_sec=100.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=100.0,
+                low_fps_caption="Root overview",
+                index_level="root",
+            )
+        ],
+    )
+    for start_sec, end_sec in [(0.0, 10.0), (20.0, 30.0)]:
+        workspace.write_observation(
+            tool_name="verify_window",
+            claim="Checked local window.",
+            confidence=0.6,
+            raw_output={"mode": "verify_window", "segment_id": "seg_0001", "time_range": [start_sec, end_sec]},
+        )
+
+    plan_view = workspace.render_plan_view(question="Which item is absent?", video_map=video_map)
+
+    assert "## Segment Time Coverage" in plan_view
+    assert "seg_0001 [0.0-100.0]: verified 20.0%" in plan_view
+    assert "covered: [0.0-10.0], [20.0-30.0]" in plan_view
+    assert "uncovered: [10.0-20.0] (10.0s), [30.0-100.0] (70.0s)" in plan_view
+
+
+def test_plan_view_recommends_sweeping_largest_uncovered_gap(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_time_coverage_sweep")
+    video_map = VideoMap(
+        video_path="/videos/demo.mp4",
+        duration_sec=100.0,
+        segments=[
+            VideoMapSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=100.0,
+                low_fps_caption="Root overview",
+                index_level="root",
+            )
+        ],
+    )
+    workspace.write_observation(
+        tool_name="verify_window",
+        claim="Checked first window.",
+        confidence=0.6,
+        raw_output={"mode": "verify_window", "segment_id": "seg_0001", "time_range": [0.0, 10.0]},
+    )
+
+    plan_view = workspace.render_plan_view(question="Which option is not discussed?", video_map=video_map)
+
+    assert "MUST verify_window(segment_id='seg_0001', time_range=[10.00,100.00])" in plan_view
+    assert "sweep largest uncovered region" in plan_view
+
+
 def test_plan_view_does_not_truncate_root_index_summaries(tmp_path: Path):
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_plan_view_full_root_index")
     long_summary = (

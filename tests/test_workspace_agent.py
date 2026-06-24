@@ -1353,8 +1353,12 @@ def test_compose_plan_prompt_includes_pending_saturation_hard_rule(tmp_path: Pat
     assert "HARD RULE" in prompt
     assert "Pending Candidate Windows count >= 3" in prompt
     assert "MUST be verify_window" in prompt
-    assert "option_<letter>_check" in prompt
-    assert "option_id" in prompt
+    assert "Question Decomposition Tactics" in prompt
+    assert "Tactic B: Comparison" in prompt
+    assert "Do NOT use option_X_check" in prompt
+    assert "Tactic D: NOT-discussed / Global Absence" in prompt
+    assert "tags=['global_negation']" in prompt
+    assert 'HARD RULE: When testing an answer option, every check target_id must follow option_<letter>_check' not in prompt
 
 
 def test_render_plan_view_marks_pending_saturation_recommendation_as_must(tmp_path: Path) -> None:
