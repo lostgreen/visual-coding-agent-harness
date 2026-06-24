@@ -36,7 +36,12 @@ def update_search_ledger(
     return ledger, raw, events
 
 
-def render_search_ledger(snapshot: Mapping[str, Any], *, max_items: int = 3) -> str:
+def render_search_ledger(
+    snapshot: Mapping[str, Any],
+    *,
+    max_items: int = 3,
+    must_verify_candidate_key: str | None = None,
+) -> str:
     ledger = _coerce_snapshot(snapshot)
     lines: list[str] = ["## Exploration Ledger"]
     records = list(ledger["records"])[-max_items:]
@@ -88,10 +93,26 @@ def render_search_ledger(snapshot: Mapping[str, Any], *, max_items: int = 3) -> 
             )
 
     recommended = _recommended_next_actions(ledger)
+    must_key = str(must_verify_candidate_key or "").strip()
+    if must_key:
+        recommended = [
+            {"tool": "verify_window", "candidate_key": must_key, "must": True},
+            *[
+                action
+                for action in recommended
+                if str(action.get("candidate_key") or action.get("event_id") or "").strip() != must_key
+            ],
+        ]
     if recommended:
         lines.extend(["", "## Recommended Next"])
         for action in recommended[:max_items]:
-            if action.get("candidate_key"):
+            if action.get("must") and action.get("candidate_key"):
+                lines.append(
+                    "- MUST verify_window before exploring again. "
+                    + str(action.get("candidate_key"))
+                    + " is the top-ranked pending candidate."
+                )
+            elif action.get("candidate_key"):
                 lines.append(f"- {action.get('tool')}({action.get('candidate_key')})")
             elif action.get("segment_id") and action.get("time_range"):
                 suffix = f": {action.get('focus')}" if action.get("focus") else ""
@@ -416,8 +437,7 @@ def _largest_uncovered_range(
     if not gaps:
         return None
     start, end = max(gaps, key=lambda item: item[1] - item[0])
-    width = min(max(0.1, float(preferred_width)), max(0.1, end - start))
-    return [round(start, 3), round(min(end, start + width), 3)]
+    return [round(start, 3), round(end, 3)]
 
 
 def _upsert_candidate(ledger: dict[str, Any], candidate: Mapping[str, Any]) -> None:

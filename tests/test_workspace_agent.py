@@ -417,6 +417,76 @@ def test_workspace_agent_repeated_explore_auto_verifies_after_recovery_hint(tmp_
     assert any(event["type"] == "candidate_auto_verify_triggered" for event in events)
 
 
+def test_workspace_agent_auto_verifies_when_pending_candidates_saturate(tmp_path: Path) -> None:
+    @tool(name="explore", description="Explore candidate windows.")
+    def explore(query: str, original_question: str = "", answer_options: dict[str, str] | None = None) -> dict[str, object]:
+        del original_question, answer_options
+        return {
+            "claim": f"Planner repeated explore for {query}.",
+            "confidence": 0.1,
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "candidate_windows": [],
+        }
+
+    @tool(name="verify_window", description="Verify a pending candidate.")
+    def verify_window(candidate_key: str, focus: list[str] | None = None) -> dict[str, object]:
+        return {
+            "claim": f"Auto-verified {candidate_key}.",
+            "confidence": 0.8,
+            "mode": "verify_window",
+            "worker": "EvidenceVerifier",
+            "candidate_key": candidate_key,
+            "focus": focus or [],
+        }
+
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_pending_saturation_auto_verify")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found several pending windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "query": "decorations in the scene",
+            "candidate_windows": [
+                {"candidate_key": "obs_0001:cand_0001", "segment_id": "seg_0001", "time_range": [0.0, 10.0]},
+                {"candidate_key": "obs_0001:cand_0002", "segment_id": "seg_0001", "time_range": [10.0, 20.0]},
+                {"candidate_key": "obs_0001:cand_0003", "segment_id": "seg_0001", "time_range": [20.0, 30.0]},
+            ],
+        },
+    )
+    registry = ToolRegistry()
+    registry.register(ToolRuntimeSpec(tool_spec=explore))
+    registry.register(ToolRuntimeSpec(tool_spec=verify_window))
+    agent = WorkspaceVisualAgent(
+        backend=ScriptedWorkspaceBackend([]),
+        registry=registry,
+        workspace=workspace,
+        max_rounds=1,
+    )
+
+    observation_ids = agent._execute_plan_action(
+        {"tool": "explore", "args": {"query": "try another paraphrase"}},
+        question="How many decorations are in the scene?",
+        round_number=2,
+        seen_tool_semantic_keys=set(),
+    )
+
+    observations = workspace.read_observations()
+    assert observation_ids == (observations[-1].observation_id,)
+    assert observations[-1].tool == "verify_window"
+    assert observations[-1].raw_output["candidate_key"] == "obs_0001:cand_0001"
+    assert observations[-1].raw_output["focus"] == ["How many decorations are in the scene?"]
+    events = workspace._read_jsonl_dicts("trace.jsonl")
+    assert any(
+        event["type"] == "candidate_auto_verify_triggered"
+        and event["payload"]["reason"] == "pending_candidate_saturation"
+        for event in events
+    )
+    assert any(event["type"] == "explore_replaced_by_auto_verify" for event in events)
+
+
 def test_workspace_agent_forces_answer_at_max_rounds(tmp_path: Path) -> None:
     @tool(name="probe", description="Gather one clue.")
     def probe() -> dict[str, object]:
@@ -1026,6 +1096,55 @@ def test_prompts_keep_generic_planning_and_scope_local_negatives(tmp_path: Path)
     assert 'mode is "caption_fact" or "mixed"' in commit_prompt
     assert "condition_match.matches_original_question is true" in commit_prompt
     assert "Reject only when" in commit_prompt
+
+
+def test_compose_plan_prompt_includes_pending_saturation_hard_rule(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_pending_saturation_prompt")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found several pending windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "query": "objects in the scene",
+            "candidate_windows": [
+                {"candidate_key": "obs_0001:cand_0001", "segment_id": "seg_0001", "time_range": [0.0, 10.0]},
+                {"candidate_key": "obs_0001:cand_0002", "segment_id": "seg_0001", "time_range": [10.0, 20.0]},
+                {"candidate_key": "obs_0001:cand_0003", "segment_id": "seg_0001", "time_range": [20.0, 30.0]},
+            ],
+        },
+    )
+
+    prompt = compose_plan_prompt(question="How many objects are in the scene?", workspace=workspace, video_map=_video_map())
+
+    assert "HARD RULE" in prompt
+    assert "Pending Candidate Windows count >= 3" in prompt
+    assert "MUST be verify_window" in prompt
+
+
+def test_render_plan_view_marks_pending_saturation_recommendation_as_must(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_pending_saturation_view")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found several pending windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "query": "objects in the scene",
+            "candidate_windows": [
+                {"candidate_key": "obs_0001:cand_0001", "segment_id": "seg_0001", "time_range": [0.0, 10.0]},
+                {"candidate_key": "obs_0001:cand_0002", "segment_id": "seg_0001", "time_range": [10.0, 20.0]},
+                {"candidate_key": "obs_0001:cand_0003", "segment_id": "seg_0001", "time_range": [20.0, 30.0]},
+            ],
+        },
+    )
+
+    plan_view = workspace.render_plan_view(question="How many objects are in the scene?", video_map=_video_map())
+
+    assert "MUST verify_window before exploring again" in plan_view
+    assert "obs_0001:cand_0001" in plan_view
 
 
 def test_compose_plan_prompt_blocks_uncited_answers_without_memory(tmp_path: Path) -> None:

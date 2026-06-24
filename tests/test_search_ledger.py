@@ -124,7 +124,65 @@ def test_negative_only_candidate_status_recommends_time_range_sweep(tmp_path: Pa
 
     rendered = workspace.render_search_ledger_view()
 
-    assert "verify_window segment=seg_0001 time=[8.9-17.8]" in rendered
+    assert "verify_window segment=seg_0001 time=[8.9-74.3]" in rendered
+    assert "extend visual coverage" in rendered
+
+
+def test_negative_only_candidate_status_recommends_largest_uncovered_gap(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "search_ledger_negative_largest_gap")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Found candidate windows.",
+        confidence=0.6,
+        raw_output={
+            "mode": "candidate_discovery",
+            "support_status": "candidate_only",
+            "query": "objects on the table",
+            "candidate_windows": [
+                {
+                    "candidate_key": "obs_0001:cand_0001",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 10.0],
+                    "segment_start_sec": 0.0,
+                    "segment_end_sec": 50.0,
+                },
+                {
+                    "candidate_key": "obs_0001:cand_0002",
+                    "segment_id": "seg_0001",
+                    "time_range": [30.0, 40.0],
+                    "segment_start_sec": 0.0,
+                    "segment_end_sec": 50.0,
+                },
+            ],
+        },
+    )
+    for candidate_key, time_range in (
+        ("obs_0001:cand_0001", [0.0, 10.0]),
+        ("obs_0001:cand_0002", [30.0, 40.0]),
+    ):
+        workspace.write_observation(
+            tool_name="verify_window",
+            claim="object not found locally",
+            confidence=0.8,
+            raw_output={
+                "mode": "verify_window",
+                "candidate_key": candidate_key,
+                "segment_id": "seg_0001",
+                "time_range": time_range,
+                "verification_results": [
+                    {
+                        "target_id": "target_1",
+                        "claim": "The object is visible.",
+                        "verdict": "not_found_in_window",
+                        "scope": {"segment_id": "seg_0001", "time_range": time_range},
+                    }
+                ],
+            },
+        )
+
+    rendered = workspace.render_search_ledger_view()
+
+    assert "verify_window segment=seg_0001 time=[10.0-30.0]" in rendered
     assert "extend visual coverage" in rendered
 
 

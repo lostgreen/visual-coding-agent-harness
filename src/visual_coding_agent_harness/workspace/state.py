@@ -170,7 +170,18 @@ class EvidenceWorkspace:
         "verify_segment_anchors",
         "read_clip",
         "verify",
+        "verify_window",
+        "synthesize_memory",
     }
+    GROUNDED_MEMORY_KINDS = frozenset(
+        {
+            "visual_support",
+            "answer_support",
+            "synthesized_support",
+            "answer_conflict_resolved",
+            "caption_support",
+        }
+    )
     LOCAL_WORKER_EVIDENCE_TOOLS = {
         "caption_image",
         "caption_region",
@@ -496,7 +507,28 @@ class EvidenceWorkspace:
         }
 
     def render_search_ledger_view(self) -> str:
-        return render_search_ledger(self.search_ledger_snapshot())
+        return render_search_ledger(
+            self.search_ledger_snapshot(),
+            must_verify_candidate_key=self._pending_saturation_candidate_key(),
+        )
+
+    def _pending_saturation_candidate_key(self, *, min_pending: int = 3) -> str | None:
+        snapshot = self.search_ledger_snapshot()
+        raw_candidates = snapshot.get("candidates", [])
+        if not isinstance(raw_candidates, Sequence) or isinstance(raw_candidates, (str, bytes)):
+            return None
+        pending = [
+            candidate
+            for candidate in raw_candidates
+            if isinstance(candidate, Mapping) and str(candidate.get("status") or "") == "pending"
+        ]
+        if len(pending) < min_pending:
+            return None
+        support_kinds = {"visual_support", "answer_support", "synthesized_support"}
+        if any(entry.kind in support_kinds for entry in self.memory_entries()):
+            return None
+        candidate_key = str(pending[0].get("candidate_key") or pending[0].get("event_id") or "").strip()
+        return candidate_key or None
 
     def _write_search_ledger_snapshot(self, snapshot: Mapping[str, Any]) -> None:
         path = self.root / "search_ledger.json"
@@ -2569,11 +2601,14 @@ class EvidenceWorkspace:
         return []
 
     def has_non_navigation_visual_citation(self, citations: Sequence[str]) -> bool:
-        """Check whether cited observation ids include answer-facing visual evidence."""
+        """Check whether cited ids include answer-facing visual evidence."""
 
-        cited = {str(item) for item in citations}
+        cited = {str(item).strip() for item in citations if str(item).strip()}
         if not cited:
             return False
+        for entry in self.memory_entries():
+            if entry.entry_id in cited and entry.kind in self.GROUNDED_MEMORY_KINDS:
+                return True
         for observation in self._read_observation_dicts():
             if str(observation.get("observation_id", "")) not in cited:
                 continue

@@ -596,18 +596,12 @@ class SegmentReadService:
                 source_observation_id=source_observation_id,
             )
             if mode in {"caption_fact", "mixed"} and (facts or caption_anchors or str(reasoning.get("claim") or "").strip()):
-                candidate_payload = (
-                    _normalize_candidate_windows(
-                        reasoning.get("candidate_windows"),
-                        fallback=candidate_windows,
-                        source_observation_id=source_observation_id,
-                    )
-                    if mode == "mixed"
-                    else _normalize_candidate_windows(
-                        reasoning.get("candidate_windows"),
-                        fallback=(),
-                        source_observation_id=source_observation_id,
-                    )
+                reasoning_candidate_windows = _mapping_items(reasoning.get("candidate_windows"))
+                navigation_fallback_used = not reasoning_candidate_windows and bool(candidate_windows)
+                candidate_payload = _normalize_candidate_windows(
+                    reasoning_candidate_windows,
+                    fallback=candidate_windows,
+                    source_observation_id=source_observation_id,
                 )
                 produced_anchors = [*caption_anchors, *candidate_anchors_for_windows(candidate_payload)]
                 support_status = str(
@@ -640,6 +634,9 @@ class SegmentReadService:
                     "notes": ["Caption-level evidence may be committed; candidate windows still require verify_window."],
                     "limitations": str(reasoning.get("limitations") or "Caption/index reasoning only; no new visual verification was performed."),
                     "raw": {"explore_reasoning": reasoning, "caption_hits": caption_hits},
+                    "_navigation_candidate_windows": list(candidate_windows),
+                    "_navigation_candidate_anchors": list(candidate_anchors),
+                    "_navigation_fallback_used": navigation_fallback_used,
                 }
                 return _validated_caption_explore_payload(payload)
         payload = {
@@ -1420,6 +1417,12 @@ def _explore_caption_reasoning_prompt(
         "You are the explore subagent. Use only dense captions, ASR, OCR, and index summaries below. "
         "Do not use outside knowledge and do not inspect video frames. "
         "Decide whether the original question can be answered at caption/index level, or whether candidate windows need verify_window.\n"
+        "STRICT GROUNDING RULE: Return mode='caption_fact' only when you can quote a verbatim sentence "
+        "or phrase from the caption/asr/ocr/index hits below whose meaning directly answers the original question. "
+        "If the answer requires general world knowledge, inference across sentences, or anything not literally present "
+        "in the hits, you MUST return mode='candidate_discovery' with facts=[]. Do not paraphrase world knowledge "
+        "into a caption_fact. Return mode='mixed' only when at least one fact is verbatim-supported and visual "
+        "verification is still needed.\n"
         "The planner query is only a retrieval hint. The original question defines what counts as answer evidence.\n"
         "Before returning caption_fact, check whether the fact directly answers the original question condition, "
         "whether it is merely related background, and whether it belongs to a later or earlier event than the one asked.\n"
@@ -1646,6 +1649,9 @@ def _normalize_condition_match(value: Any, *, default_matches: bool = False) -> 
 
 def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, object]:
     result = dict(payload)
+    navigation_candidate_windows = list(_mapping_items(result.pop("_navigation_candidate_windows", ())))
+    result.pop("_navigation_candidate_anchors", None)
+    navigation_fallback_used = bool(result.pop("_navigation_fallback_used", False))
     facts = [dict(item) for item in _mapping_items(result.get("facts"))]
     anchors = [dict(item) for item in _mapping_items(result.get("anchors"))]
     produced_anchors = [dict(item) for item in _mapping_items(result.get("produced_anchors"))]
@@ -1669,6 +1675,8 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
     )
 
     if not grounded:
+        existing_windows = [dict(item) for item in _mapping_items(result.get("candidate_windows"))]
+        restored_windows = existing_windows or [dict(item) for item in navigation_candidate_windows]
         result.update(
             {
                 "mode": "candidate_discovery",
@@ -1677,13 +1685,16 @@ def _validated_caption_explore_payload(payload: Mapping[str, Any]) -> dict[str, 
                 "needs_visual_verify": True,
                 "facts": [],
                 "anchors": [],
-                "produced_anchors": candidate_anchors_for_windows(_mapping_items(result.get("candidate_windows"))),
+                "candidate_windows": restored_windows,
+                "regions": restored_windows,
+                "produced_anchors": candidate_anchors_for_windows(restored_windows),
                 "answer_mapping": _clear_answer_support(answer_mapping, reason="Caption fact downgraded because it lacks grounded facts/anchors."),
                 "condition_match": condition_match,
                 "claim_scope": "candidate_only",
                 "query_analysis": query_analysis,
                 "task_type": task_type,
                 "caption_fact_downgraded": True,
+                "navigation_windows_restored": bool(navigation_candidate_windows and restored_windows and navigation_fallback_used),
             }
         )
         return result
@@ -1768,9 +1779,14 @@ def _caption_fact_is_grounded(
     query = str(payload.get("query") or "").strip()
     if claim and query and _norm_text(claim) == _norm_text(query):
         return False
-    if not facts and not anchors and not produced_anchors:
+    caption_produced_anchors = [
+        item
+        for item in produced_anchors
+        if str(item.get("field_path") or "") != "candidate_windows" and str(item.get("source_kind") or "") != "retrieval_hit"
+    ]
+    if not facts and not anchors and not caption_produced_anchors:
         return False
-    for item in [*facts, *anchors, *produced_anchors]:
+    for item in [*facts, *anchors, *caption_produced_anchors]:
         if str(item.get("excerpt") or item.get("claim") or item.get("text") or "").strip():
             return True
         if item.get("time_range") is not None or item.get("segment_id") is not None:

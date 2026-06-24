@@ -559,6 +559,18 @@ class WorkspaceVisualAgent:
             ctx=ctx,
             request_id="1",
         )
+        if request.tool == "explore":
+            auto_verified = self._maybe_auto_verify_on_saturation(
+                question=question,
+                round_number=round_number,
+                seen_tool_semantic_keys=seen_tool_semantic_keys,
+            )
+            if auto_verified:
+                self.workspace.write_trace_event(
+                    "explore_replaced_by_auto_verify",
+                    {"round": round_number, "reason": "pending_candidate_saturation"},
+                )
+                return auto_verified
         self.workspace.write_trace_event(
             "tool_use",
             {"step": 1, "tool": request.tool, "arguments": dict(request.arguments)},
@@ -658,6 +670,59 @@ class WorkspaceVisualAgent:
                 break
         if not candidate_key:
             return ()
+        return self._auto_verify_candidate_key(
+            candidate_key=candidate_key,
+            question=question,
+            round_number=round_number,
+            seen_tool_semantic_keys=seen_tool_semantic_keys,
+            reason="pending_candidate_not_consumed",
+            trace_payload={"query": query},
+        )
+
+    def _maybe_auto_verify_on_saturation(
+        self,
+        *,
+        question: str,
+        round_number: int,
+        seen_tool_semantic_keys: set[str],
+        min_pending: int = 3,
+    ) -> tuple[str, ...]:
+        snapshot = self.workspace.search_ledger_snapshot()
+        raw_candidates = snapshot.get("candidates", [])
+        if not isinstance(raw_candidates, Sequence) or isinstance(raw_candidates, (str, bytes)):
+            return ()
+        pending = [
+            candidate
+            for candidate in raw_candidates
+            if isinstance(candidate, Mapping) and str(candidate.get("status") or "") == "pending"
+        ]
+        if len(pending) < min_pending:
+            return ()
+        support_kinds = {"visual_support", "answer_support", "synthesized_support"}
+        if any(entry.kind in support_kinds for entry in self.workspace.memory_entries()):
+            return ()
+        candidate_key = str(pending[0].get("candidate_key") or pending[0].get("event_id") or "").strip()
+        if not candidate_key:
+            return ()
+        return self._auto_verify_candidate_key(
+            candidate_key=candidate_key,
+            question=question,
+            round_number=round_number,
+            seen_tool_semantic_keys=seen_tool_semantic_keys,
+            reason="pending_candidate_saturation",
+            trace_payload={"pending_count": len(pending)},
+        )
+
+    def _auto_verify_candidate_key(
+        self,
+        *,
+        candidate_key: str,
+        question: str,
+        round_number: int,
+        seen_tool_semantic_keys: set[str],
+        reason: str,
+        trace_payload: Mapping[str, Any] | None = None,
+    ) -> tuple[str, ...]:
         try:
             self.registry.get_runtime_spec("verify_window")
         except ToolError:
@@ -676,9 +741,9 @@ class WorkspaceVisualAgent:
             "candidate_auto_verify_triggered",
             {
                 "round": round_number,
-                "reason": "pending_candidate_not_consumed",
+                "reason": reason,
                 "candidate_key": candidate_key,
-                "query": query,
+                **dict(trace_payload or {}),
             },
         )
         self.workspace.write_trace_event(
@@ -998,6 +1063,7 @@ def compose_plan_prompt(
             "Return exactly one JSON object. Do not explain.",
             "Use Segment Cards as the starting navigation state. They are summaries only, not answer evidence.",
             "Query Framing Policy: for the first explore call, ask the question the user asked; do not merge in a candidate answer unless explicitly checking that option.",
+            "HARD RULE: If Pending Candidate Windows count >= 3 and Committed Memory contains zero visual_support / answer_support / synthesized_support entries, your next tool MUST be verify_window using either candidate_key or segment_id + time_range. Do not call explore.",
             'To inspect dense captions/indexes or find candidate windows, call {"tool":"explore","args":{"query":"question-centered condition to resolve","targets":[{"target_id":"target_1","question":"question condition to verify","verification_goal":"identify the fact that directly answers the original question condition"}],"modalities":["index","asr","ocr","visual"],"top_k":8}}.',
             'When testing an option, use a target like {"target_id":"option_B_check","claim":"option B claim","verification_goal":"Check whether option B answers the original question condition.","option_id":"B"}.',
             'For answer-grade local evidence, call {"tool":"verify_window","args":{"candidate_key":"obs_0001:cand_0001","evidence_mode":"multimodal","sampling":{"fps":2,"max_frames":128},"checks":[{"target_id":"target_1","claim":"fact to verify in this local window","polarity":"presence"}]}}.',

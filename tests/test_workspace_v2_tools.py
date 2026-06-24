@@ -11,6 +11,7 @@ from visual_coding_agent_harness.tools.workspace_v2 import (
     _explore_candidate_beats,
     _verification_results_from_backend,
     build_workspace_v2_registry,
+    candidate_anchors_for_windows,
 )
 from visual_coding_agent_harness.video.index import TimelineBeat
 from visual_coding_agent_harness.video.map import IndexRefiner, VideoMap, VideoMapSegment, VideoMapStore
@@ -492,6 +493,8 @@ def test_workspace_v2_explore_can_return_caption_fact_and_final_citable_memory(t
     assert "Original question:" in backend.requests[0].prompt
     assert "Answer options:" in backend.requests[0].prompt
     assert "The planner query is only a retrieval hint" in backend.requests[0].prompt
+    assert "STRICT GROUNDING RULE" in backend.requests[0].prompt
+    assert "If the answer requires general world knowledge" in backend.requests[0].prompt
 
     observation = workspace.write_observation(
         tool_name="explore",
@@ -750,6 +753,45 @@ def test_workspace_v2_explore_rejects_empty_caption_fact(tmp_path: Path) -> None
     assert result["cannot_final_cite"] is True
     assert result["needs_visual_verify"] is True
     assert result["answer_mapping"]["supports_option"] is None
+
+
+def test_workspace_v2_caption_fact_downgrade_preserves_navigation_windows(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_caption_downgrade_preserves_nav")
+    backend = ExploreReasoningBackend(
+        {
+            "mode": "caption_fact",
+            "support_status": "caption_supported",
+            "claim": "The caption reasoning has no grounded facts.",
+            "confidence": 0.8,
+            "facts": [],
+            "anchors": [],
+            "candidate_windows": [],
+            "condition_match": {"matches_original_question": True, "match_level": "direct"},
+            "answer_mapping": {"supports_option": "A"},
+            "needs_visual_verify": False,
+        }
+    )
+    registry = build_workspace_v2_registry(video_map=_christmas_video_map(), backend=backend, workspace=workspace)
+
+    result = registry.execute(
+        "explore",
+        {
+            "query": "apples candles berries",
+            "original_question": "How many decorative objects are on the Christmas tree?",
+            "targets": [{"target_id": "t1", "claim": "Count the decorative objects"}],
+            "modalities": ["caption", "index"],
+            "top_k": 4,
+        },
+    )
+
+    assert result["mode"] == "candidate_discovery"
+    assert result["caption_fact_downgraded"] is True
+    assert result["navigation_windows_restored"] is True
+    assert len(result["candidate_windows"]) >= 2
+    assert result["regions"] == result["candidate_windows"]
+    assert result["produced_anchors"] == candidate_anchors_for_windows(result["candidate_windows"])
+    assert "_navigation_candidate_windows" not in result
+    assert "_navigation_candidate_anchors" not in result
 
 
 def test_workspace_v2_answer_rejects_caption_support_when_visual_verify_required(tmp_path: Path) -> None:

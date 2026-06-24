@@ -439,8 +439,12 @@ def _reward_tags_for_result(*, workspace: EvidenceWorkspace, status: str, citati
         tags.append("has_citations")
     else:
         tags.append("missing_citations")
+    citation_set = {str(item).strip() for item in citations if str(item).strip()}
     if workspace.has_non_navigation_visual_citation(citations):
         tags.append("non_navigation_visual_citation")
+        for entry in workspace.memory_entries():
+            if entry.entry_id in citation_set:
+                tags.append(f"cited_kind:{entry.kind}")
     else:
         tags.append("no_non_navigation_visual_citation")
     return tags

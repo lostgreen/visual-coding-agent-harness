@@ -95,6 +95,43 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertNotIn("outside knowledge", question)
         self.assertNotIn("exactly one option letter", question)
 
+    def test_reward_tags_include_cited_memory_kind(self):
+        from visual_coding_agent_harness.evals.videomme.runner import _reward_tags_for_result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = EvidenceWorkspace.create(Path(tmp), "reward_tags_memory_kind")
+            observation = workspace.write_observation(
+                tool_name="verify_window",
+                claim="The verified window supports the answer.",
+                confidence=0.8,
+                raw_output={
+                    "produced_anchors": [
+                        {
+                            "anchor_id": "anch_verify_obs_0001_001",
+                            "observation_id": "__pending__",
+                            "source_kind": "visual_fact",
+                            "segment_id": "seg_0001",
+                            "start_sec": 0.0,
+                            "end_sec": 10.0,
+                            "field_path": "verification_results[0]",
+                            "excerpt": "The verified window supports the answer.",
+                            "modality": "visual",
+                        }
+                    ]
+                },
+            )
+            entry = workspace.write_memory(
+                kind="visual_support",
+                claim="The verified window supports the answer.",
+                anchors=[observation.raw_output["produced_anchors"][0]],
+                confidence="medium",
+            )
+
+            tags = _reward_tags_for_result(workspace=workspace, status="final", citations=[entry.entry_id])
+
+        self.assertIn("non_navigation_visual_citation", tags)
+        self.assertIn("cited_kind:visual_support", tags)
+
     def test_run_eval_cases_writes_summary_for_requested_strategy_and_budget(self):
         from runs import eval_runner
 
