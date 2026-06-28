@@ -39,6 +39,13 @@ def test_modality_routing_biography_to_asr() -> None:
     assert derive_modality_route("How was his life journey according to the video?", operator=operator) == "asr_primary"
 
 
+def test_modality_routing_main_arc_stays_multimodal() -> None:
+    operator = derive_answer_operator("What's the main idea of the video?", route="", options=())
+
+    assert operator == "main_arc"
+    assert derive_modality_route("What's the main idea of the video?", operator=operator) == "multimodal"
+
+
 def test_modality_routing_visual_and_ocr_questions() -> None:
     assert derive_modality_route("What text is written on the banner?", operator="select_present") == "ocr_primary"
     assert derive_modality_route("What color shirt is the person wearing?", operator="select_present") == "visual_primary"

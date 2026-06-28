@@ -86,8 +86,6 @@ def derive_modality_route(question: str, *, operator: AnswerOperator) -> Modalit
     """Choose a primary evidence route from generic question-form markers."""
 
     text = _normalize(question)
-    if operator == "main_arc":
-        return "asr_primary"
     if _OCR_RE.search(text):
         return "ocr_primary"
     if _BIOGRAPHY_RE.search(text) or _ASR_RE.search(text):
