@@ -10,6 +10,7 @@ from .protocol import SubGoalBudget, SubGoalConstraint, SubGoalSuccessCriteria
 
 MAX_OPEN_SUB_GOALS = 3
 ANSWER_GROUNDING_KINDS = frozenset({"visual_support"})
+CONTRADICTING_KINDS = frozenset({"answer_conflict", "contradiction", "contradicting"})
 
 
 class ReasonerAgent:
@@ -90,6 +91,22 @@ class ReasonerAgent:
             )
             return True
 
+        elimination = _elimination_answer(self.workspace, options=options)
+        if elimination is not None:
+            choice, citations = elimination
+            self.answer_result = WorkspaceRunResult(
+                answer=choice,
+                citations=citations,
+                confidence="medium",
+                rounds=round_number,
+                metadata={"status": "final", "strategy": "multi_agent_v0", "reason": "elimination"},
+            )
+            self.workspace.write_trace_event(
+                "reasoner_action_emitted",
+                {"round": round_number, "action": "answer", "n_sub_goals": 0, "reason": "elimination"},
+            )
+            return True
+
         if option_ids:
             self.workspace.write_trace_event(
                 "reasoner_action_emitted",
@@ -164,6 +181,33 @@ def _score_positive_findings(findings: Any, workspace: Any, *, options: Mapping[
         key=lambda option_id: (-scores[option_id], option_order.get(option_id, 999), option_id),
     )
     return [(option_id, tuple(citations[option_id])) for option_id in ranked]
+
+
+def _elimination_answer(workspace: Any, *, options: Mapping[str, str]) -> tuple[str, tuple[str, ...]] | None:
+    option_ids = _option_ids(options)
+    if len(option_ids) < 2:
+        return None
+    eliminated: dict[str, list[str]] = {}
+    for entry in workspace.memory_entries():
+        option_id = str(entry.supports_option or "").strip().upper()[:1]
+        if option_id not in option_ids or entry.kind not in CONTRADICTING_KINDS:
+            continue
+        verdict = ""
+        metadata = getattr(entry, "metadata", {}) or {}
+        if isinstance(metadata, Mapping):
+            verdict = str(metadata.get("verdict") or "").strip().lower()
+        if verdict and verdict != "contradicted":
+            continue
+        eliminated.setdefault(option_id, []).append(entry.entry_id)
+    remaining = [option_id for option_id in option_ids if option_id not in eliminated]
+    if len(remaining) != 1:
+        return None
+    if sum(1 for option_id in option_ids if option_id in eliminated) != len(option_ids) - 1:
+        return None
+    citations: list[str] = []
+    for option_id in option_ids:
+        citations.extend(eliminated.get(option_id, ()))
+    return remaining[0], tuple(citations)
 
 
 def _option_claim(*, question: str, option_id: str, option_text: str) -> str:

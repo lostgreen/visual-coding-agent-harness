@@ -631,6 +631,55 @@ def test_reasoner_ignores_negative_memory_and_schedules_untested_options(tmp_pat
     assert open_options == ["B", "C", "D"]
 
 
+def test_reasoner_answers_by_elimination_when_all_other_options_are_contradicted(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    conflict_ids: list[str] = []
+    for option_id in ("A", "B", "C"):
+        memory = _write_test_memory(workspace, kind="answer_conflict", supports_option=option_id)
+        conflict_ids.append(memory.entry_id)
+    for option_id in ("A", "B", "C", "D"):
+        sub_goal = mutator.create_sub_goal(
+            intent="verify",
+            constraint=SubGoalConstraint(option_id=option_id, claim=f"Check option {option_id}."),
+            budget=SubGoalBudget(max_explores=1, max_verifies=1),
+            success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+            parent_question="Question?",
+            created_by="reasoner",
+            created_round=1,
+        )
+        mutator.transition_sub_goal(sub_goal.sub_goal_id, to_status="in_progress", round_number=2)
+        memory_ids = (conflict_ids[ord(option_id) - ord("A")],) if option_id in {"A", "B", "C"} else ()
+        mutator.report_finding(
+            sub_goal_id=sub_goal.sub_goal_id,
+            status="empty",
+            memory_ids=memory_ids,
+            coverage=(0.0, 0.0),
+            notes_for_planner=f"Option {option_id} check complete.",
+            cost={"tool_calls": 1},
+            created_round=2,
+        )
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=3,
+        question="Question?",
+        options={"A": "first", "B": "second", "C": "third", "D": "fourth"},
+    ) is True
+
+    assert reasoner.answer_result is not None
+    assert reasoner.answer_result.answer == "D"
+    assert reasoner.answer_result.citations == tuple(conflict_ids)
+    assert reasoner.answer_result.metadata is not None
+    assert reasoner.answer_result.metadata["reason"] == "elimination"
+
+
 def test_reasoner_sub_goal_claim_includes_question_context(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace(tmp_path / "workspace")
     mutator = WorkspaceMutator(workspace)
