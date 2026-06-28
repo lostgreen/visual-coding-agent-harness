@@ -1005,6 +1005,54 @@ def test_structured_verify_cross_match_uses_workspace_answer_options(tmp_path: P
     ]
 
 
+def test_structured_verify_does_not_cross_match_local_negative_claim_echo(tmp_path: Path) -> None:
+    raw_output = {
+        "claim": "Check option B.",
+        "mode": "verify_window",
+        "answer_options": {
+            "A": "humble background / farmhouse seclusion",
+            "B": "humble background / upper class / farmhouse seclusion",
+        },
+        "produced_anchors": [
+            {
+                "anchor_id": "anch_negative_echo",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The inspected window does not mention the life journey.",
+            }
+        ],
+        "verification_results": [
+            {
+                "target_id": "option_B_check",
+                "claim": "Option B: humble background, upper class, farmhouse seclusion.",
+                "verdict": "not_found_in_window",
+                "evidence": "The inspected window does not mention this life journey.",
+                "anchor_ids": ["anch_negative_echo"],
+                "scope": {"segment_id": "seg_0001", "time_range": [20.0, 40.0]},
+                "confidence": 0.9,
+                "option_id": "B",
+            }
+        ],
+    }
+
+    writes = _structured_verify_writes(
+        raw_output,
+        anchors=[
+            {
+                "anchor_id": "anch_negative_echo",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The inspected window does not mention the life journey.",
+            }
+        ],
+        reason="test",
+    )
+
+    assert [(item["kind"], item.get("supports_option")) for item in writes["memory"]] == [
+        ("local_negative", None),
+    ]
+
+
 def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_commit")
     registry = ToolRegistry()

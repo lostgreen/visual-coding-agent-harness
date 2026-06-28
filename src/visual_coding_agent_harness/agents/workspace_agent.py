@@ -2034,7 +2034,7 @@ def _structured_verify_writes(
             matched_option
             and matched_option != supports_option
             and matched_option in answer_options
-            and kind in {"answer_conflict", "answer_conflict_resolved", "local_negative", "visual_support"}
+            and kind in {"answer_conflict", "answer_conflict_resolved", "visual_support"}
             and anchor_ids
         ):
             memory.append(
@@ -2104,7 +2104,7 @@ def _workspace_answer_options(workspace: EvidenceWorkspace) -> dict[str, str]:
 
 def _verify_cross_match_text(raw_output: Mapping[str, Any], results: Sequence[Mapping[str, Any]]) -> str:
     parts: list[str] = []
-    for key in ("claim", "rationale", "explanation", "evidence"):
+    for key in ("rationale", "explanation", "evidence"):
         value = raw_output.get(key)
         if isinstance(value, str):
             parts.append(value)
@@ -2114,7 +2114,7 @@ def _verify_cross_match_text(raw_output: Mapping[str, Any], results: Sequence[Ma
         else:
             parts.append(str(fact or ""))
     for result in results:
-        for key in ("claim", "evidence", "rationale", "explanation"):
+        for key in ("evidence", "rationale", "explanation"):
             parts.append(str(result.get(key) or ""))
         for fact in _sequence_items(result.get("facts")):
             if isinstance(fact, Mapping):
