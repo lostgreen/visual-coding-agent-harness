@@ -78,6 +78,27 @@ class ReasonerAgent:
         findings = self.mutator.findings()
         scored_options = _score_positive_findings(findings, self.workspace, options=options)
         if scored_options:
+            if len(scored_options) > 1:
+                created = 0
+                for option_id, _citations in scored_options[: MAX_OPEN_SUB_GOALS - len(active)]:
+                    self._create_option_sub_goal(
+                        option_id=option_id,
+                        option_text=options.get(option_id, ""),
+                        question=question,
+                        round_number=round_number,
+                        intent="disambiguate",
+                    )
+                    created += 1
+                self.workspace.write_trace_event(
+                    "reasoner_action_emitted",
+                    {
+                        "round": round_number,
+                        "action": "emit_sub_goals",
+                        "n_sub_goals": created,
+                        "reason": "positive_evidence_conflict",
+                    },
+                )
+                return created > 0
             choice, citations = scored_options[0]
             self.answer_result = WorkspaceRunResult(
                 answer=choice,
@@ -137,13 +158,14 @@ class ReasonerAgent:
         option_text: str,
         question: str,
         round_number: int,
+        intent: str = "verify",
     ) -> None:
         claim = _option_claim(question=question, option_id=option_id, option_text=option_text)
         operator = derive_answer_operator(question, route="", options=())
         route = derive_modality_route(question, operator=operator)
         modalities = ROUTE_TO_MODALITIES[route]
         self.mutator.create_sub_goal(
-            intent="verify",
+            intent=intent,  # type: ignore[arg-type]
             constraint=SubGoalConstraint(
                 option_id=option_id or None,
                 claim=claim,

@@ -609,6 +609,54 @@ def test_reasoner_answers_from_option_bound_positive_memory(tmp_path: Path) -> N
     assert reasoner.answer_result.citations == (memory.entry_id,)
 
 
+def test_reasoner_emits_disambiguation_need_when_multiple_options_have_positive_memory(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    memories = {
+        option_id: _write_test_memory(workspace, kind="visual_support", supports_option=option_id)
+        for option_id in ("C", "D")
+    }
+    for option_id in ("A", "B", "C", "D"):
+        sub_goal = mutator.create_sub_goal(
+            intent="verify",
+            constraint=SubGoalConstraint(option_id=option_id, claim=f"Check option {option_id}."),
+            budget=SubGoalBudget(max_explores=1, max_verifies=1),
+            success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+            parent_question="Question?",
+            created_by="reasoner",
+            created_round=1,
+        )
+        mutator.transition_sub_goal(sub_goal.sub_goal_id, to_status="in_progress", round_number=2)
+        memory_ids = (memories[option_id].entry_id,) if option_id in memories else ()
+        mutator.report_finding(
+            sub_goal_id=sub_goal.sub_goal_id,
+            status="satisfied" if memory_ids else "empty",
+            memory_ids=memory_ids,
+            coverage=(0.0, 0.0),
+            notes_for_planner=f"Option {option_id} check complete.",
+            cost={"tool_calls": 1},
+            created_round=2,
+        )
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=3,
+        question="Question?",
+        options={"A": "alpha", "B": "beta", "C": "gamma", "D": "delta"},
+    ) is True
+
+    assert reasoner.answer_result is None
+    open_goals = [goal for goal in mutator.sub_goals() if goal.status == "open"]
+    assert [goal.intent for goal in open_goals] == ["disambiguate", "disambiguate"]
+    assert [goal.constraint.option_id for goal in open_goals] == ["C", "D"]
+
+
 def test_reasoner_ignores_negative_memory_and_schedules_untested_options(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace(tmp_path / "workspace")
     mutator = WorkspaceMutator(workspace)

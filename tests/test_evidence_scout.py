@@ -260,6 +260,66 @@ def test_evidence_scout_sweeps_unverified_window_when_no_candidates_remain(tmp_p
     assert candidate["option_id"] == "D"
 
 
+def test_evidence_scout_sweeps_neighbor_window_from_history_without_explicit_scope(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    registry = ToolRegistry()
+    _write_verified_memory(workspace, option_id="D", segment_id="seg_0002", start_sec=20.0, end_sec=40.0)
+    recorded = mutator.record_candidates(
+        need_id="sg_0003",
+        option_id="C",
+        candidates=[
+            {
+                "candidate_key": "obs_0001:cand_0003",
+                "segment_id": "seg_0002",
+                "time_range": [20.0, 40.0],
+                "score": 0.7,
+                "source": "scout_shared_candidate",
+            }
+        ],
+        round_number=3,
+    )[0]
+    mutator.mark_candidate_consumed(str(recorded["candidate_id"]), finding_id="find_0003")
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Earlier candidate in the right segment.",
+        confidence=0.8,
+        regions=[],
+        raw_output={
+            "mode": "candidate_discovery",
+            "multi_agent_option_id": "C",
+            "candidate_windows": [
+                {
+                    "candidate_key": "obs_0001:cand_0003",
+                    "segment_id": "seg_0002",
+                    "time_range": [20.0, 40.0],
+                    "score": 0.7,
+                }
+            ],
+        },
+    )
+
+    @tool(name="explore", description="No fresh candidates.")
+    def explore(query: str = "", targets=(), scope=None, modalities=(), top_k: int = 3, original_question: str = ""):
+        return {
+            "mode": "candidate_discovery",
+            "claim": "No new candidates.",
+            "confidence": 0.1,
+            "candidate_windows": [],
+        }
+
+    registry.register(explore)
+    scout = EvidenceScout(registry=registry, mutator=mutator, workspace=workspace)
+
+    candidate = scout.propose_candidate(_sub_goal(option_id="D"), round_number=4)
+
+    assert candidate is not None
+    assert candidate["source"] == "scout_segment_sweep"
+    assert candidate["candidate_key"] == ""
+    assert candidate["segment_id"] == "seg_0002"
+    assert candidate["time_range"] == [40.0, 60.0]
+
+
 def _sub_goal(
     *,
     option_id: str,

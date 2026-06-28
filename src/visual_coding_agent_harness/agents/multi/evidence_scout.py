@@ -192,25 +192,76 @@ class EvidenceScout:
 
     def _sweep_candidate(self, sub_goal: Any) -> dict[str, object] | None:
         constraint = sub_goal.constraint
-        if not constraint.segment_id or not constraint.time_range:
+        scope = self._sweep_scope(sub_goal)
+        if scope is None:
             return None
+        segment_id, scope_range = scope
         option_id = str(constraint.option_id or "").strip().upper()[:1]
         verified = EvidenceLedger(workspace=self.workspace, mutator=self.mutator).verified_windows_for_option(option_id)
         time_range = _first_unverified_window(
-            segment_id=str(constraint.segment_id),
-            scope=constraint.time_range,
+            segment_id=segment_id,
+            scope=scope_range,
             verified=verified,
         )
         if time_range is None:
             return None
         return {
             "candidate_key": "",
-            "segment_id": str(constraint.segment_id),
+            "segment_id": segment_id,
             "time_range": [time_range[0], time_range[1]],
             "score": 0.0,
             "modalities": list(constraint.modality_hint or ("visual",)),
             "source": "scout_segment_sweep",
         }
+
+    def _sweep_scope(self, sub_goal: Any) -> tuple[str, tuple[float, float]] | None:
+        constraint = sub_goal.constraint
+        if constraint.segment_id and constraint.time_range:
+            return str(constraint.segment_id), (float(constraint.time_range[0]), float(constraint.time_range[1]))
+        candidates = self._historical_candidate_windows(sub_goal)
+        if not candidates:
+            return None
+        best = candidates[0]
+        segment_id = str(best.get("segment_id") or "").strip()
+        time_range = _candidate_time_range(best)
+        if not segment_id or time_range is None:
+            return None
+        width = max(20.0, time_range[1] - time_range[0])
+        return segment_id, (time_range[0], time_range[1] + width)
+
+    def _historical_candidate_windows(self, sub_goal: Any) -> list[dict[str, object]]:
+        option_id = str(sub_goal.constraint.option_id or "").strip().upper()[:1]
+        candidates: list[dict[str, object]] = []
+        for recorded in self.mutator.evidence_candidates():
+            row = dict(recorded)
+            if self._candidate_matches_sub_goal(row, sub_goal, enforce_option=False) and not self._has_other_option_support(
+                row, option_id=option_id
+            ):
+                candidates.append(dict(recorded))
+        for observation in self.workspace.read_observations():
+            raw_output = observation.raw_output if isinstance(observation.raw_output, dict) else {}
+            for candidate in _mapping_items(raw_output.get("candidate_windows")):
+                if self._candidate_matches_sub_goal(candidate, sub_goal, enforce_option=False) and not self._has_other_option_support(
+                    candidate, option_id=option_id
+                ):
+                    candidates.append(candidate)
+        candidates = [candidate for candidate in candidates if str(candidate.get("segment_id") or "").strip()]
+        candidates.sort(key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+        return candidates
+
+    def _has_other_option_support(self, candidate: Mapping[str, object], *, option_id: str) -> bool:
+        segment_id = str(candidate.get("segment_id") or "").strip()
+        time_range = _candidate_time_range(candidate)
+        if not segment_id or time_range is None:
+            return False
+        ledger = EvidenceLedger(workspace=self.workspace, mutator=self.mutator)
+        for item in ledger.items():
+            item_option = str(item.option_id or "").strip().upper()[:1]
+            if not item_option or item_option == option_id or item.polarity != "supports":
+                continue
+            if item.segment_id == segment_id and item.time_range == time_range:
+                return True
+        return False
 
     def _explore_args(self, sub_goal: Any) -> dict[str, Any]:
         constraint = sub_goal.constraint
