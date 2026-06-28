@@ -138,7 +138,10 @@ class EvidenceScout:
         segment_id = str(candidate.get("segment_id") or "").strip()
         time_range = _candidate_time_range(candidate)
         for recorded in self.mutator.evidence_candidates():
-            if not str(recorded.get("consumed_by_finding_id") or "").strip():
+            finding_id = str(recorded.get("consumed_by_finding_id") or "").strip()
+            if not finding_id:
+                continue
+            if self._consumed_candidate_is_reusable(finding_id):
                 continue
             recorded_key = str(recorded.get("candidate_key") or "").strip()
             if key and recorded_key == key:
@@ -153,6 +156,18 @@ class EvidenceScout:
             ):
                 return True
         return False
+
+    def _consumed_candidate_is_reusable(self, finding_id: str) -> bool:
+        finding = next((item for item in self.mutator.findings() if item.finding_id == finding_id), None)
+        if finding is None or finding.status != "empty":
+            return False
+        if not finding.memory_ids:
+            return False
+        memory_by_id = {entry.entry_id: entry for entry in self.workspace.memory_entries()}
+        return all(
+            (entry := memory_by_id.get(str(memory_id))) is not None and entry.kind == "local_negative"
+            for memory_id in finding.memory_ids
+        )
 
     def _observation_matches_sub_goal(self, raw_output: dict[str, Any], sub_goal: Any) -> bool:
         option_id = str(sub_goal.constraint.option_id or "").strip().upper()[:1]

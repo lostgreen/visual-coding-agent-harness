@@ -231,6 +231,86 @@ def test_evidence_scout_does_not_share_consumed_positive_candidate_across_option
     assert candidate is None
 
 
+def test_evidence_scout_can_share_consumed_negative_candidate_across_options(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    registry = ToolRegistry()
+    recorded = mutator.record_candidates(
+        need_id="sg_0003",
+        option_id="C",
+        candidates=[
+            {
+                "candidate_key": "obs_0005:cand_0002",
+                "segment_id": "seg_0001",
+                "time_range": [0.48, 12.139],
+                "score": 0.9,
+                "source": "scout_explore_hit",
+            }
+        ],
+        round_number=3,
+    )[0]
+    sub_goal = mutator.create_sub_goal(
+        intent="verify",
+        constraint=SubGoalConstraint(option_id="C", claim="Check option C."),
+        budget=SubGoalBudget(max_explores=1, max_verifies=1),
+        success_criteria=SubGoalSuccessCriteria(),
+        parent_question="Question?",
+        created_by="reasoner",
+        created_round=3,
+    )
+    claimed = mutator.claim_next_open_sub_goal(agent_id="investigator", round_number=3)
+    assert claimed is not None
+    negative = _write_negative_memory(workspace, segment_id="seg_0001", start_sec=0.48, end_sec=12.139)
+    finding = mutator.report_finding(
+        sub_goal_id=sub_goal.sub_goal_id,
+        status="empty",
+        memory_ids=(negative.entry_id,),
+        coverage=(0.0, 0.0),
+        notes_for_planner="Option C was not found in the candidate window.",
+        cost={"tool_calls": 1},
+        created_round=3,
+    )
+    mutator.mark_candidate_consumed(str(recorded["candidate_id"]), finding_id=finding.finding_id)
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Earlier candidate for option C.",
+        confidence=0.8,
+        regions=[],
+        raw_output={
+            "mode": "candidate_discovery",
+            "multi_agent_option_id": "C",
+            "candidate_windows": [
+                {
+                    "candidate_key": "obs_0005:cand_0002",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.48, 12.139],
+                    "score": 0.9,
+                }
+            ],
+        },
+    )
+
+    @tool(name="explore", description="No fresh candidates.")
+    def explore(query: str = "", targets=(), scope=None, modalities=(), top_k: int = 3, original_question: str = ""):
+        return {
+            "mode": "candidate_discovery",
+            "claim": "No new candidates.",
+            "confidence": 0.1,
+            "candidate_windows": [],
+        }
+
+    registry.register(explore)
+    scout = EvidenceScout(registry=registry, mutator=mutator, workspace=workspace)
+
+    candidate = scout.propose_candidate(_sub_goal(option_id="D"), round_number=4)
+
+    assert candidate is not None
+    assert candidate["source"] == "scout_shared_candidate"
+    assert candidate["candidate_key"] == "obs_0005:cand_0002"
+    assert candidate["segment_id"] == "seg_0001"
+    assert candidate["time_range"] == [0.48, 12.139]
+
+
 def test_evidence_scout_sweeps_unverified_window_when_no_candidates_remain(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace(tmp_path / "workspace")
     mutator = WorkspaceMutator(workspace)
@@ -374,4 +454,36 @@ def _write_verified_memory(
         supports_option=option_id,
         confidence="high",
         metadata={"verdict": "supported"},
+    )
+
+
+def _write_negative_memory(
+    workspace: EvidenceWorkspace,
+    *,
+    segment_id: str,
+    start_sec: float,
+    end_sec: float,
+):
+    workspace.write_produced_anchors(
+        [
+            SourceAnchor(
+                anchor_id="anch_negative",
+                observation_id="obs_negative",
+                source_kind="visual_fact",
+                segment_id=segment_id,
+                start_sec=start_sec,
+                end_sec=end_sec,
+                field_path="verification_results.0",
+                excerpt="No matching evidence.",
+                modality="visual",
+            )
+        ]
+    )
+    return workspace.write_memory(
+        kind="local_negative",
+        claim="No matching evidence.",
+        anchors=[{"anchor_id": "anch_negative"}],
+        supports_option="",
+        confidence="medium",
+        metadata={"verdict": "not_found_in_window"},
     )
