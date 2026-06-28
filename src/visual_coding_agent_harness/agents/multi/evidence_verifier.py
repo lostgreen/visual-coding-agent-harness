@@ -29,7 +29,7 @@ class EvidenceVerifier:
         candidate_key = str(candidate.get("candidate_key") or "")
         outcome = self.tool_runner.run_tool(
             "verify_window",
-            self._verify_args(sub_goal, candidate_key=candidate_key),
+            self._verify_args(sub_goal, candidate=candidate, candidate_key=candidate_key),
             round_number=round_number,
             sub_goal_id=sub_goal.sub_goal_id,
         )
@@ -72,7 +72,7 @@ class EvidenceVerifier:
         )
         return finding
 
-    def _verify_args(self, sub_goal: Any, *, candidate_key: str) -> dict[str, Any]:
+    def _verify_args(self, sub_goal: Any, *, candidate: Mapping[str, object], candidate_key: str) -> dict[str, Any]:
         constraint = sub_goal.constraint
         check: dict[str, Any] = {
             "target_id": f"option_{constraint.option_id}_check" if constraint.option_id else "sub_goal_check",
@@ -81,12 +81,20 @@ class EvidenceVerifier:
         }
         if constraint.option_id:
             check["option_id"] = constraint.option_id
-        return {
+        args: dict[str, Any] = {
             "candidate_key": candidate_key,
             "focus": [constraint.claim or sub_goal.parent_question],
             "checks": [check],
             "sampling": {"fps": 2, "max_frames": min(128, int(sub_goal.budget.max_frames or 128))},
         }
+        if not candidate_key:
+            segment_id = str(candidate.get("segment_id") or constraint.segment_id or "")
+            time_range = _candidate_time_range(candidate) or constraint.time_range
+            if segment_id:
+                args["segment_id"] = segment_id
+            if time_range:
+                args["time_range"] = [float(time_range[0]), float(time_range[1])]
+        return args
 
 
 def _has_decisive_memory(workspace: Any, memory_ids: tuple[str, ...]) -> bool:
@@ -120,3 +128,12 @@ def _frames_read(raw_output: Mapping[str, Any]) -> int:
     if isinstance(frame_refs, (list, tuple)):
         return len(frame_refs)
     return 0
+
+
+def _candidate_time_range(candidate: Mapping[str, object]) -> tuple[float, float] | None:
+    value = candidate.get("time_range")
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        return float(value[0]), float(value[1])
+    if "start_sec" in candidate and "end_sec" in candidate:
+        return float(candidate.get("start_sec") or 0.0), float(candidate.get("end_sec") or 0.0)
+    return None

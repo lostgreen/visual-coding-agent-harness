@@ -231,11 +231,51 @@ def test_evidence_scout_does_not_share_consumed_positive_candidate_across_option
     assert candidate is None
 
 
-def _sub_goal(*, option_id: str, max_explores: int = 1) -> SubGoal:
+def test_evidence_scout_sweeps_unverified_window_when_no_candidates_remain(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    registry = ToolRegistry()
+    _write_verified_memory(workspace, option_id="D", segment_id="seg_0007", start_sec=0.0, end_sec=20.0)
+
+    @tool(name="explore", description="No fresh candidates.")
+    def explore(query: str = "", targets=(), scope=None, modalities=(), top_k: int = 3, original_question: str = ""):
+        return {
+            "mode": "candidate_discovery",
+            "claim": "No new candidates.",
+            "confidence": 0.1,
+            "candidate_windows": [],
+        }
+
+    registry.register(explore)
+    scout = EvidenceScout(registry=registry, mutator=mutator, workspace=workspace)
+    sub_goal = _sub_goal(option_id="D", segment_id="seg_0007", time_range=(0.0, 60.0))
+
+    candidate = scout.propose_candidate(sub_goal, round_number=4)
+
+    assert candidate is not None
+    assert candidate["source"] == "scout_segment_sweep"
+    assert candidate["candidate_key"] == ""
+    assert candidate["segment_id"] == "seg_0007"
+    assert candidate["time_range"] == [20.0, 40.0]
+    assert candidate["option_id"] == "D"
+
+
+def _sub_goal(
+    *,
+    option_id: str,
+    max_explores: int = 1,
+    segment_id: str | None = None,
+    time_range: tuple[float, float] | None = None,
+) -> SubGoal:
     return SubGoal(
         sub_goal_id="sg_0001",
         intent="verify",
-        constraint=SubGoalConstraint(option_id=option_id, claim=f"Check option {option_id}."),
+        constraint=SubGoalConstraint(
+            option_id=option_id,
+            claim=f"Check option {option_id}.",
+            segment_id=segment_id,
+            time_range=time_range,
+        ),
         budget=SubGoalBudget(max_explores=max_explores, max_verifies=1),
         success_criteria=SubGoalSuccessCriteria(),
         parent_question="Question?",

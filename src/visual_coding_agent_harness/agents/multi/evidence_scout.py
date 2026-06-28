@@ -44,6 +44,10 @@ class EvidenceScout:
             if shared:
                 return self._record_candidate(sub_goal, shared, round_number=round_number, source="scout_shared_candidate")
         if not candidates:
+            sweep = self._sweep_candidate(sub_goal)
+            if sweep:
+                return self._record_candidate(sub_goal, sweep, round_number=round_number, source="scout_segment_sweep")
+        if not candidates:
             self.workspace.write_trace_event(
                 "evidence_scout_candidates_proposed",
                 {
@@ -186,6 +190,28 @@ class EvidenceScout:
                 return False
         return True
 
+    def _sweep_candidate(self, sub_goal: Any) -> dict[str, object] | None:
+        constraint = sub_goal.constraint
+        if not constraint.segment_id or not constraint.time_range:
+            return None
+        option_id = str(constraint.option_id or "").strip().upper()[:1]
+        verified = EvidenceLedger(workspace=self.workspace, mutator=self.mutator).verified_windows_for_option(option_id)
+        time_range = _first_unverified_window(
+            segment_id=str(constraint.segment_id),
+            scope=constraint.time_range,
+            verified=verified,
+        )
+        if time_range is None:
+            return None
+        return {
+            "candidate_key": "",
+            "segment_id": str(constraint.segment_id),
+            "time_range": [time_range[0], time_range[1]],
+            "score": 0.0,
+            "modalities": list(constraint.modality_hint or ("visual",)),
+            "source": "scout_segment_sweep",
+        }
+
     def _explore_args(self, sub_goal: Any) -> dict[str, Any]:
         constraint = sub_goal.constraint
         scope: dict[str, Any] = {}
@@ -222,4 +248,31 @@ def _candidate_time_range(candidate: Mapping[str, object]) -> tuple[float, float
         return float(value[0]), float(value[1])
     if "start_sec" in candidate and "end_sec" in candidate:
         return float(candidate.get("start_sec") or 0.0), float(candidate.get("end_sec") or 0.0)
+    return None
+
+
+def _first_unverified_window(
+    *,
+    segment_id: str,
+    scope: tuple[float, float],
+    verified: set[tuple[str, float, float]],
+    window_sec: float = 20.0,
+) -> tuple[float, float] | None:
+    scope_start, scope_end = float(scope[0]), float(scope[1])
+    if scope_end <= scope_start:
+        return None
+    intervals = sorted(
+        (max(scope_start, float(start)), min(scope_end, float(end)))
+        for verified_segment_id, start, end in verified
+        if verified_segment_id == segment_id and float(end) > scope_start and float(start) < scope_end
+    )
+    cursor = scope_start
+    for start, end in intervals:
+        if end <= cursor:
+            continue
+        if start > cursor:
+            return (cursor, min(start, cursor + window_sec))
+        cursor = max(cursor, end)
+    if cursor < scope_end:
+        return (cursor, min(scope_end, cursor + window_sec))
     return None
