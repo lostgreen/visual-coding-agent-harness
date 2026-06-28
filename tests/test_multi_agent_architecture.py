@@ -542,6 +542,29 @@ def test_reasoner_ignores_negative_memory_and_schedules_untested_options(tmp_pat
     assert open_options == ["B", "C", "D"]
 
 
+def test_reasoner_sub_goal_claim_includes_question_context(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=1,
+        question="Question: In what order are the four sculptures presented?",
+        options={"A": "Persephone, Apollo, David, Aeneas", "B": "Aeneas, David, Persephone, Apollo"},
+    ) is True
+
+    claims = [goal.constraint.claim for goal in mutator.sub_goals()]
+    assert "In what order" in claims[0]
+    assert "Option A" in claims[0]
+    assert "Persephone, Apollo, David, Aeneas" in claims[0]
+
+
 def _write_test_memory(workspace: EvidenceWorkspace, *, kind: str, supports_option: str):
     workspace.write_produced_anchors(
         [

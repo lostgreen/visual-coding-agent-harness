@@ -120,7 +120,7 @@ class ReasonerAgent:
         question: str,
         round_number: int,
     ) -> None:
-        claim = option_text or "Find answer-relevant local video evidence."
+        claim = _option_claim(question=question, option_id=option_id, option_text=option_text)
         self.mutator.create_sub_goal(
             intent="verify",
             constraint=SubGoalConstraint(
@@ -164,6 +164,17 @@ def _score_positive_findings(findings: Any, workspace: Any, *, options: Mapping[
         key=lambda option_id: (-scores[option_id], option_order.get(option_id, 999), option_id),
     )
     return [(option_id, tuple(citations[option_id])) for option_id in ranked]
+
+
+def _option_claim(*, question: str, option_id: str, option_text: str) -> str:
+    question_text = " ".join(str(question or "").split())
+    option_body = " ".join(str(option_text or "").split())
+    if option_id and option_body:
+        return (
+            f"{question_text} Candidate answer Option {option_id}: {option_body}. "
+            "Verify whether this option correctly answers the question, including order and temporal relations."
+        )
+    return option_body or question_text or "Find answer-relevant local video evidence."
 
 
 def _confidence_score(confidence: Any) -> int:
