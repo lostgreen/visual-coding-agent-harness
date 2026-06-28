@@ -48,6 +48,67 @@ class WorkspaceMutator:
     def findings(self) -> list[Finding]:
         return [Finding.from_dict(row) for row in self._read_jsonl("findings.jsonl")]
 
+    def evidence_candidates(self) -> list[dict[str, object]]:
+        """Return the latest version of each evidence candidate in insertion order."""
+
+        latest: dict[str, dict[str, object]] = {}
+        order: list[str] = []
+        for row in self._read_jsonl("evidence_candidates.jsonl"):
+            candidate_id = str(row.get("candidate_id") or "")
+            if not candidate_id:
+                continue
+            if candidate_id not in latest:
+                order.append(candidate_id)
+            latest[candidate_id] = dict(row)
+        return [latest[candidate_id] for candidate_id in order if candidate_id in latest]
+
+    def record_candidates(
+        self,
+        *,
+        need_id: str,
+        option_id: str,
+        candidates: list[Mapping[str, object]],
+        round_number: int,
+    ) -> list[dict[str, object]]:
+        """Persist Scout-proposed candidate windows for a need."""
+
+        recorded: list[dict[str, object]] = []
+        next_index = len(self.evidence_candidates()) + 1
+        for item in candidates:
+            time_range = _time_range_list(item.get("time_range"))
+            if not time_range:
+                start = item.get("start_sec")
+                end = item.get("end_sec")
+                time_range = _time_range_list([start, end])
+            row: dict[str, object] = {
+                "candidate_id": self._next_id("ec", next_index),
+                "need_id": str(need_id),
+                "option_id": str(option_id or "").strip().upper()[:1],
+                "candidate_key": str(item.get("candidate_key") or ""),
+                "segment_id": str(item.get("segment_id") or ""),
+                "time_range": time_range,
+                "score": float(item.get("score", 0.0) or 0.0),
+                "modalities": [str(value) for value in _sequence(item.get("modalities"))],
+                "source": str(item.get("source") or "scout_explore_hit"),
+                "round_number": int(round_number),
+                "consumed_by_finding_id": "",
+            }
+            next_index += 1
+            self._append_jsonl("evidence_candidates.jsonl", row)
+            recorded.append(row)
+        return recorded
+
+    def mark_candidate_consumed(self, candidate_id: str, *, finding_id: str) -> dict[str, object]:
+        """Mark a candidate as consumed by a verifier finding."""
+
+        for row in reversed(self.evidence_candidates()):
+            if str(row.get("candidate_id") or "") == str(candidate_id):
+                updated = dict(row)
+                updated["consumed_by_finding_id"] = str(finding_id)
+                self._append_jsonl("evidence_candidates.jsonl", updated)
+                return updated
+        raise ValueError(f"unknown evidence candidate: {candidate_id}")
+
     def create_sub_goal(
         self,
         *,
@@ -192,3 +253,22 @@ class WorkspaceMutator:
     @staticmethod
     def _next_id(prefix: str, index: int) -> str:
         return f"{prefix}_{index:04d}"
+
+
+def _sequence(value: object) -> tuple[object, ...]:
+    if isinstance(value, (str, bytes)) or value is None:
+        return ()
+    try:
+        return tuple(value)  # type: ignore[arg-type]
+    except TypeError:
+        return ()
+
+
+def _time_range_list(value: object) -> list[float]:
+    items = _sequence(value)
+    if len(items) < 2:
+        return []
+    try:
+        return [float(items[0]), float(items[1])]
+    except (TypeError, ValueError):
+        return []

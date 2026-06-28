@@ -114,6 +114,38 @@ def test_evidence_ledger_verified_windows_for_option_and_coverage(tmp_path: Path
     assert ledger.coverage_by_segment()["seg_0001"] == 25.0
 
 
+def test_workspace_mutator_records_and_consumes_evidence_candidates(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+
+    candidates = mutator.record_candidates(
+        need_id="sg_0001",
+        option_id="B",
+        candidates=[
+            {
+                "candidate_key": "obs_0001:cand_0001",
+                "segment_id": "seg_0001",
+                "time_range": [10.0, 20.0],
+                "score": 0.7,
+                "modalities": ["asr", "visual"],
+                "source": "scout_explore_hit",
+            }
+        ],
+        round_number=2,
+    )
+
+    assert candidates[0]["candidate_id"] == "ec_0001"
+    assert candidates[0]["need_id"] == "sg_0001"
+    assert candidates[0]["option_id"] == "B"
+    assert candidates[0]["consumed_by_finding_id"] == ""
+
+    consumed = mutator.mark_candidate_consumed("ec_0001", finding_id="find_0001")
+
+    assert consumed["candidate_id"] == "ec_0001"
+    assert consumed["consumed_by_finding_id"] == "find_0001"
+    assert mutator.evidence_candidates()[-1]["consumed_by_finding_id"] == "find_0001"
+
+
 def _write_memory(
     workspace: EvidenceWorkspace,
     *,

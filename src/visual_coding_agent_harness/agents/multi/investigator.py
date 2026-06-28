@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .evidence_scout import EvidenceScout
+from .evidence_verifier import EvidenceVerifier
 from .mutator import WorkspaceMutator
 from .tool_runner import MultiAgentToolRunner
 
@@ -28,6 +30,8 @@ class InvestigatorAgent:
         self.video_map = video_map
         self.log_root = log_root
         self.tool_runner = MultiAgentToolRunner(registry=registry, workspace=workspace)
+        self.scout = EvidenceScout(registry=registry, mutator=mutator, workspace=workspace)
+        self.verifier = EvidenceVerifier(registry=registry, mutator=mutator, workspace=workspace)
 
     def step(self, *, round_number: int) -> bool:
         """Claim one open sub-goal and try to turn it into committed evidence."""
@@ -35,47 +39,25 @@ class InvestigatorAgent:
         sub_goal = self.mutator.claim_next_open_sub_goal(agent_id="investigator", round_number=round_number)
         if sub_goal is None:
             return False
-        memory_ids: tuple[str, ...] = ()
-        notes = ""
         try:
-            candidate_key = self._select_candidate_key(sub_goal)
-            if not candidate_key:
-                explore = self.tool_runner.run_tool(
-                    "explore",
-                    self._explore_args(sub_goal),
-                    round_number=round_number,
-                    sub_goal_id=sub_goal.sub_goal_id,
-                )
-                candidate_key = (
-                    self._select_candidate_key(sub_goal)
-                    or self._first_candidate_key(explore.raw_output)
-                    or self._select_shared_candidate_key(sub_goal)
-                )
-            if candidate_key:
-                verify = self.tool_runner.run_tool(
-                    "verify_window",
-                    self._verify_args(sub_goal, candidate_key=candidate_key),
-                    round_number=round_number,
-                    sub_goal_id=sub_goal.sub_goal_id,
-                )
-                memory_ids = verify.memory_ids
-                notes = f"Verified candidate {candidate_key}."
-            else:
-                notes = "No candidate window was available for this sub-goal."
+            candidate = self.scout.propose_candidate(sub_goal, round_number=round_number)
+            if candidate:
+                self.verifier.verify(sub_goal=sub_goal, candidate=candidate, round_number=round_number, explore_calls=1)
+                return True
+            notes = "No candidate window was available for this sub-goal."
         except Exception as exc:  # noqa: BLE001 - report as finding, do not break driver
             self.workspace.write_trace_event(
                 "investigator_tool_error",
                 {"round": round_number, "sub_goal_id": sub_goal.sub_goal_id, "error": str(exc)},
             )
             notes = f"Investigation failed: {exc}"
-        status = "satisfied" if self._has_positive_memory(memory_ids) else "empty"
         self.mutator.report_finding(
             sub_goal_id=sub_goal.sub_goal_id,
-            status=status,
-            memory_ids=memory_ids,
+            status="empty",
+            memory_ids=(),
             coverage=(0.0, 0.0),
             notes_for_planner=notes,
-            cost={"tool_calls": 1 if memory_ids else 0, "frames_read": 0, "tokens": 0},
+            cost={"explore_calls": 1, "verify_calls": 0, "tool_calls": 1, "frames_read": 0, "tokens": 0},
             created_round=round_number,
         )
         return True

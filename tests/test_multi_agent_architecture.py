@@ -96,6 +96,25 @@ def test_multi_agent_protocol_exports_are_focused() -> None:
         sub_goal.status = "done"  # type: ignore[misc]
 
 
+def test_sub_goal_budget_round_trip_preserves_zero_limits() -> None:
+    sub_goal = SubGoal(
+        sub_goal_id="sg_0001",
+        intent="verify",
+        constraint=SubGoalConstraint(claim="Check one candidate."),
+        budget=SubGoalBudget(max_explores=0, max_verifies=0, max_frames=0),
+        success_criteria=SubGoalSuccessCriteria(),
+        parent_question="Question?",
+        created_by="reasoner",
+        created_round=1,
+    )
+
+    decoded = SubGoal.from_dict(sub_goal.to_dict())
+
+    assert decoded.budget.max_explores == 0
+    assert decoded.budget.max_verifies == 0
+    assert decoded.budget.max_frames == 0
+
+
 def test_workspace_mutator_persists_sub_goal_state_machine(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace(tmp_path / "workspace")
     mutator = WorkspaceMutator(workspace)

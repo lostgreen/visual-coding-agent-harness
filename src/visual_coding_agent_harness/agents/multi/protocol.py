@@ -74,9 +74,9 @@ class SubGoal:
                 modality_hint=tuple(str(item) for item in _sequence(constraint_payload.get("modality_hint"))),
             ),
             budget=SubGoalBudget(
-                max_explores=int(budget_payload.get("max_explores", 2) or 2),
-                max_verifies=int(budget_payload.get("max_verifies", 3) or 3),
-                max_frames=int(budget_payload.get("max_frames", 256) or 256),
+                max_explores=_int_with_default(budget_payload.get("max_explores"), 2),
+                max_verifies=_int_with_default(budget_payload.get("max_verifies"), 3),
+                max_frames=_int_with_default(budget_payload.get("max_frames"), 256),
             ),
             success_criteria=SubGoalSuccessCriteria(
                 needs_visual_support=bool(criteria_payload.get("needs_visual_support", True)),
@@ -163,3 +163,12 @@ def _time_range_tuple(value: object) -> tuple[float, float] | None:
     if len(items) < 2:
         return None
     return float(items[0]), float(items[1])
+
+
+def _int_with_default(value: object, default: int) -> int:
+    if value is None:
+        return int(default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
