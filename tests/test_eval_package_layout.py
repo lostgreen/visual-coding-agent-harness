@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import ast
 from pathlib import Path
 
 
@@ -62,3 +63,14 @@ def test_pyproject_exposes_packaged_eval_console_scripts():
     assert 'vh-ablation-report = "visual_coding_agent_harness.cli.generate_ablation_report:main"' in pyproject
     assert 'vh-audit-trajectory = "visual_coding_agent_harness.cli.audit_trajectory:main"' in pyproject
     assert 'vh-trajectory-markdown = "visual_coding_agent_harness.cli.trajectory_markdown:main"' in pyproject
+
+
+def test_videomme_eval_import_dependencies_postpone_annotations_for_python38():
+    repo_root = Path(__file__).resolve().parents[1]
+    module_path = repo_root / "src/visual_coding_agent_harness/workspace/context_budget.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+
+    assert any(
+        isinstance(node, ast.ImportFrom) and node.module == "__future__" and any(alias.name == "annotations" for alias in node.names)
+        for node in tree.body
+    )

@@ -1,5 +1,7 @@
 """Context budget allocation primitives for prompt slots."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import re
