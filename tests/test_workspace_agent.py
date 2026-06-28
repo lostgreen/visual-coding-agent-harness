@@ -1056,6 +1056,57 @@ def test_structured_verify_cross_match_respects_quoted_sequence_order(tmp_path: 
     ]
 
 
+def test_structured_verify_cross_match_allows_one_missing_item_in_long_sequence(tmp_path: Path) -> None:
+    raw_output = {
+        "claim": "Check option A ordering.",
+        "mode": "verify_window",
+        "answer_options": {
+            "A": '"red bus", "blue taxi", "yellow tram" and "green ferry".',
+            "B": '"blue taxi", "green ferry", "yellow tram" and "red bus".',
+            "C": '"yellow tram", "red bus", "green ferry" and "blue taxi".',
+            "D": '"green ferry", "yellow tram", "blue taxi" and "red bus".',
+        },
+        "produced_anchors": [
+            {
+                "anchor_id": "anch_partial_order",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The actual order is green ferry, yellow tram, blue taxi, and a crimson coach.",
+            }
+        ],
+        "verification_results": [
+            {
+                "target_id": "option_A_check",
+                "claim": "Option A gives the display order.",
+                "verdict": "contradicted",
+                "rationale": "The actual order is green ferry, yellow tram, blue taxi, and a crimson coach.",
+                "anchor_ids": ["anch_partial_order"],
+                "scope": {"segment_id": "seg_0001", "time_range": [0.0, 12.0]},
+                "confidence": 0.92,
+                "option_id": "A",
+            }
+        ],
+    }
+
+    writes = _structured_verify_writes(
+        raw_output,
+        anchors=[
+            {
+                "anchor_id": "anch_partial_order",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The actual order is green ferry, yellow tram, blue taxi, and a crimson coach.",
+            }
+        ],
+        reason="test",
+    )
+
+    assert [(item["kind"], item.get("supports_option")) for item in writes["memory"]] == [
+        ("answer_conflict", "A"),
+        ("synthesized_support", "D"),
+    ]
+
+
 def test_structured_verify_does_not_cross_match_local_negative_claim_echo(tmp_path: Path) -> None:
     raw_output = {
         "claim": "Check option B.",

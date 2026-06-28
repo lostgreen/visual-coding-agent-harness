@@ -2181,11 +2181,14 @@ def _ordered_sequence_score(text_norm: str, option_items: Sequence[str]) -> floa
     if len(normalized_items) < 2:
         return 0.0
     positions = [text_norm.find(item) for item in normalized_items]
-    if any(position < 0 for position in positions):
+    present_positions = [position for position in positions if position >= 0]
+    if len(present_positions) == len(positions):
+        return 1.0 if present_positions == sorted(present_positions) else 0.0
+    if len(positions) < 4 or len(present_positions) < len(positions) - 1 or len(present_positions) < 3:
         return 0.0
-    if positions != sorted(positions):
+    if present_positions != sorted(present_positions):
         return 0.0
-    return 1.0
+    return 0.9
 
 
 def _normalize_match_text(text: str) -> str:
