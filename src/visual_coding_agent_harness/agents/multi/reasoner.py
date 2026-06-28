@@ -197,6 +197,7 @@ class ReasonerAgent:
 def _score_positive_findings(findings: Any, workspace: Any, *, options: Mapping[str, str]) -> list[tuple[str, tuple[str, ...]]]:
     option_ids = set(_option_ids(options))
     memory_by_id = {entry.entry_id: entry for entry in workspace.memory_entries()}
+    refuted_options = _refuted_options(workspace, options=options)
     scores: dict[str, int] = {}
     citations: dict[str, list[str]] = {}
     for finding in findings:
@@ -209,6 +210,8 @@ def _score_positive_findings(findings: Any, workspace: Any, *, options: Mapping[
             option_id = str(entry.supports_option or "").strip().upper()[:1]
             if not option_id or (option_ids and option_id not in option_ids):
                 continue
+            if option_id in refuted_options:
+                continue
             scores[option_id] = scores.get(option_id, 0) + _confidence_score(entry.confidence)
             citations.setdefault(option_id, []).append(entry.entry_id)
     option_order = {option_id: index for index, option_id in enumerate(_option_ids(options))}
@@ -217,6 +220,23 @@ def _score_positive_findings(findings: Any, workspace: Any, *, options: Mapping[
         key=lambda option_id: (-scores[option_id], option_order.get(option_id, 999), option_id),
     )
     return [(option_id, tuple(citations[option_id])) for option_id in ranked]
+
+
+def _refuted_options(workspace: Any, *, options: Mapping[str, str]) -> set[str]:
+    option_ids = set(_option_ids(options))
+    refuted: set[str] = set()
+    for entry in workspace.memory_entries():
+        option_id = str(entry.supports_option or "").strip().upper()[:1]
+        if option_id not in option_ids or entry.kind not in CONTRADICTING_KINDS:
+            continue
+        verdict = ""
+        metadata = getattr(entry, "metadata", {}) or {}
+        if isinstance(metadata, Mapping):
+            verdict = str(metadata.get("verdict") or "").strip().lower()
+        if verdict and verdict != "contradicted":
+            continue
+        refuted.add(option_id)
+    return refuted
 
 
 def _elimination_answer(workspace: Any, *, options: Mapping[str, str]) -> tuple[str, tuple[str, ...]] | None:

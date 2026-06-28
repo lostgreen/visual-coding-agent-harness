@@ -192,6 +192,21 @@ def test_multi_agent_driver_runs_reasoner_and_investigator(tmp_path: Path) -> No
     assert mutator.findings()[0].status == "satisfied"
 
 
+def test_multi_agent_driver_allows_final_reasoner_pass_after_last_investigator_step(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    reasoner = StubReasoner(mutator)
+    investigator = StubInvestigator(mutator)
+    driver = MultiAgentDriver(reasoner=reasoner, investigator=investigator, workspace=workspace, max_rounds=1)
+
+    result = driver.run("Question: Which option is supported?\nA. no\nB. yes", options={"A": "no", "B": "yes"})
+
+    assert result.answer == "B"
+    assert result.citations == ("mem_0001",)
+    assert result.metadata is not None
+    assert result.metadata["strategy"] == "multi_agent_v0"
+
+
 def test_workspace_views_are_small_and_separated(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace(tmp_path / "workspace")
     mutator = WorkspaceMutator(workspace)
@@ -655,6 +670,59 @@ def test_reasoner_emits_disambiguation_need_when_multiple_options_have_positive_
     open_goals = [goal for goal in mutator.sub_goals() if goal.status == "open"]
     assert [goal.intent for goal in open_goals] == ["disambiguate", "disambiguate"]
     assert [goal.constraint.option_id for goal in open_goals] == ["C", "D"]
+
+
+def test_reasoner_answers_supported_option_when_competing_positive_is_refuted(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    visual_c = _write_test_memory(workspace, kind="visual_support", supports_option="C")
+    conflict_c = _write_test_memory(workspace, kind="answer_conflict", supports_option="C")
+    visual_d = _write_test_memory(workspace, kind="visual_support", supports_option="D")
+    for index, (option_id, status, memory_ids) in enumerate(
+        [
+            ("A", "empty", ()),
+            ("B", "empty", ()),
+            ("C", "satisfied", (visual_c.entry_id, conflict_c.entry_id)),
+            ("D", "satisfied", (visual_d.entry_id,)),
+        ],
+        start=1,
+    ):
+        sub_goal = mutator.create_sub_goal(
+            intent="verify",
+            constraint=SubGoalConstraint(option_id=option_id, claim=f"Check option {option_id}."),
+            budget=SubGoalBudget(max_explores=1, max_verifies=1),
+            success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+            parent_question="Question?",
+            created_by="reasoner",
+            created_round=index,
+        )
+        mutator.transition_sub_goal(sub_goal.sub_goal_id, to_status="in_progress", round_number=index + 1)
+        mutator.report_finding(
+            sub_goal_id=sub_goal.sub_goal_id,
+            status=status,  # type: ignore[arg-type]
+            memory_ids=memory_ids,
+            coverage=(0.0, 0.0),
+            notes_for_planner=f"Option {option_id} check complete.",
+            cost={"tool_calls": 1},
+            created_round=index + 1,
+        )
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=6,
+        question="Question?",
+        options={"A": "alpha", "B": "beta", "C": "gamma", "D": "delta"},
+    ) is True
+
+    assert reasoner.answer_result is not None
+    assert reasoner.answer_result.answer == "D"
+    assert reasoner.answer_result.citations == (visual_d.entry_id,)
 
 
 def test_reasoner_ignores_negative_memory_and_schedules_untested_options(tmp_path: Path) -> None:
