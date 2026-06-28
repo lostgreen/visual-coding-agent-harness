@@ -8,6 +8,9 @@ from ..workspace_agent import WorkspaceRunResult
 from .mutator import WorkspaceMutator
 from .protocol import SubGoalBudget, SubGoalConstraint, SubGoalSuccessCriteria
 
+MAX_OPEN_SUB_GOALS = 3
+ANSWER_GROUNDING_KINDS = frozenset({"visual_support"})
+
 
 class ReasonerAgent:
     """Minimal Reasoner implementation for the first multi-agent runner slice."""
@@ -29,17 +32,54 @@ class ReasonerAgent:
         self.answer_result: WorkspaceRunResult | None = None
 
     def step(self, *, round_number: int, question: str, options: Mapping[str, str]) -> bool:
-        """Emit one scoped verify sub-goal, then answer only from satisfied findings."""
+        """Schedule option checks, then answer only from option-bound positive evidence."""
 
         if self.answer_result is not None:
             return False
+        option_ids = _option_ids(options)
+        sub_goals = self.mutator.sub_goals()
+        active = [goal for goal in sub_goals if goal.status in {"open", "in_progress"}]
+        active_options = {
+            str(goal.constraint.option_id or "").strip().upper()[:1]
+            for goal in active
+            if str(goal.constraint.option_id or "").strip()
+        }
+        tested_options = {
+            str(goal.constraint.option_id or "").strip().upper()[:1]
+            for goal in sub_goals
+            if goal.status in {"done", "abandoned"} and str(goal.constraint.option_id or "").strip()
+        }
+        untested_options = [option_id for option_id in option_ids if option_id not in tested_options | active_options]
+        if untested_options and len(active) < MAX_OPEN_SUB_GOALS:
+            created = 0
+            for option_id in untested_options[: MAX_OPEN_SUB_GOALS - len(active)]:
+                self._create_option_sub_goal(
+                    option_id=option_id,
+                    option_text=options.get(option_id, ""),
+                    question=question,
+                    round_number=round_number,
+                )
+                created += 1
+            self.workspace.write_trace_event(
+                "reasoner_action_emitted",
+                {"round": round_number, "action": "emit_sub_goals", "n_sub_goals": created},
+            )
+            return created > 0
+
+        if active:
+            self.workspace.write_trace_event(
+                "reasoner_action_emitted",
+                {"round": round_number, "action": "wait", "n_sub_goals": len(active)},
+            )
+            return False
+
         findings = self.mutator.findings()
-        satisfied = [finding for finding in findings if finding.status == "satisfied" and finding.memory_ids]
-        if satisfied:
-            choice = _first_option_id(options) or "A"
+        scored_options = _score_positive_findings(findings, self.workspace, options=options)
+        if scored_options:
+            choice, citations = scored_options[0]
             self.answer_result = WorkspaceRunResult(
                 answer=choice,
-                citations=satisfied[-1].memory_ids,
+                citations=citations,
                 confidence="medium",
                 rounds=round_number,
                 metadata={"status": "final", "strategy": "multi_agent_v0"},
@@ -50,21 +90,41 @@ class ReasonerAgent:
             )
             return True
 
-        active = [goal for goal in self.mutator.sub_goals() if goal.status in {"open", "in_progress"}]
-        if active:
+        if option_ids:
             self.workspace.write_trace_event(
                 "reasoner_action_emitted",
-                {"round": round_number, "action": "wait", "n_sub_goals": len(active)},
+                {"round": round_number, "action": "wait", "n_sub_goals": 0, "reason": "no_positive_evidence"},
             )
             return False
 
-        option_id = _first_option_id(options)
+        option_id = ""
         option_text = options.get(option_id or "", "") if option_id else ""
+        claim = option_text or "Find answer-relevant local video evidence."
+        self._create_option_sub_goal(
+            option_id=option_id,
+            option_text=claim,
+            question=question,
+            round_number=round_number,
+        )
+        self.workspace.write_trace_event(
+            "reasoner_action_emitted",
+            {"round": round_number, "action": "emit_sub_goals", "n_sub_goals": 1},
+        )
+        return True
+
+    def _create_option_sub_goal(
+        self,
+        *,
+        option_id: str,
+        option_text: str,
+        question: str,
+        round_number: int,
+    ) -> None:
         claim = option_text or "Find answer-relevant local video evidence."
         self.mutator.create_sub_goal(
             intent="verify",
             constraint=SubGoalConstraint(
-                option_id=option_id,
+                option_id=option_id or None,
                 claim=claim,
                 modality_hint=("visual",),
             ),
@@ -73,16 +133,54 @@ class ReasonerAgent:
             parent_question=question,
             created_by="reasoner",
             created_round=round_number,
-            rationale="Create the first local verification target before answering.",
+            rationale=(
+                f"Verify option {option_id} before choosing an answer."
+                if option_id
+                else "Create a local verification target before answering."
+            ),
         )
-        self.workspace.write_trace_event(
-            "reasoner_action_emitted",
-            {"round": round_number, "action": "emit_sub_goals", "n_sub_goals": 1},
-        )
-        return True
 
 
-def _first_option_id(options: Mapping[str, str]) -> str:
+def _score_positive_findings(findings: Any, workspace: Any, *, options: Mapping[str, str]) -> list[tuple[str, tuple[str, ...]]]:
+    option_ids = set(_option_ids(options))
+    memory_by_id = {entry.entry_id: entry for entry in workspace.memory_entries()}
+    scores: dict[str, int] = {}
+    citations: dict[str, list[str]] = {}
+    for finding in findings:
+        if finding.status != "satisfied":
+            continue
+        for memory_id in finding.memory_ids:
+            entry = memory_by_id.get(str(memory_id))
+            if entry is None or entry.kind not in ANSWER_GROUNDING_KINDS:
+                continue
+            option_id = str(entry.supports_option or "").strip().upper()[:1]
+            if not option_id or (option_ids and option_id not in option_ids):
+                continue
+            scores[option_id] = scores.get(option_id, 0) + _confidence_score(entry.confidence)
+            citations.setdefault(option_id, []).append(entry.entry_id)
+    option_order = {option_id: index for index, option_id in enumerate(_option_ids(options))}
+    ranked = sorted(
+        scores,
+        key=lambda option_id: (-scores[option_id], option_order.get(option_id, 999), option_id),
+    )
+    return [(option_id, tuple(citations[option_id])) for option_id in ranked]
+
+
+def _confidence_score(confidence: Any) -> int:
+    normalized = str(confidence or "").strip().lower()
+    if normalized == "high":
+        return 3
+    if normalized == "low":
+        return 1
+    return 2
+
+
+def _option_ids(options: Mapping[str, str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
     for key in sorted(str(item).strip().upper() for item in options if str(item).strip()):
-        return key[:1]
-    return ""
+        option_id = key[:1]
+        if option_id and option_id not in seen:
+            seen.add(option_id)
+            ordered.append(option_id)
+    return ordered

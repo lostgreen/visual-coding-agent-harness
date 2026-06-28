@@ -6,6 +6,7 @@ from visual_coding_agent_harness.agents.multi import (
     Finding,
     FindingStatus,
     MultiAgentDriver,
+    ReasonerAgent,
     SubGoal,
     SubGoalBudget,
     SubGoalConstraint,
@@ -15,6 +16,7 @@ from visual_coding_agent_harness.agents.multi import (
 )
 from visual_coding_agent_harness.agents.workspace_agent import WorkspaceRunResult
 from visual_coding_agent_harness.core.registry import ToolRegistry, tool
+from visual_coding_agent_harness.memory import SourceAnchor
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 from visual_coding_agent_harness.workspace.views import InvestigatorView, ReasonerView
 
@@ -238,6 +240,7 @@ def test_investigator_verifies_candidate_and_reports_satisfied_finding(tmp_path:
         regions=[],
         raw_output={
             "mode": "candidate_discovery",
+            "multi_agent_option_id": "B",
             "candidate_windows": [
                 {
                     "candidate_key": "obs_0001:cand_0001",
@@ -278,3 +281,284 @@ def test_investigator_verifies_candidate_and_reports_satisfied_finding(tmp_path:
     assert findings[-1].memory_ids == ("mem_0001",)
     assert workspace.memory_entries()[0].kind == "visual_support"
     assert workspace.memory_entries()[0].supports_option == "B"
+
+
+def test_investigator_does_not_reuse_candidate_from_another_option(tmp_path: Path) -> None:
+    from visual_coding_agent_harness.agents.multi import InvestigatorAgent
+
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    registry = ToolRegistry()
+
+    @tool(name="explore", description="Fake option-specific explorer.")
+    def explore(query: str = "", targets=(), scope=None, modalities=(), top_k: int = 3, original_question: str = ""):
+        return {
+            "mode": "candidate_discovery",
+            "claim": "Explore found an option B candidate.",
+            "confidence": 0.8,
+            "candidate_windows": [
+                {
+                    "candidate_key": "obs_0002:cand_0001",
+                    "segment_id": "seg_0002",
+                    "time_range": [20.0, 30.0],
+                    "score": 0.9,
+                }
+            ],
+        }
+
+    @tool(name="verify_window", description="Fake verifier.")
+    def verify_window(candidate_key: str = "", checks=(), focus=(), sampling=None):
+        assert candidate_key == "obs_0002:cand_0001"
+        return {
+            "mode": "verify_window",
+            "claim": "Option B is visible in the window.",
+            "confidence": 0.9,
+            "verification_results": [
+                {
+                    "target_id": "option_B_check",
+                    "claim": "Option B is visible.",
+                    "verdict": "supported",
+                    "evidence": "The red car is visible.",
+                    "confidence": 0.9,
+                    "option_id": "B",
+                }
+            ],
+            "produced_anchors": [
+                {
+                    "anchor_id": "clip_anch_b",
+                    "source_kind": "visual_fact",
+                    "segment_id": "seg_0002",
+                    "start_sec": 20.0,
+                    "end_sec": 30.0,
+                    "excerpt": "The red car is visible.",
+                }
+            ],
+        }
+
+    registry.register(explore)
+    registry.register(verify_window)
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Explore found an option A candidate.",
+        confidence=0.8,
+        regions=[],
+        raw_output={
+            "mode": "candidate_discovery",
+            "multi_agent_option_id": "A",
+            "candidate_windows": [
+                {
+                    "candidate_key": "obs_0001:cand_0001",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 10.0],
+                    "score": 1.0,
+                }
+            ],
+        },
+    )
+    mutator.create_sub_goal(
+        intent="verify",
+        constraint=SubGoalConstraint(option_id="B", claim="Option B is visible."),
+        budget=SubGoalBudget(max_explores=1, max_verifies=1),
+        success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+        parent_question="Question?",
+        created_by="reasoner",
+        created_round=1,
+    )
+    investigator = InvestigatorAgent(
+        backend=object(),
+        registry=registry,
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert investigator.step(round_number=2) is True
+
+    assert mutator.findings()[-1].status == "satisfied"
+    assert workspace.memory_entries()[-1].supports_option == "B"
+
+
+def test_investigator_reports_empty_when_verify_only_finds_local_negative(tmp_path: Path) -> None:
+    from visual_coding_agent_harness.agents.multi import InvestigatorAgent
+
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    registry = ToolRegistry()
+
+    @tool(name="verify_window", description="Fake negative verifier.")
+    def verify_window(candidate_key: str = "", checks=(), focus=(), sampling=None):
+        return {
+            "mode": "verify_window",
+            "claim": "Option B was not found.",
+            "confidence": 0.8,
+            "verification_results": [
+                {
+                    "target_id": "option_B_check",
+                    "claim": "Option B is visible.",
+                    "verdict": "not_found_in_window",
+                    "evidence": "The red car is not visible.",
+                    "confidence": 0.8,
+                    "option_id": "B",
+                    "scope": {"segment_id": "seg_0002", "time_range": [20.0, 30.0]},
+                }
+            ],
+            "produced_anchors": [
+                {
+                    "anchor_id": "clip_anch_b_neg",
+                    "source_kind": "visual_fact",
+                    "segment_id": "seg_0002",
+                    "start_sec": 20.0,
+                    "end_sec": 30.0,
+                    "excerpt": "The red car is not visible.",
+                }
+            ],
+        }
+
+    registry.register(verify_window)
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Explore found an option B candidate.",
+        confidence=0.8,
+        regions=[],
+        raw_output={
+            "mode": "candidate_discovery",
+            "multi_agent_option_id": "B",
+            "candidate_windows": [
+                {
+                    "candidate_key": "obs_0001:cand_0001",
+                    "segment_id": "seg_0002",
+                    "time_range": [20.0, 30.0],
+                    "score": 0.9,
+                }
+            ],
+        },
+    )
+    mutator.create_sub_goal(
+        intent="verify",
+        constraint=SubGoalConstraint(option_id="B", claim="Option B is visible."),
+        budget=SubGoalBudget(max_explores=0, max_verifies=1),
+        success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+        parent_question="Question?",
+        created_by="reasoner",
+        created_round=1,
+    )
+    investigator = InvestigatorAgent(
+        backend=object(),
+        registry=registry,
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert investigator.step(round_number=2) is True
+
+    assert workspace.memory_entries()[-1].kind == "local_negative"
+    assert mutator.findings()[-1].status == "empty"
+
+
+def test_reasoner_answers_from_option_bound_positive_memory(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    memory = _write_test_memory(workspace, kind="visual_support", supports_option="B")
+    for option_id, status, memory_ids in [
+        ("A", "empty", ()),
+        ("B", "satisfied", (memory.entry_id,)),
+    ]:
+        sub_goal = mutator.create_sub_goal(
+            intent="verify",
+            constraint=SubGoalConstraint(option_id=option_id, claim=f"Check option {option_id}."),
+            budget=SubGoalBudget(max_explores=1, max_verifies=1),
+            success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+            parent_question="Question?",
+            created_by="reasoner",
+            created_round=1,
+        )
+        mutator.transition_sub_goal(sub_goal.sub_goal_id, to_status="in_progress", round_number=2)
+        mutator.report_finding(
+            sub_goal_id=sub_goal.sub_goal_id,
+            status=status,  # type: ignore[arg-type]
+            memory_ids=memory_ids,
+            coverage=(0.0, 0.0),
+            notes_for_planner=f"Option {option_id} check complete.",
+            cost={"tool_calls": 1},
+            created_round=2,
+        )
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(round_number=3, question="Question?", options={"A": "blue car", "B": "red car"}) is True
+
+    assert reasoner.answer_result is not None
+    assert reasoner.answer_result.answer == "B"
+    assert reasoner.answer_result.citations == (memory.entry_id,)
+
+
+def test_reasoner_ignores_negative_memory_and_schedules_untested_options(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    negative = _write_test_memory(workspace, kind="local_negative", supports_option="")
+    sub_goal = mutator.create_sub_goal(
+        intent="verify",
+        constraint=SubGoalConstraint(option_id="A", claim="Check option A."),
+        budget=SubGoalBudget(max_explores=1, max_verifies=1),
+        success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+        parent_question="Question?",
+        created_by="reasoner",
+        created_round=1,
+    )
+    mutator.transition_sub_goal(sub_goal.sub_goal_id, to_status="in_progress", round_number=2)
+    mutator.report_finding(
+        sub_goal_id=sub_goal.sub_goal_id,
+        status="satisfied",
+        memory_ids=(negative.entry_id,),
+        coverage=(0.0, 0.0),
+        notes_for_planner="Option A was not found in the local window.",
+        cost={"tool_calls": 1},
+        created_round=2,
+    )
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=3,
+        question="Question?",
+        options={"A": "blue car", "B": "red car", "C": "green car", "D": "yellow car"},
+    ) is True
+
+    assert reasoner.answer_result is None
+    open_options = [goal.constraint.option_id for goal in mutator.sub_goals() if goal.status == "open"]
+    assert open_options == ["B", "C", "D"]
+
+
+def _write_test_memory(workspace: EvidenceWorkspace, *, kind: str, supports_option: str):
+    workspace.write_produced_anchors(
+        [
+            SourceAnchor(
+                anchor_id=f"anch_{kind}_{supports_option or 'none'}",
+                observation_id="obs_0001",
+                source_kind="visual_fact",
+                segment_id="seg_0001",
+                field_path="verification_results.0",
+                excerpt="A visible clue appears in the inspected window.",
+            )
+        ]
+    )
+    return workspace.write_memory(
+        kind=kind,  # type: ignore[arg-type]
+        claim="A visible clue appears in the inspected window.",
+        anchors=[{"anchor_id": f"anch_{kind}_{supports_option or 'none'}"}],
+        supports_option=supports_option,
+        confidence="high",
+    )

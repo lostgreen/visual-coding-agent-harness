@@ -66,6 +66,10 @@ class MultiAgentToolRunner:
             {"step": round_number, "tool": request.tool, "arguments": dict(request.arguments), "agent": "investigator"},
         )
         raw_output = dict(self.registry.execute(request.tool, request.arguments))
+        raw_output.setdefault("multi_agent_sub_goal_id", sub_goal_id)
+        option_id = _option_id_from_arguments(request.arguments)
+        if option_id:
+            raw_output.setdefault("multi_agent_option_id", option_id)
         observation = self.workspace.write_observation(
             tool_name=request.tool,
             input_artifacts=raw_output.get("input_artifacts", []),
@@ -133,3 +137,33 @@ class MultiAgentToolRunner:
             {"observation_id": observation_id, "memory_ids": after},
         )
         return tuple(after)
+
+
+def _option_id_from_arguments(arguments: Mapping[str, Any]) -> str:
+    for key in ("option_id", "supports_option"):
+        option_id = str(arguments.get(key) or "").strip().upper()[:1]
+        if option_id:
+            return option_id
+    for collection_key in ("targets", "checks"):
+        value = arguments.get(collection_key)
+        if not isinstance(value, (list, tuple)):
+            continue
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            option_id = str(item.get("option_id") or item.get("supports_option") or "").strip().upper()[:1]
+            if option_id:
+                return option_id
+            target_id = str(item.get("target_id") or "").strip()
+            parsed = _option_id_from_target_id(target_id)
+            if parsed:
+                return parsed
+    return ""
+
+
+def _option_id_from_target_id(target_id: str) -> str:
+    text = str(target_id or "").strip().upper()
+    for option_id in ("A", "B", "C", "D"):
+        if f"OPTION_{option_id}" in text or f"OPTION-{option_id}" in text or f"OPTION {option_id}" in text:
+            return option_id
+    return ""

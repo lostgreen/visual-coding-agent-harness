@@ -64,7 +64,7 @@ class InvestigatorAgent:
                 {"round": round_number, "sub_goal_id": sub_goal.sub_goal_id, "error": str(exc)},
             )
             notes = f"Investigation failed: {exc}"
-        status = "satisfied" if memory_ids else "empty"
+        status = "satisfied" if self._has_positive_memory(memory_ids) else "empty"
         self.mutator.report_finding(
             sub_goal_id=sub_goal.sub_goal_id,
             status=status,
@@ -75,6 +75,17 @@ class InvestigatorAgent:
             created_round=round_number,
         )
         return True
+
+    def _has_positive_memory(self, memory_ids: tuple[str, ...]) -> bool:
+        if not memory_ids:
+            return False
+        positive_kinds = {"visual_support", "answer_support", "synthesized_support", "answer_conflict_resolved"}
+        memory_by_id = {entry.entry_id: entry for entry in self.workspace.memory_entries()}
+        for memory_id in memory_ids:
+            entry = memory_by_id.get(str(memory_id))
+            if entry is not None and entry.kind in positive_kinds:
+                return True
+        return False
 
     def _explore_args(self, sub_goal: Any) -> dict[str, Any]:
         constraint = sub_goal.constraint
@@ -120,6 +131,8 @@ class InvestigatorAgent:
         best_score = -1.0
         for observation in self.workspace.read_observations():
             raw_output = observation.raw_output if isinstance(observation.raw_output, dict) else {}
+            if not self._observation_matches_sub_goal(raw_output, sub_goal):
+                continue
             for candidate in _mapping_items(raw_output.get("candidate_windows")):
                 if not self._candidate_matches_sub_goal(candidate, sub_goal):
                     continue
@@ -130,8 +143,25 @@ class InvestigatorAgent:
                     best_score = score
         return best_key
 
+    def _observation_matches_sub_goal(self, raw_output: dict[str, Any], sub_goal: Any) -> bool:
+        option_id = str(sub_goal.constraint.option_id or "").strip().upper()[:1]
+        if not option_id:
+            return True
+        tagged_option = str(raw_output.get("multi_agent_option_id") or "").strip().upper()[:1]
+        if tagged_option:
+            return tagged_option == option_id
+        return False
+
     def _candidate_matches_sub_goal(self, candidate: dict[str, Any], sub_goal: Any) -> bool:
         constraint = sub_goal.constraint
+        option_id = str(constraint.option_id or "").strip().upper()[:1]
+        if option_id:
+            candidate_option = str(candidate.get("option_id") or "").strip().upper()[:1]
+            if candidate_option and candidate_option != option_id:
+                return False
+            target_id = str(candidate.get("target_id") or "").strip().upper()
+            if target_id and f"OPTION_{option_id}" not in target_id and f"OPTION-{option_id}" not in target_id:
+                return False
         if constraint.segment_id and str(candidate.get("segment_id") or "") != constraint.segment_id:
             return False
         if constraint.time_range:
