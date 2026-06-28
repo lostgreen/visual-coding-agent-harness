@@ -2196,30 +2196,30 @@ def _sequence_option_items(text: str) -> list[str]:
 
 
 def _ordered_sequence_score(text_norm: str, option_items: Sequence[str]) -> float:
-    normalized_items = [_normalize_match_text(item) for item in option_items if _normalize_match_text(item)]
-    if len(normalized_items) < 2:
+    item_variants = [_match_phrase_variants(item) for item in option_items if _match_phrase_variants(item)]
+    if len(item_variants) < 2:
         return 0.0
-    matched_count, missing_count, ordered = _ordered_sequence_match(text_norm, normalized_items)
+    matched_count, missing_count, ordered = _ordered_sequence_match(text_norm, item_variants)
     if not ordered:
         return 0.0
-    if matched_count == len(normalized_items):
+    if matched_count == len(item_variants):
         return 1.0
     if (
-        len(normalized_items) < 4
+        len(item_variants) < 4
         or missing_count > 1
-        or matched_count < len(normalized_items) - 1
+        or matched_count < len(item_variants) - 1
         or matched_count < 3
     ):
         return 0.0
     return 0.9
 
 
-def _ordered_sequence_match(text_norm: str, normalized_items: Sequence[str]) -> tuple[int, int, bool]:
+def _ordered_sequence_match(text_norm: str, item_variants: Sequence[Sequence[str]]) -> tuple[int, int, bool]:
     matched_count = 0
     missing_count = 0
     previous = -1
-    for item in normalized_items:
-        item_positions = [match.start() for match in re.finditer(re.escape(item), text_norm)]
+    for variants in item_variants:
+        item_positions = _match_phrase_positions(text_norm, variants)
         if not item_positions:
             missing_count += 1
             continue
@@ -2229,6 +2229,44 @@ def _ordered_sequence_match(text_norm: str, normalized_items: Sequence[str]) -> 
         matched_count += 1
         previous = next_position
     return matched_count, missing_count, True
+
+
+def _match_phrase_variants(item: str) -> list[str]:
+    normalized = _normalize_match_text(item)
+    if not normalized:
+        return []
+    variants = [normalized]
+    tokens = normalized.split()
+    if len(tokens) > 1 and tokens[0] == "the":
+        variants.append(" ".join(tokens[1:]))
+    if len(tokens) >= 5 and "and" in tokens:
+        connector_index = tokens.index("and")
+        prefix_tokens = tokens[: connector_index + 2]
+        if len(prefix_tokens) >= 3:
+            variants.append(" ".join(prefix_tokens))
+    return list(dict.fromkeys(variant for variant in variants if variant))
+
+
+def _match_phrase_positions(text_norm: str, variants: Sequence[str]) -> list[int]:
+    positions: set[int] = set()
+    for variant in variants:
+        pattern = rf"(?<![a-z0-9]){re.escape(variant)}(?![a-z0-9])"
+        positions.update(match.start() for match in re.finditer(pattern, text_norm))
+        positions.update(_title_suffix_alias_positions(text_norm, variant))
+    return sorted(positions)
+
+
+def _title_suffix_alias_positions(text_norm: str, variant: str) -> list[int]:
+    tokens = str(variant or "").split()
+    if len(tokens) < 4:
+        return []
+    token_matches = list(re.finditer(r"[a-z0-9]+", text_norm))
+    positions: list[int] = []
+    for start_index in range(0, len(token_matches) - len(tokens) + 1):
+        window = [match.group(0) for match in token_matches[start_index : start_index + len(tokens)]]
+        if window[:-1] == tokens[:-1] and window[-1] != tokens[-1]:
+            positions.append(token_matches[start_index].start())
+    return positions
 
 
 def _normalize_match_text(text: str) -> str:

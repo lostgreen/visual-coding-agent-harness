@@ -1005,6 +1005,64 @@ def test_structured_verify_cross_match_uses_workspace_answer_options(tmp_path: P
     ]
 
 
+def test_structured_verify_cross_match_tolerates_title_aliases_and_suffixes(tmp_path: Path) -> None:
+    raw_output = {
+        "claim": "Check option A ordering.",
+        "mode": "verify_window",
+        "answer_options": {
+            "A": '"The Rape of Persephone", "Apollo and Daphne", "David" and "Aeneas, Anchises, and Ascanius fleeing Troy".',
+            "D": '"Aeneas, Anchises, and Ascanius fleeing Troy", "David", "The Rape of Persephone" and "Apollo and Daphne".',
+        },
+        "produced_anchors": [
+            {
+                "anchor_id": "anch_title_alias_order",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": (
+                    "The video shows the sculptures in the order: Aeneas, Anchises, and Ascanius; "
+                    "David; The Rape of Proserpina; and Apollo and Daphne."
+                ),
+            }
+        ],
+        "verification_results": [
+            {
+                "target_id": "option_A_check",
+                "claim": "Option A gives the display order.",
+                "verdict": "contradicted",
+                "rationale": (
+                    "The video shows the sculptures in the order: Aeneas, Anchises, and Ascanius; "
+                    "David; The Rape of Proserpina; and Apollo and Daphne."
+                ),
+                "anchor_ids": ["anch_title_alias_order"],
+                "scope": {"segment_id": "seg_0001", "time_range": [0.0, 12.0]},
+                "confidence": 0.92,
+                "option_id": "A",
+            }
+        ],
+    }
+
+    writes = _structured_verify_writes(
+        raw_output,
+        anchors=[
+            {
+                "anchor_id": "anch_title_alias_order",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": (
+                    "The video shows the sculptures in the order: Aeneas, Anchises, and Ascanius; "
+                    "David; The Rape of Proserpina; and Apollo and Daphne."
+                ),
+            }
+        ],
+        reason="test",
+    )
+
+    assert [(item["kind"], item.get("supports_option")) for item in writes["memory"]] == [
+        ("answer_conflict", "A"),
+        ("synthesized_support", "D"),
+    ]
+
+
 def test_structured_verify_cross_match_respects_quoted_sequence_order(tmp_path: Path) -> None:
     raw_output = {
         "claim": "Check option A ordering.",
