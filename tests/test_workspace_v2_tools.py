@@ -10,6 +10,7 @@ from visual_coding_agent_harness.core.registry import ToolError, ToolRegistry
 from visual_coding_agent_harness.tools.workspace_v2 import (
     _explore_candidate_beats,
     _read_clip_prompt,
+    _verification_items_from_payload,
     _verification_results_from_backend,
     build_workspace_v2_registry,
     candidate_anchors_for_windows,
@@ -281,7 +282,8 @@ def test_verify_window_text_json_target_absent_becomes_not_found() -> None:
     out = _verification_results_from_backend(
         targets=[{"target_id": "target_1", "claim": "A red sock is present.", "polarity": "presence"}],
         raw_backend={},
-        facts=[{"text": '```json\n{"target_1": "absent"}\n```', "source_kind": "visual_fact"}],
+        response_text='```json\n{"labels": {"target_1": "absent"}}\n```',
+        facts=[{"text": "A red sock is not visible.", "source_kind": "visual_fact"}],
         produced_anchors=[{"anchor_id": "anch_1"}],
         segment_id="seg_0001",
         time_range=[0.0, 10.0],
@@ -308,6 +310,96 @@ def test_verify_window_text_json_label_tag_becomes_supported() -> None:
     assert out[0]["verdict"] == "supported"
     assert out[0]["raw_signal"]["field"] == "tag"
     assert out[0]["raw_signal"]["value"] == "present"
+
+
+def test_verify_parser_preserves_response_text_contradicted_verdict() -> None:
+    response_text = """```json
+{
+  "verification_results": [
+    {
+      "target_id": "option_A_check",
+      "verdict": "contradicted",
+      "evidence": "The video order is Aeneas, David, Proserpina, Apollo, which contradicts option A.",
+      "confidence": 1.0,
+      "option_id": "A"
+    }
+  ],
+  "facts": [{"text": "The actual order is Aeneas, David, Proserpina, Apollo."}]
+}
+```"""
+
+    out = _verification_results_from_backend(
+        targets=[{"target_id": "option_A_check", "claim": "Option A order.", "polarity": "presence", "option_id": "A"}],
+        raw_backend={"backend": "kml", "task": "verify_window"},
+        response_text=response_text,
+        facts=[
+            {"text": '{"verification_results": [{"target_id": "option_A_check"', "source_kind": "visual_fact"},
+            {"text": '"facts": [{"text": "The actual order is Aeneas, David, Proserpina, Apollo."}]}', "source_kind": "visual_fact"},
+        ],
+        produced_anchors=[{"anchor_id": "anch_a"}],
+        segment_id="seg_0001",
+        time_range=[0.0, 10.0],
+    )
+
+    assert len(out) == 1
+    assert out[0]["target_id"] == "option_A_check"
+    assert out[0]["verdict"] == "contradicted"
+    assert out[0]["option_id"] == "A"
+    assert out[0]["anchor_ids"] == ["anch_a"]
+
+
+def test_verify_parser_preserves_response_text_supported_verdict() -> None:
+    response_text = """```json
+{
+  "verification_results": [
+    {
+      "target_id": "option_D_check",
+      "verdict": "supported",
+      "evidence": "The video order is Aeneas, David, Proserpina, Apollo, matching option D.",
+      "confidence": 1.0,
+      "option_id": "D"
+    }
+  ]
+}
+```"""
+
+    out = _verification_results_from_backend(
+        targets=[{"target_id": "option_D_check", "claim": "Option D order.", "polarity": "presence", "option_id": "D"}],
+        raw_backend={"backend": "kml", "task": "verify_window"},
+        response_text=response_text,
+        facts=[],
+        produced_anchors=[],
+        segment_id="seg_0001",
+        time_range=[0.0, 10.0],
+    )
+
+    assert len(out) == 1
+    assert out[0]["target_id"] == "option_D_check"
+    assert out[0]["verdict"] == "supported"
+    assert out[0]["option_id"] == "D"
+
+
+def test_verify_parser_rejects_arbitrary_dict_targets() -> None:
+    assert _verification_items_from_payload({"foo": "bar", "baz": "qux"}) == []
+
+
+def test_verify_parser_traces_parse_decision(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+
+    _verification_results_from_backend(
+        targets=[{"target_id": "target_1", "claim": "X", "polarity": "presence"}],
+        raw_backend={"verification_results": [{"target_id": "target_1", "tag": "present"}]},
+        response_text="",
+        facts=[],
+        produced_anchors=[],
+        segment_id="seg_0001",
+        time_range=[0.0, 10.0],
+        workspace=workspace,
+    )
+
+    events = [json.loads(line) for line in (workspace.root / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert events[-1]["type"] == "verify_parse_decision"
+    assert events[-1]["payload"]["branch"] == "structured_raw"
 
 
 def test_synthesize_memory_normalizer_uses_derived_from_as_supports_fallback(tmp_path: Path) -> None:

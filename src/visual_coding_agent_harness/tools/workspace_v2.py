@@ -173,6 +173,7 @@ def build_workspace_v2_registry(
             video_map_store=video_map_store,
             backend=backend,
             frame_sampler=frame_sampler,
+            workspace=workspace,
             scope=scope,
             focus=focus,
             sampling=sampling,
@@ -879,6 +880,7 @@ class SegmentReadService:
             video_map_store=self.video_map_store,
             backend=self.backend,
             frame_sampler=self.frame_sampler,
+            workspace=self.workspace,
             scope={"segment_id": segment_id, "time_range": [start_sec, end_sec]},
             focus=focus_items,
             sampling={},
@@ -942,6 +944,7 @@ class SegmentReadService:
             video_map_store=self.video_map_store,
             backend=self.backend,
             frame_sampler=self.frame_sampler,
+            workspace=self.workspace,
             scope={"segment_id": resolved_segment_id, "time_range": [start_sec, end_sec]},
             focus=focus_items,
             verification_targets=targets,
@@ -1030,6 +1033,7 @@ def _read_clip_evidence(
     video_map_store: VideoMapStore,
     backend: VisionLanguageBackend,
     frame_sampler: FrameSampler | None = None,
+    workspace: Any | None = None,
     scope: Mapping[str, Any],
     focus: Sequence[str],
     verification_targets: Sequence[Mapping[str, Any]] = (),
@@ -1117,10 +1121,12 @@ def _read_clip_evidence(
     verification_results = _verification_results_from_backend(
         targets=targets,
         raw_backend=raw_backend,
+        response_text=fact_text,
         facts=facts,
         produced_anchors=produced_anchors,
         segment_id=segment.segment_id,
         time_range=[start_sec, end_sec],
+        workspace=workspace,
     )
     return {
         "claim": fact_text,
@@ -2529,10 +2535,12 @@ def _verification_results_from_backend(
     *,
     targets: Sequence[Mapping[str, Any]],
     raw_backend: Mapping[str, Any],
+    response_text: str = "",
     facts: Sequence[Mapping[str, Any]],
     produced_anchors: Sequence[Mapping[str, Any]],
     segment_id: str,
     time_range: Sequence[float],
+    workspace: Any | None = None,
 ) -> list[dict[str, Any]]:
     if not targets:
         return []
@@ -2560,9 +2568,19 @@ def _verification_results_from_backend(
                 )
             )
         if normalized:
+            _trace_verification_parse_decision(
+                workspace,
+                branch="structured_raw",
+                targets=targets,
+                normalized=normalized,
+                raw_backend=raw_backend,
+            )
             return normalized
 
-    parsed_results = _verification_result_items_from_text(raw_backend=raw_backend, facts=facts)
+    parsed_results = _verification_result_items_from_text(
+        raw_backend=raw_backend,
+        response_text=response_text,
+    )
     if parsed_results:
         normalized = []
         for index, item in enumerate(parsed_results):
@@ -2591,6 +2609,13 @@ def _verification_results_from_backend(
                 )
             )
         if normalized:
+            _trace_verification_parse_decision(
+                workspace,
+                branch="text_extracted",
+                targets=targets,
+                normalized=normalized,
+                raw_backend=raw_backend,
+            )
             return normalized
 
     raw_facts = raw_backend.get("facts")
@@ -2617,11 +2642,18 @@ def _verification_results_from_backend(
                     option_id=str(target.get("option_id") or target.get("option") or ""),
                 )
             )
+        _trace_verification_parse_decision(
+            workspace,
+            branch="facts_aligned",
+            targets=targets,
+            normalized=aligned,
+            raw_backend=raw_backend,
+        )
         return aligned
 
     if _targets_are_default_focus_check(targets):
         return []
-    return [
+    default_results = [
         _verification_result(
             target_id=str(target.get("target_id") or f"target_{index + 1}"),
             claim=str(target.get("claim") or ""),
@@ -2636,6 +2668,35 @@ def _verification_results_from_backend(
         )
         for index, target in enumerate(targets)
     ]
+    _trace_verification_parse_decision(
+        workspace,
+        branch="default_uncertain",
+        targets=targets,
+        normalized=default_results,
+        raw_backend=raw_backend,
+    )
+    return default_results
+
+
+def _trace_verification_parse_decision(
+    workspace: Any | None,
+    *,
+    branch: str,
+    targets: Sequence[Mapping[str, Any]],
+    normalized: Sequence[Mapping[str, Any]],
+    raw_backend: Mapping[str, Any],
+) -> None:
+    if workspace is None or not hasattr(workspace, "write_trace_event"):
+        return
+    workspace.write_trace_event(
+        "verify_parse_decision",
+        {
+            "branch": branch,
+            "n_targets": len(targets),
+            "n_normalized": len(normalized),
+            "raw_keys_present": sorted(str(key) for key in raw_backend.keys()),
+        },
+    )
 
 
 def _targets_are_default_focus_check(targets: Sequence[Mapping[str, Any]]) -> bool:
@@ -2682,10 +2743,10 @@ def _coerce_verdict(item: Mapping[str, Any], *, target: Mapping[str, Any]) -> tu
 def _verification_result_items_from_text(
     *,
     raw_backend: Mapping[str, Any],
-    facts: Sequence[Mapping[str, Any]],
+    response_text: str = "",
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for text in _verification_text_sources(raw_backend=raw_backend, facts=facts):
+    for text in _verification_text_sources(raw_backend=raw_backend, response_text=response_text):
         payload = _extract_verification_json_from_text(text)
         if payload is None:
             continue
@@ -2696,17 +2757,17 @@ def _verification_result_items_from_text(
 def _verification_text_sources(
     *,
     raw_backend: Mapping[str, Any],
-    facts: Sequence[Mapping[str, Any]],
+    response_text: str = "",
 ) -> list[str]:
+    direct_text = str(response_text or "").strip()
+    if direct_text:
+        return [direct_text]
     sources: list[str] = []
     for key in ("response", "text", "content", "raw_text", "output"):
         value = raw_backend.get(key)
         if isinstance(value, str) and value.strip():
             sources.append(value)
-    for fact in facts:
-        value = fact.get("text") if isinstance(fact, Mapping) else None
-        if isinstance(value, str) and value.strip():
-            sources.append(value)
+            break
     return sources
 
 
@@ -2761,7 +2822,7 @@ def _verification_items_from_payload(payload: Any) -> list[dict[str, Any]]:
         return [_verification_item_from_target_value(str(target_id), value) for target_id, value in labels.items()]
     if any(key in payload for key in ("target_id", "target", "label", "tag", "polarity", "presence", "verdict")):
         return [dict(payload)]
-    return [_verification_item_from_target_value(str(target_id), value) for target_id, value in payload.items()]
+    return []
 
 
 def _verification_item_from_target_value(target_id: str, value: Any) -> dict[str, Any]:

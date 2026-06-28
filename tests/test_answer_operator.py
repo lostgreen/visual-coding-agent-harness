@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from visual_coding_agent_harness.evidence.answer_operators import derive_answer_operator
+from visual_coding_agent_harness.evidence.answer_operators import derive_answer_operator, derive_modality_route
 
 
 def test_plain_factual_question_defaults_to_select_present() -> None:
@@ -31,3 +31,14 @@ def test_universal_order_and_main_arc_detection() -> None:
         == "ordered_projection"
     )
     assert derive_answer_operator("What is the video mainly about?", route="gist_global", options=()) == "main_arc"
+
+
+def test_modality_routing_biography_to_asr() -> None:
+    operator = derive_answer_operator("How was his life journey according to the video?", route="", options=())
+
+    assert derive_modality_route("How was his life journey according to the video?", operator=operator) == "asr_primary"
+
+
+def test_modality_routing_visual_and_ocr_questions() -> None:
+    assert derive_modality_route("What text is written on the banner?", operator="select_present") == "ocr_primary"
+    assert derive_modality_route("What color shirt is the person wearing?", operator="select_present") == "visual_primary"

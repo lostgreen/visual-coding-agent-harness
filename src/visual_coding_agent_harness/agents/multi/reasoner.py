@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from ...evidence.answer_operators import ROUTE_TO_MODALITIES, derive_answer_operator, derive_modality_route
 from ..workspace_agent import WorkspaceRunResult
 from .mutator import WorkspaceMutator
 from .protocol import SubGoalBudget, SubGoalConstraint, SubGoalSuccessCriteria
@@ -138,12 +139,15 @@ class ReasonerAgent:
         round_number: int,
     ) -> None:
         claim = _option_claim(question=question, option_id=option_id, option_text=option_text)
+        operator = derive_answer_operator(question, route="", options=())
+        route = derive_modality_route(question, operator=operator)
+        modalities = ROUTE_TO_MODALITIES[route]
         self.mutator.create_sub_goal(
             intent="verify",
             constraint=SubGoalConstraint(
                 option_id=option_id or None,
                 claim=claim,
-                modality_hint=("visual",),
+                modality_hint=modalities,
             ),
             budget=SubGoalBudget(max_explores=1, max_verifies=1, max_frames=64),
             success_criteria=SubGoalSuccessCriteria(needs_visual_support=True, needs_option_relation=True),
@@ -155,6 +159,16 @@ class ReasonerAgent:
                 if option_id
                 else "Create a local verification target before answering."
             ),
+        )
+        self.workspace.write_trace_event(
+            "modality_route_chosen",
+            {
+                "round": round_number,
+                "option_id": option_id,
+                "question_operator": operator,
+                "route": route,
+                "modalities": list(modalities),
+            },
         )
 
 

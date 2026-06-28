@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -724,6 +725,31 @@ def test_reasoner_sub_goal_claim_drops_full_options_block(tmp_path: Path) -> Non
     assert "Options:" not in claim
     assert "Question: In what order are the sculptures presented?" in claim
     assert "Option A: old order" in claim
+
+
+def test_reasoner_routes_biography_question_to_asr_first(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=1,
+        question="How was his life journey according to the video?",
+        options={"A": "upper class only", "B": "humble background, upper class, seclusion"},
+    ) is True
+
+    first_goal = mutator.sub_goals()[0]
+    assert first_goal.constraint.modality_hint == ("asr", "index", "visual")
+    events = [json.loads(line) for line in (workspace.root / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    route_events = [event for event in events if event["type"] == "modality_route_chosen"]
+    assert route_events
+    assert route_events[0]["payload"]["route"] == "asr_primary"
 
 
 def _write_test_memory(workspace: EvidenceWorkspace, *, kind: str, supports_option: str):
