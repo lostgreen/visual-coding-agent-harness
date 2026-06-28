@@ -1,5 +1,6 @@
-"""Evidence projection helpers for generic option support."""
+"""Evidence contracts shared by agent strategies."""
 
-from .projection import ProjectionEvidence, ProjectionResult, project_option_support
+from .frame_set import FrameSet
+from .option_relations import OptionRelation, OptionRelationKind
 
-__all__ = ["ProjectionEvidence", "ProjectionResult", "project_option_support"]
+__all__ = ["FrameSet", "OptionRelation", "OptionRelationKind"]

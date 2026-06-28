@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from visual_coding_agent_harness.core.budget import AgentBudget
 from visual_coding_agent_harness.workspace.context_budget import parse_budget_ratios
+from visual_coding_agent_harness.agents.multi import InvestigatorAgent, MultiAgentDriver, ReasonerAgent, WorkspaceMutator
 from visual_coding_agent_harness.agents.workspace_agent import WorkspaceVisualAgent
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import RootIndexPolicy, SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
@@ -44,8 +45,9 @@ DEFAULT_RUN_ROOT = KML_MANAGED_ROOT / "runs" / "videomme_agent_eval"
 DEFAULT_SCENE_INDEX_CACHE_DIR = KML_MANAGED_ROOT / "scene_index_cache"
 DEFAULT_CASES = ("605-1", "611-2", "612-1")
 WORKSPACE_V2_STRATEGY = "workspace_v2"
+MULTI_AGENT_V0_STRATEGY = "multi_agent_v0"
 DEFAULT_STRATEGIES = (WORKSPACE_V2_STRATEGY,)
-STRATEGIES = (WORKSPACE_V2_STRATEGY,)
+STRATEGIES = (WORKSPACE_V2_STRATEGY, MULTI_AGENT_V0_STRATEGY)
 WINDOW_SEC = 300.0
 DEFAULT_NFRAMES = 8
 FRAME_CACHE_FPS = 2.0
@@ -251,6 +253,42 @@ def run_loop(
             log_root=workspace_log_dir,
         )
         result = agent.run(question)
+    elif strategy == MULTI_AGENT_V0_STRATEGY:
+        index_refiner = IndexRefiner(
+            backend=backend,
+            frame_sampler=frame_sampler,
+            artifact_root=workspace.root / "artifacts" / "index_refinement",
+        )
+        registry = build_workspace_v2_registry(
+            video_map=video_map_store,
+            backend=backend,
+            workspace=workspace,
+            index_refiner=index_refiner,
+            frame_sampler=frame_sampler,
+        )
+        mutator = WorkspaceMutator(workspace)
+        reasoner = ReasonerAgent(
+            backend=backend,
+            mutator=mutator,
+            workspace=workspace,
+            video_map=video_map_store,
+            log_root=workspace_log_dir,
+        )
+        investigator = InvestigatorAgent(
+            backend=backend,
+            registry=registry,
+            mutator=mutator,
+            workspace=workspace,
+            video_map=video_map_store,
+            log_root=workspace_log_dir,
+        )
+        driver = MultiAgentDriver(
+            reasoner=reasoner,
+            investigator=investigator,
+            workspace=workspace,
+            max_rounds=budget.max_rounds,
+        )
+        result = driver.run(question, options=_extract_option_map(question))
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
     seconds = time.perf_counter() - start
@@ -293,6 +331,7 @@ def run_loop(
     backend_call_counters = _backend_call_counters(workspace=workspace, scene_index=scene_index)
     return {
         "answer": answer,
+        "strategy": strategy,
         "choice": extract_choice(answer),
         "status": status,
         "confidence": confidence,
@@ -314,6 +353,15 @@ def run_loop(
         **backend_call_counters,
         "reward_tags": reward_tags,
     }
+
+
+def _extract_option_map(question: str) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for line in str(question or "").splitlines():
+        match = re.match(r"^\s*([A-H])[\.\)]\s*(.+?)\s*$", line)
+        if match:
+            options[match.group(1).upper()] = match.group(2)
+    return options
 
 
 def _result_status(result: Any) -> str:

@@ -64,6 +64,8 @@ class EvalRunnerTest(unittest.TestCase):
 
         self.assertEqual(eval_runner.parse_strategies(None), ("workspace_v2",))
         self.assertEqual(eval_runner.parse_strategies(("workspace_v2",)), ("workspace_v2",))
+        self.assertEqual(eval_runner.parse_strategies(("multi_agent_v0",)), ("multi_agent_v0",))
+        self.assertEqual(eval_runner.parse_strategies(("workspace_v2,multi_agent_v0",)), ("workspace_v2", "multi_agent_v0"))
         with self.assertRaisesRegex(ValueError, "Unknown strategy: direct_full_video"):
             eval_runner.parse_strategies(("direct_full_video",))
 
@@ -1927,6 +1929,142 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertEqual(raw["segments"], ["seg_0001"])
             self.assertEqual(raw["workspace_log_dir"], str(workspace_root.parent / "workspace_logs" / "case_workspace_v2"))
             self.assertEqual(raw["planner_io_dir"], str(workspace_root.parent / "workspace_logs" / "case_workspace_v2"))
+
+    def test_run_loop_multi_agent_v0_uses_clean_driver_and_sidecar_state(self):
+        from runs import eval_runner
+        from visual_coding_agent_harness.agents.workspace_agent import WorkspaceRunResult
+
+        class FakeReasoner:
+            def __init__(self, *, backend, mutator, workspace, video_map, log_root):
+                self.backend = backend
+                self.mutator = mutator
+                self.workspace = workspace
+                self.video_map = video_map
+                self.log_root = log_root
+                self.answer_result = WorkspaceRunResult(
+                    answer="C. multi agent answer",
+                    citations=("mem_0001",),
+                    confidence="medium",
+                    rounds=3,
+                    metadata={"status": "final", "strategy": "multi_agent_v0"},
+                )
+                reasoners.append(self)
+
+            def step(self, *, round_number, question, options):
+                self.workspace.write_trace_event("reasoner_action_emitted", {"round": round_number, "action": "answer"})
+                return True
+
+        class FakeInvestigator:
+            def __init__(self, *, backend, registry, mutator, workspace, video_map, log_root):
+                self.backend = backend
+                self.registry = registry
+                self.mutator = mutator
+                self.workspace = workspace
+                self.video_map = video_map
+                self.log_root = log_root
+                investigators.append(self)
+
+            def step(self, *, round_number):
+                self.workspace.write_trace_event(
+                    "investigator_tool_invoked",
+                    {"round": round_number, "sub_goal_id": "sg_0001", "tool": "verify_window"},
+                )
+                return True
+
+        registry_calls = []
+        reasoners = []
+        investigators = []
+        drivers = []
+
+        def fake_build_registry(**kwargs):
+            registry_calls.append(kwargs)
+            return object()
+
+        class FakeMultiAgentDriver:
+            def __init__(self, *, reasoner, investigator, workspace, max_rounds):
+                self.reasoner = reasoner
+                self.investigator = investigator
+                self.workspace = workspace
+                self.max_rounds = max_rounds
+                drivers.append(self)
+
+            def run(self, question, options=None):
+                self.reasoner.step(round_number=1, question=question, options=options or {})
+                self.investigator.step(round_number=1)
+                return self.reasoner.answer_result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "workspaces"
+            scene_index = SceneIndex(
+                video_path="/videos/demo.mp4",
+                duration_sec=12.0,
+                segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
+            )
+            with patch.object(eval_runner, "build_workspace_v2_registry", side_effect=fake_build_registry, create=True):
+                with patch.object(eval_runner, "ReasonerAgent", FakeReasoner, create=True):
+                    with patch.object(eval_runner, "InvestigatorAgent", FakeInvestigator, create=True):
+                        with patch.object(eval_runner, "MultiAgentDriver", FakeMultiAgentDriver, create=True):
+                            raw = eval_runner.run_loop(
+                                backend=object(),
+                                video_path="/videos/demo.mp4",
+                                question="Question: Which object is visible?\nOptions:\nA. blue car\nC. red car",
+                                duration_sec=12.0,
+                                run_id="case_multi_agent_v0",
+                                scene_index=scene_index,
+                                workspace_root=workspace_root,
+                                budget=AgentBudget(max_rounds=5),
+                                extract_clips=False,
+                                strategy="multi_agent_v0",
+                            )
+
+            self.assertEqual(len(registry_calls), 1)
+            self.assertEqual(len(reasoners), 1)
+            self.assertEqual(len(investigators), 1)
+            self.assertEqual(len(drivers), 1)
+            self.assertEqual(drivers[0].max_rounds, 5)
+            self.assertEqual(raw["answer"], "C. multi agent answer")
+            self.assertEqual(raw["choice"], "C")
+            self.assertEqual(raw["status"], "final")
+            self.assertEqual(raw["citations"], ["mem_0001"])
+            self.assertEqual(raw["rounds"], 3)
+            self.assertEqual(raw["strategy"], "multi_agent_v0")
+            self.assertEqual(raw["workspace_log_dir"], str(workspace_root.parent / "workspace_logs" / "case_multi_agent_v0"))
+
+    def test_run_loop_multi_agent_v0_real_skeleton_writes_sidecar_state(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "workspaces"
+            scene_index = SceneIndex(
+                video_path="/videos/demo.mp4",
+                duration_sec=12.0,
+                segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
+            )
+            raw = eval_runner.run_loop(
+                backend=object(),
+                video_path="/videos/demo.mp4",
+                question="Question: Which object is visible?\nOptions:\nA. blue car\nB. red car",
+                duration_sec=12.0,
+                run_id="case_multi_agent_real",
+                scene_index=scene_index,
+                workspace_root=workspace_root,
+                budget=AgentBudget(max_rounds=3),
+                extract_clips=False,
+                strategy="multi_agent_v0",
+            )
+
+            workspace_path = workspace_root / "runs" / "case_multi_agent_real"
+            sub_goals_path = workspace_path / "multi_agent" / "sub_goals.jsonl"
+            findings_path = workspace_path / "multi_agent" / "findings.jsonl"
+
+            self.assertEqual(raw["strategy"], "multi_agent_v0")
+            self.assertEqual(raw["status"], "need_more_evidence")
+            self.assertTrue(sub_goals_path.exists())
+            self.assertTrue(findings_path.exists())
+            self.assertIn('"status": "done"', sub_goals_path.read_text(encoding="utf-8"))
+            self.assertIn('"status": "empty"', findings_path.read_text(encoding="utf-8"))
+            self.assertIn("reasoner_action_emitted", (workspace_path / "trace.jsonl").read_text(encoding="utf-8"))
+            self.assertIn("finding_created", (workspace_path / "trace.jsonl").read_text(encoding="utf-8"))
 
     def test_run_eval_cases_exports_training_trajectory_when_enabled(self):
         from runs import eval_runner
