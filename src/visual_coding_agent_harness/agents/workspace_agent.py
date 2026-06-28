@@ -1961,7 +1961,7 @@ def _structured_verify_writes(
     answer_options = _normalize_answer_options(raw_output.get("answer_options") or raw_output.get("options"))
     if not answer_options and workspace is not None:
         answer_options = _workspace_answer_options(workspace)
-    cross_match_text = _verify_cross_match_text(raw_output, results)
+    cross_match_parts = _verify_cross_match_parts(raw_output, results)
     for index, result in enumerate(results):
         verdict = str(result.get("verdict") or "uncertain").strip()
         kind = _memory_kind_for_verification_verdict(verdict)
@@ -2028,7 +2028,7 @@ def _structured_verify_writes(
         matched_option, match_score = _cross_match_verify_result_to_options(
             result,
             answer_options=answer_options,
-            context_text=cross_match_text,
+            context_parts=cross_match_parts,
         )
         if (
             matched_option
@@ -2103,6 +2103,10 @@ def _workspace_answer_options(workspace: EvidenceWorkspace) -> dict[str, str]:
 
 
 def _verify_cross_match_text(raw_output: Mapping[str, Any], results: Sequence[Mapping[str, Any]]) -> str:
+    return " ".join(_verify_cross_match_parts(raw_output, results)).strip()
+
+
+def _verify_cross_match_parts(raw_output: Mapping[str, Any], results: Sequence[Mapping[str, Any]]) -> list[str]:
     parts: list[str] = []
     for key in ("rationale", "explanation", "evidence"):
         value = raw_output.get(key)
@@ -2121,36 +2125,54 @@ def _verify_cross_match_text(raw_output: Mapping[str, Any], results: Sequence[Ma
                 parts.extend(str(fact.get(key) or "") for key in ("text", "claim", "evidence", "rationale"))
             else:
                 parts.append(str(fact or ""))
-    return " ".join(part for part in parts if part).strip()
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        text = " ".join(str(part or "").split()).strip()
+        if not text:
+            continue
+        key = _normalize_match_text(text)
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(text)
+    return deduped
 
 
 def _cross_match_verify_result_to_options(
     result: Mapping[str, Any],
     *,
     answer_options: Mapping[str, str],
-    context_text: str,
+    context_parts: Sequence[str],
 ) -> tuple[str, float]:
     if not answer_options:
         return "", 0.0
-    result_text = _verify_cross_match_text({}, [result])
-    text = " ".join(part for part in (context_text, result_text) if part)
+    result_parts = _verify_cross_match_parts({}, [result])
+    parts = list(context_parts) or result_parts
+    text = " ".join(parts).strip()
     best_option = ""
     best_score = 0.0
     for option_id, option_text in answer_options.items():
-        score = _option_match_score(text, option_text)
+        score = _option_match_score(text, option_text, parts=parts)
         if score > best_score:
             best_option = str(option_id).strip().upper()[:1]
             best_score = score
     return (best_option, best_score) if best_score >= 0.74 else ("", 0.0)
 
 
-def _option_match_score(text: str, option_text: str) -> float:
+def _option_match_score(text: str, option_text: str, *, parts: Sequence[str] = ()) -> float:
     text_norm = _normalize_match_text(text)
     option_norm = _normalize_match_text(option_text)
     if not text_norm or not option_norm:
         return 0.0
     option_items = _sequence_option_items(option_text)
     if len(option_items) >= 2:
+        part_scores = [
+            _ordered_sequence_score(_normalize_match_text(part), option_items)
+            for part in parts
+            if _normalize_match_text(part)
+        ]
+        if part_scores:
+            return max(part_scores)
         return _ordered_sequence_score(text_norm, option_items)
     if option_norm in text_norm:
         return 1.0
@@ -2170,9 +2192,6 @@ def _sequence_option_items(text: str) -> list[str]:
         return [" ".join(item.split()).strip() for item in raw.split("/") if item.strip()]
     if ";" in raw:
         return [" ".join(item.split()).strip() for item in raw.split(";") if item.strip()]
-    if "," in raw and re.search(r"\band\b", raw, flags=re.IGNORECASE):
-        normalized = re.sub(r"\band\b", ",", raw, flags=re.IGNORECASE)
-        return [" ".join(item.split()).strip(" .") for item in normalized.split(",") if item.strip(" .")]
     return []
 
 
@@ -2180,15 +2199,36 @@ def _ordered_sequence_score(text_norm: str, option_items: Sequence[str]) -> floa
     normalized_items = [_normalize_match_text(item) for item in option_items if _normalize_match_text(item)]
     if len(normalized_items) < 2:
         return 0.0
-    positions = [text_norm.find(item) for item in normalized_items]
-    present_positions = [position for position in positions if position >= 0]
-    if len(present_positions) == len(positions):
-        return 1.0 if present_positions == sorted(present_positions) else 0.0
-    if len(positions) < 4 or len(present_positions) < len(positions) - 1 or len(present_positions) < 3:
+    matched_count, missing_count, ordered = _ordered_sequence_match(text_norm, normalized_items)
+    if not ordered:
         return 0.0
-    if present_positions != sorted(present_positions):
+    if matched_count == len(normalized_items):
+        return 1.0
+    if (
+        len(normalized_items) < 4
+        or missing_count > 1
+        or matched_count < len(normalized_items) - 1
+        or matched_count < 3
+    ):
         return 0.0
     return 0.9
+
+
+def _ordered_sequence_match(text_norm: str, normalized_items: Sequence[str]) -> tuple[int, int, bool]:
+    matched_count = 0
+    missing_count = 0
+    previous = -1
+    for item in normalized_items:
+        item_positions = [match.start() for match in re.finditer(re.escape(item), text_norm)]
+        if not item_positions:
+            missing_count += 1
+            continue
+        next_position = next((position for position in item_positions if position > previous), None)
+        if next_position is None:
+            return matched_count, missing_count, False
+        matched_count += 1
+        previous = next_position
+    return matched_count, missing_count, True
 
 
 def _normalize_match_text(text: str) -> str:

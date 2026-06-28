@@ -1107,6 +1107,58 @@ def test_structured_verify_cross_match_allows_one_missing_item_in_long_sequence(
     ]
 
 
+def test_structured_verify_cross_match_uses_later_occurrence_for_repeated_sequence_text(tmp_path: Path) -> None:
+    raw_output = {
+        "claim": "Check option A ordering.",
+        "mode": "verify_window",
+        "answer_options": {
+            "A": '"alpha", "delta", "beta" and "gamma".',
+            "D": '"alpha", "beta", "gamma" and "delta".',
+        },
+        "produced_anchors": [
+            {
+                "anchor_id": "anch_repeated_order",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The order is alpha, beta, delta. A later clarification says beta, gamma, delta.",
+            }
+        ],
+        "verification_results": [
+            {
+                "target_id": "option_A_check",
+                "claim": "Option A gives the display order.",
+                "verdict": "contradicted",
+                "rationale": (
+                    "The order is alpha, beta, an alternate label, and delta. "
+                    "The alternate label is also known as gamma, followed by delta."
+                ),
+                "anchor_ids": ["anch_repeated_order"],
+                "scope": {"segment_id": "seg_0001", "time_range": [0.0, 12.0]},
+                "confidence": 0.92,
+                "option_id": "A",
+            }
+        ],
+    }
+
+    writes = _structured_verify_writes(
+        raw_output,
+        anchors=[
+            {
+                "anchor_id": "anch_repeated_order",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The order is alpha, beta, delta. A later clarification says beta, gamma, delta.",
+            }
+        ],
+        reason="test",
+    )
+
+    assert [(item["kind"], item.get("supports_option")) for item in writes["memory"]] == [
+        ("answer_conflict", "A"),
+        ("synthesized_support", "D"),
+    ]
+
+
 def test_structured_verify_does_not_cross_match_local_negative_claim_echo(tmp_path: Path) -> None:
     raw_output = {
         "claim": "Check option B.",
