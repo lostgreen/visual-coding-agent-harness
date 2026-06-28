@@ -46,7 +46,11 @@ class InvestigatorAgent:
                     round_number=round_number,
                     sub_goal_id=sub_goal.sub_goal_id,
                 )
-                candidate_key = self._select_candidate_key(sub_goal) or self._first_candidate_key(explore.raw_output)
+                candidate_key = (
+                    self._select_candidate_key(sub_goal)
+                    or self._first_candidate_key(explore.raw_output)
+                    or self._select_shared_candidate_key(sub_goal)
+                )
             if candidate_key:
                 verify = self.tool_runner.run_tool(
                     "verify_window",
@@ -143,6 +147,21 @@ class InvestigatorAgent:
                     best_score = score
         return best_key
 
+    def _select_shared_candidate_key(self, sub_goal: Any) -> str:
+        best_key = ""
+        best_score = -1.0
+        for observation in self.workspace.read_observations():
+            raw_output = observation.raw_output if isinstance(observation.raw_output, dict) else {}
+            for candidate in _mapping_items(raw_output.get("candidate_windows")):
+                if not self._candidate_matches_sub_goal(candidate, sub_goal, enforce_option=False):
+                    continue
+                score = float(candidate.get("score", 0.0) or 0.0)
+                key = str(candidate.get("candidate_key") or "").strip()
+                if key and score >= best_score:
+                    best_key = key
+                    best_score = score
+        return best_key
+
     def _observation_matches_sub_goal(self, raw_output: dict[str, Any], sub_goal: Any) -> bool:
         option_id = str(sub_goal.constraint.option_id or "").strip().upper()[:1]
         if not option_id:
@@ -152,10 +171,16 @@ class InvestigatorAgent:
             return tagged_option == option_id
         return False
 
-    def _candidate_matches_sub_goal(self, candidate: dict[str, Any], sub_goal: Any) -> bool:
+    def _candidate_matches_sub_goal(
+        self,
+        candidate: dict[str, Any],
+        sub_goal: Any,
+        *,
+        enforce_option: bool = True,
+    ) -> bool:
         constraint = sub_goal.constraint
         option_id = str(constraint.option_id or "").strip().upper()[:1]
-        if option_id:
+        if enforce_option and option_id:
             candidate_option = str(candidate.get("option_id") or "").strip().upper()[:1]
             if candidate_option and candidate_option != option_id:
                 return False

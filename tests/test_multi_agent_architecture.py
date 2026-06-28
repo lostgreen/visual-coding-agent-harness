@@ -379,6 +379,95 @@ def test_investigator_does_not_reuse_candidate_from_another_option(tmp_path: Pat
     assert workspace.memory_entries()[-1].supports_option == "B"
 
 
+def test_investigator_falls_back_to_shared_candidate_when_explore_is_deduped(tmp_path: Path) -> None:
+    from visual_coding_agent_harness.agents.multi import InvestigatorAgent
+
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    registry = ToolRegistry()
+
+    @tool(name="explore", description="Fake deduped explorer.")
+    def explore(query: str = "", targets=(), scope=None, modalities=(), top_k: int = 3, original_question: str = ""):
+        return {
+            "mode": "candidate_discovery",
+            "claim": "Explore produced no new candidate windows; existing pending candidates already cover these regions.",
+            "confidence": 0.2,
+            "candidate_windows": [],
+        }
+
+    @tool(name="verify_window", description="Fake shared-window verifier.")
+    def verify_window(candidate_key: str = "", checks=(), focus=(), sampling=None):
+        assert candidate_key == "obs_0001:cand_0001"
+        return {
+            "mode": "verify_window",
+            "claim": "Option B is supported in the shared window.",
+            "confidence": 0.9,
+            "verification_results": [
+                {
+                    "target_id": "option_B_check",
+                    "claim": "Option B is supported.",
+                    "verdict": "supported",
+                    "evidence": "The shared window supports option B.",
+                    "confidence": 0.9,
+                    "option_id": "B",
+                }
+            ],
+            "produced_anchors": [
+                {
+                    "anchor_id": "clip_anch_shared_b",
+                    "source_kind": "visual_fact",
+                    "segment_id": "seg_0001",
+                    "start_sec": 0.0,
+                    "end_sec": 10.0,
+                    "excerpt": "The shared window supports option B.",
+                }
+            ],
+        }
+
+    registry.register(explore)
+    registry.register(verify_window)
+    workspace.write_observation(
+        tool_name="explore",
+        claim="Explore found a shared candidate while checking option A.",
+        confidence=0.8,
+        regions=[],
+        raw_output={
+            "mode": "candidate_discovery",
+            "multi_agent_option_id": "A",
+            "candidate_windows": [
+                {
+                    "candidate_key": "obs_0001:cand_0001",
+                    "segment_id": "seg_0001",
+                    "time_range": [0.0, 10.0],
+                    "score": 1.0,
+                }
+            ],
+        },
+    )
+    mutator.create_sub_goal(
+        intent="verify",
+        constraint=SubGoalConstraint(option_id="B", claim="Question? Option B: shared answer."),
+        budget=SubGoalBudget(max_explores=1, max_verifies=1),
+        success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+        parent_question="Question?",
+        created_by="reasoner",
+        created_round=1,
+    )
+    investigator = InvestigatorAgent(
+        backend=object(),
+        registry=registry,
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert investigator.step(round_number=2) is True
+
+    assert mutator.findings()[-1].status == "satisfied"
+    assert workspace.memory_entries()[-1].supports_option == "B"
+
+
 def test_investigator_reports_empty_when_verify_only_finds_local_negative(tmp_path: Path) -> None:
     from visual_coding_agent_harness.agents.multi import InvestigatorAgent
 
