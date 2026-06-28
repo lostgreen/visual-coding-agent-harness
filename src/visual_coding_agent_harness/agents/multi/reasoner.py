@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+import re
+from typing import Any, Mapping, Sequence
 
 from ...evidence.answer_operators import ROUTE_TO_MODALITIES, derive_answer_operator, derive_modality_route
 from ..workspace_agent import WorkspaceRunResult
@@ -10,8 +11,9 @@ from .mutator import WorkspaceMutator
 from .protocol import SubGoalBudget, SubGoalConstraint, SubGoalSuccessCriteria
 
 MAX_OPEN_SUB_GOALS = 3
-ANSWER_GROUNDING_KINDS = frozenset({"visual_support"})
+ANSWER_GROUNDING_KINDS = frozenset({"visual_support", "synthesized_support", "answer_conflict_resolved"})
 CONTRADICTING_KINDS = frozenset({"answer_conflict", "contradiction", "contradicting"})
+FINAL_GROUNDING_KINDS = frozenset({"visual_support", "synthesized_support", "answer_conflict_resolved"})
 
 
 class ReasonerAgent:
@@ -78,7 +80,7 @@ class ReasonerAgent:
         findings = self.mutator.findings()
         scored_options = _score_positive_findings(findings, self.workspace, options=options)
         if scored_options:
-            if len(scored_options) > 1:
+            if untested_options and len(scored_options) > 1 and _needs_conflict_follow_up(scored_options, sub_goals):
                 created = 0
                 for option_id, _citations in scored_options[: MAX_OPEN_SUB_GOALS - len(active)]:
                     self._create_option_sub_goal(
@@ -99,10 +101,10 @@ class ReasonerAgent:
                     },
                 )
                 return created > 0
-            choice, citations = scored_options[0]
-            self.answer_result = WorkspaceRunResult(
-                answer=choice,
-                citations=citations,
+            self.answer_result = _answer_or_need_more(
+                choice=scored_options[0][0],
+                citations=scored_options[0][1],
+                workspace=self.workspace,
                 confidence="medium",
                 rounds=round_number,
                 metadata={"status": "final", "strategy": "multi_agent_v0"},
@@ -116,9 +118,10 @@ class ReasonerAgent:
         elimination = _elimination_answer(self.workspace, options=options)
         if elimination is not None:
             choice, citations = elimination
-            self.answer_result = WorkspaceRunResult(
-                answer=choice,
+            self.answer_result = _answer_or_need_more(
+                choice=choice,
                 citations=citations,
+                workspace=self.workspace,
                 confidence="medium",
                 rounds=round_number,
                 metadata={"status": "final", "strategy": "multi_agent_v0", "reason": "elimination"},
@@ -194,32 +197,154 @@ class ReasonerAgent:
         )
 
 
+def best_effort_answer_from_workspace(workspace: Any, options: Mapping[str, str]) -> tuple[str, tuple[str, ...]] | None:
+    """Return the strongest option-bound visual answer support in workspace memory."""
+
+    scored_options = _score_positive_memory_entries(workspace, options=options)
+    return scored_options[0] if scored_options else None
+
+
 def _score_positive_findings(findings: Any, workspace: Any, *, options: Mapping[str, str]) -> list[tuple[str, tuple[str, ...]]]:
+    finding_memory_ids: set[str] = set()
+    for finding in findings:
+        if finding.status != "satisfied":
+            continue
+        finding_memory_ids.update(str(memory_id) for memory_id in finding.memory_ids)
+    return _score_positive_memory_entries(workspace, options=options, allowed_memory_ids=finding_memory_ids or None)
+
+
+def _score_positive_memory_entries(
+    workspace: Any,
+    *,
+    options: Mapping[str, str],
+    allowed_memory_ids: set[str] | None = None,
+) -> list[tuple[str, tuple[str, ...]]]:
     option_ids = set(_option_ids(options))
     memory_by_id = {entry.entry_id: entry for entry in workspace.memory_entries()}
     refuted_options = _refuted_options(workspace, options=options)
     scores: dict[str, int] = {}
     citations: dict[str, list[str]] = {}
-    for finding in findings:
-        if finding.status != "satisfied":
+    support_counts: dict[str, int] = {}
+    specificity: dict[str, int] = {}
+    overlap: dict[str, int] = {}
+    for entry in memory_by_id.values():
+        if allowed_memory_ids is not None and entry.entry_id not in allowed_memory_ids:
             continue
-        for memory_id in finding.memory_ids:
-            entry = memory_by_id.get(str(memory_id))
-            if entry is None or entry.kind not in ANSWER_GROUNDING_KINDS:
-                continue
-            option_id = str(entry.supports_option or "").strip().upper()[:1]
-            if not option_id or (option_ids and option_id not in option_ids):
-                continue
-            if option_id in refuted_options:
-                continue
-            scores[option_id] = scores.get(option_id, 0) + _confidence_score(entry.confidence)
-            citations.setdefault(option_id, []).append(entry.entry_id)
+        if entry.kind not in ANSWER_GROUNDING_KINDS:
+            continue
+        option_id = str(entry.supports_option or "").strip().upper()[:1]
+        if not option_id or (option_ids and option_id not in option_ids):
+            continue
+        if option_id in refuted_options:
+            continue
+        scores[option_id] = scores.get(option_id, 0) + _confidence_score(entry.confidence)
+        support_counts[option_id] = support_counts.get(option_id, 0) + 1
+        specificity[option_id] = specificity.get(option_id, 0) + _anchor_specificity(entry)
+        overlap[option_id] = overlap.get(option_id, 0) + _claim_option_overlap(entry, options.get(option_id, ""))
+        citations.setdefault(option_id, []).append(entry.entry_id)
     option_order = {option_id: index for index, option_id in enumerate(_option_ids(options))}
     ranked = sorted(
         scores,
-        key=lambda option_id: (-scores[option_id], option_order.get(option_id, 999), option_id),
+        key=lambda option_id: (
+            -scores[option_id],
+            -support_counts.get(option_id, 0),
+            -specificity.get(option_id, 0),
+            -overlap.get(option_id, 0),
+            option_order.get(option_id, 999),
+            option_id,
+        ),
     )
     return [(option_id, tuple(citations[option_id])) for option_id in ranked]
+
+
+def _needs_conflict_follow_up(scored_options: Sequence[tuple[str, tuple[str, ...]]], sub_goals: Sequence[Any]) -> bool:
+    scored_ids = [option_id for option_id, _citations in scored_options]
+    for option_id in scored_ids:
+        count = sum(
+            1
+            for goal in sub_goals
+            if goal.intent == "disambiguate" and str(goal.constraint.option_id or "").strip().upper()[:1] == option_id
+        )
+        if count >= 1:
+            return False
+    return True
+
+
+def _answer_or_need_more(
+    *,
+    choice: str,
+    citations: tuple[str, ...],
+    workspace: Any,
+    confidence: str,
+    rounds: int,
+    metadata: Mapping[str, Any],
+) -> WorkspaceRunResult:
+    if _valid_final_citations(workspace, citations):
+        return WorkspaceRunResult(
+            answer=choice,
+            citations=citations,
+            confidence=confidence,
+            rounds=rounds,
+            metadata=metadata,
+        )
+    return WorkspaceRunResult(
+        answer="need_more_evidence",
+        citations=(),
+        confidence="low",
+        rounds=rounds,
+        metadata={**dict(metadata), "reason": "missing_visual_citation"},
+    )
+
+
+def _valid_final_citations(workspace: Any, citations: tuple[str, ...]) -> bool:
+    if not citations:
+        return False
+    memory_by_id = {entry.entry_id: entry for entry in workspace.memory_entries()}
+    cited_entries = [memory_by_id.get(str(citation)) for citation in citations]
+    cited_entries = [entry for entry in cited_entries if entry is not None]
+    if not cited_entries:
+        return False
+    return any(entry.kind in FINAL_GROUNDING_KINDS for entry in cited_entries)
+
+
+def _anchor_specificity(entry: Any) -> int:
+    text_parts = [str(getattr(entry, "claim", "") or "")]
+    metadata = getattr(entry, "metadata", {}) or {}
+    if isinstance(metadata, Mapping):
+        text_parts.extend(str(value) for value in metadata.values() if isinstance(value, (str, int, float)))
+        if metadata.get("derived_from_verify_cross_match"):
+            text_parts.append("cross_match")
+    for anchor in getattr(entry, "anchors", ()) or ():
+        text_parts.append(str(getattr(anchor, "excerpt", "") or ""))
+    text = " ".join(text_parts)
+    score = 0
+    score += len(re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b", text))
+    score += len(re.findall(r"\b\d{3,4}\b", text)) * 2
+    if str(getattr(entry, "kind", "") or "") == "visual_support":
+        score += 2
+    if isinstance(metadata, Mapping) and metadata.get("derived_from_verify_cross_match"):
+        score += 2
+    generic_terms = {"war", "map", "people", "scene", "video", "object", "thing"}
+    tokens = {token.lower() for token in re.findall(r"[A-Za-z]{3,}", text)}
+    if tokens and tokens <= generic_terms:
+        score = max(0, score - 2)
+    return score
+
+
+def _claim_option_overlap(entry: Any, option_text: str) -> int:
+    option_tokens = _content_tokens(option_text)
+    if not option_tokens:
+        return 0
+    entry_text = str(getattr(entry, "claim", "") or "")
+    for anchor in getattr(entry, "anchors", ()) or ():
+        entry_text += " " + str(getattr(anchor, "excerpt", "") or "")
+    entry_tokens = _content_tokens(entry_text)
+    return len(option_tokens & entry_tokens)
+
+
+def _content_tokens(text: str) -> set[str]:
+    stopwords = {"the", "and", "are", "was", "were", "with", "from", "that", "this", "option", "question"}
+    return {token for token in re.findall(r"[a-z0-9]+", str(text or "").lower()) if len(token) >= 3 and token not in stopwords}
 
 
 def _refuted_options(workspace: Any, *, options: Mapping[str, str]) -> set[str]:

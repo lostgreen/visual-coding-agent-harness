@@ -87,6 +87,9 @@ class EvidenceVerifier:
             "checks": [check],
             "sampling": {"fps": 2, "max_frames": min(128, int(sub_goal.budget.max_frames or 128))},
         }
+        answer_options = dict(candidate.get("answer_options") or {})
+        if answer_options:
+            args["answer_options"] = answer_options
         if not candidate_key:
             segment_id = str(candidate.get("segment_id") or constraint.segment_id or "")
             time_range = _candidate_time_range(candidate) or constraint.time_range

@@ -393,7 +393,12 @@ class WorkspaceVisualAgent:
         if self.workspace.observation_status(observation_id) in {"committed", "rejected", "acknowledged", "auto_acknowledged"}:
             return False
         anchors = _mapping_items(raw_output.get("produced_anchors"))
-        writes = _structured_verify_writes(raw_output, anchors=anchors, reason="deterministic_verify_commit")
+        writes = _structured_verify_writes(
+            raw_output,
+            anchors=anchors,
+            reason="deterministic_verify_commit",
+            workspace=self.workspace,
+        )
         if not writes:
             return False
         try:
@@ -434,7 +439,7 @@ class WorkspaceVisualAgent:
                 },
             )
             return
-        structured_verify_writes = _structured_verify_writes(raw_output, anchors=anchors, reason=reason)
+        structured_verify_writes = _structured_verify_writes(raw_output, anchors=anchors, reason=reason, workspace=self.workspace)
         if structured_verify_writes:
             try:
                 self.workspace.commit_observation(observation.observation_id, writes=structured_verify_writes)
@@ -1692,6 +1697,7 @@ def _retrieval_candidate_writes(
     *,
     anchors: Sequence[Mapping[str, Any]],
     reason: str,
+    workspace: EvidenceWorkspace | None = None,
 ) -> dict[str, Any]:
     results = _mapping_items(raw_output.get("results")) or _mapping_items(raw_output.get("candidate_windows"))
     if not results:
@@ -1942,6 +1948,7 @@ def _structured_verify_writes(
     *,
     anchors: Sequence[Mapping[str, Any]],
     reason: str,
+    workspace: EvidenceWorkspace | None = None,
 ) -> dict[str, Any]:
     if str(raw_output.get("mode") or "") != "verify_window":
         return {}
@@ -1951,6 +1958,10 @@ def _structured_verify_writes(
     anchors_by_id = {str(anchor.get("anchor_id") or "").strip(): dict(anchor) for anchor in anchors if str(anchor.get("anchor_id") or "").strip()}
     pinned: list[dict[str, Any]] = []
     memory: list[dict[str, Any]] = []
+    answer_options = _normalize_answer_options(raw_output.get("answer_options") or raw_output.get("options"))
+    if not answer_options and workspace is not None:
+        answer_options = _workspace_answer_options(workspace)
+    cross_match_text = _verify_cross_match_text(raw_output, results)
     for index, result in enumerate(results):
         verdict = str(result.get("verdict") or "uncertain").strip()
         kind = _memory_kind_for_verification_verdict(verdict)
@@ -2014,9 +2025,180 @@ def _structured_verify_writes(
         if supports_option and kind != "local_negative":
             item["supports_option"] = supports_option
         memory.append(item)
+        matched_option, match_score = _cross_match_verify_result_to_options(
+            result,
+            answer_options=answer_options,
+            context_text=cross_match_text,
+        )
+        if (
+            matched_option
+            and matched_option != supports_option
+            and matched_option in answer_options
+            and kind in {"answer_conflict", "answer_conflict_resolved", "local_negative", "visual_support"}
+            and anchor_ids
+        ):
+            memory.append(
+                {
+                    "kind": "synthesized_support",
+                    "claim": (
+                        f"Verify output for {str(result.get('target_id') or '').strip() or 'target'} "
+                        f"visually matches option {matched_option}: {answer_options[matched_option]}."
+                    ),
+                    "anchor_ids": anchor_ids,
+                    "confidence": _memory_confidence(result.get("confidence")),
+                    "target_id": str(result.get("target_id") or ""),
+                    "supports_option": matched_option,
+                    "metadata": {
+                        "auto_pinned": True,
+                        "auto_pin_reason": reason,
+                        "verdict": "supported",
+                        "target_id": str(result.get("target_id") or ""),
+                        "scope": dict(result.get("scope", {}) or {}) if isinstance(result.get("scope"), Mapping) else {},
+                        "source_kind": str(result.get("source_kind") or ""),
+                        "claim_scope": "direct_answer",
+                        "global_answer_support": True,
+                        "local_only": True,
+                        "event_id": str(result.get("event_id") or ""),
+                        "event_type": str(result.get("event_type") or ""),
+                        "option_truth_status": "supported_true",
+                        "derived_from_verify_cross_match": True,
+                        "source_target_id": str(result.get("target_id") or ""),
+                        "source_target_option": supports_option,
+                        "match_score": match_score,
+                    },
+                }
+            )
     if not memory:
         return {}
     return {"pinned_anchors": _dedupe_anchor_payloads(pinned), "memory": memory}
+
+
+def _normalize_answer_options(value: Any) -> dict[str, str]:
+    if isinstance(value, Mapping):
+        return {
+            str(key).strip().upper()[:1]: str(item).strip()
+            for key, item in value.items()
+            if str(key).strip() and str(item).strip()
+        }
+    options: dict[str, str] = {}
+    for item in _sequence_items(value):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if len(text) >= 3 and text[0].upper() in "ABCDEFGH" and text[1] in {".", ")"}:
+            options[text[0].upper()] = text[2:].strip()
+        else:
+            options[chr(ord("A") + len(options))] = text
+    return options
+
+
+def _workspace_answer_options(workspace: EvidenceWorkspace) -> dict[str, str]:
+    try:
+        snapshot = workspace.search_ledger_snapshot()
+    except Exception:  # noqa: BLE001 - fallback context only
+        return {}
+    if not isinstance(snapshot, Mapping):
+        return {}
+    return _normalize_answer_options(snapshot.get("answer_options"))
+
+
+def _verify_cross_match_text(raw_output: Mapping[str, Any], results: Sequence[Mapping[str, Any]]) -> str:
+    parts: list[str] = []
+    for key in ("claim", "rationale", "explanation", "evidence"):
+        value = raw_output.get(key)
+        if isinstance(value, str):
+            parts.append(value)
+    for fact in _sequence_items(raw_output.get("facts")):
+        if isinstance(fact, Mapping):
+            parts.extend(str(fact.get(key) or "") for key in ("text", "claim", "evidence", "rationale"))
+        else:
+            parts.append(str(fact or ""))
+    for result in results:
+        for key in ("claim", "evidence", "rationale", "explanation"):
+            parts.append(str(result.get(key) or ""))
+        for fact in _sequence_items(result.get("facts")):
+            if isinstance(fact, Mapping):
+                parts.extend(str(fact.get(key) or "") for key in ("text", "claim", "evidence", "rationale"))
+            else:
+                parts.append(str(fact or ""))
+    return " ".join(part for part in parts if part).strip()
+
+
+def _cross_match_verify_result_to_options(
+    result: Mapping[str, Any],
+    *,
+    answer_options: Mapping[str, str],
+    context_text: str,
+) -> tuple[str, float]:
+    if not answer_options:
+        return "", 0.0
+    result_text = _verify_cross_match_text({}, [result])
+    text = " ".join(part for part in (context_text, result_text) if part)
+    best_option = ""
+    best_score = 0.0
+    for option_id, option_text in answer_options.items():
+        score = _option_match_score(text, option_text)
+        if score > best_score:
+            best_option = str(option_id).strip().upper()[:1]
+            best_score = score
+    return (best_option, best_score) if best_score >= 0.74 else ("", 0.0)
+
+
+def _option_match_score(text: str, option_text: str) -> float:
+    text_norm = _normalize_match_text(text)
+    option_norm = _normalize_match_text(option_text)
+    if not text_norm or not option_norm:
+        return 0.0
+    if option_norm in text_norm:
+        return 1.0
+    option_items = _sequence_option_items(option_text)
+    if len(option_items) >= 2:
+        normalized_items = [_normalize_match_text(item) for item in option_items if _normalize_match_text(item)]
+        if normalized_items and all(item in text_norm for item in normalized_items):
+            positions = [text_norm.find(item) for item in normalized_items]
+            ordered = positions == sorted(positions)
+            coverage = sum(1 for pos in positions if pos >= 0) / len(normalized_items)
+            return coverage if ordered else coverage * 0.8
+    option_tokens = _match_tokens(option_norm)
+    if not option_tokens:
+        return 0.0
+    text_tokens = _match_tokens(text_norm)
+    return len(option_tokens & text_tokens) / len(option_tokens)
+
+
+def _sequence_option_items(text: str) -> list[str]:
+    if "/" in str(text or ""):
+        return [" ".join(item.split()).strip() for item in str(text).split("/") if item.strip()]
+    if ";" in str(text or ""):
+        return [" ".join(item.split()).strip() for item in str(text).split(";") if item.strip()]
+    return []
+
+
+def _normalize_match_text(text: str) -> str:
+    normalized = str(text or "").lower()
+    normalized = normalized.replace("&", " and ")
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _match_tokens(text: str) -> set[str]:
+    stopwords = {
+        "the",
+        "and",
+        "are",
+        "was",
+        "were",
+        "with",
+        "from",
+        "left",
+        "right",
+        "order",
+        "sequence",
+        "option",
+        "actual",
+        "visible",
+    }
+    return {token for token in str(text or "").split() if len(token) >= 3 and token not in stopwords}
 
 
 def _memory_kind_for_verification_verdict(verdict: str) -> str:

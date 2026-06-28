@@ -879,6 +879,132 @@ def test_structured_verify_writes_false_option_negative_as_answer_support(tmp_pa
     assert accepted["accepted"] is True
 
 
+def test_structured_verify_cross_matches_contradicted_result_to_supported_option(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_verify_cross_match")
+    answer_options = {
+        "A": "Apollo and Daphne / Persephone / David / Aeneas, Anchises, and Ascanius",
+        "B": "David / Apollo and Daphne / Aeneas, Anchises, and Ascanius / Persephone",
+        "C": "Persephone / Aeneas, Anchises, and Ascanius / Apollo and Daphne / David",
+        "D": "Aeneas, Anchises, and Ascanius / David / Persephone / Apollo and Daphne",
+    }
+    raw_output = {
+        "claim": "Check option A ordering.",
+        "mode": "verify_window",
+        "answer_options": answer_options,
+        "produced_anchors": [
+            {
+                "anchor_id": "anch_order",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "From left to right the order is Aeneas, Anchises, and Ascanius, David, Persephone, Apollo and Daphne.",
+            }
+        ],
+        "facts": [
+            "The visible left to right sequence is Aeneas, Anchises, and Ascanius, David, Persephone, Apollo and Daphne."
+        ],
+        "verification_results": [
+            {
+                "target_id": "option_A_check",
+                "claim": "Option A gives the left-to-right sculpture order.",
+                "verdict": "contradicted",
+                "evidence": "The actual left-to-right order is Aeneas, Anchises, and Ascanius, David, Persephone, Apollo and Daphne.",
+                "rationale": "This sequence matches option D rather than option A.",
+                "anchor_ids": ["anch_order"],
+                "scope": {"segment_id": "seg_0001", "time_range": [0.0, 12.0]},
+                "confidence": 0.92,
+                "option_id": "A",
+            }
+        ],
+    }
+    observation = workspace.write_observation(
+        tool_name="verify_window",
+        claim="Check option A ordering.",
+        confidence=0.9,
+        raw_output=raw_output,
+    )
+
+    writes = _structured_verify_writes(
+        raw_output,
+        anchors=[
+            {
+                "anchor_id": "anch_order",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "From left to right the order is Aeneas, Anchises, and Ascanius, David, Persephone, Apollo and Daphne.",
+            }
+        ],
+        reason="test",
+    )
+
+    workspace.commit_observation(observation.observation_id, writes=writes)
+    memories = workspace.memory_entries()
+    assert [(memory.kind, memory.supports_option) for memory in memories] == [
+        ("answer_conflict", "A"),
+        ("synthesized_support", "D"),
+    ]
+    assert memories[1].anchors[0].anchor_id == "anch_order"
+    assert memories[1].metadata["derived_from_verify_cross_match"] is True
+    assert memories[1].metadata["source_target_id"] == "option_A_check"
+
+
+def test_structured_verify_cross_match_uses_workspace_answer_options(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_verify_cross_match_ledger")
+    workspace._write_search_ledger_snapshot(
+        {
+            "records": [],
+            "candidates": [],
+            "options": {"A": {"option_id": "A", "status": "untested"}, "D": {"option_id": "D", "status": "untested"}},
+            "answer_options": {
+                "A": "red car / blue truck",
+                "D": "green bus / yellow taxi",
+            },
+        }
+    )
+    raw_output = {
+        "claim": "Check option A ordering.",
+        "mode": "verify_window",
+        "produced_anchors": [
+            {
+                "anchor_id": "anch_order_ledger",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The sequence is green bus followed by yellow taxi.",
+            }
+        ],
+        "verification_results": [
+            {
+                "target_id": "option_A_check",
+                "claim": "Option A gives the order.",
+                "verdict": "contradicted",
+                "evidence": "The actual order is green bus then yellow taxi.",
+                "anchor_ids": ["anch_order_ledger"],
+                "scope": {"segment_id": "seg_0001", "time_range": [0.0, 12.0]},
+                "confidence": 0.9,
+                "option_id": "A",
+            }
+        ],
+    }
+
+    writes = _structured_verify_writes(
+        raw_output,
+        anchors=[
+            {
+                "anchor_id": "anch_order_ledger",
+                "source_kind": "visual_fact",
+                "modality": "visual",
+                "excerpt": "The sequence is green bus followed by yellow taxi.",
+            }
+        ],
+        reason="test",
+        workspace=workspace,
+    )
+
+    assert [(item["kind"], item.get("supports_option")) for item in writes["memory"]] == [
+        ("answer_conflict", "A"),
+        ("synthesized_support", "D"),
+    ]
+
+
 def test_workspace_agent_runs_plan_act_commit_before_answer(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_agent_commit")
     registry = ToolRegistry()

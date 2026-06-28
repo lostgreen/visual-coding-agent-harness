@@ -115,7 +115,12 @@ class MultiAgentToolRunner:
         anchors = _mapping_items(raw_output.get("produced_anchors"))
         writes: Mapping[str, Any] = {}
         if str(raw_output.get("mode") or "") == "verify_window":
-            writes = _structured_verify_writes(raw_output, anchors=anchors, reason="multi_agent_investigator_commit")
+            writes = _structured_verify_writes(
+                raw_output,
+                anchors=anchors,
+                reason="multi_agent_investigator_commit",
+                workspace=self.workspace,
+            )
         if not writes:
             writes = _caption_fact_writes(raw_output, anchors=anchors, reason="multi_agent_investigator_commit")
         if not writes and anchors:

@@ -79,6 +79,19 @@ class StubInvestigator:
         return True
 
 
+class IdleReasoner:
+    def __init__(self) -> None:
+        self.answer_result: WorkspaceRunResult | None = None
+
+    def step(self, *, round_number: int, question: str, options: dict[str, str]) -> bool:
+        return False
+
+
+class IdleInvestigator:
+    def step(self, *, round_number: int) -> bool:
+        return False
+
+
 def test_multi_agent_protocol_exports_are_focused() -> None:
     assert SubGoalIntent.__args__ == ("locate", "verify", "disprove", "cover", "disambiguate")
     assert FindingStatus.__args__ == ("satisfied", "partial", "empty", "infeasible")
@@ -624,7 +637,59 @@ def test_reasoner_answers_from_option_bound_positive_memory(tmp_path: Path) -> N
     assert reasoner.answer_result.citations == (memory.entry_id,)
 
 
-def test_reasoner_emits_disambiguation_need_when_multiple_options_have_positive_memory(tmp_path: Path) -> None:
+def test_multi_agent_forced_final_uses_best_effort_visual_support(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    _write_test_memory(workspace, kind="visual_support", supports_option="D")
+    driver = MultiAgentDriver(
+        reasoner=IdleReasoner(),
+        investigator=IdleInvestigator(),
+        workspace=workspace,
+        max_rounds=1,
+    )
+
+    result = driver.run("Question?", options={"A": "alpha", "B": "beta", "C": "gamma", "D": "delta"})
+
+    assert result.answer == "D"
+    assert result.citations == ("mem_0001",)
+    assert result.confidence == "low"
+    assert result.metadata["forced_final"] is True
+    assert result.metadata["reason"] == "max_rounds"
+    assert result.metadata["best_effort_from_visual_support"] is True
+
+
+def test_multi_agent_forced_final_without_positive_memory_stays_need_more(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    driver = MultiAgentDriver(
+        reasoner=IdleReasoner(),
+        investigator=IdleInvestigator(),
+        workspace=workspace,
+        max_rounds=1,
+    )
+
+    result = driver.run("Question?", options={"A": "alpha", "B": "beta"})
+
+    assert result.answer == "need_more_evidence"
+    assert result.citations == ()
+    assert result.metadata["forced_final"] is True
+
+
+def test_multi_agent_driver_records_answer_options_for_verify_cross_match(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace.create(tmp_path, "workspace_driver_answer_options")
+    driver = MultiAgentDriver(
+        reasoner=IdleReasoner(),
+        investigator=IdleInvestigator(),
+        workspace=workspace,
+        max_rounds=1,
+    )
+
+    driver.run("Question?", options={"A": "alpha", "D": "delta"})
+
+    snapshot = workspace.search_ledger_snapshot()
+    assert snapshot["answer_options"] == {"A": "alpha", "D": "delta"}
+    assert snapshot["options"]["A"]["status"] == "untested"
+
+
+def test_reasoner_scores_when_all_options_tested_with_multiple_positive_memory(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace(tmp_path / "workspace")
     mutator = WorkspaceMutator(workspace)
     memories = {
@@ -666,10 +731,122 @@ def test_reasoner_emits_disambiguation_need_when_multiple_options_have_positive_
         options={"A": "alpha", "B": "beta", "C": "gamma", "D": "delta"},
     ) is True
 
-    assert reasoner.answer_result is None
-    open_goals = [goal for goal in mutator.sub_goals() if goal.status == "open"]
-    assert [goal.intent for goal in open_goals] == ["disambiguate", "disambiguate"]
-    assert [goal.constraint.option_id for goal in open_goals] == ["C", "D"]
+    assert reasoner.answer_result is not None
+    assert reasoner.answer_result.answer == "C"
+    assert reasoner.answer_result.citations == (memories["C"].entry_id,)
+    assert [goal for goal in mutator.sub_goals() if goal.status == "open"] == []
+
+
+def test_reasoner_answers_when_all_options_tested_even_with_positive_conflict(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    visual_c = _write_test_memory(workspace, kind="visual_support", supports_option="C")
+    visual_d_1 = _write_test_memory(workspace, kind="visual_support", supports_option="D")
+    visual_d_2 = _write_test_memory(workspace, kind="visual_support", supports_option="D")
+    for option_id, memory_ids in [
+        ("A", ()),
+        ("B", ()),
+        ("C", (visual_c.entry_id,)),
+        ("D", (visual_d_1.entry_id, visual_d_2.entry_id)),
+    ]:
+        sub_goal = mutator.create_sub_goal(
+            intent="verify",
+            constraint=SubGoalConstraint(option_id=option_id, claim=f"Check option {option_id}."),
+            budget=SubGoalBudget(max_explores=1, max_verifies=1),
+            success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+            parent_question="Question?",
+            created_by="reasoner",
+            created_round=1,
+        )
+        mutator.transition_sub_goal(sub_goal.sub_goal_id, to_status="in_progress", round_number=2)
+        mutator.report_finding(
+            sub_goal_id=sub_goal.sub_goal_id,
+            status="satisfied" if memory_ids else "empty",
+            memory_ids=memory_ids,
+            coverage=(0.0, 0.0),
+            notes_for_planner=f"Option {option_id} check complete.",
+            cost={"tool_calls": 1},
+            created_round=2,
+        )
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=3,
+        question="Question?",
+        options={"A": "alpha", "B": "beta", "C": "gamma", "D": "delta"},
+    ) is True
+
+    assert reasoner.answer_result is not None
+    assert reasoner.answer_result.answer == "D"
+    assert reasoner.answer_result.citations == (visual_d_1.entry_id, visual_d_2.entry_id)
+    assert [goal for goal in mutator.sub_goals() if goal.status == "open"] == []
+
+
+def test_reasoner_tie_break_prefers_more_specific_grounding(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    generic_c = _write_test_memory(
+        workspace,
+        kind="visual_support",
+        supports_option="C",
+        claim="A generic scene is visible in the inspected window.",
+        excerpt="A scene with people appears.",
+    )
+    specific_d = _write_test_memory(
+        workspace,
+        kind="visual_support",
+        supports_option="D",
+        claim="Aeneas, Anchises, Ascanius, David, Persephone, and Apollo are visible in order.",
+        excerpt="Aeneas, Anchises and Ascanius appear before David, Persephone, and Apollo and Daphne.",
+    )
+    for option_id, memory_ids in [
+        ("A", ()),
+        ("B", ()),
+        ("C", (generic_c.entry_id,)),
+        ("D", (specific_d.entry_id,)),
+    ]:
+        sub_goal = mutator.create_sub_goal(
+            intent="verify",
+            constraint=SubGoalConstraint(option_id=option_id, claim=f"Check option {option_id}."),
+            budget=SubGoalBudget(max_explores=1, max_verifies=1),
+            success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+            parent_question="Question?",
+            created_by="reasoner",
+            created_round=1,
+        )
+        mutator.transition_sub_goal(sub_goal.sub_goal_id, to_status="in_progress", round_number=2)
+        mutator.report_finding(
+            sub_goal_id=sub_goal.sub_goal_id,
+            status="satisfied" if memory_ids else "empty",
+            memory_ids=memory_ids,
+            coverage=(0.0, 0.0),
+            notes_for_planner=f"Option {option_id} check complete.",
+            cost={"tool_calls": 1},
+            created_round=2,
+        )
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=3,
+        question="Question?",
+        options={"A": "alpha", "B": "beta", "C": "a generic scene", "D": "Aeneas David Persephone Apollo"},
+    ) is True
+
+    assert reasoner.answer_result is not None
+    assert reasoner.answer_result.answer == "D"
+    assert reasoner.answer_result.citations == (specific_d.entry_id,)
 
 
 def test_reasoner_answers_supported_option_when_competing_positive_is_refuted(tmp_path: Path) -> None:
@@ -767,7 +944,7 @@ def test_reasoner_ignores_negative_memory_and_schedules_untested_options(tmp_pat
     assert open_options == ["B", "C", "D"]
 
 
-def test_reasoner_answers_by_elimination_when_all_other_options_are_contradicted(tmp_path: Path) -> None:
+def test_reasoner_gates_elimination_without_positive_grounding_citation(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace(tmp_path / "workspace")
     mutator = WorkspaceMutator(workspace)
     conflict_ids: list[str] = []
@@ -810,10 +987,58 @@ def test_reasoner_answers_by_elimination_when_all_other_options_are_contradicted
     ) is True
 
     assert reasoner.answer_result is not None
-    assert reasoner.answer_result.answer == "D"
-    assert reasoner.answer_result.citations == tuple(conflict_ids)
+    assert reasoner.answer_result.answer == "need_more_evidence"
+    assert reasoner.answer_result.citations == ()
     assert reasoner.answer_result.metadata is not None
-    assert reasoner.answer_result.metadata["reason"] == "elimination"
+    assert reasoner.answer_result.metadata["reason"] == "missing_visual_citation"
+
+
+def test_reasoner_rejects_non_need_more_answer_without_grounding_citation(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    conflict_ids: list[str] = []
+    for option_id in ("A", "B", "C"):
+        memory = _write_test_memory(workspace, kind="answer_conflict", supports_option=option_id)
+        conflict_ids.append(memory.entry_id)
+    for option_id in ("A", "B", "C", "D"):
+        sub_goal = mutator.create_sub_goal(
+            intent="verify",
+            constraint=SubGoalConstraint(option_id=option_id, claim=f"Check option {option_id}."),
+            budget=SubGoalBudget(max_explores=1, max_verifies=1),
+            success_criteria=SubGoalSuccessCriteria(needs_visual_support=True),
+            parent_question="Question?",
+            created_by="reasoner",
+            created_round=1,
+        )
+        mutator.transition_sub_goal(sub_goal.sub_goal_id, to_status="in_progress", round_number=2)
+        memory_ids = (conflict_ids[ord(option_id) - ord("A")],) if option_id in {"A", "B", "C"} else ()
+        mutator.report_finding(
+            sub_goal_id=sub_goal.sub_goal_id,
+            status="empty",
+            memory_ids=memory_ids,
+            coverage=(0.0, 0.0),
+            notes_for_planner=f"Option {option_id} check complete.",
+            cost={"tool_calls": 1},
+            created_round=2,
+        )
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    assert reasoner.step(
+        round_number=3,
+        question="Question?",
+        options={"A": "first", "B": "second", "C": "third", "D": "fourth"},
+    ) is True
+
+    assert reasoner.answer_result is not None
+    assert reasoner.answer_result.answer == "need_more_evidence"
+    assert reasoner.answer_result.citations == ()
+    assert reasoner.answer_result.metadata["reason"] == "missing_visual_citation"
 
 
 def test_reasoner_sub_goal_claim_includes_question_context(tmp_path: Path) -> None:
@@ -887,7 +1112,14 @@ def test_reasoner_routes_biography_question_to_asr_first(tmp_path: Path) -> None
     assert route_events[0]["payload"]["route"] == "asr_primary"
 
 
-def _write_test_memory(workspace: EvidenceWorkspace, *, kind: str, supports_option: str):
+def _write_test_memory(
+    workspace: EvidenceWorkspace,
+    *,
+    kind: str,
+    supports_option: str,
+    claim: str = "A visible clue appears in the inspected window.",
+    excerpt: str = "A visible clue appears in the inspected window.",
+):
     workspace.write_produced_anchors(
         [
             SourceAnchor(
@@ -896,13 +1128,13 @@ def _write_test_memory(workspace: EvidenceWorkspace, *, kind: str, supports_opti
                 source_kind="visual_fact",
                 segment_id="seg_0001",
                 field_path="verification_results.0",
-                excerpt="A visible clue appears in the inspected window.",
+                excerpt=excerpt,
             )
         ]
     )
     return workspace.write_memory(
         kind=kind,  # type: ignore[arg-type]
-        claim="A visible clue appears in the inspected window.",
+        claim=claim,
         anchors=[{"anchor_id": f"anch_{kind}_{supports_option or 'none'}"}],
         supports_option=supports_option,
         confidence="high",
