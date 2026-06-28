@@ -2149,16 +2149,11 @@ def _option_match_score(text: str, option_text: str) -> float:
     option_norm = _normalize_match_text(option_text)
     if not text_norm or not option_norm:
         return 0.0
-    if option_norm in text_norm:
-        return 1.0
     option_items = _sequence_option_items(option_text)
     if len(option_items) >= 2:
-        normalized_items = [_normalize_match_text(item) for item in option_items if _normalize_match_text(item)]
-        if normalized_items and all(item in text_norm for item in normalized_items):
-            positions = [text_norm.find(item) for item in normalized_items]
-            ordered = positions == sorted(positions)
-            coverage = sum(1 for pos in positions if pos >= 0) / len(normalized_items)
-            return coverage if ordered else coverage * 0.8
+        return _ordered_sequence_score(text_norm, option_items)
+    if option_norm in text_norm:
+        return 1.0
     option_tokens = _match_tokens(option_norm)
     if not option_tokens:
         return 0.0
@@ -2167,11 +2162,30 @@ def _option_match_score(text: str, option_text: str) -> float:
 
 
 def _sequence_option_items(text: str) -> list[str]:
-    if "/" in str(text or ""):
-        return [" ".join(item.split()).strip() for item in str(text).split("/") if item.strip()]
-    if ";" in str(text or ""):
-        return [" ".join(item.split()).strip() for item in str(text).split(";") if item.strip()]
+    raw = str(text or "")
+    quoted = [item.strip() for group in re.findall(r'"([^"]+)"|“([^”]+)”|‘([^’]+)’', raw) for item in group if item.strip()]
+    if len(quoted) >= 2:
+        return quoted
+    if "/" in raw:
+        return [" ".join(item.split()).strip() for item in raw.split("/") if item.strip()]
+    if ";" in raw:
+        return [" ".join(item.split()).strip() for item in raw.split(";") if item.strip()]
+    if "," in raw and re.search(r"\band\b", raw, flags=re.IGNORECASE):
+        normalized = re.sub(r"\band\b", ",", raw, flags=re.IGNORECASE)
+        return [" ".join(item.split()).strip(" .") for item in normalized.split(",") if item.strip(" .")]
     return []
+
+
+def _ordered_sequence_score(text_norm: str, option_items: Sequence[str]) -> float:
+    normalized_items = [_normalize_match_text(item) for item in option_items if _normalize_match_text(item)]
+    if len(normalized_items) < 2:
+        return 0.0
+    positions = [text_norm.find(item) for item in normalized_items]
+    if any(position < 0 for position in positions):
+        return 0.0
+    if positions != sorted(positions):
+        return 0.0
+    return 1.0
 
 
 def _normalize_match_text(text: str) -> str:
