@@ -167,14 +167,20 @@ def _score_positive_findings(findings: Any, workspace: Any, *, options: Mapping[
 
 
 def _option_claim(*, question: str, option_id: str, option_text: str) -> str:
-    question_text = " ".join(str(question or "").split())
+    question_text = _question_stem(question)
     option_body = " ".join(str(option_text or "").split())
     if option_id and option_body:
-        return (
-            f"{question_text} Candidate answer Option {option_id}: {option_body}. "
-            "Verify whether this option correctly answers the question, including order and temporal relations."
-        )
+        return f"{question_text} Option {option_id}: {option_body}."
     return option_body or question_text or "Find answer-relevant local video evidence."
+
+
+def _question_stem(question: str) -> str:
+    text = " ".join(str(question or "").split())
+    for marker in (" Options:", " options:", "\nOptions:", "\noptions:"):
+        if marker in text:
+            text = text.split(marker, 1)[0].strip()
+            break
+    return text
 
 
 def _confidence_score(confidence: Any) -> int:

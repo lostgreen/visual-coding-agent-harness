@@ -565,6 +565,29 @@ def test_reasoner_sub_goal_claim_includes_question_context(tmp_path: Path) -> No
     assert "Persephone, Apollo, David, Aeneas" in claims[0]
 
 
+def test_reasoner_sub_goal_claim_drops_full_options_block(tmp_path: Path) -> None:
+    workspace = EvidenceWorkspace(tmp_path / "workspace")
+    mutator = WorkspaceMutator(workspace)
+    reasoner = ReasonerAgent(
+        backend=object(),
+        mutator=mutator,
+        workspace=workspace,
+        video_map=None,
+        log_root=tmp_path / "logs",
+    )
+
+    reasoner.step(
+        round_number=1,
+        question="Question: In what order are the sculptures presented? Options: A. old order B. correct order",
+        options={"A": "old order", "B": "correct order"},
+    )
+
+    claim = mutator.sub_goals()[0].constraint.claim
+    assert "Options:" not in claim
+    assert "Question: In what order are the sculptures presented?" in claim
+    assert "Option A: old order" in claim
+
+
 def _write_test_memory(workspace: EvidenceWorkspace, *, kind: str, supports_option: str):
     workspace.write_produced_anchors(
         [
