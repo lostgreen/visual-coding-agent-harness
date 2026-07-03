@@ -38,7 +38,9 @@ class Investigator:
 
     def run(self, query: ScopedQuery) -> InvestigationReport:
         self.workspace.record_request(query)
-        candidates = tuple(self.explore_fn(query=query, index=self.index, backend=self.backend))
+        explore_result = self.explore_fn(query=query, index=self.index, backend=self.backend)
+        candidates = tuple(explore_result)
+        explore_calls = int(getattr(explore_result, "batch_count", 1 if candidates else 0) or 0)
         self.workspace.record_explore(query.query_id, candidates)
         findings: list[Finding] = []
         verified_shots: list[str] = []
@@ -68,7 +70,7 @@ class Investigator:
             explored_shots=tuple(candidate.shot_id for candidate in candidates),
             verified_shots=tuple(verified_shots),
             unresolved=() if findings else (query.expected_evidence,),
-            cost={"explore_calls": 1, "verify_calls": len(candidates), "frames_read": frames_read},
+            cost={"explore_calls": explore_calls, "verify_calls": len(candidates), "frames_read": frames_read},
         )
         self.workspace.record_report(report)
         return report

@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
 from visual_coding_agent_harness.contracts.report import Finding, VerifyRequest
+from visual_coding_agent_harness.video.artifacts import is_image_path
 
 
 def verify_window(
@@ -17,12 +18,13 @@ def verify_window(
     frame_paths: Sequence[str],
     backend: VisionLanguageBackend,
 ) -> tuple[Finding, ...]:
+    image_frames = [path for path in frame_paths if is_image_path(path, must_exist=True)]
     response = backend.generate(
         BackendRequest(
             task="multi_v3_verify_window",
             prompt=_verify_prompt(request),
-            frames=list(frame_paths),
-            media_type="image",
+            frames=image_frames,
+            media_type="image" if image_frames else None,
             max_new_tokens=512,
             metadata={
                 "query_id": query_id,

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope, ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport
 from visual_coding_agent_harness.workspace.digest import digest_reports
-from visual_coding_agent_harness.workspace.evidence import EvidenceLedger
+from visual_coding_agent_harness.workspace.evidence_ledger import EvidenceLedger
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
 
 
@@ -90,3 +91,27 @@ def test_evidence_ledger_is_append_only_and_digest_is_compact(tmp_path: Path) ->
     assert digest[0].goal_id == "g1"
     assert digest[0].summary == "The red car is visible."
     assert digest[0].citation_ids == ("ev_0001",)
+
+
+def test_investigator_workspace_merges_coverage_under_parallel_reports(tmp_path: Path) -> None:
+    workspace = InvestigatorWorkspace(tmp_path)
+
+    def write_report(index: int) -> None:
+        shot_id = f"sc01_sh{index:03d}"
+        report = InvestigationReport(
+            query_id=f"q{index}",
+            status="empty",
+            findings=(),
+            explored_shots=(shot_id,),
+            verified_shots=(shot_id,),
+            unresolved=("missing evidence",),
+            cost={"explore_calls": 1, "verify_calls": 1, "frames_read": 0},
+        )
+        workspace.record_report(report)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        tuple(executor.map(write_report, range(1, 9)))
+
+    coverage = json.loads((tmp_path / "coverage.json").read_text(encoding="utf-8"))
+    assert coverage["explored_shots"] == [f"sc01_sh{index:03d}" for index in range(1, 9)]
+    assert coverage["verified_shots"] == [f"sc01_sh{index:03d}" for index in range(1, 9)]

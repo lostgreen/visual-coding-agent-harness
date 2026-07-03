@@ -76,3 +76,27 @@ def test_report_contracts_round_trip_and_digest_shape() -> None:
     assert digest.supports_options == ("A",)
     assert digest.refutes_options == ("C",)
     assert digest.citation_ids == ("ev_0001",)
+
+
+def test_digest_item_truncates_long_summaries() -> None:
+    finding = Finding(
+        finding_id="ev_0001",
+        query_id="q1",
+        shot_id="sc01_sh001",
+        summary="x" * 300,
+        citation_ids=("ev_0001",),
+    )
+    report = InvestigationReport(
+        query_id="q1",
+        status="satisfied",
+        findings=(finding,),
+        explored_shots=("sc01_sh001",),
+        verified_shots=("sc01_sh001",),
+        unresolved=(),
+        cost={},
+    )
+
+    digest = DigestItem.from_report(report, goal_id="g1")
+
+    assert len(digest.summary) == 240
+    assert digest.summary.endswith("...")

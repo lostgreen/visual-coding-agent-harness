@@ -19,9 +19,18 @@ from visual_coding_agent_harness.agents.investigator import Investigator as Inve
 from visual_coding_agent_harness.agents.reasoner import Reasoner as ReasonerV3
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import RootIndexPolicy, SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
+from visual_coding_agent_harness.evals.videomme.multi_v3_export import (
+    export_multi_v3_evidence_chains,
+    export_multi_v3_training_trajectory,
+    export_multi_v3_trajectory,
+    export_multi_v3_workspace_round_log,
+    multi_v3_backend_call_counters,
+    multi_v3_tools_and_segments,
+)
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
-from visual_coding_agent_harness.video.build import build_video_index_from_scene_index
-from visual_coding_agent_harness.video.index import SceneIndex
+from visual_coding_agent_harness.video.build import build_video_index_from_scene_index, build_video_index_from_video
+from visual_coding_agent_harness.video.index import Frame, SceneIndex
+from visual_coding_agent_harness.video.keyframes import sample_shot_frames
 from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace as InvestigatorWorkspaceV3
@@ -228,25 +237,35 @@ def run_loop(
     strategy: str = MULTI_V3_STRATEGY,
 ) -> dict[str, Any]:
     start = time.perf_counter()
-    workspace = EvidenceWorkspace.create(base_dir=workspace_root, run_id=run_id)
+    workspace_run_root = workspace_root / "runs" / run_id
+    workspace_run_root.mkdir(parents=True, exist_ok=True)
     workspace_log_dir = workspace_root.parent / "workspace_logs" / run_id
     if strategy == MULTI_V3_STRATEGY:
-        video_index = build_video_index_from_scene_index(
-            scene_index,
-            artifact_dir=workspace.root / "artifacts" / "multi_v3_index",
+        effective_frame_sampler = frame_sampler
+        if effective_frame_sampler is None and Path(video_path).exists():
+            effective_frame_sampler = _default_multi_v3_frame_sampler(
+                artifact_dir=workspace_run_root / "artifacts" / "multi_v3_verify_frames"
+            )
+        video_index = _build_multi_v3_video_index(
+            video_path=video_path,
+            duration_sec=duration_sec,
+            scene_index=scene_index,
+            artifact_dir=workspace_run_root / "artifacts" / "multi_v3_index",
+            frame_sampler=effective_frame_sampler,
         )
         overview = build_scene_timeline_overview(
             video_index,
-            output_dir=workspace.root / "artifacts" / "multi_v3_overview",
+            output_dir=workspace_run_root / "artifacts" / "multi_v3_overview",
         )
-        investigator_workspace = InvestigatorWorkspaceV3(workspace.root / "multi_v3")
+        overview_image_path = getattr(overview, "grid_image_path", getattr(overview, "grid_path", ""))
+        investigator_workspace = InvestigatorWorkspaceV3(workspace_run_root / "multi_v3")
         investigator_kwargs = {
             "index": video_index,
             "workspace": investigator_workspace,
             "backend": backend,
         }
-        if frame_sampler is not None:
-            investigator_kwargs["frame_sampler"] = _multi_v3_frame_sampler(video_path=video_path, frame_sampler=frame_sampler)
+        if effective_frame_sampler is not None:
+            investigator_kwargs["frame_sampler"] = _multi_v3_frame_sampler(video_path=video_path, frame_sampler=effective_frame_sampler)
         reasoner = ReasonerV3(backend=backend)
         investigator = InvestigatorV3(**investigator_kwargs)
         driver = MultiV3Driver(
@@ -254,12 +273,14 @@ def run_loop(
             investigator=investigator,
             workspace=investigator_workspace,
             max_rounds=budget.max_rounds,
+            valid_scene_ids=tuple(scene.scene_id for scene in video_index.scenes),
         )
         result = driver.run(
             question=question,
             options=_extract_option_map(question),
             index_context=video_index.summary() if hasattr(video_index, "summary") else str(video_index),
-            overview_path=overview.grid_path,
+            overview_path=overview_image_path,
+            overview_image_path=overview_image_path,
         )
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
@@ -268,39 +289,39 @@ def run_loop(
     answer = str(getattr(result, "answer", ""))
     citations = _result_citations(result)
     confidence = getattr(result, "confidence", "")
-    reward_tags = _reward_tags_for_result(workspace=workspace, status=status, citations=citations)
-    trajectory_payload = workspace.export_longvideoagent_trajectory(
+    reward_tags = _reward_tags_for_multi_v3(status=status, citations=citations)
+    trajectory_path = workspace_run_root / "artifacts" / "trajectories" / "longvideoagent_trajectory.json"
+    evidence_chains_path = workspace_run_root / "artifacts" / "evidence_chains" / "evidence_chains.json"
+    final_payload = {
+        "answer": answer,
+        "status": status,
+        "citations": list(citations),
+        "confidence": confidence,
+    }
+    trajectory_payload = export_multi_v3_trajectory(
+        investigator_workspace,
         question=question,
         video_path=video_path,
-        final={
-            "answer": answer,
-            "status": status,
-            "citations": list(citations),
-            "confidence": confidence,
-        },
-        verifier_result={"status": status},
+        final=final_payload,
         reward_tags=reward_tags,
+        output_path=trajectory_path,
     )
-    evidence_chains_payload = workspace.export_evidence_chains()
-    trajectory_path = workspace.root / "artifacts" / "trajectories" / "longvideoagent_trajectory.json"
-    evidence_chains_path = workspace.root / "artifacts" / "evidence_chains" / "evidence_chains.json"
-    workspace_round_log = export_workspace_round_log(
-        workspace,
+    evidence_chains_payload = export_multi_v3_evidence_chains(
+        investigator_workspace,
+        output_path=evidence_chains_path,
+    )
+    workspace_round_log = export_multi_v3_workspace_round_log(
+        investigator_workspace,
         question=question,
         video_path=video_path,
-        final={
-            "answer": answer,
-            "status": status,
-            "citations": list(citations),
-            "confidence": confidence,
-        },
+        final=final_payload,
         trajectory_path=trajectory_path,
         evidence_chains_path=evidence_chains_path,
         log_root=workspace_log_dir,
     )
     planner_io_dir = workspace_log_dir
-    tools, segments = _result_tools_and_segments(result, workspace=workspace)
-    backend_call_counters = _backend_call_counters(workspace=workspace, scene_index=scene_index)
+    tools, segments = multi_v3_tools_and_segments(investigator_workspace)
+    backend_call_counters = multi_v3_backend_call_counters(investigator_workspace)
     return {
         "answer": answer,
         "strategy": strategy,
@@ -332,6 +353,102 @@ def _multi_v3_frame_sampler(*, video_path: str, frame_sampler: FrameSampler):
         return tuple(frame_sampler(video_path, float(shot.start_sec), float(shot.end_sec), int(max_frames)))
 
     return sample
+
+
+def _default_multi_v3_frame_sampler(*, artifact_dir: Path) -> FrameSampler:
+    def sample(video_path: str, start_sec: float, end_sec: float, nframes: int) -> tuple[str, ...]:
+        out_dir = artifact_dir / _frame_sample_dir_name(start_sec=start_sec, end_sec=end_sec, nframes=nframes)
+        frames = sample_shot_frames(
+            video_path,
+            float(start_sec),
+            float(end_sec),
+            n_frames=int(nframes),
+            out_dir=out_dir,
+        )
+        return tuple(frame.thumb_path for frame in frames if frame.thumb_path)
+
+    return sample
+
+
+def _frame_sample_dir_name(*, start_sec: float, end_sec: float, nframes: int) -> str:
+    label = f"{float(start_sec):.3f}_{float(end_sec):.3f}_{int(nframes)}"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("_") or "frames"
+
+
+def _build_multi_v3_video_index(
+    *,
+    video_path: str,
+    duration_sec: float,
+    scene_index: SceneIndex,
+    artifact_dir: Path,
+    frame_sampler: FrameSampler | None,
+):
+    if Path(video_path).exists():
+        try:
+            return build_video_index_from_video(
+                video_path,
+                duration_sec,
+                artifact_dir=artifact_dir,
+                asr_cues=_scene_index_asr_cues(scene_index),
+                keyframe_sampler=_keyframe_sampler_from_frame_sampler(frame_sampler) if frame_sampler is not None else None,
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "multi_v3 video indexing failed for an existing video; install ffmpeg/ffprobe "
+                "or provide a working frame sampler instead of falling back to the legacy scene-index adapter"
+            ) from exc
+    return build_video_index_from_scene_index(
+        scene_index,
+        artifact_dir=artifact_dir,
+        shot_frame_paths=_scene_segment_frame_paths(video_path=video_path, frame_sampler=frame_sampler)
+        if frame_sampler is not None
+        else None,
+    )
+
+
+def _keyframe_sampler_from_frame_sampler(frame_sampler: FrameSampler):
+    def sample(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
+        del out_dir
+        paths = tuple(frame_sampler(video_path, float(start_sec), float(end_sec), int(n_frames)))
+        return _frames_from_paths(paths, start_sec=float(start_sec), end_sec=float(end_sec))
+
+    return sample
+
+
+def _scene_segment_frame_paths(*, video_path: str, frame_sampler: FrameSampler):
+    def paths(segment) -> tuple[str, ...]:
+        return tuple(frame_sampler(video_path, float(segment.start_sec), float(segment.end_sec), DEFAULT_NFRAMES))
+
+    return paths
+
+
+def _frames_from_paths(paths: Sequence[str], *, start_sec: float, end_sec: float) -> tuple[Frame, ...]:
+    if not paths:
+        return ()
+    span = max(0.0, float(end_sec) - float(start_sec))
+    frames = []
+    for index, path in enumerate(paths, start=1):
+        time_sec = float(start_sec) if len(paths) == 1 else float(start_sec) + span * float(index - 1) / float(len(paths) - 1)
+        frames.append(Frame(frame_id=f"fr{index:03d}", time_sec=round(time_sec, 3), thumb_path=str(path)))
+    return tuple(frames)
+
+
+def _scene_index_asr_cues(scene_index: SceneIndex) -> tuple[dict[str, Any], ...]:
+    cues: list[dict[str, Any]] = []
+    for segment in scene_index.segments:
+        for item in getattr(segment, "asr_sentences", ()) or ():
+            if isinstance(item, Mapping) and item.get("text"):
+                cues.append(
+                    {
+                        "start_sec": float(item.get("start_sec", segment.start_sec) or segment.start_sec),
+                        "end_sec": float(item.get("end_sec", segment.end_sec) or segment.end_sec),
+                        "text": str(item["text"]),
+                    }
+                )
+        summary = str(getattr(segment, "asr_summary", "") or "").strip()
+        if summary:
+            cues.append({"start_sec": float(segment.start_sec), "end_sec": float(segment.end_sec), "text": summary})
+    return tuple(cues)
 
 
 def _extract_option_map(question: str) -> dict[str, str]:
@@ -401,6 +518,14 @@ def _result_tools_and_segments(result: Any, *, workspace: EvidenceWorkspace | No
             if segment_id:
                 segments.append(segment_id)
     return tools, segments
+
+
+def _reward_tags_for_multi_v3(*, status: str, citations: Sequence[str]) -> list[str]:
+    tags = [str(status)] if status else []
+    tags.append("has_citations" if citations else "missing_citations")
+    if citations:
+        tags.append("multi_v3_citations")
+    return tags
 
 
 def _segment_id_from_tool_arguments(arguments: Mapping[str, Any]) -> str:
@@ -946,17 +1071,31 @@ def _export_training_trajectory(
         return None
     selected = str(strategy_summary.get("choice") or "") or None
     trajectory_path = (run_root / "trajectories" / f"{case_id}_{strategy}.json").resolve()
-    TrainingTrajectory.from_workspace(
-        EvidenceWorkspace(root=workspace_path),
-        case_id=case_id,
-        question=question,
-        options=options,
-        ground_truth=gt,
-        final_decision=str(strategy_summary.get("status", "")),
-        selected_option=selected,
-        is_correct=bool(strategy_summary.get("correct")) if selected else None,
-        output_path=trajectory_path,
-    )
+    multi_v3_root = workspace_path / "multi_v3"
+    if multi_v3_root.exists():
+        export_multi_v3_training_trajectory(
+            multi_v3_root,
+            case_id=case_id,
+            question=question,
+            options=options,
+            ground_truth=gt,
+            final_decision=str(strategy_summary.get("status", "")),
+            selected_option=selected,
+            is_correct=bool(strategy_summary.get("correct")) if selected else None,
+            output_path=trajectory_path,
+        )
+    else:
+        TrainingTrajectory.from_workspace(
+            EvidenceWorkspace(root=workspace_path),
+            case_id=case_id,
+            question=question,
+            options=options,
+            ground_truth=gt,
+            final_decision=str(strategy_summary.get("status", "")),
+            selected_option=selected,
+            is_correct=bool(strategy_summary.get("correct")) if selected else None,
+            output_path=trajectory_path,
+        )
     write_trajectory_markdown(trajectory_path)
     return trajectory_path
 
@@ -988,7 +1127,25 @@ def _write_run_evidence_chains(run_root: Path, results: Sequence[Mapping[str, An
             strategy_summary = strategies.get(str(strategy), {})
             if not isinstance(strategy_summary, Mapping):
                 strategy_summary = {}
-            chains = EvidenceWorkspace(root=workspace_root).evidence_chain_summaries(max_chains=100)
+            multi_v3_root = workspace_root / "multi_v3"
+            if multi_v3_root.exists():
+                payload = export_multi_v3_evidence_chains(multi_v3_root)
+                chains = payload.get("chains", []) if isinstance(payload, Mapping) else []
+                chain_rows = [
+                    [
+                        str(record.get("evidence_id", ""))
+                        for record in chain.get("records", [])
+                        if isinstance(record, Mapping)
+                    ]
+                    for chain in chains
+                    if isinstance(chain, Mapping)
+                ]
+            else:
+                chains = EvidenceWorkspace(root=workspace_root).evidence_chain_summaries(max_chains=100)
+                chain_rows = [
+                    [str(record.get("evidence_id", "")) for record in chain.get("records", [])]
+                    for chain in chains
+                ]
             rows.append(
                 {
                     "case_id": str(case.get("question_id", "")),
@@ -997,10 +1154,7 @@ def _write_run_evidence_chains(run_root: Path, results: Sequence[Mapping[str, An
                     "selected_option": str(strategy_summary.get("choice", "")),
                     "workspace": workspace_root.as_posix(),
                     "chain_count": len(chains),
-                    "chains": [
-                        [str(record.get("evidence_id", "")) for record in chain.get("records", [])]
-                        for chain in chains
-                    ],
+                    "chains": chain_rows,
                 }
             )
     with path.open("w", encoding="utf-8") as handle:

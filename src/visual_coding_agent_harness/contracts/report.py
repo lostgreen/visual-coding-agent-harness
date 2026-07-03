@@ -166,14 +166,14 @@ class DigestItem:
         object.__setattr__(self, "citation_ids", _text_tuple(self.citation_ids))
 
     @classmethod
-    def from_report(cls, report: InvestigationReport, *, goal_id: str) -> "DigestItem":
+    def from_report(cls, report: InvestigationReport, *, goal_id: str, max_summary_chars: int = 240) -> "DigestItem":
         findings = tuple(report.findings)
         summary = " ".join(finding.summary for finding in findings if finding.summary).strip()
         return cls(
             query_id=report.query_id,
             goal_id=goal_id,
             status=report.status,
-            summary=summary or "; ".join(report.unresolved),
+            summary=_truncate_summary(summary or "; ".join(report.unresolved), max_summary_chars),
             supports_options=_unique(item for finding in findings for item in finding.supports_options),
             refutes_options=_unique(item for finding in findings for item in finding.refutes_options),
             citation_ids=_unique(item for finding in findings for item in finding.citation_ids),
@@ -213,6 +213,15 @@ def _text_tuple(value: object) -> tuple[str, ...]:
         except TypeError:
             values = (value,)
     return tuple(text for item in values if (text := str(item).strip()))
+
+
+def _truncate_summary(text: str, max_chars: int) -> str:
+    max_chars = max(0, int(max_chars))
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return text[: max_chars - 3].rstrip() + "..."
 
 
 def _unique(values: Sequence[str] | Any) -> tuple[str, ...]:

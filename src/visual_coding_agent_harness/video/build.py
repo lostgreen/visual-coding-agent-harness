@@ -4,14 +4,89 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
+from .artifacts import compose_scene_thumb, compose_shot_grid
 from .index import Frame, Scene, SceneIndex, Shot, VideoIndex, VideoSegment
+from .keyframes import sample_shot_frames
+from .scene_aggregate import aggregate_shot_ranges_by_duration
+from .shot_detect import detect_shots_ffmpeg, detect_shots_uniform
 
 
 FramePathBuilder = Callable[[VideoSegment], Sequence[str]]
 ShotGridBuilder = Callable[[Shot, Sequence[Frame]], str]
 SceneThumbBuilder = Callable[[Scene, Sequence[Shot]], str]
+ShotDetector = Callable[[str, float], Sequence[tuple[float, float]]]
+KeyframeSampler = Callable[[str, float, float, int, Path], Sequence[Frame]]
+
+
+def build_video_index_from_video(
+    video_path: str,
+    duration_sec: float,
+    *,
+    artifact_dir: Path,
+    asr_cues: Sequence[Any] = (),
+    shot_detector: ShotDetector | None = None,
+    keyframe_sampler: KeyframeSampler | None = None,
+    frames_per_shot: int = 6,
+    scene_max_sec: float = 600.0,
+    render_grid: bool = True,
+) -> VideoIndex:
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    shot_ranges = tuple((float(start), float(end)) for start, end in _detect_shot_ranges(video_path, duration_sec, detector=shot_detector))
+    if not shot_ranges:
+        shot_ranges = tuple(detect_shots_uniform(duration_sec, window=max(1.0, min(float(duration_sec), 15.0))))
+    groups = aggregate_shot_ranges_by_duration(shot_ranges, max_scene_sec=scene_max_sec)
+    scenes = []
+    sampler = keyframe_sampler or _default_keyframe_sampler
+    for scene_number, group in enumerate(groups, start=1):
+        scene_id = f"sc{scene_number:02d}"
+        shots = []
+        for shot_number, (start_sec, end_sec) in enumerate(group, start=1):
+            shot_id = f"{scene_id}_sh{shot_number:03d}"
+            frames = tuple(
+                _with_frame_id(frame, shot_id=shot_id, frame_number=index)
+                for index, frame in enumerate(
+                    sampler(str(video_path), float(start_sec), float(end_sec), int(frames_per_shot), artifact_dir / "frames" / shot_id),
+                    start=1,
+                )
+            )
+            shot = Shot(
+                shot_id=shot_id,
+                scene_id=scene_id,
+                start_sec=float(start_sec),
+                end_sec=float(end_sec),
+                frames=frames,
+                visual_caption="",
+                asr_text=_asr_text_for_range(asr_cues, start_sec=float(start_sec), end_sec=float(end_sec)),
+                ocr_lines=(),
+                entities=(),
+                lowres_grid_path="",
+                source_segment_id=shot_id,
+            )
+            grid_path = _compose_shot_grid_or_empty(shot=shot, frames=frames, artifact_dir=artifact_dir) if render_grid else ""
+            shots.append(replace(shot, lowres_grid_path=grid_path))
+        scene_start = min(start for start, _end in group)
+        scene_end = max(end for _start, end in group)
+        scene = Scene(
+            scene_id=scene_id,
+            start_sec=float(scene_start),
+            end_sec=float(scene_end),
+            title=f"Scene {scene_number}",
+            summary=_scene_summary_from_shots(shots),
+            shots=tuple(shots),
+            dominant_entities=(),
+            dominant_topics=(),
+            scene_thumb_path="",
+            source_segment_id=scene_id,
+        )
+        thumb_path = (
+            str(compose_scene_thumb(scene, tuple(shots), artifact_dir / "scenes" / f"{scene_id}_thumb.jpg"))
+            if render_grid
+            else ""
+        )
+        scenes.append(replace(scene, scene_thumb_path=thumb_path))
+    return VideoIndex(video_path=str(video_path), duration_sec=float(duration_sec), scenes=tuple(scenes))
 
 
 def build_video_index_from_scene_index(
@@ -21,6 +96,7 @@ def build_video_index_from_scene_index(
     shot_frame_paths: FramePathBuilder | None = None,
     shot_grid_builder: ShotGridBuilder | None = None,
     scene_thumb_builder: SceneThumbBuilder | None = None,
+    render_grid: bool = True,
 ) -> VideoIndex:
     """Create the v3 hierarchy from the current flat SceneIndex.
 
@@ -52,11 +128,12 @@ def build_video_index_from_scene_index(
             lowres_grid_path="",
             source_segment_id=segment.segment_id,
         )
-        grid_path = (
-            shot_grid_builder(shot, frames)
-            if shot_grid_builder
-            else str(artifact_dir / "shots" / f"{shot_id}_lowres_grid.json")
-        )
+        if shot_grid_builder:
+            grid_path = shot_grid_builder(shot, frames)
+        elif render_grid:
+            grid_path = _compose_shot_grid_or_empty(shot=shot, frames=frames, artifact_dir=artifact_dir)
+        else:
+            grid_path = ""
         shot = replace(shot, lowres_grid_path=grid_path)
         scene = Scene(
             scene_id=scene_id,
@@ -70,13 +147,83 @@ def build_video_index_from_scene_index(
             scene_thumb_path="",
             source_segment_id=segment.segment_id,
         )
-        thumb_path = (
-            scene_thumb_builder(scene, (shot,))
-            if scene_thumb_builder
-            else (segment.keyframe_path or str(artifact_dir / "scenes" / f"{scene_id}_thumb.json"))
-        )
+        if scene_thumb_builder:
+            thumb_path = scene_thumb_builder(scene, (shot,))
+        elif render_grid:
+            thumb_path = str(compose_scene_thumb(scene, (shot,), artifact_dir / "scenes" / f"{scene_id}_thumb.jpg"))
+        else:
+            thumb_path = segment.keyframe_path or ""
         scenes.append(replace(scene, scene_thumb_path=thumb_path))
     return VideoIndex(video_path=scene_index.video_path, duration_sec=scene_index.duration_sec, scenes=tuple(scenes))
+
+
+def _compose_shot_grid_or_empty(*, shot: Shot, frames: Sequence[Frame], artifact_dir: Path) -> str:
+    if not frames:
+        return ""
+    try:
+        return str(compose_shot_grid(frames, artifact_dir / "shots" / f"{shot.shot_id}_grid.jpg"))
+    except (OSError, ValueError):
+        return ""
+
+
+def _detect_shot_ranges(
+    video_path: str,
+    duration_sec: float,
+    *,
+    detector: ShotDetector | None,
+) -> Sequence[tuple[float, float]]:
+    if detector is not None:
+        return detector(str(video_path), float(duration_sec))
+    try:
+        return detect_shots_ffmpeg(str(video_path))
+    except RuntimeError:
+        return detect_shots_uniform(float(duration_sec), window=15.0)
+
+
+def _default_keyframe_sampler(
+    video_path: str,
+    start_sec: float,
+    end_sec: float,
+    n_frames: int,
+    out_dir: Path,
+) -> Sequence[Frame]:
+    return sample_shot_frames(
+        video_path,
+        start_sec,
+        end_sec,
+        n_frames=n_frames,
+        out_dir=out_dir,
+    )
+
+
+def _with_frame_id(frame: Frame, *, shot_id: str, frame_number: int) -> Frame:
+    return replace(frame, frame_id=f"{shot_id}_fr{frame_number:03d}")
+
+
+def _asr_text_for_range(cues: Sequence[Any], *, start_sec: float, end_sec: float) -> str:
+    lines = []
+    for cue in cues:
+        cue_start = float(_field(cue, "start_sec", 0.0) or 0.0)
+        cue_end = float(_field(cue, "end_sec", cue_start) or cue_start)
+        if cue_end < start_sec or cue_start > end_sec:
+            continue
+        text = str(_field(cue, "text", "") or "").strip()
+        if text:
+            lines.append(text)
+    return " ".join(lines)
+
+
+def _scene_summary_from_shots(shots: Sequence[Shot]) -> str:
+    asr = " ".join(shot.asr_text for shot in shots if shot.asr_text).strip()
+    if asr:
+        return asr[:240]
+    return f"{len(shots)} shot visual scene."
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
 
 def _default_frame_paths(segment: VideoSegment) -> tuple[str, ...]:

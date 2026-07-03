@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
-from visual_coding_agent_harness.video.build import build_video_index_from_scene_index
+from visual_coding_agent_harness.video.build import build_video_index_from_scene_index, build_video_index_from_video
 from visual_coding_agent_harness.video.index import Frame, Scene, SceneIndex, Shot, VideoIndex, VideoSegment
 from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
 
@@ -81,8 +82,68 @@ def test_build_video_index_from_legacy_scene_index_creates_scene_shot_frame_laye
     assert VideoIndex.from_dict(index.to_dict()) == index
 
 
-def test_scene_timeline_overview_writes_manifest_with_scene_thumbs(tmp_path: Path) -> None:
-    frame = Frame(frame_id="fr1", time_sec=2.0, thumb_path="/thumbs/fr1.jpg")
+def test_default_scene_index_adapter_renders_real_grid_and_thumb_images(tmp_path: Path) -> None:
+    frame_path = tmp_path / "frame.jpg"
+    Image.new("RGB", (32, 32), color=(255, 0, 0)).save(frame_path)
+    source = SceneIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=10.0,
+        segments=[
+            VideoSegment(
+                segment_id="seg_0001",
+                start_sec=0.0,
+                end_sec=10.0,
+                keyframe_path=str(frame_path),
+                visual_caption="A red frame.",
+            )
+        ],
+    )
+
+    index = build_video_index_from_scene_index(source, artifact_dir=tmp_path / "artifacts")
+
+    grid_path = Path(index.scenes[0].shots[0].lowres_grid_path)
+    thumb_path = Path(index.scenes[0].scene_thumb_path)
+    assert grid_path.suffix == ".jpg"
+    assert thumb_path.suffix == ".jpg"
+    with Image.open(grid_path) as grid:
+        assert grid.size == (320, 180)
+    with Image.open(thumb_path) as thumb:
+        assert thumb.size == (320, 180)
+
+
+def test_build_video_index_from_video_uses_detected_shots_and_sampled_frames(tmp_path: Path) -> None:
+    def fake_keyframes(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path):
+        del video_path, start_sec, end_sec
+        out_dir.mkdir(parents=True, exist_ok=True)
+        frames = []
+        for index in range(1, min(3, n_frames) + 1):
+            path = out_dir / f"frame_{index:03d}.jpg"
+            Image.new("RGB", (24, 24), color=(index * 30, 80, 120)).save(path)
+            frames.append(Frame(frame_id=f"tmp_{index}", time_sec=float(index), thumb_path=str(path)))
+        return tuple(frames)
+
+    index = build_video_index_from_video(
+        "/videos/demo.mp4",
+        60.0,
+        artifact_dir=tmp_path,
+        shot_detector=lambda _video_path, _duration: ((0.0, 10.0), (10.0, 30.0), (30.0, 60.0)),
+        keyframe_sampler=fake_keyframes,
+        frames_per_shot=3,
+    )
+
+    assert len(index.scenes) == 1
+    assert len(index.scenes[0].shots) == 3
+    for shot in index.scenes[0].shots:
+        assert len(shot.frames) == 3
+        assert Path(shot.lowres_grid_path).exists()
+        with Image.open(shot.lowres_grid_path) as grid:
+            assert grid.size == (960, 180)
+
+
+def test_scene_timeline_overview_writes_manifest_and_real_grid_image(tmp_path: Path) -> None:
+    thumb_path = tmp_path / "sc01.jpg"
+    Image.new("RGB", (32, 32), color=(0, 0, 255)).save(thumb_path)
+    frame = Frame(frame_id="fr1", time_sec=2.0, thumb_path=str(thumb_path))
     index = VideoIndex(
         video_path="/videos/demo.mp4",
         duration_sec=12.0,
@@ -109,7 +170,7 @@ def test_scene_timeline_overview_writes_manifest_with_scene_thumbs(tmp_path: Pat
                 ),
                 dominant_entities=("host",),
                 dominant_topics=("intro",),
-                scene_thumb_path="/thumbs/sc01.jpg",
+                scene_thumb_path=str(thumb_path),
             ),
         ),
     )
@@ -117,7 +178,11 @@ def test_scene_timeline_overview_writes_manifest_with_scene_thumbs(tmp_path: Pat
     overview = build_scene_timeline_overview(index, output_dir=tmp_path, cols=4)
 
     manifest = json.loads(Path(overview.manifest_path).read_text(encoding="utf-8"))
-    assert overview.grid_path.endswith("scene_timeline_grid.json")
+    assert overview.grid_path.endswith("scene_timeline_grid.jpg")
+    assert overview.grid_image_path == overview.grid_path
+    assert overview.manifest_path.endswith("scene_timeline_grid.json")
+    with Image.open(overview.grid_image_path) as grid:
+        assert grid.size == (320, 180)
     assert manifest["cols"] == 4
     assert manifest["scenes"][0]["scene_id"] == "sc01"
-    assert manifest["scenes"][0]["thumb_path"] == "/thumbs/sc01.jpg"
+    assert manifest["scenes"][0]["thumb_path"] == str(thumb_path)

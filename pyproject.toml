@@ -7,7 +7,7 @@ name = "visual-coding-agent-harness"
 version = "0.1.0"
 description = "A lightweight visual coding-agent harness for multimodal tool-use research."
 requires-python = ">=3.9"
-dependencies = []
+dependencies = ["Pillow>=10"]
 
 [project.scripts]
 vh-eval-videomme = "visual_coding_agent_harness.cli.eval_videomme:main"

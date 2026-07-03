@@ -4,12 +4,32 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot
+from visual_coding_agent_harness.video.artifacts import is_image_path
 from visual_coding_agent_harness.video.index import Shot, VideoIndex
+
+
+class ExploreResult(tuple):
+    """Candidate shots plus execution metadata for cost accounting."""
+
+    batch_count: int
+    degraded: bool
+
+    def __new__(
+        cls,
+        items: Iterable[CandidateShot] = (),
+        *,
+        batch_count: int = 0,
+        degraded: bool = False,
+    ) -> "ExploreResult":
+        obj = tuple.__new__(cls, tuple(items))
+        obj.batch_count = max(0, int(batch_count))
+        obj.degraded = bool(degraded)
+        return obj
 
 
 def explore(
@@ -18,24 +38,34 @@ def explore(
     index: VideoIndex,
     backend: VisionLanguageBackend,
     batch_size: int = 16,
-) -> tuple[CandidateShot, ...]:
+) -> ExploreResult:
     shots = tuple(shot for scene_id in query.scope.scene_ids for shot in index.get_scene(scene_id).shots)
     candidates: list[CandidateShot] = []
+    batch_count = 0
+    degraded = False
     for batch in _chunks(shots, max(1, int(batch_size))):
+        batch_count += 1
+        frames = [shot.lowres_grid_path for shot in batch if is_image_path(shot.lowres_grid_path, must_exist=True)]
+        batch_degraded = len(frames) < len(batch)
+        degraded = degraded or batch_degraded
         response = backend.generate(
             BackendRequest(
                 task="multi_v3_explore",
                 prompt=_explore_prompt(query=query, shots=batch),
-                frames=[shot.lowres_grid_path for shot in batch if shot.lowres_grid_path],
-                media_type="image",
+                frames=frames,
+                media_type="image" if frames else None,
                 max_new_tokens=512,
-                metadata={"query_id": query.query_id, "scene_ids": list(query.scope.scene_ids)},
+                metadata={
+                    "query_id": query.query_id,
+                    "scene_ids": list(query.scope.scene_ids),
+                    "degraded": batch_degraded,
+                },
             )
         )
         candidates.extend(_parse_candidates(response.text))
     candidates.sort(key=lambda item: item.score, reverse=True)
     limit = query.budget.max_shots_to_verify
-    return tuple(candidates[:limit] if limit else ())
+    return ExploreResult(candidates[:limit] if limit else (), batch_count=batch_count, degraded=degraded)
 
 
 def _explore_prompt(*, query: ScopedQuery, shots: Sequence[Shot]) -> str:
@@ -43,7 +73,6 @@ def _explore_prompt(*, query: ScopedQuery, shots: Sequence[Shot]) -> str:
         "Select the 1-3 shot ids that best answer the query. Return JSON only:",
         '{"picks":[{"shot_id":"...","score":0.0,"reason":"..."}]}',
         f"Query: {query.natural_query}",
-        f"ExpectedEvidence: {query.expected_evidence}",
         "ShotMeta:",
     ]
     for shot in shots:

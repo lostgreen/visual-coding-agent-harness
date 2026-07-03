@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
 from visual_coding_agent_harness.contracts.query import ScopedQuery, VerifiableGoal
 from visual_coding_agent_harness.contracts.report import DigestItem
 from visual_coding_agent_harness.agents.result import WorkspaceRunResult
+from visual_coding_agent_harness.video.artifacts import is_image_path
 
 
 @dataclass(frozen=True)
@@ -34,7 +36,12 @@ class ReasonerDecision:
             citations=tuple(self.citations),
             confidence=self.confidence,
             rounds=rounds,
-            metadata={"status": "final" if self.answer else "need_more_evidence", "strategy": "multi_v3"},
+            metadata={
+                "status": "final" if self.answer else "need_more_evidence",
+                "strategy": "multi_v3",
+                "rationale": self.rationale,
+                "goals": [goal.to_dict() for goal in self.goals],
+            },
         )
 
 
@@ -48,10 +55,12 @@ class Reasoner:
         question: str,
         options: Mapping[str, str],
         index_context: str,
-        overview_path: str,
-        previous_digest: Sequence[DigestItem],
-        round_number: int,
+        overview_path: str = "",
+        previous_digest: Sequence[DigestItem] = (),
+        round_number: int = 1,
+        overview_image_path: str = "",
     ) -> ReasonerDecision:
+        media_path = _valid_overview_image_path(overview_image_path or overview_path)
         response = self.backend.generate(
             BackendRequest(
                 task="multi_v3_reasoner",
@@ -66,8 +75,8 @@ class Reasoner:
                     previous_digest=previous_digest,
                     round_number=round_number,
                 ),
-                media_path=overview_path,
-                media_type="image" if overview_path else None,
+                media_path=media_path,
+                media_type="image" if media_path else None,
                 max_new_tokens=1024,
                 metadata={"round_number": round_number, "strategy": "multi_v3"},
             )
@@ -104,6 +113,8 @@ def _parse_decision(text: str) -> ReasonerDecision:
     if action == "answer":
         return ReasonerDecision(
             action="answer",
+            goals=tuple(VerifiableGoal.from_dict(item) for item in _sequence(payload.get("goals")) if isinstance(item, Mapping)),
+            rationale=str(payload.get("rationale") or ""),
             answer=str(payload.get("answer") or ""),
             confidence=str(payload.get("confidence") or ""),
             citations=tuple(str(item) for item in _sequence(payload.get("citations"))),
@@ -136,3 +147,12 @@ def _sequence(value: object) -> tuple[object, ...]:
         return tuple(value)  # type: ignore[arg-type]
     except TypeError:
         return ()
+
+
+def _valid_overview_image_path(path: str) -> str | None:
+    text = str(path or "").strip()
+    if not text:
+        return None
+    if not is_image_path(text):
+        return None
+    return text if Path(text).exists() else None

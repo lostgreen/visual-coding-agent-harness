@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 from pathlib import Path
 from typing import Sequence
@@ -9,7 +10,7 @@ from typing import Sequence
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport
 
-from .evidence import EvidenceLedger
+from .evidence_ledger import EvidenceLedger
 
 
 class InvestigatorWorkspace:
@@ -40,6 +41,9 @@ class InvestigatorWorkspace:
         self._merge_coverage(explored=report.explored_shots, verified=report.verified_shots)
         self._trace("report_recorded", {"query_id": report.query_id, "status": report.status})
 
+    def record_warning(self, event: str, payload: dict[str, object]) -> None:
+        self._trace(event, payload)
+
     def _query_dir(self, query_id: str) -> Path:
         path = self.root / "queries" / query_id
         path.mkdir(parents=True, exist_ok=True)
@@ -47,12 +51,21 @@ class InvestigatorWorkspace:
 
     def _merge_coverage(self, *, explored: Sequence[str], verified: Sequence[str]) -> None:
         path = self.root / "coverage.json"
-        current = {"explored_shots": [], "verified_shots": []}
-        if path.exists():
-            current.update(json.loads(path.read_text(encoding="utf-8")))
-        current["explored_shots"] = sorted(set(str(item) for item in current.get("explored_shots", [])) | set(explored))
-        current["verified_shots"] = sorted(set(str(item) for item in current.get("verified_shots", [])) | set(verified))
-        self._write_json(path, current)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            handle.seek(0)
+            raw = handle.read().strip()
+            current = {"explored_shots": [], "verified_shots": []}
+            if raw:
+                current.update(json.loads(raw))
+            current["explored_shots"] = sorted(set(str(item) for item in current.get("explored_shots", [])) | set(explored))
+            current["verified_shots"] = sorted(set(str(item) for item in current.get("verified_shots", [])) | set(verified))
+            handle.seek(0)
+            handle.truncate()
+            handle.write(json.dumps(current, ensure_ascii=False, indent=2, sort_keys=True))
+            handle.write("\n")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _trace(self, event: str, payload: dict[str, object]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
