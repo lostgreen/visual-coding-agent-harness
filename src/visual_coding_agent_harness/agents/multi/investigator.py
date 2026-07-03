@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..debug_hooks import maybe_break
 from .evidence_scout import EvidenceScout
 from .evidence_verifier import EvidenceVerifier
 from .mutator import WorkspaceMutator
@@ -39,6 +40,7 @@ class InvestigatorAgent:
         sub_goal = self.mutator.claim_next_open_sub_goal(agent_id="investigator", round_number=round_number)
         if sub_goal is None:
             return False
+        maybe_break("investigator.claimed", investigator=self, round_number=round_number, sub_goal=sub_goal)
         try:
             candidate = self.scout.propose_candidate(sub_goal, round_number=round_number)
             if candidate:

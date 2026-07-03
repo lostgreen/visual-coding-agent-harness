@@ -6,6 +6,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from ...evidence.answer_operators import ROUTE_TO_MODALITIES, derive_answer_operator, derive_modality_route
+from ..debug_hooks import maybe_break
 from ..workspace_agent import WorkspaceRunResult
 from .mutator import WorkspaceMutator
 from .protocol import SubGoalBudget, SubGoalConstraint, SubGoalSuccessCriteria
@@ -54,6 +55,17 @@ class ReasonerAgent:
             if goal.status in {"done", "abandoned"} and str(goal.constraint.option_id or "").strip()
         }
         untested_options = [option_id for option_id in option_ids if option_id not in tested_options | active_options]
+        maybe_break(
+            "reasoner.state",
+            reasoner=self,
+            round_number=round_number,
+            question=question,
+            options=options,
+            sub_goals=sub_goals,
+            active=active,
+            tested_options=tested_options,
+            untested_options=untested_options,
+        )
         if untested_options and len(active) < MAX_OPEN_SUB_GOALS:
             created = 0
             for option_id in untested_options[: MAX_OPEN_SUB_GOALS - len(active)]:
@@ -79,6 +91,7 @@ class ReasonerAgent:
 
         findings = self.mutator.findings()
         scored_options = _score_positive_findings(findings, self.workspace, options=options)
+        maybe_break("reasoner.scored", reasoner=self, findings=findings, scored_options=scored_options)
         if scored_options:
             if untested_options and len(scored_options) > 1 and _needs_conflict_follow_up(scored_options, sub_goals):
                 created = 0
@@ -101,6 +114,7 @@ class ReasonerAgent:
                     },
                 )
                 return created > 0
+            maybe_break("reasoner.before_answer", reasoner=self, choice=scored_options[0][0], citations=scored_options[0][1])
             self.answer_result = _answer_or_need_more(
                 choice=scored_options[0][0],
                 citations=scored_options[0][1],

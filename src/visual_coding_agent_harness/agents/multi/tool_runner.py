@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from ...core.protocol import ToolRequest
 from ...core.registry import ToolError, ToolRegistry
 from ...workspace import EvidenceWorkspace
+from ..debug_hooks import maybe_break
 from ..workspace_agent import _caption_fact_writes, _mapping_items, _retrieval_candidate_writes, _structured_verify_writes
 
 
@@ -65,7 +66,9 @@ class MultiAgentToolRunner:
             "tool_use",
             {"step": round_number, "tool": request.tool, "arguments": dict(request.arguments), "agent": "investigator"},
         )
+        maybe_break("tool_runner.before_execute", runner=self, request=request, round_number=round_number, sub_goal_id=sub_goal_id)
         raw_output = dict(self.registry.execute(request.tool, request.arguments))
+        maybe_break("tool_runner.after_execute", runner=self, request=request, raw_output=raw_output)
         raw_output.setdefault("multi_agent_sub_goal_id", sub_goal_id)
         option_id = _option_id_from_arguments(request.arguments)
         if option_id:
@@ -90,6 +93,7 @@ class MultiAgentToolRunner:
                 "agent": "investigator",
             },
         )
+        maybe_break("tool_runner.before_commit", runner=self, observation=observation, raw_output=raw_output)
         memory_ids = self._commit_known_observation(observation.observation_id, raw_output)
         return ToolRunOutcome(observation_id=observation.observation_id, raw_output=raw_output, memory_ids=memory_ids)
 
@@ -115,6 +119,7 @@ class MultiAgentToolRunner:
         anchors = _mapping_items(raw_output.get("produced_anchors"))
         writes: Mapping[str, Any] = {}
         if str(raw_output.get("mode") or "") == "verify_window":
+            maybe_break("tool_runner.before_structured_verify_writes", runner=self, raw_output=raw_output, anchors=anchors)
             writes = _structured_verify_writes(
                 raw_output,
                 anchors=anchors,
@@ -128,6 +133,7 @@ class MultiAgentToolRunner:
         if not writes:
             return ()
         before = {entry.entry_id for entry in self.workspace.memory_entries()}
+        maybe_break("tool_runner.before_workspace_commit", runner=self, observation_id=observation_id, writes=writes, before_memory_ids=before)
         try:
             self.workspace.commit_observation(observation_id, writes=writes)
         except (ToolError, ValueError) as exc:

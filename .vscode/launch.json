@@ -34,6 +34,40 @@
         }
       ],
       "justMyCode": false
+    },
+    {
+      "name": "VideoMME multi_agent_v0 debug: 611-2 evidence flow",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python",
+      "program": "${workspaceFolder}/runs/eval_runner.py",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src:.",
+        "CUDA_VISIBLE_DEVICES": "1",
+        "http_proxy": "http://oversea-squid1.jp.txyun:11080",
+        "https_proxy": "http://oversea-squid1.jp.txyun:11080",
+        "no_proxy": "localhost,127.0.0.1,localaddress,localdomain.com,internal,corp.kuaishou.com,test.gifshow.com,staging.kuaishou.com",
+        "VCAH_MULTI_AGENT_DEBUG_STOPS": "driver.round.start,reasoner.state,investigator.claimed,scout.before_explore,scout.record_candidate,verifier.before_verify,verifier.after_verify,tool_runner.before_execute,tool_runner.after_execute,tool_runner.before_structured_verify_writes,tool_runner.before_workspace_commit,verify.cross_match,reasoner.scored,reasoner.before_answer,driver.forced_final",
+        "VCAH_MULTI_AGENT_DEBUG_WAIT": "0"
+      },
+      "args": [
+        "--config",
+        "/m2v_intern/xuboshen/zgw/VideoAgent/VideoMME/runs/2ef78b5_short10_explorefix_eval_p10/eval_config.short10.explorefix.yaml",
+        "--cases",
+        "611-2",
+        "--strategy",
+        "multi_agent_v0",
+        "--run-root",
+        "/m2v_intern/xuboshen/zgw/VideoAgent/VideoMME/runs/debug_multi_agent_v0_611",
+        "--workspace-root",
+        "/m2v_intern/xuboshen/zgw/VideoAgent/VideoMME/runs/debug_multi_agent_v0_611/workspaces",
+        "--allow-any-python"
+      ],
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "subProcess": true,
+      "stopOnEntry": false
     }
   ]
 }

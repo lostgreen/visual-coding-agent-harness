@@ -13,6 +13,7 @@ from ..core.protocol import ToolRequest, ToolResult
 from ..core.registry import DuplicateGuardPolicy, ToolError, ToolRegistry
 from ..workspace import EvidenceWorkspace
 from ..workspace.open_questions import extract_candidate_options
+from .debug_hooks import maybe_break
 
 
 DISPOSITION_TOOLS = {
@@ -2029,6 +2030,15 @@ def _structured_verify_writes(
             result,
             answer_options=answer_options,
             context_parts=cross_match_parts,
+        )
+        maybe_break(
+            "verify.cross_match",
+            result=result,
+            supports_option=supports_option,
+            kind=kind,
+            matched_option=matched_option,
+            match_score=match_score,
+            answer_options=answer_options,
         )
         if (
             matched_option

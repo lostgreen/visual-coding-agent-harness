@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from ..debug_hooks import maybe_break
 from ..workspace_agent import WorkspaceRunResult
 from .reasoner import best_effort_answer_from_workspace
 
@@ -24,6 +25,14 @@ class MultiAgentDriver:
         idle_streak = 0
         last_investigator_acted = False
         for round_number in range(1, self.max_rounds + 1):
+            maybe_break(
+                "driver.round.start",
+                driver=self,
+                round_number=round_number,
+                question=question,
+                options=option_payload,
+                idle_streak=idle_streak,
+            )
             reasoner_acted = bool(
                 self.reasoner.step(round_number=round_number, question=question, options=option_payload)
             )
@@ -50,6 +59,7 @@ class MultiAgentDriver:
 
     def _forced_final(self, round_number: int, *, reason: str) -> WorkspaceRunResult:
         best_effort = best_effort_answer_from_workspace(self.workspace, getattr(self, "_last_options", {}))
+        maybe_break("driver.forced_final", driver=self, round_number=round_number, reason=reason, best_effort=best_effort)
         if best_effort is not None:
             answer, citations = best_effort
             if hasattr(self.workspace, "write_trace_event"):

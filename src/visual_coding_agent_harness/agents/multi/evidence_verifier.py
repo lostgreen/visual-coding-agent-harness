@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from ..debug_hooks import maybe_break
 from .mutator import WorkspaceMutator
 from .protocol import Finding
 from .tool_runner import MultiAgentToolRunner
@@ -27,9 +28,11 @@ class EvidenceVerifier:
         explore_calls: int = 0,
     ) -> Finding:
         candidate_key = str(candidate.get("candidate_key") or "")
+        verify_args = self._verify_args(sub_goal, candidate=candidate, candidate_key=candidate_key)
+        maybe_break("verifier.before_verify", verifier=self, sub_goal=sub_goal, candidate=candidate, verify_args=verify_args)
         outcome = self.tool_runner.run_tool(
             "verify_window",
-            self._verify_args(sub_goal, candidate=candidate, candidate_key=candidate_key),
+            verify_args,
             round_number=round_number,
             sub_goal_id=sub_goal.sub_goal_id,
         )
@@ -41,6 +44,7 @@ class EvidenceVerifier:
             "frames_read": _frames_read(outcome.raw_output),
             "tokens": 0,
         }
+        maybe_break("verifier.after_verify", verifier=self, outcome=outcome, status=status, cost=cost)
         finding = self.mutator.report_finding(
             sub_goal_id=sub_goal.sub_goal_id,
             status=status,  # type: ignore[arg-type]

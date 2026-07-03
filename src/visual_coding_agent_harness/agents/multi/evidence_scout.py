@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from ...evidence import EvidenceLedger
+from ..debug_hooks import maybe_break
 from .mutator import WorkspaceMutator
 from .tool_runner import MultiAgentToolRunner
 
@@ -31,9 +32,11 @@ class EvidenceScout:
                     source="scout_existing_candidate",
                 )
 
+        explore_args = self._explore_args(sub_goal)
+        maybe_break("scout.before_explore", scout=self, sub_goal=sub_goal, round_number=round_number, explore_args=explore_args)
         explore = self.tool_runner.run_tool(
             "explore",
-            self._explore_args(sub_goal),
+            explore_args,
             round_number=round_number,
             sub_goal_id=sub_goal.sub_goal_id,
         )
@@ -68,6 +71,7 @@ class EvidenceScout:
         source: str,
     ) -> dict[str, object] | None:
         row = dict(candidate)
+        maybe_break("scout.record_candidate", scout=self, sub_goal=sub_goal, candidate=row, round_number=round_number)
         row["source"] = source
         recorded = self.mutator.record_candidates(
             need_id=sub_goal.sub_goal_id,
