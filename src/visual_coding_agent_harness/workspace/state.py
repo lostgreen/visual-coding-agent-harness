@@ -14,7 +14,6 @@ from typing import Any, Mapping, Sequence
 from ..core.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
 from .output_quality import is_unsupported_claim
 from .open_questions import extract_candidate_options
-from .search_ledger import empty_search_ledger, render_search_ledger, update_search_ledger
 from .transcript_binder import TranscriptEvidenceBinder
 from ..contracts import (
     ClaimModality,
@@ -23,7 +22,6 @@ from ..contracts import (
     build_ordered_transcript_sequence,
 )
 from ..core.schemas import EvidenceRowV2
-from ..evidence.order_extraction import extract_observed_order_from_text, match_observed_order_to_hypotheses
 from ..memory import MemoryEntry, SourceAnchor, excerpt_hash, normalized_text
 
 
@@ -346,13 +344,6 @@ class EvidenceWorkspace:
         )
         if produced_anchors:
             raw_payload["produced_anchors"] = [anchor.to_dict() for anchor in produced_anchors]
-        ledger, raw_payload, ledger_events = update_search_ledger(
-            self.search_ledger_snapshot(),
-            observation_id=observation_id,
-            tool_name=tool_name,
-            raw_output=raw_payload,
-        )
-        self._write_search_ledger_snapshot(ledger)
         observation = Observation(
             observation_id=observation_id,
             tool=tool_name,
@@ -368,8 +359,6 @@ class EvidenceWorkspace:
         )
         self._append_jsonl("observations.jsonl", asdict(observation))
         self._append_jsonl("observations/observations.jsonl", asdict(observation))
-        for event_type, payload in ledger_events:
-            self.write_trace_event(event_type, payload)
         claim_scope = str(raw_payload.get("claim_scope") or "").strip()
         if tool_name == "explore" and claim_scope and claim_scope != "direct_answer":
             self.write_trace_event(
@@ -499,53 +488,6 @@ class EvidenceWorkspace:
 
     def memory_entries(self) -> list[MemoryEntry]:
         return [MemoryEntry.from_mapping(row) for row in self._read_jsonl_dicts("memory.jsonl")]
-
-    def search_ledger_snapshot(self) -> dict[str, Any]:
-        path = self.root / "search_ledger.json"
-        if not path.exists():
-            return empty_search_ledger()
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return empty_search_ledger()
-        if not isinstance(payload, Mapping):
-            return empty_search_ledger()
-        return {
-            "records": list(payload.get("records", [])) if isinstance(payload.get("records", []), Sequence) else [],
-            "candidates": list(payload.get("candidates", [])) if isinstance(payload.get("candidates", []), Sequence) else [],
-            "options": dict(payload.get("options", {})) if isinstance(payload.get("options", {}), Mapping) else {},
-            "answer_options": (
-                dict(payload.get("answer_options", {})) if isinstance(payload.get("answer_options", {}), Mapping) else {}
-            ),
-        }
-
-    def render_search_ledger_view(self) -> str:
-        return render_search_ledger(
-            self.search_ledger_snapshot(),
-            must_verify_candidate_key=self._pending_saturation_candidate_key(),
-        )
-
-    def _pending_saturation_candidate_key(self, *, min_pending: int = 3) -> str | None:
-        snapshot = self.search_ledger_snapshot()
-        raw_candidates = snapshot.get("candidates", [])
-        if not isinstance(raw_candidates, Sequence) or isinstance(raw_candidates, (str, bytes)):
-            return None
-        pending = [
-            candidate
-            for candidate in raw_candidates
-            if isinstance(candidate, Mapping) and str(candidate.get("status") or "") == "pending"
-        ]
-        if len(pending) < min_pending:
-            return None
-        if any(entry.kind in self.POSITIVE_SUPPORT_KINDS for entry in self.memory_entries()):
-            return None
-        candidate = _highest_score_pending_candidate(pending)
-        candidate_key = str(candidate.get("candidate_key") or candidate.get("event_id") or "").strip()
-        return candidate_key or None
-
-    def _write_search_ledger_snapshot(self, snapshot: Mapping[str, Any]) -> None:
-        path = self.root / "search_ledger.json"
-        path.write_text(json.dumps(dict(snapshot), ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
 
     def get_memory(self, entry_id: str) -> MemoryEntry | None:
         for entry in self.memory_entries():
@@ -946,11 +888,6 @@ class EvidenceWorkspace:
             if segment_time_coverage:
                 lines.extend(["", "## Segment Time Coverage"])
                 lines.extend(segment_time_coverage)
-            sweep_recommendation = _sweep_recommendation_lines(self, root_segments)
-            if sweep_recommendation:
-                lines.extend(["", "## Recommended Next"])
-                lines.extend(sweep_recommendation)
-
         render_section(
             "Pending Candidate Windows",
             _candidate_window_rows(self),
@@ -977,10 +914,6 @@ class EvidenceWorkspace:
             ).rstrip(),
             hint='read_workspace(section="observations_by_id")',
         )
-
-        ledger_view = self.render_search_ledger_view()
-        if ledger_view.strip():
-            lines.extend(["", ledger_view])
 
         render_section(
             "Deferred Observations",
@@ -3015,7 +2948,6 @@ class EvidenceWorkspace:
             "memory/memory.jsonl",
             "observations/disposition.jsonl",
             "pinned/pinned_anchors.jsonl",
-            "search_ledger.json",
             "notes/plan.md",
             "notes/open_questions.md",
         )
@@ -3209,91 +3141,8 @@ def _ordered_list_answer_rows_from_source(
     ordered_sets: Sequence[Any],
     observation_id: str,
 ) -> list[Mapping[str, Any]]:
-    rows: list[Mapping[str, Any]] = []
-    text = str(source.get("text") or "")
-    if not text.strip():
-        return rows
-    for ordered_set in ordered_sets:
-        observed = extract_observed_order_from_text(
-            text,
-            ordered_set,
-            source=_observed_order_source(source),
-            cue_ids=tuple(str(cue_id) for cue_id in source.get("cue_ids", ()) if str(cue_id).strip())
-            if isinstance(source.get("cue_ids", ()), Sequence)
-            else (),
-        )
-        if observed is None:
-            continue
-        match = match_observed_order_to_hypotheses(observed, ordered_set.hypotheses)
-        if match.status != "full_match" or not match.option_id:
-            continue
-        source_tool = str(source.get("source_tool", ""))
-        anchors = source.get("anchors_for_vlm", ())
-        anchor_rows = [dict(anchor) for anchor in anchors if isinstance(anchor, Mapping)] if isinstance(anchors, Sequence) and not isinstance(anchors, (str, bytes)) else []
-        locator_without_anchors = source_tool == "locate_targets_in_segment" and not anchor_rows
-        rows.append(
-            {
-                "tool": "ordered_list_evidence",
-                "source_tool": source_tool,
-                "segment_id": str(raw_output.get("segment_id", "")),
-                "time_range": [float(raw_output.get("start_sec", 0.0) or 0.0), float(raw_output.get("end_sec", 0.0) or 0.0)],
-                "event_label": "ordered_list",
-                "claim": (
-                    f"Indexed text gives ordered set {observed.ordered_set_id} as "
-                    + " -> ".join(observed.entity_order)
-                    + f", matching option {match.option_id}."
-                ),
-                "confidence": match.confidence,
-                "grounding_quality": "text_only_locator"
-                if locator_without_anchors
-                else ("indexed_transcript" if observed.source == "indexed_asr" else observed.source),
-                "confidence_signal": "ordered_list_answer_grade",
-                "limitations": "Order is derived from indexed text mention order; visual corroboration depends on route policy.",
-                "requires_visual_verification": bool(source_tool == "locate_targets_in_segment"),
-                "anchors_for_vlm": anchor_rows,
-                "source": observed.source,
-                "snippet": observed.support_span,
-                "evidence_type": "ordered_list",
-                "evidence_grade": "answer_grade",
-                "support_status": "supported",
-                "supported_option": match.option_id,
-                "source_observation_id": observation_id,
-                "candidate_option_relations": [
-                    {
-                        "option": match.option_id,
-                        "relation": "support",
-                        "strength": match.confidence,
-                        "observation_id": observation_id,
-                    }
-                ],
-                "metadata": {
-                    "ordered_set_id": observed.ordered_set_id,
-                    "observed_order": list(observed.entity_order),
-                    "matched_hypothesis": match.option_id,
-                    "source": observed.source,
-                    "cue_ids": list(observed.cue_ids),
-                },
-                "evidence_binding": {
-                    "status": "supported",
-                    "target_id": "ordered_list",
-                    "supported_option": match.option_id,
-                    "ordered_set_id": observed.ordered_set_id,
-                    "observed_order": list(observed.entity_order),
-                },
-                "_workspace_promoted": True,
-            }
-        )
-    return rows
-
-
-def _observed_order_source(source: Mapping[str, Any]) -> str:
-    modality = str(source.get("modality") or "")
-    if modality == "ocr":
-        return "ocr"
-    if modality == "caption":
-        return "caption"
-    return "indexed_asr"
-
+    del raw_output, source, ordered_sets, observation_id
+    return []
 
 def _promotion_text_sources(raw_output: Mapping[str, Any]) -> list[dict[str, Any]]:
     segment_id = str(raw_output.get("segment_id", ""))
@@ -3914,41 +3763,6 @@ def _segment_time_coverage_lines(workspace: "EvidenceWorkspace", root_segments: 
     return lines
 
 
-def _sweep_recommendation_lines(workspace: "EvidenceWorkspace", root_segments: Sequence[Any]) -> list[str]:
-    snapshot = workspace.search_ledger_snapshot()
-    raw_candidates = snapshot.get("candidates", [])
-    pending = [
-        candidate
-        for candidate in raw_candidates
-        if isinstance(candidate, Mapping) and str(candidate.get("status") or "") == "pending"
-    ] if isinstance(raw_candidates, Sequence) and not isinstance(raw_candidates, (str, bytes)) else []
-    if pending:
-        return []
-    if any(entry.kind in workspace.POSITIVE_SUPPORT_KINDS for entry in workspace.memory_entries()):
-        return []
-    best: tuple[str, float, float] | None = None
-    for segment in root_segments:
-        segment_id = str(getattr(segment, "segment_id", "") or "").strip()
-        if not segment_id:
-            continue
-        start_sec = float(getattr(segment, "start_sec", 0.0) or 0.0)
-        end_sec = float(getattr(segment, "end_sec", start_sec) or start_sec)
-        verified = _verified_intervals_for_segment(workspace, segment_id=segment_id, start_sec=start_sec, end_sec=end_sec)
-        gaps = _complement_intervals(_merge_intervals(verified), start_sec=start_sec, end_sec=end_sec)
-        for gap_start, gap_end in gaps:
-            if best is None or (gap_end - gap_start) > (best[2] - best[1]):
-                best = (segment_id, gap_start, gap_end)
-    if best is None or best[2] <= best[1]:
-        return []
-    segment_id, start_sec, end_sec = best
-    return [
-        (
-            f"- MUST verify_window(segment_id='{segment_id}', time_range=[{start_sec:.2f},{end_sec:.2f}]) "
-            f"-- sweep largest uncovered region ({end_sec - start_sec:.1f}s) before declaring global negation."
-        )
-    ]
-
-
 def _verified_intervals_for_segment(
     workspace: "EvidenceWorkspace",
     *,
@@ -4033,18 +3847,6 @@ def _candidate_window_rows(workspace: "EvidenceWorkspace") -> list[dict[str, Any
             )
             rows.append(row)
     return rows
-
-
-def _highest_score_pending_candidate(pending: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
-    def sort_key(candidate: Mapping[str, Any]) -> tuple[float, str]:
-        try:
-            score = float(candidate.get("score", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            score = 0.0
-        candidate_key = str(candidate.get("candidate_key") or candidate.get("event_id") or "")
-        return (-score, candidate_key)
-
-    return sorted(pending, key=sort_key)[0]
 
 
 def _render_option_evidence_map(*, question: str, memory_entries: Sequence[MemoryEntry]) -> str:

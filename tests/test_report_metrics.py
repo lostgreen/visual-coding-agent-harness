@@ -11,7 +11,7 @@ class ReportMetricsTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            workspace = root / "workspaces" / "runs" / "case_workspace_v2"
+            workspace = root / "workspaces" / "runs" / "case_multi_v3"
             workspace.mkdir(parents=True)
             (workspace / "trace.jsonl").write_text(
                 "\n".join(
@@ -37,7 +37,7 @@ class ReportMetricsTest(unittest.TestCase):
                                 "question_id": "605-1",
                                 "gt": "D",
                                 "strategies": {
-                                    "workspace_v2": {
+                                    "multi_v3": {
                                         "choice": "D",
                                         "correct": True,
                                         "seconds": 40.0,
@@ -46,14 +46,14 @@ class ReportMetricsTest(unittest.TestCase):
                                     },
                                 },
                                 "raw_artifacts": {
-                                    "workspaces": {"workspace_v2": str(workspace)}
+                                    "workspaces": {"multi_v3": str(workspace)}
                                 },
                             },
                             {
                                 "question_id": "611-2",
                                 "gt": "B",
                                 "strategies": {
-                                    "workspace_v2": {
+                                    "multi_v3": {
                                         "choice": "A",
                                         "correct": False,
                                         "seconds": 20.0,
@@ -73,7 +73,7 @@ class ReportMetricsTest(unittest.TestCase):
 
             report = report_metrics.build_report(summary_path)
 
-            agent = report["strategies"]["workspace_v2"]
+            agent = report["strategies"]["multi_v3"]
             self.assertEqual(agent["accuracy"], "1/2")
             self.assertEqual(agent["raw_choice_accuracy"], "1/2")
             self.assertEqual(agent["grounded_choice_accuracy"], "0/2")
@@ -84,7 +84,7 @@ class ReportMetricsTest(unittest.TestCase):
             self.assertNotIn("direct_regressions", agent)
             self.assertNotIn("avg_walltime_vs_direct", agent)
 
-            detail = report["cases"][0]["strategies"]["workspace_v2"]
+            detail = report["cases"][0]["strategies"]["multi_v3"]
             self.assertTrue(detail["incomplete"])
             self.assertEqual(detail["tool_sequence"], ["video_ls", "inspect_segment"])
             self.assertEqual(detail["unique_inspected_segments"], ["seg_0002"])
@@ -92,7 +92,7 @@ class ReportMetricsTest(unittest.TestCase):
             self.assertFalse(detail["grounded_correct"])
 
             rendered = report_metrics.render_markdown(report)
-            self.assertIn("workspace_v2", rendered)
+            self.assertIn("multi_v3", rendered)
             self.assertNotIn("Direct Regressions", rendered)
             self.assertNotIn("Avg vs Direct", rendered)
             self.assertIn("50.0%", rendered)
@@ -104,7 +104,7 @@ class ReportMetricsTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            workspace = EvidenceWorkspace.create(root / "workspaces", run_id="case_611_workspace_v2")
+            workspace = EvidenceWorkspace.create(root / "workspaces", run_id="case_611_multi_v3")
             d_observation = workspace.write_observation(
                 tool_name="verify_local_claim",
                 input_artifacts=["clip_d.mp4"],
@@ -142,7 +142,7 @@ class ReportMetricsTest(unittest.TestCase):
                                     "D. fourth order",
                                 ],
                                 "strategies": {
-                                    "workspace_v2": {
+                                    "multi_v3": {
                                         "choice": "A",
                                         "correct": False,
                                         "status": "final",
@@ -152,7 +152,7 @@ class ReportMetricsTest(unittest.TestCase):
                                     }
                                 },
                                 "raw_artifacts": {
-                                    "workspaces": {"workspace_v2": str(workspace.root)}
+                                    "workspaces": {"multi_v3": str(workspace.root)}
                                 },
                             }
                         ]
@@ -164,14 +164,14 @@ class ReportMetricsTest(unittest.TestCase):
 
             report = report_metrics.build_report(summary_path)
 
-            detail = report["cases"][0]["strategies"]["workspace_v2"]
+            detail = report["cases"][0]["strategies"]["multi_v3"]
             self.assertTrue(detail["has_conflict"])
             self.assertTrue(detail["final_with_conflict"])
             self.assertTrue(detail["unsupported_final"])
             self.assertFalse(detail["option_support_consistency"])
             self.assertEqual(detail["top_supported_option"], "D")
 
-            metrics = report["strategies"]["workspace_v2"]
+            metrics = report["strategies"]["multi_v3"]
             self.assertEqual(metrics["conflict_rate"], 1.0)
             self.assertEqual(metrics["final_with_conflict_rate"], 1.0)
             self.assertEqual(metrics["unsupported_final_rate"], 1.0)
@@ -214,14 +214,14 @@ class ReportMetricsTest(unittest.TestCase):
                                 "question": "What is the video mainly about?",
                                 "options": ["A. one", "B. local guess", "C. three", "D. synopsis"],
                                 "strategies": {
-                                    "workspace_v2": {
+                                    "multi_v3": {
                                         "choice": "D",
                                         "correct": True,
                                         "status": "final",
                                         "citations": ["obs_0002"],
                                     }
                                 },
-                                "raw_artifacts": {"workspaces": {"workspace_v2": str(workspace.root)}},
+                                "raw_artifacts": {"workspaces": {"multi_v3": str(workspace.root)}},
                             }
                         ]
                     },
@@ -232,11 +232,11 @@ class ReportMetricsTest(unittest.TestCase):
 
             report = report_metrics.build_report(summary_path)
 
-            detail = report["cases"][0]["strategies"]["workspace_v2"]
+            detail = report["cases"][0]["strategies"]["multi_v3"]
             self.assertEqual(detail["legacy_worker_vote_rows"], 1)
             self.assertNotIn("D", detail["option_support"])
             self.assertNotIn("B", detail["option_support"])
-            self.assertEqual(report["strategies"]["workspace_v2"]["legacy_worker_vote_rows"], 1)
+            self.assertEqual(report["strategies"]["multi_v3"]["legacy_worker_vote_rows"], 1)
 
     def test_build_report_resolves_repo_relative_workspace_paths(self):
         from runs import report_metrics
@@ -245,7 +245,7 @@ class ReportMetricsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run_root = root / "runs" / "round3"
-            workspace = EvidenceWorkspace.create(run_root / "workspaces", run_id="case_workspace_v2")
+            workspace = EvidenceWorkspace.create(run_root / "workspaces", run_id="case_multi_v3")
             observation = workspace.write_observation(
                 tool_name="global_gist",
                 claim="Supported option: D. The whole video is about the empire rising and falling.",
@@ -270,7 +270,7 @@ class ReportMetricsTest(unittest.TestCase):
                                 "question": "Question: What's the main idea of the video?",
                                 "options": ["A. one", "B. two", "C. three", "D. whole-video synopsis"],
                                 "strategies": {
-                                    "workspace_v2": {
+                                    "multi_v3": {
                                         "choice": "D",
                                         "correct": True,
                                         "status": "final",
@@ -279,7 +279,7 @@ class ReportMetricsTest(unittest.TestCase):
                                 },
                                 "raw_artifacts": {
                                     "workspaces": {
-                                        "workspace_v2": "runs/round3/workspaces/runs/case_workspace_v2"
+                                        "multi_v3": "runs/round3/workspaces/runs/case_multi_v3"
                                     }
                                 },
                             }
@@ -297,8 +297,8 @@ class ReportMetricsTest(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
-            detail = report["cases"][0]["strategies"]["workspace_v2"]
-            self.assertEqual(detail["workspace"], "runs/round3/workspaces/runs/case_workspace_v2")
+            detail = report["cases"][0]["strategies"]["multi_v3"]
+            self.assertEqual(detail["workspace"], "runs/round3/workspaces/runs/case_multi_v3")
             self.assertEqual(detail["citations"], ["obs_0001"])
             self.assertNotIn("D", detail["option_support"])
             self.assertEqual(detail["top_supported_option"], "")

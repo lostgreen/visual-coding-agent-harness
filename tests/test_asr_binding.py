@@ -4,8 +4,8 @@ from pathlib import Path
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 from visual_coding_agent_harness.contracts import ClaimModality, TargetRegistry, TargetSpec
 from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
-from visual_coding_agent_harness.tools.exploration import build_video_exploration_registry
-from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment
+from visual_coding_agent_harness.tools.asr_binding import build_asr_binding_registry
+from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
@@ -68,11 +68,15 @@ def _workspace(root: Path) -> EvidenceWorkspace:
     return workspace
 
 
+def _registry(*, video_map: VideoMap, backend: VisionLanguageBackend, workspace: EvidenceWorkspace):
+    return build_asr_binding_registry(video_map_store=VideoMapStore(video_map), backend=backend, workspace=workspace)
+
+
 def test_bind_asr_claim_promotes_supported_legal_cue_to_answer_evidence_row() -> None:
     backend = AsrBindingBackend('{"T1": {"verdict": "supports", "cue_ids": ["cue_0001"], "quote": "Goya came from a humble background"}}')
     with tempfile.TemporaryDirectory() as tmp:
         workspace = _workspace(Path(tmp))
-        registry = build_video_exploration_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+        registry = _registry(video_map=_video_map(), backend=backend, workspace=workspace)
 
         result = ProgramInterpreter(registry=registry, workspace=workspace).run(
             [{"tool": "bind_asr_claim", "args": {"segment_id": "seg_0001", "target_refs": ["T1"]}}]
@@ -100,7 +104,7 @@ def test_bind_asr_claim_rejects_illegal_cue_without_supported_row() -> None:
     backend = AsrBindingBackend('{"T1": {"verdict": "supported", "cue_ids": ["cue_9999"], "quote": "not indexed"}}')
     with tempfile.TemporaryDirectory() as tmp:
         workspace = _workspace(Path(tmp))
-        registry = build_video_exploration_registry(video_map=_video_map(), backend=backend, workspace=workspace)
+        registry = _registry(video_map=_video_map(), backend=backend, workspace=workspace)
 
         output = registry.execute("bind_asr_claim", {"segment_id": "seg_0001", "target_refs": ["T1"]})
 
@@ -114,7 +118,7 @@ def test_bind_asr_claim_normalizes_cue_prefixed_numeric_ids() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         workspace = _workspace(Path(tmp))
-        registry = build_video_exploration_registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
+        registry = _registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
 
         output = registry.execute("bind_asr_claim", {"segment_id": "seg_0001", "target_refs": ["T1"]})
 
@@ -129,7 +133,7 @@ def test_bind_asr_claim_prompt_example_uses_real_cue_ids() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         workspace = _workspace(Path(tmp))
-        registry = build_video_exploration_registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
+        registry = _registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
 
         registry.execute("bind_asr_claim", {"segment_id": "seg_0001", "target_refs": ["T1"]})
 
@@ -146,7 +150,7 @@ def test_bind_asr_claim_retries_once_after_still_illegal_cue_ids() -> None:
     )
     with tempfile.TemporaryDirectory() as tmp:
         workspace = _workspace(Path(tmp))
-        registry = build_video_exploration_registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
+        registry = _registry(video_map=_video_map(cue_id="142"), backend=backend, workspace=workspace)
 
         output = registry.execute("bind_asr_claim", {"segment_id": "seg_0001", "target_refs": ["T1"]})
 

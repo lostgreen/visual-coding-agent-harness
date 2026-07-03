@@ -1,14 +1,14 @@
-"""MVP workspace agent loop."""
+"""V3 long-video multi-agent entry points."""
 
-__all__ = ["WorkspaceRunResult", "WorkspaceVisualAgent"]
+from .driver import MultiV3Driver
+from .investigator import Investigator
+from .reasoner import Reasoner, ReasonerDecision
+from .result import WorkspaceRunResult
 
-
-def __getattr__(name: str):
-    if name in __all__:
-        from .workspace_agent import WorkspaceRunResult, WorkspaceVisualAgent
-
-        return {
-            "WorkspaceRunResult": WorkspaceRunResult,
-            "WorkspaceVisualAgent": WorkspaceVisualAgent,
-        }[name]
-    raise AttributeError(name)
+__all__ = [
+    "Investigator",
+    "MultiV3Driver",
+    "Reasoner",
+    "ReasonerDecision",
+    "WorkspaceRunResult",
+]

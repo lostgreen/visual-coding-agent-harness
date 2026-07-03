@@ -275,17 +275,6 @@ def _trace_summary(workspace_path: Path | None) -> dict[str, Any]:
             segment_id = arguments.get("segment_id")
             if segment_id and tool in VISUAL_SEGMENT_TOOLS:
                 inspected_segments.append(str(segment_id))
-    ledger_path = workspace_path / "search_ledger.json"
-    if ledger_path.exists():
-        try:
-            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            ledger = {}
-        candidates = ledger.get("candidates", []) if isinstance(ledger, Mapping) else []
-        if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes)):
-            ledger_pending_candidate_count = sum(
-                1 for candidate in candidates if isinstance(candidate, Mapping) and candidate.get("status") == "pending"
-            )
     return {
         "tool_sequence": tools,
         "unique_inspected_segments": _unique(inspected_segments),

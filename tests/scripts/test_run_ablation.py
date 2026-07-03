@@ -10,7 +10,7 @@ def test_matrix_parses_and_builds_dry_run_commands(tmp_path: Path):
         json.dumps(
             {
                 "matrix_id": "unit",
-                "common_args": ["--strategy", "workspace_v2", "--cases", "605-1"],
+                "common_args": ["--strategy", "multi_v3", "--cases", "605-1"],
                 "runs": [
                     {"id": "base", "args": ["--max-rounds", "2"]},
                     {"id": "media", "planner_receives_media": True},

@@ -262,8 +262,8 @@ def test_planner_turns_show_context_growth_without_inlining_prompts(tmp_path):
     assert "## Evidence" not in json.dumps(payload)
 
 
-def test_training_trajectory_supports_workspace_v2_model_io_events(tmp_path):
-    workspace = EvidenceWorkspace.create(tmp_path / "workspace", run_id="workspace_v2_case")
+def test_training_trajectory_supports_multi_v3_model_io_events(tmp_path):
+    workspace = EvidenceWorkspace.create(tmp_path / "workspace", run_id="multi_v3_case")
     observation = workspace.write_observation(
         tool_name="read_segment",
         claim="The selected window shows a doctor explaining visceral fat research with chart evidence.",

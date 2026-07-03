@@ -136,8 +136,8 @@ def test_write_memory_tool_persists_anchor_backed_memory(tmp_path: Path):
     assert entry.metadata == {"source": "planner"}
 
 
-def test_workspace_v2_layout_is_created_alongside_legacy_files(tmp_path: Path):
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_layout")
+def test_multi_v3_layout_creates_workspace_files(tmp_path: Path):
+    workspace = EvidenceWorkspace.create(tmp_path, "multi_v3_layout")
 
     expected_paths = [
         "index/coarse_segments.jsonl",
@@ -581,7 +581,7 @@ def test_plan_view_includes_segment_time_coverage_and_gaps(tmp_path: Path) -> No
     assert "uncovered: [10.0-20.0] (10.0s), [30.0-100.0] (70.0s)" in plan_view
 
 
-def test_plan_view_recommends_sweeping_largest_uncovered_gap(tmp_path: Path) -> None:
+def test_plan_view_omits_legacy_sweep_recommendation(tmp_path: Path) -> None:
     workspace = EvidenceWorkspace.create(tmp_path, "workspace_time_coverage_sweep")
     video_map = VideoMap(
         video_path="/videos/demo.mp4",
@@ -605,8 +605,9 @@ def test_plan_view_recommends_sweeping_largest_uncovered_gap(tmp_path: Path) -> 
 
     plan_view = workspace.render_plan_view(question="Which option is not discussed?", video_map=video_map)
 
-    assert "MUST verify_window(segment_id='seg_0001', time_range=[10.00,100.00])" in plan_view
-    assert "sweep largest uncovered region" in plan_view
+    assert "verified 10.0%" in plan_view
+    assert "MUST verify_window" not in plan_view
+    assert "sweep largest uncovered region" not in plan_view
 
 
 def test_plan_view_does_not_truncate_root_index_summaries(tmp_path: Path):

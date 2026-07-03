@@ -89,7 +89,7 @@ def test_exports_compact_evidence_chains(tmp_path: Path):
 
 
 def test_exports_workspace_memory_evidence_chains_when_legacy_records_are_absent(tmp_path: Path):
-    workspace = EvidenceWorkspace.create(tmp_path, "workspace_v2_chain")
+    workspace = EvidenceWorkspace.create(tmp_path, "multi_v3_chain")
     observation = workspace.write_observation(
         tool_name="read_segment",
         claim="The video shows Austria-Hungary rising and falling.",

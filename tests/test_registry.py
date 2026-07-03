@@ -6,15 +6,15 @@ from visual_coding_agent_harness.core.registry import ToolError, ToolRegistry, T
 
 
 def test_resolve_alias() -> None:
-    @tool(name="verify_ledger_answer", description="Verify answer evidence.")
-    def verify_ledger_answer(answer: str):
+    @tool(name="verify_answer", description="Verify answer evidence.")
+    def verify_answer(answer: str):
         return {"claim": answer, "confidence": 1.0}
 
     registry = ToolRegistry()
-    registry.register(ToolRuntimeSpec(tool_spec=verify_ledger_answer, aliases=("verify",)))
+    registry.register(ToolRuntimeSpec(tool_spec=verify_answer, aliases=("verify",)))
 
-    assert registry.resolve_alias("verify") == "verify_ledger_answer"
-    assert registry.resolve_alias("verify_ledger_answer") == "verify_ledger_answer"
+    assert registry.resolve_alias("verify") == "verify_answer"
+    assert registry.resolve_alias("verify_answer") == "verify_answer"
     assert registry.resolve_alias("unknown_tool") == "unknown_tool"
 
 

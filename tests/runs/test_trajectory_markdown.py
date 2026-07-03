@@ -122,7 +122,7 @@ def test_render_trajectory_markdown_explains_runs_without_planner_turns(tmp_path
 
 
 def test_trajectory_markdown_cli_writes_default_neighbor_file(tmp_path):
-    trajectory_path = tmp_path / "case_001_workspace_v2.json"
+    trajectory_path = tmp_path / "case_001_multi_v3.json"
     trajectory_path.write_text(
         json.dumps(
             {
@@ -148,7 +148,7 @@ def test_trajectory_markdown_cli_writes_default_neighbor_file(tmp_path):
         timeout=20,
     )
 
-    output_path = tmp_path / "case_001_workspace_v2.md"
+    output_path = tmp_path / "case_001_multi_v3.md"
     assert completed.returncode == 0, completed.stderr
     assert output_path.exists()
     assert output_path.as_posix() in completed.stdout

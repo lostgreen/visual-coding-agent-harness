@@ -14,15 +14,17 @@ from typing import Any, Callable, Mapping, Sequence
 
 from visual_coding_agent_harness.core.budget import AgentBudget
 from visual_coding_agent_harness.workspace.context_budget import parse_budget_ratios
-from visual_coding_agent_harness.agents.multi import InvestigatorAgent, MultiAgentDriver, ReasonerAgent, WorkspaceMutator
-from visual_coding_agent_harness.agents.workspace_agent import WorkspaceVisualAgent
+from visual_coding_agent_harness.agents.driver import MultiV3Driver
+from visual_coding_agent_harness.agents.investigator import Investigator as InvestigatorV3
+from visual_coding_agent_harness.agents.reasoner import Reasoner as ReasonerV3
 from visual_coding_agent_harness.evals.videomme.scene_index_builder import RootIndexPolicy, SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
-from visual_coding_agent_harness.tools.workspace_v2 import build_workspace_v2_registry
+from visual_coding_agent_harness.video.build import build_video_index_from_scene_index
 from visual_coding_agent_harness.video.index import SceneIndex
-from visual_coding_agent_harness.video.map import IndexRefiner, VideoMap, VideoMapStore
+from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
 from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace as InvestigatorWorkspaceV3
 
 from .summary_schema import RunSummary, validate as validate_run_summary
 from .training_trajectory import TrainingTrajectory
@@ -44,10 +46,9 @@ DEFAULT_SUBTITLE_DIR = DATA_ROOT / "subtitle"
 DEFAULT_RUN_ROOT = KML_MANAGED_ROOT / "runs" / "videomme_agent_eval"
 DEFAULT_SCENE_INDEX_CACHE_DIR = KML_MANAGED_ROOT / "scene_index_cache"
 DEFAULT_CASES = ("605-1", "611-2", "612-1")
-WORKSPACE_V2_STRATEGY = "workspace_v2"
-MULTI_AGENT_V0_STRATEGY = "multi_agent_v0"
-DEFAULT_STRATEGIES = (WORKSPACE_V2_STRATEGY,)
-STRATEGIES = (WORKSPACE_V2_STRATEGY, MULTI_AGENT_V0_STRATEGY)
+MULTI_V3_STRATEGY = "multi_v3"
+DEFAULT_STRATEGIES = (MULTI_V3_STRATEGY,)
+STRATEGIES = (MULTI_V3_STRATEGY,)
 WINDOW_SEC = 300.0
 DEFAULT_NFRAMES = 8
 FRAME_CACHE_FPS = 2.0
@@ -224,71 +225,42 @@ def run_loop(
     budget: AgentBudget,
     extract_clips: bool = True,
     frame_sampler: FrameSampler | None = None,
-    strategy: str = WORKSPACE_V2_STRATEGY,
+    strategy: str = MULTI_V3_STRATEGY,
 ) -> dict[str, Any]:
     start = time.perf_counter()
     workspace = EvidenceWorkspace.create(base_dir=workspace_root, run_id=run_id)
     workspace_log_dir = workspace_root.parent / "workspace_logs" / run_id
-    video_map = VideoMap.from_scene_index(scene_index)
-    video_map_store = VideoMapStore(video_map)
-    if strategy == WORKSPACE_V2_STRATEGY:
-        index_refiner = IndexRefiner(
-            backend=backend,
-            frame_sampler=frame_sampler,
-            artifact_root=workspace.root / "artifacts" / "index_refinement",
+    if strategy == MULTI_V3_STRATEGY:
+        video_index = build_video_index_from_scene_index(
+            scene_index,
+            artifact_dir=workspace.root / "artifacts" / "multi_v3_index",
         )
-        agent = WorkspaceVisualAgent(
-            backend=backend,
-            registry=build_workspace_v2_registry(
-                video_map=video_map_store,
-                backend=backend,
-                workspace=workspace,
-                index_refiner=index_refiner,
-                frame_sampler=frame_sampler,
-            ),
-            workspace=workspace,
-            max_rounds=budget.max_rounds,
-            video_path=video_path,
-            video_map=video_map_store,
-            log_root=workspace_log_dir,
+        overview = build_scene_timeline_overview(
+            video_index,
+            output_dir=workspace.root / "artifacts" / "multi_v3_overview",
         )
-        result = agent.run(question)
-    elif strategy == MULTI_AGENT_V0_STRATEGY:
-        index_refiner = IndexRefiner(
-            backend=backend,
-            frame_sampler=frame_sampler,
-            artifact_root=workspace.root / "artifacts" / "index_refinement",
-        )
-        registry = build_workspace_v2_registry(
-            video_map=video_map_store,
-            backend=backend,
-            workspace=workspace,
-            index_refiner=index_refiner,
-            frame_sampler=frame_sampler,
-        )
-        mutator = WorkspaceMutator(workspace)
-        reasoner = ReasonerAgent(
-            backend=backend,
-            mutator=mutator,
-            workspace=workspace,
-            video_map=video_map_store,
-            log_root=workspace_log_dir,
-        )
-        investigator = InvestigatorAgent(
-            backend=backend,
-            registry=registry,
-            mutator=mutator,
-            workspace=workspace,
-            video_map=video_map_store,
-            log_root=workspace_log_dir,
-        )
-        driver = MultiAgentDriver(
+        investigator_workspace = InvestigatorWorkspaceV3(workspace.root / "multi_v3")
+        investigator_kwargs = {
+            "index": video_index,
+            "workspace": investigator_workspace,
+            "backend": backend,
+        }
+        if frame_sampler is not None:
+            investigator_kwargs["frame_sampler"] = _multi_v3_frame_sampler(video_path=video_path, frame_sampler=frame_sampler)
+        reasoner = ReasonerV3(backend=backend)
+        investigator = InvestigatorV3(**investigator_kwargs)
+        driver = MultiV3Driver(
             reasoner=reasoner,
             investigator=investigator,
-            workspace=workspace,
+            workspace=investigator_workspace,
             max_rounds=budget.max_rounds,
         )
-        result = driver.run(question, options=_extract_option_map(question))
+        result = driver.run(
+            question=question,
+            options=_extract_option_map(question),
+            index_context=video_index.summary() if hasattr(video_index, "summary") else str(video_index),
+            overview_path=overview.grid_path,
+        )
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
     seconds = time.perf_counter() - start
@@ -353,6 +325,13 @@ def run_loop(
         **backend_call_counters,
         "reward_tags": reward_tags,
     }
+
+
+def _multi_v3_frame_sampler(*, video_path: str, frame_sampler: FrameSampler):
+    def sample(shot, max_frames: int) -> tuple[str, ...]:
+        return tuple(frame_sampler(video_path, float(shot.start_sec), float(shot.end_sec), int(max_frames)))
+
+    return sample
 
 
 def _extract_option_map(question: str) -> dict[str, str]:
@@ -1135,7 +1114,6 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         final_cases += caption_metrics["final_case"]
         planner_recovery_hints += sum(1 for event in events if _event_type(event) == "planner_recovery_hint_emitted")
         repeated_explores += sum(1 for event in events if _event_type(event) == "repeated_explore_detected")
-        pending_candidate_workspaces += int(_search_ledger_pending_candidates(workspace) > 0)
 
     summary.route_violations = route_violations
     summary.context_budget_overflow_count = context_overflows
@@ -1166,14 +1144,6 @@ def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[Ev
         summary.planner_recovery_hint_rate = planner_recovery_hints / len(workspaces)
         summary.repeated_explore_rate = repeated_explores / len(workspaces)
         summary.ledger_pending_candidate_rate = pending_candidate_workspaces / len(workspaces)
-
-
-def _search_ledger_pending_candidates(workspace: EvidenceWorkspace) -> int:
-    snapshot = workspace.search_ledger_snapshot()
-    candidates = snapshot.get("candidates", [])
-    if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
-        return 0
-    return sum(1 for candidate in candidates if isinstance(candidate, Mapping) and candidate.get("status") == "pending")
 
 
 def _caption_explore_trace_metrics(workspace: EvidenceWorkspace) -> dict[str, int]:

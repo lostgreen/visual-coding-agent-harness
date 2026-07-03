@@ -39,6 +39,6 @@ def test_runtime_source_contains_no_benchmark_semantic_constants() -> None:
 
 
 def test_test_fixtures_may_contain_benchmark_questions() -> None:
-    fixture_text = (TEST_ROOT / "test_caption_qa_tools.py").read_text(encoding="utf-8")
+    fixture_text = (TEST_ROOT / "fixtures" / "case_611_2" / "fixture.json").read_text(encoding="utf-8")
 
     assert any(term in fixture_text for term in ("Aeneas", "Persephone"))
