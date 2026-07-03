@@ -18,7 +18,7 @@ def sample_shot_frames(
     *,
     n_frames: int = 6,
     out_dir: Path,
-    size: tuple[int, int] = (256, 144),
+    size: tuple[int, int] | None = (256, 144),
 ) -> Sequence[Frame]:
     out_dir.mkdir(parents=True, exist_ok=True)
     times = _sample_times(start_sec, end_sec, n_frames)
@@ -26,7 +26,8 @@ def sample_shot_frames(
     for index, time_sec in enumerate(times, start=1):
         output_path = out_dir / f"frame_{index:03d}.jpg"
         _extract_frame(video_path=video_path, time_sec=time_sec, output_path=output_path)
-        _resize_in_place(output_path, size=size)
+        if size is not None:
+            _resize_in_place(output_path, size=size)
         frames.append(Frame(frame_id=f"fr{index:03d}", time_sec=time_sec, thumb_path=str(output_path)))
     return tuple(frames)
 

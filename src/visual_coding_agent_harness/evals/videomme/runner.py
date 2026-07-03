@@ -241,9 +241,10 @@ def run_loop(
     workspace_run_root.mkdir(parents=True, exist_ok=True)
     workspace_log_dir = workspace_root.parent / "workspace_logs" / run_id
     if strategy == MULTI_V3_STRATEGY:
-        effective_frame_sampler = frame_sampler
-        if effective_frame_sampler is None and Path(video_path).exists():
-            effective_frame_sampler = _default_multi_v3_frame_sampler(
+        index_frame_sampler = frame_sampler
+        verify_frame_sampler = frame_sampler
+        if verify_frame_sampler is None and Path(video_path).exists():
+            verify_frame_sampler = _default_multi_v3_frame_sampler(
                 artifact_dir=workspace_run_root / "artifacts" / "multi_v3_verify_frames"
             )
         video_index = _build_multi_v3_video_index(
@@ -251,7 +252,7 @@ def run_loop(
             duration_sec=duration_sec,
             scene_index=scene_index,
             artifact_dir=workspace_run_root / "artifacts" / "multi_v3_index",
-            frame_sampler=effective_frame_sampler,
+            frame_sampler=index_frame_sampler,
         )
         overview = build_scene_timeline_overview(
             video_index,
@@ -264,8 +265,8 @@ def run_loop(
             "workspace": investigator_workspace,
             "backend": backend,
         }
-        if effective_frame_sampler is not None:
-            investigator_kwargs["frame_sampler"] = _multi_v3_frame_sampler(video_path=video_path, frame_sampler=effective_frame_sampler)
+        if verify_frame_sampler is not None:
+            investigator_kwargs["frame_sampler"] = _multi_v3_frame_sampler(video_path=video_path, frame_sampler=verify_frame_sampler)
         reasoner = ReasonerV3(backend=backend)
         investigator = InvestigatorV3(**investigator_kwargs)
         driver = MultiV3Driver(
@@ -364,6 +365,7 @@ def _default_multi_v3_frame_sampler(*, artifact_dir: Path) -> FrameSampler:
             float(end_sec),
             n_frames=int(nframes),
             out_dir=out_dir,
+            size=None,
         )
         return tuple(frame.thumb_path for frame in frames if frame.thumb_path)
 
@@ -390,6 +392,7 @@ def _build_multi_v3_video_index(
                 duration_sec,
                 artifact_dir=artifact_dir,
                 asr_cues=_scene_index_asr_cues(scene_index),
+                source_segments=scene_index.segments,
                 keyframe_sampler=_keyframe_sampler_from_frame_sampler(frame_sampler) if frame_sampler is not None else None,
             )
         except RuntimeError as exc:

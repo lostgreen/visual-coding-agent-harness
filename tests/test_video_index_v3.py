@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from visual_coding_agent_harness.video import keyframes as keyframe_module
 from visual_coding_agent_harness.video.build import build_video_index_from_scene_index, build_video_index_from_video
+from visual_coding_agent_harness.video.artifacts import compose_scene_timeline_grid
 from visual_coding_agent_harness.video.index import Frame, Scene, SceneIndex, Shot, VideoIndex, VideoSegment
 from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
 
@@ -138,6 +140,91 @@ def test_build_video_index_from_video_uses_detected_shots_and_sampled_frames(tmp
         assert Path(shot.lowres_grid_path).exists()
         with Image.open(shot.lowres_grid_path) as grid:
             assert grid.size == (960, 180)
+
+
+def test_sample_shot_frames_can_preserve_source_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_extract_frame(*, video_path: str, time_sec: float, output_path: Path) -> None:
+        del video_path, time_sec
+        Image.new("RGB", (800, 450), color=(120, 80, 40)).save(output_path)
+
+    monkeypatch.setattr(keyframe_module, "_extract_frame", fake_extract_frame)
+
+    frames = keyframe_module.sample_shot_frames(
+        "/videos/demo.mp4",
+        0.0,
+        2.0,
+        n_frames=1,
+        out_dir=tmp_path / "verify_frames",
+        size=None,
+    )
+
+    with Image.open(frames[0].thumb_path) as image:
+        assert image.size == (800, 450)
+
+
+def test_build_video_index_from_video_inherits_scene_index_semantics(tmp_path: Path) -> None:
+    def fake_keyframes(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path):
+        del video_path, start_sec, end_sec, n_frames
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / "frame_001.jpg"
+        Image.new("RGB", (24, 24), color=(80, 120, 160)).save(path)
+        return (Frame(frame_id="tmp", time_sec=1.0, thumb_path=str(path)),)
+
+    source_segments = (
+        VideoSegment(
+            segment_id="seg_0001",
+            start_sec=0.0,
+            end_sec=10.0,
+            visual_caption="A chef chops onions on a counter.",
+            entities=("chef", "onion"),
+            topic_tags=("cooking",),
+        ),
+        VideoSegment(
+            segment_id="seg_0002",
+            start_sec=10.0,
+            end_sec=20.0,
+            low_fps_caption="A plated dish is shown.",
+            entities=("dish",),
+            topic_tags=("plating",),
+        ),
+    )
+
+    index = build_video_index_from_video(
+        "/videos/demo.mp4",
+        20.0,
+        artifact_dir=tmp_path,
+        shot_detector=lambda _video_path, _duration: ((0.0, 10.0), (10.0, 20.0)),
+        keyframe_sampler=fake_keyframes,
+        source_segments=source_segments,
+        frames_per_shot=1,
+    )
+
+    assert index.scenes[0].shots[0].visual_caption == "A chef chops onions on a counter."
+    assert index.scenes[0].shots[0].entities == ("chef", "onion")
+    assert index.scenes[0].shots[1].visual_caption == "A plated dish is shown."
+    assert index.scenes[0].dominant_entities == ("chef", "onion", "dish")
+    assert index.scenes[0].dominant_topics == ("cooking", "plating")
+    assert "cooking" in index.scenes[0].title
+    assert "chef chops onions" in index.scenes[0].summary
+
+
+def test_placeholder_timeline_grid_does_not_draw_text(tmp_path: Path) -> None:
+    scene = Scene(
+        scene_id="sc99",
+        start_sec=0.0,
+        end_sec=1.0,
+        title="Scene title should not be drawn",
+        summary="Summary should not be drawn either",
+        shots=(),
+        scene_thumb_path="",
+    )
+
+    out_path = compose_scene_timeline_grid((scene,), tmp_path / "timeline.jpg")
+
+    with Image.open(out_path) as image:
+        colors = image.convert("RGB").getcolors(maxcolors=10_000)
+    assert len(colors or ()) == 1
+    assert colors[0][0] == 320 * 180
 
 
 def test_scene_timeline_overview_writes_manifest_and_real_grid_image(tmp_path: Path) -> None:

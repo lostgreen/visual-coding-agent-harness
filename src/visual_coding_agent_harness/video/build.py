@@ -28,6 +28,7 @@ def build_video_index_from_video(
     asr_cues: Sequence[Any] = (),
     shot_detector: ShotDetector | None = None,
     keyframe_sampler: KeyframeSampler | None = None,
+    source_segments: Sequence[VideoSegment] = (),
     frames_per_shot: int = 6,
     scene_max_sec: float = 600.0,
     render_grid: bool = True,
@@ -44,6 +45,7 @@ def build_video_index_from_video(
         shots = []
         for shot_number, (start_sec, end_sec) in enumerate(group, start=1):
             shot_id = f"{scene_id}_sh{shot_number:03d}"
+            inherited_segments = _segments_for_range(source_segments, start_sec=float(start_sec), end_sec=float(end_sec))
             frames = tuple(
                 _with_frame_id(frame, shot_id=shot_id, frame_number=index)
                 for index, frame in enumerate(
@@ -57,10 +59,10 @@ def build_video_index_from_video(
                 start_sec=float(start_sec),
                 end_sec=float(end_sec),
                 frames=frames,
-                visual_caption="",
+                visual_caption=_visual_caption_for_segments(inherited_segments),
                 asr_text=_asr_text_for_range(asr_cues, start_sec=float(start_sec), end_sec=float(end_sec)),
                 ocr_lines=(),
-                entities=(),
+                entities=_entities_for_segments(inherited_segments),
                 lowres_grid_path="",
                 source_segment_id=shot_id,
             )
@@ -68,15 +70,18 @@ def build_video_index_from_video(
             shots.append(replace(shot, lowres_grid_path=grid_path))
         scene_start = min(start for start, _end in group)
         scene_end = max(end for _start, end in group)
+        scene_segments = _segments_for_range(source_segments, start_sec=float(scene_start), end_sec=float(scene_end))
+        scene_entities = _entities_for_segments(scene_segments) or _unique_text(item for shot in shots for item in shot.entities)
+        scene_topics = _topics_for_segments(scene_segments)
         scene = Scene(
             scene_id=scene_id,
             start_sec=float(scene_start),
             end_sec=float(scene_end),
-            title=f"Scene {scene_number}",
-            summary=_scene_summary_from_shots(shots),
+            title=_video_scene_title(scene_number, scene_topics),
+            summary=_scene_summary_from_shots(shots, source_segments=scene_segments),
             shots=tuple(shots),
-            dominant_entities=(),
-            dominant_topics=(),
+            dominant_entities=scene_entities,
+            dominant_topics=scene_topics,
             scene_thumb_path="",
             source_segment_id=scene_id,
         )
@@ -213,11 +218,75 @@ def _asr_text_for_range(cues: Sequence[Any], *, start_sec: float, end_sec: float
     return " ".join(lines)
 
 
-def _scene_summary_from_shots(shots: Sequence[Shot]) -> str:
+def _segments_for_range(segments: Sequence[VideoSegment], *, start_sec: float, end_sec: float) -> tuple[VideoSegment, ...]:
+    overlapping = []
+    for segment in segments:
+        segment_start = float(segment.start_sec)
+        segment_end = float(segment.end_sec)
+        if segment_end <= start_sec or segment_start >= end_sec:
+            continue
+        overlapping.append(segment)
+    return tuple(overlapping)
+
+
+def _visual_caption_for_segments(segments: Sequence[VideoSegment]) -> str:
+    return _bounded_text(" ".join(_unique_text(_segment_visual_text(segment) for segment in segments)), 360)
+
+
+def _segment_visual_text(segment: VideoSegment) -> str:
+    return segment.visual_caption or segment.low_fps_caption or segment.map_summary
+
+
+def _entities_for_segments(segments: Sequence[VideoSegment]) -> tuple[str, ...]:
+    return _unique_text(item for segment in segments for item in segment.entities)
+
+
+def _topics_for_segments(segments: Sequence[VideoSegment]) -> tuple[str, ...]:
+    return _unique_text(item for segment in segments for item in segment.topic_tags)
+
+
+def _video_scene_title(scene_number: int, topics: Sequence[str]) -> str:
+    if topics:
+        return f"Scene {scene_number} ({', '.join(topics[:3])})"
+    return f"Scene {scene_number}"
+
+
+def _scene_summary_from_shots(shots: Sequence[Shot], *, source_segments: Sequence[VideoSegment] = ()) -> str:
+    captions = " ".join(shot.visual_caption for shot in shots if shot.visual_caption).strip()
+    if captions:
+        return _bounded_text(captions, 360)
+    segment_summary = " ".join(_unique_text(_scene_summary(segment) for segment in source_segments)).strip()
+    if segment_summary:
+        return _bounded_text(segment_summary, 360)
     asr = " ".join(shot.asr_text for shot in shots if shot.asr_text).strip()
     if asr:
-        return asr[:240]
+        return _bounded_text(asr, 360)
     return f"{len(shots)} shot visual scene."
+
+
+def _bounded_text(text: str, max_chars: int) -> str:
+    text = " ".join(str(text or "").split())
+    max_chars = max(0, int(max_chars))
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    sentence_end = max(text.rfind(".", 0, max_chars - 3), text.rfind("。", 0, max_chars - 3))
+    if sentence_end >= max(0, max_chars // 2):
+        return text[: sentence_end + 1]
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _unique_text(values: Any) -> tuple[str, ...]:
+    seen = set()
+    result = []
+    for value in values:
+        text = str(value or "").strip()
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            result.append(text)
+    return tuple(result)
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:

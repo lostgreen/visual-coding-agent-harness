@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from visual_coding_agent_harness.agents.result import WorkspaceRunResult
 from visual_coding_agent_harness.core.budget import AgentBudget
-from visual_coding_agent_harness.video.index import SceneIndex, VideoSegment
+from visual_coding_agent_harness.video.index import Frame, Scene, SceneIndex, Shot, VideoIndex, VideoSegment
 
 
 class EvalRunnerTest(unittest.TestCase):
@@ -178,8 +178,8 @@ class EvalRunnerTest(unittest.TestCase):
 
         calls = []
 
-        def fake_sample_shot_frames(video_path, start_sec, end_sec, *, n_frames, out_dir):
-            calls.append((video_path, start_sec, end_sec, n_frames, Path(out_dir).name))
+        def fake_sample_shot_frames(video_path, start_sec, end_sec, *, n_frames, out_dir, size=None):
+            calls.append((video_path, start_sec, end_sec, n_frames, Path(out_dir).name, size))
             return (
                 eval_runner.Frame(
                     frame_id="fr001",
@@ -194,7 +194,109 @@ class EvalRunnerTest(unittest.TestCase):
                 paths = sampler("/videos/demo.mp4", 1.25, 3.75, 5)
 
         self.assertEqual(paths, (str(Path(tmp) / "1.250_3.750_5" / "frame_001.jpg"),))
-        self.assertEqual(calls, [("/videos/demo.mp4", 1.25, 3.75, 5, "1.250_3.750_5")])
+        self.assertEqual(calls, [("/videos/demo.mp4", 1.25, 3.75, 5, "1.250_3.750_5", None)])
+
+    def test_run_loop_keeps_default_verify_sampler_separate_from_index_sampler(self):
+        from runs import eval_runner
+
+        captured = {"index_kwargs": None, "sample_calls": []}
+
+        shot = Shot(
+            shot_id="sc01_sh001",
+            scene_id="sc01",
+            start_sec=1.0,
+            end_sec=3.0,
+            frames=(Frame(frame_id="thumb", time_sec=1.0, thumb_path="/index/thumb.jpg"),),
+            lowres_grid_path="/index/grid.jpg",
+        )
+        video_index = VideoIndex(
+            video_path="/videos/demo.mp4",
+            duration_sec=4.0,
+            scenes=(
+                Scene(
+                    scene_id="sc01",
+                    start_sec=0.0,
+                    end_sec=4.0,
+                    title="Scene 1",
+                    summary="demo",
+                    shots=(shot,),
+                    scene_thumb_path="/index/thumb.jpg",
+                ),
+            ),
+        )
+
+        class FakeOverview:
+            grid_image_path = ""
+            grid_path = ""
+            manifest_path = ""
+
+        class FakeInvestigatorWorkspace:
+            def __init__(self, root):
+                self.root = Path(root)
+
+        class FakeReasoner:
+            def __init__(self, *, backend):
+                self.backend = backend
+
+        class FakeInvestigator:
+            def __init__(self, *, index, workspace, backend, frame_sampler=None):
+                self.index = index
+                self.workspace = workspace
+                self.backend = backend
+                self.frame_sampler = frame_sampler
+
+        class FakeDriver:
+            def __init__(self, *, reasoner, investigator, workspace, max_rounds, max_concurrency=4, valid_scene_ids=()):
+                self.investigator = investigator
+                self.workspace = workspace
+
+            def run(self, **kwargs):
+                del kwargs
+                self.workspace.root.mkdir(parents=True, exist_ok=True)
+                assert self.investigator.frame_sampler is not None
+                paths = self.investigator.frame_sampler(shot, 1)
+                assert "multi_v3_verify_frames" in paths[0]
+                assert paths[0] != shot.frames[0].thumb_path
+                return WorkspaceRunResult(answer="A", citations=(), confidence="medium", rounds=1, metadata={"status": "final"})
+
+        def fake_build_video_index_from_video(*args, **kwargs):
+            captured["index_kwargs"] = kwargs
+            return video_index
+
+        def fake_sample_shot_frames(video_path, start_sec, end_sec, *, n_frames, out_dir, size=None):
+            captured["sample_calls"].append((video_path, start_sec, end_sec, n_frames, str(out_dir), size))
+            return (Frame(frame_id="verify", time_sec=start_sec, thumb_path=str(Path(out_dir) / "verify.jpg")),)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = Path(tmp) / "demo.mp4"
+            video_path.write_bytes(b"not a real mp4; build is patched")
+            workspace_root = Path(tmp) / "workspaces"
+            scene_index = SceneIndex(
+                video_path=str(video_path),
+                duration_sec=4.0,
+                segments=(VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=4.0),),
+            )
+            with patch.object(eval_runner, "build_video_index_from_video", side_effect=fake_build_video_index_from_video):
+                with patch.object(eval_runner, "sample_shot_frames", side_effect=fake_sample_shot_frames):
+                    with patch.object(eval_runner, "build_scene_timeline_overview", return_value=FakeOverview()):
+                        with patch.object(eval_runner, "InvestigatorWorkspaceV3", FakeInvestigatorWorkspace, create=True):
+                            with patch.object(eval_runner, "ReasonerV3", FakeReasoner, create=True):
+                                with patch.object(eval_runner, "InvestigatorV3", FakeInvestigator, create=True):
+                                    with patch.object(eval_runner, "MultiV3Driver", FakeDriver, create=True):
+                                        eval_runner.run_loop(
+                                            backend=object(),
+                                            video_path=str(video_path),
+                                            question="Question: Which object?\nOptions:\nA. demo",
+                                            duration_sec=4.0,
+                                            run_id="case_default_verify",
+                                            scene_index=scene_index,
+                                            workspace_root=workspace_root,
+                                            budget=AgentBudget(max_rounds=1),
+                                            strategy="multi_v3",
+                                        )
+
+        self.assertIsNone(captured["index_kwargs"]["keyframe_sampler"])
+        self.assertEqual(captured["sample_calls"][0][-1], None)
 
 
 if __name__ == "__main__":

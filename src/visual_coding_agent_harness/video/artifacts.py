@@ -6,7 +6,7 @@ from math import ceil
 from pathlib import Path
 from typing import Sequence
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from .index import Frame, Scene, Shot
 
@@ -51,7 +51,7 @@ def compose_scene_thumb(
         + [frame.thumb_path for shot in shots for frame in shot.frames]
     )
     if source is None:
-        image = _placeholder(cell_size, scene.scene_id, scene.title or scene.summary)
+        image = _placeholder(cell_size)
     else:
         image = _fit_image(source, cell_size=cell_size)
     return _save_jpeg(image, out_path)
@@ -68,11 +68,11 @@ def compose_scene_timeline_grid(
     for scene in scenes:
         source = _first_existing_image((scene.scene_thumb_path,))
         if source is None:
-            cells.append(_placeholder(cell_size, scene.scene_id, scene.title or scene.summary))
+            cells.append(_placeholder(cell_size))
         else:
             cells.append(_fit_image(source, cell_size=cell_size))
     if not cells:
-        cells = [_placeholder(cell_size, "empty", "No scenes indexed")]
+        cells = [_placeholder(cell_size)]
     return _write_grid(cells, out_path=out_path, cols=cols, cell_size=cell_size)
 
 
@@ -94,13 +94,8 @@ def _fit_image(path: Path, *, cell_size: tuple[int, int]) -> Image.Image:
         return canvas
 
 
-def _placeholder(cell_size: tuple[int, int], label: str, detail: str = "") -> Image.Image:
-    image = Image.new("RGB", cell_size, color=(42, 48, 56))
-    draw = ImageDraw.Draw(image)
-    draw.text((12, 12), str(label)[:32], fill=(240, 240, 240))
-    if detail:
-        draw.text((12, 34), str(detail)[:72], fill=(200, 210, 220))
-    return image
+def _placeholder(cell_size: tuple[int, int]) -> Image.Image:
+    return Image.new("RGB", cell_size, color=(42, 48, 56))
 
 
 def _write_grid(
