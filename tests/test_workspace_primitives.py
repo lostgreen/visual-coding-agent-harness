@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from visual_coding_agent_harness.memory import SourceAnchor
-from visual_coding_agent_harness.tools.workspace_primitives import build_workspace_primitives_registry
+from visual_coding_agent_harness.legacy.workspace_v2.tools import build_workspace_primitives_registry
 from visual_coding_agent_harness.video.index import TimelineBeat
 from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment
 from visual_coding_agent_harness.workspace import EvidenceWorkspace

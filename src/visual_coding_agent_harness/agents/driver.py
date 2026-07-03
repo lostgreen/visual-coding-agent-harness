@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
-from typing import Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, Mapping, Sequence
 
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import DigestItem, InvestigationReport
-from visual_coding_agent_harness.agents.result import WorkspaceRunResult
 from visual_coding_agent_harness.workspace.digest import digest_reports
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
+
+
+@dataclass(frozen=True)
+class WorkspaceRunResult:
+    answer: str
+    citations: tuple[str, ...] = ()
+    confidence: str = ""
+    rounds: int = 0
+    metadata: Mapping[str, Any] | None = None
 
 
 class MultiV3Driver:

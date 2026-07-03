@@ -7,7 +7,7 @@ from pathlib import Path
 from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope, ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport
 from visual_coding_agent_harness.workspace.digest import digest_reports
-from visual_coding_agent_harness.workspace.evidence_ledger import EvidenceLedger
+from visual_coding_agent_harness.workspace.evidence import EvidenceLedger
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
 
 

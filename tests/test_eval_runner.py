@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from visual_coding_agent_harness.agents.result import WorkspaceRunResult
+from visual_coding_agent_harness.agents.driver import WorkspaceRunResult
 from visual_coding_agent_harness.core.budget import AgentBudget
 from visual_coding_agent_harness.video.index import Frame, Scene, SceneIndex, Shot, VideoIndex, VideoSegment
 

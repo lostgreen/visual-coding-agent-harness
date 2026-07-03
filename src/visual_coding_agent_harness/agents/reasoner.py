@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
+from visual_coding_agent_harness.agents.driver import WorkspaceRunResult
 from visual_coding_agent_harness.contracts.query import ScopedQuery, VerifiableGoal
 from visual_coding_agent_harness.contracts.report import DigestItem
-from visual_coding_agent_harness.agents.result import WorkspaceRunResult
 from visual_coding_agent_harness.video.artifacts import is_image_path
 
 

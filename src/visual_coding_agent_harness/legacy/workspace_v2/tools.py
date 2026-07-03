@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Optional, Sequence
 
-from ..core.registry import ToolRegistry, tool
-from ..workspace import EvidenceWorkspace
+from visual_coding_agent_harness.core.registry import ToolRegistry, tool
+from visual_coding_agent_harness.workspace import EvidenceWorkspace
 
 
 PLAN_PHASE_PRIMITIVES = frozenset({"read_workspace"})

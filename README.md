@@ -176,72 +176,54 @@ The run writes the same harness artifacts under `runs/<run_id>/`:
 - `trace.jsonl`
 - `ledger.md`
 
-## Workspace-First Long-Video Agent
+## Evidence-Centric Long-Video Agent
 
-The active long-video evaluation path is `--strategy workspace_v2`. It uses
-`WorkspaceVisualAgent`, a durable workspace layout, compact exploration tools
-(`explore`, `verify_window`, `read_workspace`, `synthesize_memory`, `answer`),
-and a mandatory plan -> act -> commit loop for visual evidence. The evidence
-hierarchy is:
+The active long-video evaluation path is `--strategy multi_v3`. It uses a small
+Reasoner -> Driver -> Investigator loop:
 
-- `explore` = candidate discovery only; never final evidence.
-- `verify_window` = scoped local video evidence, with one or more factual checks.
-- `synthesize_memory` = derived evidence from committed verified memory.
-- `answer` = final citation gate over committed verified memory.
+- `Reasoner` plans scoped queries or returns the final answer.
+- `Driver` validates scene scope, dispatches queries in parallel, and feeds back
+  compact digests.
+- `Investigator` runs `explore` over low-resolution shot grids, then `verify`
+  over high-resolution frames for candidate shots.
 
-The old iterative agent and its old exploration loop have been removed from the
-active branch.
+Legacy workspace_v2 tools live under `visual_coding_agent_harness.legacy`; they
+are not part of the active multi_v3 tool surface.
 
 ```bash
 PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.eval_videomme \
-  --strategy workspace_v2 \
+  --strategy multi_v3 \
   --cases 605-1 \
-  --run-root /tmp/vcah-workspace-v2 \
+  --run-root /tmp/vcah-multi-v3 \
   --allow-any-python
 ```
 
-Planner output for an exploration round is one JSON tool call:
+Reasoner planning emits scoped evidence queries:
 
 ```json
 {
-  "tool": "explore",
-  "args": {
-    "query": "what is discussed in this segment",
-    "scope": {"segment_ids": ["seg_0002"]},
-    "modalities": ["index", "asr", "ocr", "visual"],
-    "top_k": 8
-  }
+  "action": "plan",
+  "queries": [
+    {
+      "query_id": "q1",
+      "goal_id": "g1",
+      "natural_query": "Find whether the red car appears.",
+      "scope": {"scene_ids": ["sc01"]},
+      "expected_evidence": "A verified red car sighting.",
+      "budget": {"max_shots_to_verify": 2, "max_frames": 32}
+    }
+  ],
+  "rationale": "Need visual evidence before answering."
 }
 ```
 
-After `explore` returns a candidate, inspect local evidence with
-`verify_window`:
+Final answers cite verified multi_v3 evidence ids:
 
 ```json
 {
-  "tool": "verify_window",
-  "args": {
-    "candidate_key": "obs_0001:cand_0001",
-    "checks": [
-      {"target_id": "target_1", "claim": "The local fact to verify.", "polarity": "presence"}
-    ],
-    "sampling": {"fps": 2, "max_frames": 128}
-  }
-}
-```
-
-After a commit-required tool returns, the commit phase must dispose of the
-observation by calling `commit_observation`, `reject_observation`,
-`defer_observation`, or `no_commit_needed`. Final answers must cite committed
-planner-authored workspace memory:
-
-```json
-{
-  "tool": "answer",
-  "args": {
-    "text": "...",
-    "citations": ["mem_<committed_support_id>"],
-    "confidence": "high"
-  }
+  "action": "answer",
+  "answer": "A",
+  "confidence": "high",
+  "citations": ["ev_0001"]
 }
 ```

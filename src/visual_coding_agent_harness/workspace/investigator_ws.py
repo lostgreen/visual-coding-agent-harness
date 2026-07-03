@@ -10,7 +10,7 @@ from typing import Sequence
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport
 
-from .evidence_ledger import EvidenceLedger
+from .evidence import EvidenceLedger
 
 
 class InvestigatorWorkspace:
