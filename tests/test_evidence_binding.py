@@ -1,6 +1,6 @@
 from dataclasses import asdict
 
-from visual_coding_agent_harness.contracts import ClaimModality, EvidenceBinding
+from visual_coding_agent_harness.legacy.contracts_v2 import ClaimModality, EvidenceBinding
 
 
 def test_evidence_binding_roundtrips_with_effective_claim_modality():

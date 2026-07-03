@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from runs.training_trajectory import TrainingTrajectory
-from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceRecord, EvidenceWorkspace
 
 
 def test_from_workspace_collects_all_chains_and_trace_context(tmp_path):

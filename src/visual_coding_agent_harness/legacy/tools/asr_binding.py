@@ -6,10 +6,10 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
-from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..core.registry import ToolRegistry, tool
-from ..video.map import VideoMapSegment, VideoMapStore
-from ..workspace import EvidenceWorkspace
+from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
+from visual_coding_agent_harness.core.registry import ToolRegistry, tool
+from visual_coding_agent_harness.video._map import VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 _SUPPORTED_VERDICTS = {"supports", "supported"}

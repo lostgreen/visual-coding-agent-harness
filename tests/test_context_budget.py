@@ -1,6 +1,6 @@
 import pytest
 
-from visual_coding_agent_harness.workspace.context_budget import (
+from visual_coding_agent_harness.legacy.workspace_v2.context_budget import (
     BudgetExceededError,
     CompactStrategy,
     ContextBudgetAllocator,
@@ -9,7 +9,7 @@ from visual_coding_agent_harness.workspace.context_budget import (
     NavLatestWinsCompact,
     parse_budget_ratios,
 )
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 class TruncateStrategy(CompactStrategy):

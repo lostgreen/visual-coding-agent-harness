@@ -67,7 +67,7 @@ def test_pyproject_exposes_packaged_eval_console_scripts():
 
 def test_videomme_eval_import_dependencies_postpone_annotations_for_python38():
     repo_root = Path(__file__).resolve().parents[1]
-    module_path = repo_root / "src/visual_coding_agent_harness/workspace/context_budget.py"
+    module_path = repo_root / "src/visual_coding_agent_harness/legacy/workspace_v2/context_budget.py"
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
 
     assert any(

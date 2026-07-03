@@ -1,6 +1,10 @@
 import unittest
 
-from visual_coding_agent_harness.workspace.open_questions import build_question_context, exploration_question, rewrite_exploration_question_with_model
+from visual_coding_agent_harness.legacy.workspace_v2.open_questions import (
+    build_question_context,
+    exploration_question,
+    rewrite_exploration_question_with_model,
+)
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse, VisionLanguageBackend
 
 

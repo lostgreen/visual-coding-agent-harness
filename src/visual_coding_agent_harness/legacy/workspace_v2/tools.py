@@ -6,7 +6,7 @@ import re
 from typing import Any, Mapping, Optional, Sequence
 
 from visual_coding_agent_harness.core.registry import ToolRegistry, tool
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 PLAN_PHASE_PRIMITIVES = frozenset({"read_workspace"})

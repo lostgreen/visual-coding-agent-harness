@@ -7,13 +7,13 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
-from ..core.contracts import resolve_nframes
-from ..workspace.open_questions import exploration_question
-from ..workspace.output_quality import confidence_signal_from_text
-from ..backends.base import BackendRequest, VisionLanguageBackend
-from ..core.registry import ToolRegistry, tool
-from ..workspace import EvidenceWorkspace
-from .frame_cache import FrameSampler, frame_cache_artifact_ref
+from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
+from visual_coding_agent_harness.core.contracts import resolve_nframes
+from visual_coding_agent_harness.core.registry import ToolRegistry, tool
+from visual_coding_agent_harness.legacy.workspace_v2.open_questions import exploration_question
+from visual_coding_agent_harness.legacy.workspace_v2.output_quality import confidence_signal_from_text
+from visual_coding_agent_harness.tools.frame_cache import FrameSampler, frame_cache_artifact_ref
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 ClipExtractor = Callable[[str, str, float, float], str]

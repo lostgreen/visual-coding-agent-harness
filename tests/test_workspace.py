@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceRecord, EvidenceWorkspace
 
 
 def test_evidence_table_jsonl_roundtrip(tmp_path: Path):

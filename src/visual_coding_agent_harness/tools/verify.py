@@ -8,7 +8,7 @@ from typing import Any, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
 from visual_coding_agent_harness.contracts.report import Finding, VerifyRequest
-from visual_coding_agent_harness.video.artifacts import is_image_path
+from visual_coding_agent_harness.video._artifacts import is_image_path
 
 
 def verify_window(

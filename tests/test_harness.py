@@ -4,8 +4,8 @@ from pathlib import Path
 
 from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.core.registry import ToolRegistry, tool
-from visual_coding_agent_harness.tools.dummy import build_dummy_registry
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.tools.dummy import build_dummy_registry
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 class HarnessTest(unittest.TestCase):

@@ -1,6 +1,6 @@
 import pytest
 
-from visual_coding_agent_harness.contracts import (
+from visual_coding_agent_harness.legacy.contracts_v2 import (
     ClaimModality,
     ClaimRelation,
     OptionSpec,

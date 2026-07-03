@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 DEFAULT_WORKSPACE_ROUND_LOG_FILENAME = "workspace_round_log.md"

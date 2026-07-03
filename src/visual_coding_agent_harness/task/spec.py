@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
 from ..evidence.answer_operators import AnswerOperator, derive_answer_operator, normalize_answer_operator
-from ..contracts import TargetRegistry
+from ..legacy.contracts_v2 import TargetRegistry
 
 AnswerFormat = Literal["mcq", "short_answer", "freeform"]
 

@@ -5,8 +5,8 @@ import pytest
 from visual_coding_agent_harness.memory import SourceAnchor
 from visual_coding_agent_harness.legacy.workspace_v2.tools import build_workspace_primitives_registry
 from visual_coding_agent_harness.video.index import TimelineBeat
-from visual_coding_agent_harness.video.map import VideoMap, VideoMapSegment
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.video._map import VideoMap, VideoMapSegment
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 def test_workspace_primitives_return_deterministic_results(tmp_path: Path):

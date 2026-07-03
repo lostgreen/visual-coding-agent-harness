@@ -2,7 +2,7 @@ from pathlib import Path
 
 from runs import eval_runner, report_metrics
 from runs.summary_schema import RunSummary
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 def test_phase_d_metrics_default_to_zero():

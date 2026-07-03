@@ -17,7 +17,7 @@ from visual_coding_agent_harness.evals.videomme.scene_index_builder import (
 )
 from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
 from visual_coding_agent_harness.video.index import SceneIndex, VideoSegment
-from visual_coding_agent_harness.video.map import VideoMap
+from visual_coding_agent_harness.video._map import VideoMap
 
 
 class RecordingBackend:

@@ -6,11 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from .artifacts import compose_scene_thumb, compose_shot_grid
+from ._artifacts import compose_scene_thumb, compose_shot_grid
 from .index import Frame, Scene, SceneIndex, Shot, VideoIndex, VideoSegment
-from .keyframes import sample_shot_frames
-from .scene_aggregate import aggregate_shot_ranges_by_duration
-from .shot_detect import detect_shots_ffmpeg, detect_shots_uniform
+from ._keyframes import sample_shot_frames
+from ._scene_aggregate import aggregate_shot_ranges_by_duration
+from ._shot_detect import detect_shots_ffmpeg, detect_shots_uniform
 
 
 FramePathBuilder = Callable[[VideoSegment], Sequence[str]]

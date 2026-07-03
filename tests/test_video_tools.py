@@ -2,7 +2,7 @@ import unittest
 from unittest import mock
 
 from visual_coding_agent_harness.core.registry import ToolError
-from visual_coding_agent_harness.tools.video_atomic import (
+from visual_coding_agent_harness.legacy.tools.video_atomic import (
     build_extract_clip_command,
     build_sample_frames_command,
     require_ffmpeg,

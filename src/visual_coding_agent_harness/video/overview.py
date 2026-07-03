@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from .artifacts import compose_scene_timeline_grid
+from ._artifacts import compose_scene_timeline_grid
 from .index import VideoIndex
 
 

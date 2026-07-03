@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
 
 from ..backends.base import BackendRequest, VisionLanguageBackend
-from .text_norm import unique_tokens
+from ._text_norm import unique_tokens
 from .index import SceneIndex, TimelineBeat
 
 FrameSampler = Callable[[str, float, float, int], Sequence[str]]

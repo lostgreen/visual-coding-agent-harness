@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 def test_link_manifest_updates_observation(tmp_path: Path):

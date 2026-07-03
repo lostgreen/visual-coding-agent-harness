@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 from visual_coding_agent_harness.core.protocol import ToolRequest
-from visual_coding_agent_harness.tools.traditional import build_traditional_registry
+from visual_coding_agent_harness.legacy.tools.traditional import build_traditional_registry
 
 
 class TraditionalRegistryTest(unittest.TestCase):

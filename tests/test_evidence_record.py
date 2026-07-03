@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from visual_coding_agent_harness.workspace import EvidenceRecord, EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceRecord, EvidenceWorkspace
 
 
 def _record(workspace: EvidenceWorkspace, *, stage: str, parent_id: str | None = None) -> EvidenceRecord:

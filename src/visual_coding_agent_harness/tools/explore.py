@@ -9,7 +9,7 @@ from typing import Any, Iterable, Sequence
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot
-from visual_coding_agent_harness.video.artifacts import is_image_path
+from visual_coding_agent_harness.video._artifacts import is_image_path
 from visual_coding_agent_harness.video.index import Shot, VideoIndex
 
 

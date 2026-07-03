@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 INCOMPLETE_STATUSES = {

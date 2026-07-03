@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from visual_coding_agent_harness.core.budget import AgentBudget
-from visual_coding_agent_harness.workspace.context_budget import parse_budget_ratios
+from visual_coding_agent_harness.legacy.workspace_v2.context_budget import parse_budget_ratios
 from visual_coding_agent_harness.agents.driver import MultiV3Driver
 from visual_coding_agent_harness.agents.investigator import Investigator as InvestigatorV3
 from visual_coding_agent_harness.agents.reasoner import Reasoner as ReasonerV3
@@ -30,9 +30,9 @@ from visual_coding_agent_harness.evals.videomme.multi_v3_export import (
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
 from visual_coding_agent_harness.video.build import build_video_index_from_scene_index, build_video_index_from_video
 from visual_coding_agent_harness.video.index import Frame, SceneIndex
-from visual_coding_agent_harness.video.keyframes import sample_shot_frames
+from visual_coding_agent_harness.video._keyframes import sample_shot_frames
 from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace as InvestigatorWorkspaceV3
 
 from .summary_schema import RunSummary, validate as validate_run_summary

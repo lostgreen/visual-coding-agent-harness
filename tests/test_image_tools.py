@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from visual_coding_agent_harness.tools.image_atomic import (
+from visual_coding_agent_harness.legacy.tools.image_atomic import (
     crop_region,
     enhance_image,
     threshold_image,

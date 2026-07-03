@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from runs.eval_runner import compute_nframes_metrics
-from visual_coding_agent_harness.workspace import EvidenceWorkspace
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 
 def _manifest(workspace: EvidenceWorkspace, *, tool: str, nframes: int, target: int = 128) -> None:

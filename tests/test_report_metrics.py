@@ -100,7 +100,7 @@ class ReportMetricsTest(unittest.TestCase):
 
     def test_build_report_flags_conflicting_unsupported_final(self):
         from runs import report_metrics
-        from visual_coding_agent_harness.workspace import EvidenceWorkspace
+        from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -179,7 +179,7 @@ class ReportMetricsTest(unittest.TestCase):
 
     def test_build_report_counts_legacy_worker_vote_rows(self):
         from runs import report_metrics
-        from visual_coding_agent_harness.workspace import EvidenceWorkspace
+        from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -240,7 +240,7 @@ class ReportMetricsTest(unittest.TestCase):
 
     def test_build_report_resolves_repo_relative_workspace_paths(self):
         from runs import report_metrics
-        from visual_coding_agent_harness.workspace import EvidenceWorkspace
+        from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

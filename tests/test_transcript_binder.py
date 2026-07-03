@@ -1,5 +1,5 @@
-from visual_coding_agent_harness.workspace.transcript_binder import TranscriptEvidenceBinder
-from visual_coding_agent_harness.contracts import (
+from visual_coding_agent_harness.legacy.workspace_v2.transcript_binder import TranscriptEvidenceBinder
+from visual_coding_agent_harness.legacy.contracts_v2 import (
     ClaimRelation,
     OptionSpec,
     TargetSpec,

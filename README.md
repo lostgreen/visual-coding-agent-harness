@@ -190,6 +190,36 @@ Reasoner -> Driver -> Investigator loop:
 Legacy workspace_v2 tools live under `visual_coding_agent_harness.legacy`; they
 are not part of the active multi_v3 tool surface.
 
+### Active multi_v3 module boundary
+
+Only these modules are part of the active long-video path:
+
+```text
+agents/
+  driver.py
+  investigator.py
+  reasoner.py
+tools/
+  explore.py
+  verify.py
+  frame_cache.py
+workspace/
+  investigator_ws.py
+  evidence.py
+  digest.py
+contracts/
+  query.py
+  report.py
+  evidence.py
+video/
+  index.py
+  build.py
+  overview.py
+```
+
+Everything else under `legacy/` is compatibility-only and must not be imported
+by active multi_v3 modules.
+
 ```bash
 PYTHONPATH=src python3 -m visual_coding_agent_harness.cli.eval_videomme \
   --strategy multi_v3 \

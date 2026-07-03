@@ -1,33 +1,17 @@
-"""Stable protocol contracts for skill-first verification flows."""
+"""Active multi_v3 contracts."""
 
-from .targets import (
-    ClaimModality,
-    ClaimRelation,
-    EvidenceBinding,
-    OptionSpec,
-    RelationBinding,
-    TargetRegistry,
-    TargetSpec,
-    TargetTextHit,
-)
-from .ordered_sequence import (
-    OrderedTranscriptItem,
-    OrderedTranscriptSequence,
-    build_ordered_transcript_sequence,
-    ordered_sequence_exact_option,
-)
+from .evidence import CandidateShot, Finding, VerifyRequest
+from .query import QueryBudget, QueryScope, ScopedQuery, VerifiableGoal
+from .report import DigestItem, InvestigationReport
 
 __all__ = [
-    "ClaimModality",
-    "ClaimRelation",
-    "EvidenceBinding",
-    "OrderedTranscriptItem",
-    "OrderedTranscriptSequence",
-    "OptionSpec",
-    "RelationBinding",
-    "TargetRegistry",
-    "TargetSpec",
-    "TargetTextHit",
-    "build_ordered_transcript_sequence",
-    "ordered_sequence_exact_option",
+    "CandidateShot",
+    "DigestItem",
+    "Finding",
+    "InvestigationReport",
+    "QueryBudget",
+    "QueryScope",
+    "ScopedQuery",
+    "VerifiableGoal",
+    "VerifyRequest",
 ]

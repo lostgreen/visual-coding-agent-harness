@@ -12,7 +12,7 @@ from visual_coding_agent_harness.backends.base import BackendRequest, VisionLang
 from visual_coding_agent_harness.agents.driver import WorkspaceRunResult
 from visual_coding_agent_harness.contracts.query import ScopedQuery, VerifiableGoal
 from visual_coding_agent_harness.contracts.report import DigestItem
-from visual_coding_agent_harness.video.artifacts import is_image_path
+from visual_coding_agent_harness.video._artifacts import is_image_path
 
 
 @dataclass(frozen=True)

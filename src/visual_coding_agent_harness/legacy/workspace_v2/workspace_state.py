@@ -11,18 +11,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from ..core.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
+from ...core.contracts import CONTRACT_VERSION, BudgetReason, EvidenceStage, GroundingQuality, SamplingPolicy
 from .output_quality import is_unsupported_claim
 from .open_questions import extract_candidate_options
 from .transcript_binder import TranscriptEvidenceBinder
-from ..contracts import (
+from ..contracts_v2 import (
     ClaimModality,
     ClaimRelation,
     TargetSpec,
     build_ordered_transcript_sequence,
 )
-from ..core.schemas import EvidenceRowV2
-from ..memory import MemoryEntry, SourceAnchor, excerpt_hash, normalized_text
+from ...core.schemas import EvidenceRowV2
+from ...memory import MemoryEntry, SourceAnchor, excerpt_hash, normalized_text
 
 
 _TARGET_REF_RE = re.compile(r"^T[1-9]\d*$")

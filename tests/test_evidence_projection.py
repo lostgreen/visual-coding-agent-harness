@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from visual_coding_agent_harness.contracts import TargetRegistry, TargetSpec
+from visual_coding_agent_harness.legacy.contracts_v2 import TargetRegistry, TargetSpec
 from visual_coding_agent_harness.evidence.projection import ProjectionEvidence, project_option_support
 from visual_coding_agent_harness.task.spec import TaskSpec, build_task_spec
 

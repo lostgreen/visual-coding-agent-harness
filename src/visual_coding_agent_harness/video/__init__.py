@@ -1,5 +1,3 @@
-"""Video indexing and map primitives for the MVP harness."""
+"""Active multi_v3 video index contracts."""
 
 from .index import *  # noqa: F401,F403
-from .map import *  # noqa: F401,F403
-

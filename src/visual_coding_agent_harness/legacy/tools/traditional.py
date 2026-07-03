@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Mapping, Sequence
 
 from visual_coding_agent_harness.core.registry import ToolRegistry, tool
-from visual_coding_agent_harness.tools import image_atomic, video_atomic
+from visual_coding_agent_harness.legacy.tools import image_atomic, video_atomic
 
 
 @tool(name="crop_region", description="Crop an image region using normalized [0,1000] bbox.")

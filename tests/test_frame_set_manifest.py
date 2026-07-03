@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from visual_coding_agent_harness.core.contracts import CONTRACT_VERSION
-from visual_coding_agent_harness.workspace import EvidenceWorkspace, FrameSetManifest
+from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace, FrameSetManifest
 
 
 def _create_manifest(workspace: EvidenceWorkspace, *, approximate: bool = False) -> FrameSetManifest:
