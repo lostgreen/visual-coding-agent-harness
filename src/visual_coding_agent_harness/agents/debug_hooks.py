@@ -29,7 +29,7 @@ def maybe_break(label: str, **context: Any) -> None:
 
     try:
         connected = bool(debugpy.is_client_connected())
-    except Exception:  # noqa: BLE001 - debugger best-effort only
+    except Exception:  # noqa: BLE001 - debugging fallback only
         connected = False
     if not connected:
         wait = os.getenv(_WAIT_ENV, "").strip().lower() in {"1", "true", "yes", "on"}

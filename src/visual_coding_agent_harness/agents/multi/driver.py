@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..debug_hooks import maybe_break
 from ..workspace_agent import WorkspaceRunResult
+from ..debug_hooks import maybe_break
 from .reasoner import best_effort_answer_from_workspace
 
 

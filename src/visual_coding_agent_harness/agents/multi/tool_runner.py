@@ -8,8 +8,8 @@ from typing import Any, Mapping
 from ...core.protocol import ToolRequest
 from ...core.registry import ToolError, ToolRegistry
 from ...workspace import EvidenceWorkspace
-from ..debug_hooks import maybe_break
 from ..workspace_agent import _caption_fact_writes, _mapping_items, _retrieval_candidate_writes, _structured_verify_writes
+from ..debug_hooks import maybe_break
 
 
 @dataclass

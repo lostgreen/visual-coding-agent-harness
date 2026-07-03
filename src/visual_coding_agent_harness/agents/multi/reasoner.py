@@ -6,8 +6,8 @@ import re
 from typing import Any, Mapping, Sequence
 
 from ...evidence.answer_operators import ROUTE_TO_MODALITIES, derive_answer_operator, derive_modality_route
-from ..debug_hooks import maybe_break
 from ..workspace_agent import WorkspaceRunResult
+from ..debug_hooks import maybe_break
 from .mutator import WorkspaceMutator
 from .protocol import SubGoalBudget, SubGoalConstraint, SubGoalSuccessCriteria
 
