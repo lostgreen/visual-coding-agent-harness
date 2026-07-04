@@ -1,1 +1,1 @@
-"""VideoMME evaluation runner, metrics, and summary schemas."""
+"""VideoMME evaluation adapter for the active multi_v3 path."""

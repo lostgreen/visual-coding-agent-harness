@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
-from visual_coding_agent_harness.agents.driver import WorkspaceRunResult
 from visual_coding_agent_harness.contracts.query import ScopedQuery, VerifiableGoal
 from visual_coding_agent_harness.contracts.report import DigestItem
 from visual_coding_agent_harness.video.pipeline import is_image_path
@@ -29,20 +28,6 @@ class ReasonerDecision:
         object.__setattr__(self, "goals", tuple(self.goals))
         object.__setattr__(self, "queries", tuple(self.queries))
         object.__setattr__(self, "citations", tuple(str(item) for item in self.citations if str(item)))
-
-    def to_run_result(self, *, rounds: int) -> WorkspaceRunResult:
-        return WorkspaceRunResult(
-            answer=self.answer,
-            citations=tuple(self.citations),
-            confidence=self.confidence,
-            rounds=rounds,
-            metadata={
-                "status": "final" if self.answer else "need_more_evidence",
-                "strategy": "multi_v3",
-                "rationale": self.rationale,
-                "goals": [goal.to_dict() for goal in self.goals],
-            },
-        )
 
 
 class Reasoner:

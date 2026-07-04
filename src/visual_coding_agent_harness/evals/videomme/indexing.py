@@ -1,4 +1,4 @@
-"""Root DVC SceneIndex builder for VideoMME navigation indexes."""
+"""VideoMME scene-index builders and cache helpers."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from ...backends.base import BackendRequest, VisionLanguageBackend
 from ...tools.frame_cache import FrameSampler
 from ...video.index import SceneIndex, TimelineBeat, VideoSegment, fixed_window_scene_index
-from .scene_index_cache import SceneIndexCache
 
 
 SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dvc_root_v3"
@@ -36,6 +35,35 @@ class RootIndexPolicy:
     frame_cache_fps: float = 0.5
     max_pixels_per_frame: int = 360 * 420
     max_new_tokens: int = 6144
+
+
+class SceneIndexCache:
+    def __init__(self, cache_dir: Path | str) -> None:
+        self.cache_dir = Path(cache_dir)
+
+    def key_for(self, parts: Mapping[str, Any]) -> str:
+        payload = json.dumps(parts, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def load(self, key: str) -> Optional[SceneIndex]:
+        path = self._path_for(key)
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return SceneIndex.from_dict(data["scene_index"])
+
+    def store(self, key: str, scene_index: SceneIndex) -> None:
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        path = self._path_for(key)
+        tmp_path = path.with_suffix(".tmp")
+        tmp_path.write_text(
+            json.dumps({"scene_index": scene_index.to_dict()}, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+        tmp_path.replace(path)
+
+    def _path_for(self, key: str) -> Path:
+        return self.cache_dir / f"{key}.json"
 
 
 class SceneIndexBuilder:

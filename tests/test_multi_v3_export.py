@@ -5,7 +5,7 @@ from pathlib import Path
 
 from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope, ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport
-from visual_coding_agent_harness.evals.videomme.multi_v3_export import (
+from visual_coding_agent_harness.evals.videomme.outputs import (
     export_multi_v3_evidence_chains,
     export_multi_v3_training_trajectory,
     export_multi_v3_trajectory,

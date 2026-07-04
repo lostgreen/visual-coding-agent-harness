@@ -59,7 +59,7 @@ class MultiV3Driver:
                 round_number=round_number,
             )
             if decision.action == "answer":
-                return decision.to_run_result(rounds=round_number)
+                return self._answer_result(decision, rounds=round_number)
             queries = self._filter_queries(decision.queries)
             if not queries:
                 continue
@@ -80,6 +80,20 @@ class MultiV3Driver:
     def _dispatch_queries(self, queries: Sequence[ScopedQuery]) -> tuple[InvestigationReport, ...]:
         with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(queries))) as executor:
             return tuple(executor.map(self.investigator.run, queries))
+
+    def _answer_result(self, decision, *, rounds: int) -> WorkspaceRunResult:
+        return WorkspaceRunResult(
+            answer=decision.answer,
+            citations=tuple(decision.citations),
+            confidence=decision.confidence,
+            rounds=rounds,
+            metadata={
+                "status": "final" if decision.answer else "need_more_evidence",
+                "strategy": "multi_v3",
+                "rationale": decision.rationale,
+                "goals": [goal.to_dict() for goal in decision.goals],
+            },
+        )
 
     def _filter_queries(self, queries: Sequence[ScopedQuery]) -> tuple[ScopedQuery, ...]:
         queries = tuple(queries)

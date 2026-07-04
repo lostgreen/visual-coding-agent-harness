@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def test_videomme_eval_code_lives_in_package_with_legacy_runs_compatibility():
-    from visual_coding_agent_harness.evals.videomme import metrics, runner, summary_schema, trajectory_markdown
+    from visual_coding_agent_harness.evals.videomme import metrics, outputs, runner
     from visual_coding_agent_harness.legacy.evals.videomme import training_trajectory
     from runs import eval_runner, report_metrics
     from runs.summary_schema import RunSummary
@@ -14,9 +14,9 @@ def test_videomme_eval_code_lives_in_package_with_legacy_runs_compatibility():
 
     assert eval_runner.EvalConfig is runner.EvalConfig
     assert report_metrics.build_report is metrics.build_report
-    assert RunSummary is summary_schema.RunSummary
+    assert RunSummary is outputs.RunSummary
     assert TrainingTrajectory is training_trajectory.TrainingTrajectory
-    assert callable(trajectory_markdown.render_trajectory_markdown)
+    assert callable(outputs.render_trajectory_markdown)
 
 
 def test_ablation_code_lives_in_package_with_legacy_scripts_compatibility():

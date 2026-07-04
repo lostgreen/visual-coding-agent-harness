@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from visual_coding_agent_harness.evals.videomme.trajectory_markdown import render_trajectory_markdown
+from visual_coding_agent_harness.evals.videomme.outputs import render_trajectory_markdown
 
 
 def test_render_trajectory_markdown_groups_planner_io_and_tool_results(tmp_path):

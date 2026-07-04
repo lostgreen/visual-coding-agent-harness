@@ -167,10 +167,10 @@ def test_reasoner_parses_answer_action_into_result() -> None:
     )
 
     assert decision.action == "answer"
-    assert decision.to_run_result(rounds=2).answer == "A"
-    assert decision.to_run_result(rounds=2).metadata["strategy"] == "multi_v3"
-    assert decision.to_run_result(rounds=2).metadata["rationale"] == "Evidence supports option A."
-    assert decision.to_run_result(rounds=2).metadata["goals"][0]["goal_id"] == "g1"
+    assert decision.answer == "A"
+    assert decision.confidence == "high"
+    assert decision.rationale == "Evidence supports option A."
+    assert decision.goals[0].goal_id == "g1"
 
 
 def test_investigator_runs_explore_then_verify_and_records_report(tmp_path: Path) -> None:

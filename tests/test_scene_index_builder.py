@@ -8,14 +8,14 @@ import time
 import pytest
 
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse
-from visual_coding_agent_harness.evals.videomme.scene_index_builder import (
+from visual_coding_agent_harness.evals.videomme.indexing import (
     RootIndexPolicy,
     SCENE_INDEX_BUILDER_SCHEMA_VERSION,
     SceneIndexBuilder,
     SubtitleCue,
     subtitle_hash,
 )
-from visual_coding_agent_harness.evals.videomme.scene_index_cache import SceneIndexCache
+from visual_coding_agent_harness.evals.videomme.indexing import SceneIndexCache
 from visual_coding_agent_harness.video.index import SceneIndex, VideoSegment
 from visual_coding_agent_harness.legacy.video_map import VideoMap
 

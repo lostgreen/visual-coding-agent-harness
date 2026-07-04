@@ -87,6 +87,11 @@ def test_legacy_agent_tool_and_ledger_modules_are_removed() -> None:
         "visual_coding_agent_harness.video._text_norm",
         "visual_coding_agent_harness.evals.videomme.training_trajectory",
         "visual_coding_agent_harness.evals.videomme.workspace_round_log",
+        "visual_coding_agent_harness.evals.videomme.scene_index_builder",
+        "visual_coding_agent_harness.evals.videomme.scene_index_cache",
+        "visual_coding_agent_harness.evals.videomme.summary_schema",
+        "visual_coding_agent_harness.evals.videomme.trajectory_markdown",
+        "visual_coding_agent_harness.evals.videomme.multi_v3_export",
     )
 
     assert {name: _safe_find_spec(name) for name in removed_modules} == {
@@ -130,6 +135,13 @@ def test_active_surface_file_inventory_is_small() -> None:
         "index.py",
         "overview.py",
         "pipeline.py",
+    }
+    assert _py_files(repo / "src/visual_coding_agent_harness/evals/videomme") <= {
+        "__init__.py",
+        "indexing.py",
+        "metrics.py",
+        "outputs.py",
+        "runner.py",
     }
 
 
