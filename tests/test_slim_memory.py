@@ -14,15 +14,20 @@ def test_evidence_store_accepts_only_known_evidence_ids(tmp_path: Path) -> None:
         beat_id="bt00002",
         start_sec=10.0,
         end_sec=20.0,
-        text="A blue sign is visible.",
-        source="focus_clip",
+        modality="asr",
+        pointer="bt00002@10.000-20.000",
+        verbatim="A blue sign is visible.",
+        claim="A blue sign is visible.",
     )
 
     store.add(record)
 
     assert store.valid(("ev_0001",))
     assert not store.valid(("ev_9999",))
-    assert json.loads((tmp_path / "evidence.jsonl").read_text(encoding="utf-8").splitlines()[0])["evidence_id"] == "ev_0001"
+    payload = json.loads((tmp_path / "evidence.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert payload["evidence_id"] == "ev_0001"
+    assert payload["modality"] == "asr"
+    assert payload["verbatim"] == "A blue sign is visible."
 
 
 def test_memory_and_trace_write_minimal_run_artifacts(tmp_path: Path) -> None:
@@ -39,3 +44,14 @@ def test_memory_and_trace_write_minimal_run_artifacts(tmp_path: Path) -> None:
 
     assert json.loads((tmp_path / "memory.json").read_text(encoding="utf-8"))["visited_beats"] == ["bt00001"]
     assert json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[0])["action"]["type"] == "search_text"
+
+
+def test_memory_tracks_last_search_hits(tmp_path: Path) -> None:
+    memory = AgentMemory.empty(tmp_path / "memory.json")
+
+    memory.record_result(ToolResult(tool="search_visual", beat_ids=("bt00003", "bt00002"), text="visual hits"))
+    memory.save()
+
+    payload = json.loads((tmp_path / "memory.json").read_text(encoding="utf-8"))
+    assert memory.last_hits == ["bt00003", "bt00002"]
+    assert payload["last_hits"] == ["bt00003", "bt00002"]

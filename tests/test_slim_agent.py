@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -81,3 +82,59 @@ def test_video_agent_rejects_unverified_final_citation(tmp_path: Path) -> None:
 
     assert answer.answer == "Insufficient verified evidence."
     assert answer.citations == ()
+
+
+def test_agent_uses_last_hits_for_grid_and_focus_clip(tmp_path: Path) -> None:
+    model = ColorModel(
+        actions=[
+            {"type": "search_visual", "query": "blue frame"},
+            {"type": "open_grid"},
+            {"type": "focus_clip"},
+            {"type": "answer", "answer": "The blue sign appears in the second beat.", "citations": ["ev_0001"]},
+        ]
+    )
+    agent = VideoAgent(model=model, max_steps=5)
+
+    answer = agent.ask(
+        "/videos/demo.mp4",
+        "Where is the blue sign?",
+        run_dir=tmp_path,
+        duration_sec=8.0,
+        asr_cues=({"start": 4.0, "end": 8.0, "text": "a blue sign appears"},),
+        range_detector=lambda _video_path, _duration: ((0.0, 4.0), (4.0, 8.0)),
+        keyframe_sampler=_sampler,
+    )
+
+    trace_lines = [
+        json.loads(line)
+        for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    evidence = json.loads((tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+    assert answer.citations == ("ev_0001",)
+    assert trace_lines[1]["result"]["payload"]["beat_ids"] == ["bt00002"]
+    assert evidence["beat_id"] == "bt00002"
+    assert evidence["modality"] == "asr"
+
+
+def test_visual_only_focus_clip_does_not_create_evidence(tmp_path: Path) -> None:
+    model = ColorModel(
+        actions=[
+            {"type": "focus_clip", "beat_id": "bt00001"},
+            {"type": "answer", "answer": "Unsupported visual-only claim.", "citations": ["ev_0001"]},
+        ]
+    )
+    agent = VideoAgent(model=model, max_steps=3)
+
+    answer = agent.ask(
+        "/videos/demo.mp4",
+        "What happens?",
+        run_dir=tmp_path,
+        duration_sec=4.0,
+        range_detector=lambda _video_path, _duration: ((0.0, 4.0),),
+        keyframe_sampler=_sampler,
+    )
+
+    assert answer.answer == "Insufficient verified evidence."
+    assert answer.citations == ()
+    assert (tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8") == ""

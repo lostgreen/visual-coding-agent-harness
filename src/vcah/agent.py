@@ -48,7 +48,7 @@ class VideoAgent:
         memory = AgentMemory.empty(run_artifacts / "memory.json")
         evidence = EvidenceStore.empty(run_artifacts / "evidence.jsonl")
         trace = TraceStore(run_artifacts / "trace.jsonl")
-        tools = AgentTools(index, evidence, run_artifacts)
+        tools = AgentTools(index, memory, evidence, run_artifacts)
 
         for _step in range(self.max_steps):
             action = self.model.controller(question, index.timeline_digest(), memory.digest(), evidence.digest())

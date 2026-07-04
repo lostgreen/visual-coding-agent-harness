@@ -108,7 +108,11 @@ class VisualIndex:
             raise ValueError("embed_text must return a (1, D) array")
         scores = self.embeddings @ _l2_normalize(query_vec)[0]
         order = sorted(range(len(scores)), key=lambda idx: (-float(scores[idx]), self.beat_ids[idx]))
-        return tuple(Hit(self.beat_ids[idx], float(scores[idx]), "visual") for idx in order[: max(0, int(k))])
+        return tuple(
+            Hit(self.beat_ids[idx], float(scores[idx]), "visual")
+            for idx in order[: max(0, int(k))]
+            if float(scores[idx]) > 0.0
+        )
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -251,7 +255,7 @@ def build_cold_index(
         beats=beats,
         text_index=text_index,
         visual_index=visual_index,
-        diagnostics=_diagnostics(duration_sec, chapters, beats, visual_index, index_mode),
+        diagnostics=_diagnostics(duration_sec, chapters, beats, visual_index, model, index_mode),
     )
     cold.save(cold_dir)
     render_timeline_grid([beat.keyframe_path for beat in beats], cold_dir / "timeline.jpg")
@@ -313,6 +317,7 @@ def _diagnostics(
     chapters: Sequence[Chapter],
     beats: Sequence[Beat],
     visual_index: VisualIndex,
+    model: ModelClient,
     index_mode: str,
 ) -> IndexDiagnostics:
     durations = tuple(max(0.0, beat.end_sec - beat.start_sec) for beat in beats)
@@ -322,6 +327,9 @@ def _diagnostics(
         warnings.append("visual_index_dim_lte_1")
     if norms.size and float(norms.mean()) <= 0.0:
         warnings.append("visual_embedding_norm_mean_lte_0")
+    embedding_backend = str(getattr(model, "embed_model", model.__class__.__name__) or "unknown")
+    if embedding_backend == "local-hash":
+        warnings.append("placeholder_visual_embedding_backend")
     return IndexDiagnostics(
         duration_sec=float(duration_sec),
         chapter_count=len(chapters),
@@ -330,6 +338,7 @@ def _diagnostics(
         max_beat_sec=float(max(durations)) if durations else 0.0,
         visual_index_dim=int(visual_index.embeddings.shape[1]) if visual_index.embeddings.ndim == 2 else 0,
         visual_embedding_norm_mean=float(norms.mean()) if norms.size else 0.0,
+        embedding_backend=embedding_backend,
         index_mode=str(index_mode or "fast"),
         warnings=tuple(warnings),
     )

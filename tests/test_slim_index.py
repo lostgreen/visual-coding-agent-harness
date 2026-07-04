@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from vcah.index import ColdIndex, build_cold_index
+from vcah.model import ModelClient
 from vcah.types import Frame
 
 
@@ -94,3 +95,19 @@ def test_cold_index_roundtrips_without_vlm_captions(tmp_path: Path) -> None:
 
     assert loaded.search_text('"red crane"')[0].beat_id == cold.beats[0].beat_id
     assert "caption" not in (tmp_path / "cold_index" / "index.json").read_text(encoding="utf-8").lower()
+
+
+def test_local_hash_visual_backend_is_marked_as_placeholder(tmp_path: Path) -> None:
+    build_cold_index(
+        "/videos/demo.mp4",
+        duration_sec=4.0,
+        run_dir=tmp_path,
+        model=ModelClient(),
+        range_detector=lambda _video_path, _duration: ((0.0, 4.0),),
+        keyframe_sampler=_sampler,
+    )
+
+    diagnostics = json.loads((tmp_path / "cold_index" / "diagnostics.json").read_text(encoding="utf-8"))
+
+    assert diagnostics["embedding_backend"] == "local-hash"
+    assert "placeholder_visual_embedding_backend" in diagnostics["warnings"]

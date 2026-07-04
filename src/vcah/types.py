@@ -65,6 +65,7 @@ class IndexDiagnostics:
     max_beat_sec: float
     visual_index_dim: int
     visual_embedding_norm_mean: float
+    embedding_backend: str
     index_mode: str
     warnings: tuple[str, ...] = ()
 
@@ -75,8 +76,10 @@ class EvidenceRecord:
     beat_id: str
     start_sec: float
     end_sec: float
-    text: str
-    source: str
+    modality: Literal["asr", "ocr", "frame"]
+    pointer: str
+    verbatim: str
+    claim: str = ""
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,7 @@ class ToolAction:
     type: str
     query: str = ""
     beat_id: str = ""
+    beat_ids: tuple[str, ...] = ()
     answer: str = ""
     citations: tuple[str, ...] = ()
 
@@ -92,10 +96,14 @@ class ToolAction:
         citations = payload.get("citations") or ()
         if isinstance(citations, str):
             citations = (citations,)
+        beat_ids = payload.get("beat_ids") or ()
+        if isinstance(beat_ids, str):
+            beat_ids = (beat_ids,)
         return cls(
             type=str(payload.get("type") or payload.get("tool") or ""),
             query=str(payload.get("query") or ""),
             beat_id=str(payload.get("beat_id") or ""),
+            beat_ids=tuple(str(item) for item in beat_ids),
             answer=str(payload.get("answer") or ""),
             citations=tuple(str(item) for item in citations),
         )

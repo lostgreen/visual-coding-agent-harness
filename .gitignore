@@ -6,6 +6,9 @@ configs/private/
 scripts/audit_videomme_rewrites.py
 scripts/extract_video_segment_evidence.py
 scripts/start_qwen35_9b_planner_vllm.sh
+archive/scripts_old/audit_videomme_rewrites.py
+archive/scripts_old/extract_video_segment_evidence.py
+archive/scripts_old/start_qwen35_9b_planner_vllm.sh
 artifacts/
 experiments/
 .pytest_cache/
@@ -14,8 +17,7 @@ __pycache__/
 .DS_Store
 ._*
 **/._*
-runs/*
-!runs/*.py
+runs/
 runs/._*.py
 dist/
 build/

@@ -14,6 +14,7 @@ class AgentMemory:
         self.observations: list[str] = []
         self.failed_searches: list[str] = []
         self.visited_beats: list[str] = []
+        self.last_hits: list[str] = []
 
     @classmethod
     def empty(cls, path: Path) -> "AgentMemory":
@@ -25,6 +26,8 @@ class AgentMemory:
         for beat_id in result.beat_ids:
             if beat_id not in self.visited_beats:
                 self.visited_beats.append(beat_id)
+        if result.tool.startswith("search"):
+            self.last_hits = list(result.beat_ids)
         if result.tool.startswith("search") and not result.beat_ids:
             self.failed_searches.append(result.text or result.tool)
 
@@ -39,6 +42,7 @@ class AgentMemory:
                 {
                     "observations": self.observations,
                     "failed_searches": self.failed_searches,
+                    "last_hits": self.last_hits,
                     "visited_beats": self.visited_beats,
                 },
                 ensure_ascii=False,
