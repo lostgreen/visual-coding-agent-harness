@@ -7,7 +7,9 @@ import numpy as np
 from PIL import Image
 
 from visual_coding_agent_harness.video.index import Frame
-from visual_coding_agent_harness.workspace.video_workspace import VideoWorkspace, build_video_workspace
+from visual_coding_agent_harness.workspace.text_index import InvertedIndex
+from visual_coding_agent_harness.workspace.video_workspace import Beat, Chapter, VideoWorkspace, build_video_workspace
+from visual_coding_agent_harness.workspace.visual_index import VisualIndex
 
 
 class ColorEmbeddingBackend:
@@ -88,3 +90,23 @@ def test_timeline_text_can_fill_missing_titles_without_vlm(tmp_path: Path) -> No
 
     assert workspace.chapters[0].title is not None
     assert "shipyard" in text.lower()
+
+
+def test_window_time_returns_beats_overlapping_requested_seconds() -> None:
+    beats = (
+        Beat("bt00001", "ch01", 0.0, 10.0, "", "", (), ("sh001",)),
+        Beat("bt00002", "ch01", 10.0, 20.0, "", "", (), ("sh002",)),
+        Beat("bt00003", "ch01", 40.0, 50.0, "", "", (), ("sh003",)),
+    )
+    workspace = VideoWorkspace(
+        video_path="/videos/demo.mp4",
+        duration_sec=50.0,
+        chapters=(Chapter("ch01", 0.0, 50.0, tuple(beat.beat_id for beat in beats), ""),),
+        beats=beats,
+        text_index=InvertedIndex(),
+        visual_index=VisualIndex(ColorEmbeddingBackend()),
+    )
+
+    window = workspace.window_time("bt00002", before_sec=5.0, after_sec=25.0)
+
+    assert tuple(beat.beat_id for beat in window) == ("bt00001", "bt00002", "bt00003")

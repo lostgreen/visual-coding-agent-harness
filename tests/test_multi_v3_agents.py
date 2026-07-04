@@ -10,10 +10,12 @@ from visual_coding_agent_harness.agents.driver import MultiV3Driver
 from visual_coding_agent_harness.agents.investigator import Investigator
 from visual_coding_agent_harness.agents.reasoner import Reasoner
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse
+from visual_coding_agent_harness.contracts.evidence import EvidenceRecord
 from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope, ScopedQuery, VerifiableGoal
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, VerifyRequest
 from visual_coding_agent_harness.tools.vlm_tools import ExploreResult
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
+from visual_coding_agent_harness.workspace.memo import MemoStore
 from visual_coding_agent_harness.workspace.text_index import InvertedIndex
 from visual_coding_agent_harness.workspace.video_workspace import Beat, Chapter, VideoWorkspace
 from visual_coding_agent_harness.workspace.visual_index import VisualIndex
@@ -231,8 +233,8 @@ def test_investigator_dispatches_to_playbook_program_when_workspace_available(tm
     )
 
     class FakeProgram:
-        def execute(self, *, query, workspace, backend, frame_sampler, verify_fn):
-            del backend, frame_sampler, verify_fn
+        def execute(self, *, query, workspace, backend, frame_sampler, verify_fn, memo_store=None, evidence_ledger=None):
+            del backend, frame_sampler, verify_fn, memo_store, evidence_ledger
             calls.append(f"program:{query.query_id}:{len(workspace.beats)}")
             return type(
                 "Report",
@@ -283,8 +285,66 @@ def test_investigator_dispatches_to_playbook_program_when_workspace_available(tm
     assert report.status == "satisfied"
 
 
+def test_investigator_passes_memo_store_and_real_sampler_to_playbook(tmp_path: Path) -> None:
+    cold_workspace = VideoWorkspace(
+        video_path="/videos/demo.mp4",
+        duration_sec=8.0,
+        chapters=(Chapter("ch01", 0.0, 8.0, ("bt00001",), ""),),
+        beats=(Beat("bt00001", "ch01", 0.0, 8.0, "", "red car", (), ("sc01_sh001",)),),
+        text_index=InvertedIndex(),
+        visual_index=VisualIndex(EmptyEmbeddingBackend()),
+    )
+    memo_store = MemoStore(tmp_path / "observation_memos.jsonl")
+    calls: list[tuple[object, tuple[str, ...]]] = []
+
+    class FakeProgram:
+        def execute(self, *, query, workspace, backend, frame_sampler, verify_fn, memo_store=None, evidence_ledger=None):
+            del query, workspace, backend, verify_fn, evidence_ledger
+            frames = tuple(frame_sampler(cold_workspace.beats[0], 3, resolution="high", dense=True))
+            calls.append((memo_store, frames))
+            return type(
+                "Report",
+                (),
+                {
+                    "query_id": "q1",
+                    "status": "satisfied",
+                    "findings": (),
+                    "explored_shots": ("sc01_sh001",),
+                    "verified_shots": ("sc01_sh001",),
+                    "unresolved": (),
+                    "cost": {"frames_read": len(frames)},
+                    "to_dict": lambda self: {
+                        "query_id": "q1",
+                        "status": "satisfied",
+                        "findings": [],
+                        "explored_shots": ["sc01_sh001"],
+                        "verified_shots": ["sc01_sh001"],
+                        "unresolved": [],
+                        "cost": {"frames_read": len(frames)},
+                    },
+                },
+            )()
+
+    def sampler(beat: Beat, max_frames: int, *, resolution: str, dense: bool) -> tuple[str, ...]:
+        return (f"/verify/{beat.beat_id}_{resolution}_{dense}_{max_frames}.jpg",)
+
+    investigator = Investigator(
+        workspace=InvestigatorWorkspace(tmp_path),
+        backend=object(),
+        frame_sampler=sampler,
+        video_workspace=cold_workspace,
+        memo_store=memo_store,
+        programs={_query().playbook: FakeProgram()},
+    )
+
+    investigator.run(_query())
+
+    assert calls == [(memo_store, ("/verify/bt00001_high_True_3.jpg",))]
+
+
 def test_driver_dispatches_queries_in_parallel_and_returns_reasoner_answer(tmp_path: Path) -> None:
     queries = (_query("q1"), _query("q2"))
+    workspace = InvestigatorWorkspace(tmp_path)
 
     class FakeReasoner:
         def __init__(self) -> None:
@@ -302,6 +362,19 @@ def test_driver_dispatches_queries_in_parallel_and_returns_reasoner_answer(tmp_p
     class SlowInvestigator:
         def run(self, query: ScopedQuery):
             time.sleep(0.08)
+            workspace.evidence_records.append(
+                EvidenceRecord(
+                    evidence_id=f"ev_{query.query_id}",
+                    claim=f"Finding for {query.query_id}",
+                    stance="supports",
+                    modality="asr",
+                    time_sec=1.0,
+                    pointer="bt00001",
+                    verbatim=f"Finding for {query.query_id}",
+                    query_id=query.query_id,
+                    beat_id="bt00001",
+                )
+            )
             return type(
                 "Report",
                 (),
@@ -329,7 +402,7 @@ def test_driver_dispatches_queries_in_parallel_and_returns_reasoner_answer(tmp_p
     result = MultiV3Driver(
         reasoner=FakeReasoner(),
         investigator=SlowInvestigator(),
-        workspace=InvestigatorWorkspace(tmp_path),
+        workspace=workspace,
         max_rounds=2,
         max_concurrency=2,
     ).run(

@@ -41,6 +41,32 @@ def test_query_contracts_round_trip_with_budget_and_scope() -> None:
     assert decoded.budget.max_shots_to_verify == 2
 
 
+def test_scoped_query_carries_split_text_and_visual_queries() -> None:
+    query = ScopedQuery(
+        query_id="q_split",
+        goal_id="g1",
+        natural_query="Find the person by the door.",
+        text_queries=("doorbell transcript phrase",),
+        visual_queries=("person standing beside the door", "door close-up"),
+        scope=QueryScope(scene_ids=("sc01",)),
+        expected_evidence="A person is beside the door.",
+    )
+
+    decoded = ScopedQuery.from_dict(query.to_dict())
+    fallback = ScopedQuery(
+        query_id="q_fallback",
+        goal_id="g1",
+        natural_query="fallback query",
+        scope=QueryScope(scene_ids=("sc01",)),
+        expected_evidence="fallback evidence",
+    )
+
+    assert decoded.text_queries == ("doorbell transcript phrase",)
+    assert decoded.visual_queries == ("person standing beside the door", "door close-up")
+    assert fallback.text_queries == ("fallback query",)
+    assert fallback.visual_queries == ("fallback query",)
+
+
 def test_report_contracts_round_trip_and_digest_shape() -> None:
     request = VerifyRequest(
         shot_id="sc01_sh001",

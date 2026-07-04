@@ -6,19 +6,21 @@ from typing import Callable, Sequence
 
 from visual_coding_agent_harness.agents.playbook_programs import PROGRAMS, PlaybookProgram
 from visual_coding_agent_harness.backends.base import VisionLanguageBackend
+from visual_coding_agent_harness.contracts.evidence import EvidenceRecord
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport, VerifyRequest
 from visual_coding_agent_harness.tools.vlm_tools import explore
 from visual_coding_agent_harness.tools.vlm_tools import explore_via_search
 from visual_coding_agent_harness.tools.vlm_tools import verify_window
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
+from visual_coding_agent_harness.workspace.memo import MemoStore
 from visual_coding_agent_harness.workspace.video_workspace import Beat
 from visual_coding_agent_harness.workspace.video_workspace import VideoWorkspace
 
 
 ExploreFn = Callable[..., Sequence[CandidateShot]]
 VerifyFn = Callable[..., Sequence[Finding]]
-FrameSamplerFn = Callable[[Beat, int], Sequence[str]]
+FrameSamplerFn = Callable[..., Sequence[str]]
 
 
 class Investigator:
@@ -32,6 +34,7 @@ class Investigator:
         verify_fn: VerifyFn = verify_window,
         frame_sampler: FrameSamplerFn | None = None,
         video_workspace: VideoWorkspace | None = None,
+        memo_store: MemoStore | None = None,
         use_search: bool = False,
         search_explore_fn: ExploreFn = explore_via_search,
         programs: dict | None = None,
@@ -43,6 +46,7 @@ class Investigator:
         self.verify_fn = verify_fn
         self.frame_sampler = frame_sampler or _default_frame_sampler
         self.video_workspace = video_workspace
+        self.memo_store = memo_store
         self.use_search = bool(use_search)
         self.search_explore_fn = search_explore_fn
         self.programs = PROGRAMS if programs is None else programs
@@ -55,8 +59,10 @@ class Investigator:
                 query=query,
                 workspace=self.video_workspace,
                 backend=self.backend,
-                frame_sampler=lambda beat, max_frames: (beat.keyframe_path,)[:max_frames] if beat.keyframe_path else (),
+                frame_sampler=self.frame_sampler,
                 verify_fn=self.verify_fn,
+                memo_store=self.memo_store,
+                evidence_ledger=self.workspace.evidence_records,
             )
             self.workspace.record_report(explore_result)
             return explore_result
@@ -87,6 +93,9 @@ class Investigator:
                 self.verify_fn(query_id=query.query_id, request=request, frame_paths=frame_paths, backend=self.backend)
             )
             self.workspace.record_verify(query.query_id, candidate.shot_id, shot_findings)
+            self.workspace.evidence_records.extend(
+                _evidence_records_from_findings(query=query, beat=beat, findings=shot_findings, frame_paths=frame_paths)
+            )
             if shot_findings:
                 verified_shots.append(candidate.shot_id)
                 findings.extend(shot_findings)
@@ -115,3 +124,35 @@ def _default_frame_sampler(beat: Beat, max_frames: int) -> tuple[str, ...]:
     if max_frames <= 0 or not beat.keyframe_path:
         return ()
     return (beat.keyframe_path,)
+
+
+def _evidence_records_from_findings(
+    *,
+    query: ScopedQuery,
+    beat: Beat,
+    findings: Sequence[Finding],
+    frame_paths: Sequence[str],
+) -> tuple[EvidenceRecord, ...]:
+    pointer = str(tuple(frame_paths)[0]) if frame_paths else beat.beat_id
+    modality = "frame" if frame_paths else ("asr" if beat.asr_verbatim else "ocr")
+    verbatim = beat.asr_verbatim or " ".join(beat.ocr_verbatim)
+    records: list[EvidenceRecord] = []
+    for finding in findings:
+        summary = finding.summary.strip()
+        evidence_id = (finding.citation_ids[0] if finding.citation_ids else finding.finding_id).strip()
+        if not evidence_id or not (summary or verbatim):
+            continue
+        records.append(
+            EvidenceRecord(
+                evidence_id=evidence_id,
+                claim=query.expected_evidence,
+                stance="supports",
+                modality=modality,  # type: ignore[arg-type]
+                time_sec=beat.start_sec,
+                pointer=pointer,
+                verbatim=summary or verbatim,
+                query_id=query.query_id,
+                beat_id=beat.beat_id,
+            )
+        )
+    return tuple(records)

@@ -102,6 +102,12 @@ class VideoWorkspace:
         end = min(len(self.beats), index + max(0, int(after)) + 1)
         return self.beats[start:end]
 
+    def window_time(self, beat_id: str, *, before_sec: float = 60.0, after_sec: float = 60.0) -> tuple[Beat, ...]:
+        target = self.get_beat(beat_id)
+        start = max(0.0, target.start_sec - max(0.0, float(before_sec)))
+        end = target.end_sec + max(0.0, float(after_sec))
+        return tuple(beat for beat in self.beats if beat.end_sec >= start and beat.start_sec <= end)
+
     def beats_in_chapters(self, chapter_ids: Sequence[str]) -> tuple[Beat, ...]:
         allowed = set(_text_tuple(chapter_ids))
         return tuple(beat for beat in self.beats if beat.chapter_id in allowed)

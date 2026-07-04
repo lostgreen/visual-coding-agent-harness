@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from visual_coding_agent_harness.agents.driver import WorkspaceRunResult
 from visual_coding_agent_harness.core.budget import AgentBudget
-from visual_coding_agent_harness.video.index import Frame, SceneIndex, VideoSegment
+from visual_coding_agent_harness.evals.videomme.dvc_compat import SceneIndex, VideoSegment
+from visual_coding_agent_harness.video.index import Frame
 from visual_coding_agent_harness.workspace.text_index import InvertedIndex
 from visual_coding_agent_harness.workspace.video_workspace import Beat, Chapter, VideoWorkspace
 from visual_coding_agent_harness.workspace.visual_index import VisualIndex
@@ -81,10 +82,11 @@ class EvalRunnerTest(unittest.TestCase):
                 created["reasoners"].append(self)
 
         class FakeInvestigator:
-            def __init__(self, *, video_workspace, workspace, backend):
+            def __init__(self, *, video_workspace, workspace, backend, memo_store=None):
                 self.video_workspace = video_workspace
                 self.workspace = workspace
                 self.backend = backend
+                self.memo_store = memo_store
                 created["investigators"].append(self)
 
         class FakeDriver:
@@ -188,6 +190,10 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertIsInstance(created["overviews"][0][0], VideoWorkspace)
             self.assertEqual(created["drivers"][0].max_rounds, 4)
             self.assertEqual(created["drivers"][0].valid_scene_ids, ("ch01",))
+            self.assertEqual(
+                created["investigators"][0].memo_store.path,
+                workspace_root / "runs" / "case_multi_v3" / "multi_v3" / "observation_memos.jsonl",
+            )
             self.assertEqual(raw["answer"], "A. v3 answer")
             self.assertEqual(raw["choice"], "A")
             self.assertEqual(raw["status"], "final")
@@ -249,11 +255,12 @@ class EvalRunnerTest(unittest.TestCase):
                 self.backend = backend
 
         class FakeInvestigator:
-            def __init__(self, *, video_workspace, workspace, backend, frame_sampler=None):
+            def __init__(self, *, video_workspace, workspace, backend, frame_sampler=None, memo_store=None):
                 self.video_workspace = video_workspace
                 self.workspace = workspace
                 self.backend = backend
                 self.frame_sampler = frame_sampler
+                self.memo_store = memo_store
 
         class FakeDriver:
             def __init__(

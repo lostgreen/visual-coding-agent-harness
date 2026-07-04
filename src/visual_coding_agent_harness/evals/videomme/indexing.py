@@ -13,7 +13,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from ...backends.base import BackendRequest, VisionLanguageBackend
 from ...tools.frame_cache import FrameSampler
-from ...video.index import SceneIndex, TimelineBeat, VideoSegment, fixed_window_scene_index
+from .dvc_compat import SceneIndex, TimelineBeat, VideoSegment, fixed_window_scene_index
 
 
 SCENE_INDEX_BUILDER_SCHEMA_VERSION = "dvc_root_v3"

@@ -147,6 +147,8 @@ class ScopedQuery:
     expected_evidence: str
     budget: QueryBudget = field(default_factory=QueryBudget)
     playbook: Playbook = Playbook.IDENTIFY_VISUAL
+    text_queries: Sequence[str] = field(default_factory=tuple)
+    visual_queries: Sequence[str] = field(default_factory=tuple)
     scope_b: QueryScope | None = None
 
     def __post_init__(self) -> None:
@@ -157,6 +159,8 @@ class ScopedQuery:
             raise ValueError("goal_id is required")
         if not self.natural_query:
             raise ValueError("natural_query is required")
+        object.__setattr__(self, "text_queries", _text_tuple(self.text_queries) or (self.natural_query,))
+        object.__setattr__(self, "visual_queries", _text_tuple(self.visual_queries) or (self.natural_query,))
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -164,6 +168,8 @@ class ScopedQuery:
             "goal_id": self.goal_id,
             "playbook": self.playbook.value,
             "natural_query": self.natural_query,
+            "text_queries": list(self.text_queries),
+            "visual_queries": list(self.visual_queries),
             "scope": self.scope.to_dict(),
             "scope_b": self.scope_b.to_dict() if self.scope_b is not None else None,
             "expected_evidence": self.expected_evidence,
@@ -183,6 +189,8 @@ class ScopedQuery:
             expected_evidence=str(value.get("expected_evidence") or ""),
             budget=QueryBudget.from_dict(budget),
             playbook=Playbook.parse(value.get("playbook")),
+            text_queries=_text_tuple(value.get("text_queries") or ()),
+            visual_queries=_text_tuple(value.get("visual_queries") or ()),
             scope_b=QueryScope.from_dict(scope_b) if scope_b is not None else None,
         )
 

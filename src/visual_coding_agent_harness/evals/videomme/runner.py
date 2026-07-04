@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import inspect
 import json
 import re
 import subprocess
@@ -19,6 +20,7 @@ from visual_coding_agent_harness.core.budget import AgentBudget, parse_budget_ra
 from visual_coding_agent_harness.agents.driver import MultiV3Driver
 from visual_coding_agent_harness.agents.investigator import Investigator as InvestigatorV3
 from visual_coding_agent_harness.agents.reasoner import Reasoner as ReasonerV3
+from visual_coding_agent_harness.evals.videomme.dvc_compat import SceneIndex
 from visual_coding_agent_harness.evals.videomme.indexing import RootIndexPolicy, SceneIndexBuilder, SubtitleCue
 from visual_coding_agent_harness.evals.videomme.indexing import SceneIndexCache
 from visual_coding_agent_harness.evals.videomme.outputs import (
@@ -35,10 +37,11 @@ from visual_coding_agent_harness.evals.videomme.outputs import (
 )
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
 from visual_coding_agent_harness.video.build import build_video_workspace
-from visual_coding_agent_harness.video.index import Frame, SceneIndex
+from visual_coding_agent_harness.video.index import Frame
 from visual_coding_agent_harness.video.pipeline import sample_shot_frames
 from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace as InvestigatorWorkspaceV3
+from visual_coding_agent_harness.workspace.memo import MemoStore
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
 KML_MANAGED_ROOT = Path("/m2v_intern/xuboshen/zgw/visual-coding-agent-harness")
@@ -263,6 +266,7 @@ def run_loop(
             "workspace": investigator_workspace,
             "backend": backend,
             "video_workspace": video_index,
+            "memo_store": MemoStore(investigator_workspace.root / "observation_memos.jsonl"),
         }
         if verify_frame_sampler is not None:
             investigator_kwargs["frame_sampler"] = _multi_v3_frame_sampler(video_path=video_path, frame_sampler=verify_frame_sampler)
@@ -360,14 +364,31 @@ def run_loop(
 
 
 def _multi_v3_frame_sampler(*, video_path: str, frame_sampler: FrameSampler):
-    def sample(shot, max_frames: int) -> tuple[str, ...]:
-        return tuple(frame_sampler(video_path, float(shot.start_sec), float(shot.end_sec), int(max_frames)))
+    def sample(shot, max_frames: int, *, resolution: str = "high", dense: bool = False) -> tuple[str, ...]:
+        return _sample_verify_frames(
+            frame_sampler,
+            video_path=str(video_path),
+            start_sec=float(shot.start_sec),
+            end_sec=float(shot.end_sec),
+            nframes=int(max_frames),
+            resolution=resolution,
+            dense=dense,
+        )
 
     return sample
 
 
 def _default_multi_v3_frame_sampler(*, artifact_dir: Path) -> FrameSampler:
-    def sample(video_path: str, start_sec: float, end_sec: float, nframes: int) -> tuple[str, ...]:
+    def sample(
+        video_path: str,
+        start_sec: float,
+        end_sec: float,
+        nframes: int,
+        *,
+        resolution: str = "high",
+        dense: bool = False,
+    ) -> tuple[str, ...]:
+        del dense
         out_dir = artifact_dir / _frame_sample_dir_name(start_sec=start_sec, end_sec=end_sec, nframes=nframes)
         frames = sample_shot_frames(
             video_path,
@@ -375,11 +396,40 @@ def _default_multi_v3_frame_sampler(*, artifact_dir: Path) -> FrameSampler:
             float(end_sec),
             n_frames=int(nframes),
             out_dir=out_dir,
-            size=None,
+            size=None if resolution == "high" else (384, 216),
         )
         return tuple(frame.thumb_path for frame in frames if frame.thumb_path)
 
     return sample
+
+
+def _sample_verify_frames(
+    frame_sampler: FrameSampler,
+    *,
+    video_path: str,
+    start_sec: float,
+    end_sec: float,
+    nframes: int,
+    resolution: str,
+    dense: bool,
+) -> tuple[str, ...]:
+    try:
+        parameters = inspect.signature(frame_sampler).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_keywords = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+    if accepts_keywords or "resolution" in parameters or "dense" in parameters:
+        return tuple(
+            frame_sampler(
+                video_path,
+                float(start_sec),
+                float(end_sec),
+                int(nframes),
+                resolution=resolution,
+                dense=dense,
+            )
+        )
+    return tuple(frame_sampler(video_path, float(start_sec), float(end_sec), int(nframes)))
 
 
 def _frame_sample_dir_name(*, start_sec: float, end_sec: float, nframes: int) -> str:

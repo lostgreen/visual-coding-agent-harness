@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 import re
 from typing import Any, Mapping, Sequence
 
+from visual_coding_agent_harness.contracts.evidence import EvidenceRecord
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import DigestItem, InvestigationReport
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
@@ -29,6 +30,24 @@ class CounterCheckHit:
     beat_id: str
     score: float
     verbatim: str
+
+
+@dataclass(frozen=True)
+class CounterCheckResult:
+    status: str
+    hits: tuple[CounterCheckHit, ...] = ()
+
+    def __bool__(self) -> bool:
+        return self.status == "needs_verify" and bool(self.hits)
+
+    def __iter__(self):
+        return iter(self.hits)
+
+    def __len__(self) -> int:
+        return len(self.hits)
+
+    def __getitem__(self, index: int) -> CounterCheckHit:
+        return self.hits[index]
 
 
 class MultiV3Driver:
@@ -61,6 +80,7 @@ class MultiV3Driver:
     ) -> WorkspaceRunResult:
         previous_digest: tuple[DigestItem, ...] = ()
         last_reports: tuple[InvestigationReport, ...] = ()
+        counter_check_blocks = 0
         for round_number in range(1, self.max_rounds + 1):
             decision = self.reasoner.decide(
                 question=question,
@@ -86,30 +106,45 @@ class MultiV3Driver:
                         ),
                     )
                     continue
-                counter_hits = (
+                counter_result = (
                     counter_check_mcq(
                         workspace=self.video_workspace,
                         question=question,
                         options=options,
                         proposed_answer=decision.answer,
+                        existing_evidence=tuple(self.workspace.evidence_records.read_all()),
                     )
                     if self.video_workspace is not None
-                    else ()
+                    else CounterCheckResult(status="clear")
                 )
-                if counter_hits:
+                if counter_result.status == "needs_verify" and counter_check_blocks < 1:
+                    counter_check_blocks += 1
                     self.workspace.record_warning(
                         "counter_check_hits",
-                        {"hits": [hit.__dict__ for hit in counter_hits], "proposed_answer": decision.answer},
+                        {
+                            "status": counter_result.status,
+                            "hits": [hit.__dict__ for hit in counter_result.hits],
+                            "proposed_answer": decision.answer,
+                        },
                     )
                     previous_digest = previous_digest + (
                         DigestItem(
                             query_id=f"counter_round_{round_number}",
                             goal_id="counter_check",
                             status="partial",
-                            summary="Counter-check found competing option text in the cold index.",
+                            summary="Counter-check found competing option text; verify the competing option before answering.",
                         ),
                     )
                     continue
+                if counter_result.status == "needs_verify":
+                    self.workspace.record_warning(
+                        "counter_check_repeated",
+                        {
+                            "status": counter_result.status,
+                            "hits": [hit.__dict__ for hit in counter_result.hits],
+                            "proposed_answer": decision.answer,
+                        },
+                    )
                 return self._answer_result(decision, rounds=round_number, citations=citations)
             queries = self._filter_queries(decision.queries)
             if not queries:
@@ -152,11 +187,9 @@ class MultiV3Driver:
         if not requested:
             return ()
         valid = set()
-        for item in previous_digest:
-            valid.update(item.citation_ids)
-        for finding in self.workspace.ledger.read_all():
-            valid.add(finding.finding_id)
-            valid.update(finding.citation_ids)
+        del previous_digest
+        for record in self.workspace.evidence_records.read_all():
+            valid.add(record.evidence_id)
         return tuple(item for item in requested if item in valid)
 
     def _filter_queries(self, queries: Sequence[ScopedQuery]) -> tuple[ScopedQuery, ...]:
@@ -198,9 +231,11 @@ def counter_check_mcq(
     question: str,
     options: Mapping[str, str],
     proposed_answer: str,
-) -> tuple[CounterCheckHit, ...]:
+    existing_evidence: Sequence[EvidenceRecord] = (),
+) -> CounterCheckResult:
     del question
     hits: list[CounterCheckHit] = []
+    option_text_by_id = {str(option_id): str(option_text) for option_id, option_text in options.items()}
     for option_id, option_text in options.items():
         if str(option_id) == str(proposed_answer):
             continue
@@ -215,7 +250,37 @@ def counter_check_mcq(
                 beat = workspace.get_beat(hit.beat_id)
                 verbatim = beat.asr_verbatim or " ".join(beat.ocr_verbatim)
                 hits.append(CounterCheckHit(option_id=str(option_id), beat_id=hit.beat_id, score=hit.score, verbatim=verbatim))
-    return tuple(sorted(hits, key=lambda item: (-item.score, item.option_id, item.beat_id)))
+    ordered = tuple(sorted(hits, key=lambda item: (-item.score, item.option_id, item.beat_id)))
+    if not ordered:
+        return CounterCheckResult(status="clear")
+    unresolved = tuple(
+        hit
+        for hit in ordered
+        if not _refuted_by_existing_evidence(hit, option_text_by_id.get(hit.option_id, ""), existing_evidence)
+    )
+    if not unresolved:
+        return CounterCheckResult(status="refuted_by_existing_evidence")
+    return CounterCheckResult(status="needs_verify", hits=unresolved)
+
+
+def _refuted_by_existing_evidence(
+    hit: CounterCheckHit,
+    option_text: str,
+    existing_evidence: Sequence[EvidenceRecord],
+) -> bool:
+    option_text_norm = str(option_text or "").casefold()
+    keywords = _keywords(option_text_norm)
+    for record in existing_evidence:
+        if record.stance != "refutes":
+            continue
+        if record.beat_id and record.beat_id != hit.beat_id:
+            continue
+        text = f"{record.claim} {record.verbatim}".casefold()
+        if hit.option_id.casefold() in text or (option_text_norm and option_text_norm in text):
+            return True
+        if keywords and all(keyword in text for keyword in keywords[:2]):
+            return True
+    return False
 
 
 def _keywords(text: str) -> tuple[str, ...]:

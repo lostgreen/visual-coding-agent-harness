@@ -16,7 +16,7 @@ from visual_coding_agent_harness.evals.videomme.indexing import (
     subtitle_hash,
 )
 from visual_coding_agent_harness.evals.videomme.indexing import SceneIndexCache
-from visual_coding_agent_harness.video.index import SceneIndex, VideoSegment
+from visual_coding_agent_harness.evals.videomme.dvc_compat import SceneIndex, VideoSegment
 from visual_coding_agent_harness.legacy.video_map import VideoMap
 
 

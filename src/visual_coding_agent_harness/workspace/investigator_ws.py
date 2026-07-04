@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from visual_coding_agent_harness.contracts.evidence import EvidenceRecord
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot, DigestItem, Finding, InvestigationReport
 
@@ -36,6 +37,30 @@ class EvidenceLedger:
         return findings
 
 
+class EvidenceRecordLedger:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+
+    def append(self, evidence: EvidenceRecord) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(evidence.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+
+    def extend(self, records: Iterable[EvidenceRecord]) -> None:
+        for record in records:
+            self.append(record)
+
+    def read_all(self) -> list[EvidenceRecord]:
+        if not self.path.exists():
+            return []
+        records = []
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            records.append(EvidenceRecord.from_dict(json.loads(line)))
+        return records
+
+
 def digest_reports(
     reports: Sequence[InvestigationReport],
     *,
@@ -51,6 +76,7 @@ class InvestigatorWorkspace:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         self.ledger = EvidenceLedger(self.root / "evidence_ledger.jsonl")
+        self.evidence_records = EvidenceRecordLedger(self.root / "evidence_records.jsonl")
         self._coverage_lock = threading.Lock()
 
     def record_request(self, query: ScopedQuery) -> None:
@@ -114,4 +140,4 @@ class InvestigatorWorkspace:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
-__all__ = ["EvidenceLedger", "InvestigatorWorkspace", "digest_reports"]
+__all__ = ["EvidenceLedger", "EvidenceRecordLedger", "InvestigatorWorkspace", "digest_reports"]

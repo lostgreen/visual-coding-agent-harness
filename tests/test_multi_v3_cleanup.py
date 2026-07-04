@@ -146,6 +146,11 @@ def test_old_scene_shot_index_surface_is_removed() -> None:
     assert re.search(r"\bclass\s+Shot\b", source_text) is None
     assert "source_segments" not in source_text
     assert "aggregate_shot_ranges_by_duration" not in source_text
+    video_index_text = (repo / "src/visual_coding_agent_harness/video/index.py").read_text(encoding="utf-8")
+    assert re.search(r"\bclass\s+SceneIndex\b", video_index_text) is None
+    assert re.search(r"\bclass\s+VideoSegment\b", video_index_text) is None
+    assert re.search(r"\bclass\s+TimelineBeat\b", video_index_text) is None
+    assert "fixed_window_scene_index" not in video_index_text
     assert _public_py_files(repo / "src/visual_coding_agent_harness/video") <= {
         "__init__.py",
         "build.py",
@@ -156,6 +161,7 @@ def test_old_scene_shot_index_surface_is_removed() -> None:
     assert _py_files(repo / "src/visual_coding_agent_harness/evals/videomme") <= {
         "__init__.py",
         "indexing.py",
+        "dvc_compat.py",
         "metrics.py",
         "outputs.py",
         "runner.py",

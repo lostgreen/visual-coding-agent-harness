@@ -5,20 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import inspect
 from typing import Callable, Literal, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest
 from visual_coding_agent_harness.backends.base import VisionLanguageBackend
+from visual_coding_agent_harness.contracts.evidence import EvidenceRecord
 from visual_coding_agent_harness.contracts.playbook import Playbook
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import Finding, InvestigationReport, VerifyRequest
 from visual_coding_agent_harness.tools.vlm_tools import verify_window
+from visual_coding_agent_harness.workspace.investigator_ws import EvidenceRecordLedger
 from visual_coding_agent_harness.workspace.memo import MemoStore, ObservationMemo
 from visual_coding_agent_harness.workspace.video_workspace import Beat, VideoWorkspace
 from visual_coding_agent_harness.workspace.visual_index import BeatHit
 
 
-FrameSampler = Callable[[Beat, int], Sequence[str]]
+FrameSampler = Callable[..., Sequence[str]]
 VerifyFn = Callable[..., Sequence[Finding]]
 
 
@@ -40,6 +43,7 @@ class PlaybookProgram:
         frame_sampler: FrameSampler | None = None,
         verify_fn: VerifyFn = verify_window,
         memo_store: MemoStore | None = None,
+        evidence_ledger: EvidenceRecordLedger | None = None,
     ) -> InvestigationReport:
         candidates = _candidate_beats(workspace, query=query, search_order=self.search_order, top_k=self.top_k_candidates)
         if memo_store is not None and candidates:
@@ -56,7 +60,13 @@ class PlaybookProgram:
         for beat in candidates:
             shot_id = beat.shot_ids[0] if beat.shot_ids else beat.beat_id
             max_frames = min(query.budget.max_frames, self.verify_frames_per_beat)
-            frame_paths = tuple(frame_sampler(beat, max_frames))
+            frame_paths = _sample_frames(
+                frame_sampler,
+                beat,
+                max_frames,
+                resolution=self.verify_resolution,
+                dense=self.dense_sampling,
+            )
             frames_read += len(frame_paths)
             request = VerifyRequest(
                 shot_id=shot_id,
@@ -73,6 +83,15 @@ class PlaybookProgram:
             shot_findings = tuple(verify_fn(query_id=query.query_id, request=request, frame_paths=frame_paths, backend=backend))
             if shot_findings:
                 findings.extend(shot_findings)
+                if evidence_ledger is not None:
+                    evidence_ledger.extend(
+                        _evidence_records_from_findings(
+                            findings=shot_findings,
+                            query=query,
+                            beat=beat,
+                            frame_paths=frame_paths,
+                        )
+                    )
                 verified_shots.append(shot_id)
                 if self.stop_when_supports:
                     break
@@ -155,16 +174,18 @@ def _candidate_beats(
     beat_by_id = {beat.beat_id: beat for beat in workspace.beats}
     scores: dict[str, float] = {}
     for modality in search_order:
-        hits: Sequence[BeatHit]
-        if modality == "text":
-            hits = workspace.search_text(query.natural_query)
-        else:
-            hits = workspace.search_visual(query.natural_query, k=top_k)
-        for rank, hit in enumerate(tuple(hits)[: max(0, int(top_k))], start=1):
-            beat = beat_by_id.get(hit.beat_id)
-            if beat is None or (scoped and beat.chapter_id not in scoped):
-                continue
-            scores[hit.beat_id] = scores.get(hit.beat_id, 0.0) + 1.0 / float(60 + rank)
+        search_queries = query.text_queries if modality == "text" else query.visual_queries
+        for search_query in search_queries:
+            hits: Sequence[BeatHit]
+            if modality == "text":
+                hits = workspace.search_text(search_query)
+            else:
+                hits = workspace.search_visual(search_query, k=top_k)
+            for rank, hit in enumerate(tuple(hits)[: max(0, int(top_k))], start=1):
+                beat = beat_by_id.get(hit.beat_id)
+                if beat is None or (scoped and beat.chapter_id not in scoped):
+                    continue
+                scores[hit.beat_id] = scores.get(hit.beat_id, 0.0) + 1.0 / float(60 + rank)
     ordered = sorted(scores, key=lambda beat_id: (-scores[beat_id], beat_id))
     return tuple(beat_by_id[beat_id] for beat_id in ordered[: max(0, int(top_k))])
 
@@ -173,6 +194,56 @@ def _default_frame_sampler(beat: Beat, max_frames: int) -> tuple[str, ...]:
     if max_frames <= 0 or not beat.keyframe_path:
         return ()
     return (beat.keyframe_path,)
+
+
+def _sample_frames(
+    frame_sampler: FrameSampler,
+    beat: Beat,
+    max_frames: int,
+    *,
+    resolution: str,
+    dense: bool,
+) -> tuple[str, ...]:
+    try:
+        parameters = inspect.signature(frame_sampler).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_keywords = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+    if accepts_keywords or "resolution" in parameters or "dense" in parameters:
+        return tuple(frame_sampler(beat, max_frames, resolution=resolution, dense=dense))
+    return tuple(frame_sampler(beat, max_frames))
+
+
+def _evidence_records_from_findings(
+    *,
+    findings: Sequence[Finding],
+    query: ScopedQuery,
+    beat: Beat,
+    frame_paths: Sequence[str],
+) -> tuple[EvidenceRecord, ...]:
+    records: list[EvidenceRecord] = []
+    pointer = str(frame_paths[0]) if frame_paths else beat.beat_id
+    modality: Literal["frame", "asr", "ocr"] = "frame" if frame_paths else ("asr" if beat.asr_verbatim else "ocr")
+    verbatim = beat.asr_verbatim or " ".join(beat.ocr_verbatim)
+    for finding in findings:
+        summary = finding.summary.strip()
+        evidence_id = (finding.citation_ids[0] if finding.citation_ids else finding.finding_id).strip()
+        if not evidence_id or not (summary or verbatim):
+            continue
+        records.append(
+            EvidenceRecord(
+                evidence_id=evidence_id,
+                claim=query.expected_evidence,
+                stance="supports",
+                modality=modality,
+                time_sec=beat.start_sec,
+                pointer=pointer,
+                verbatim=summary or verbatim,
+                query_id=query.query_id,
+                beat_id=beat.beat_id,
+            )
+        )
+    return tuple(records)
 
 
 def _record_observation_memos(
