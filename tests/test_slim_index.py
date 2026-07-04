@@ -98,7 +98,7 @@ def test_cold_index_roundtrips_without_vlm_captions(tmp_path: Path) -> None:
 
 
 def test_local_hash_visual_backend_is_marked_as_placeholder(tmp_path: Path) -> None:
-    build_cold_index(
+    cold = build_cold_index(
         "/videos/demo.mp4",
         duration_sec=4.0,
         run_dir=tmp_path,
@@ -111,3 +111,4 @@ def test_local_hash_visual_backend_is_marked_as_placeholder(tmp_path: Path) -> N
 
     assert diagnostics["embedding_backend"] == "local-hash"
     assert "placeholder_visual_embedding_backend" in diagnostics["warnings"]
+    assert cold.search_visual("anything visual") == ()

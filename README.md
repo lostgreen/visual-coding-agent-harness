@@ -27,6 +27,11 @@ Visual-only observations are kept in memory until they are verified. The
 evidence gate accepts only `EvidenceRecord` ids backed by raw ASR/OCR or a
 future verified frame record.
 
+`focus_clip` requires an explicit beat candidate or the latest search hits; it
+does not fall back to the first beat. Placeholder `local-hash` visual embeddings
+are recorded in diagnostics but visual search is disabled unless explicitly
+allowed for smoke testing.
+
 ## Files
 
 ```text

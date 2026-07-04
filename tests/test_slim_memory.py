@@ -55,3 +55,26 @@ def test_memory_tracks_last_search_hits(tmp_path: Path) -> None:
     payload = json.loads((tmp_path / "memory.json").read_text(encoding="utf-8"))
     assert memory.last_hits == ["bt00003", "bt00002"]
     assert payload["last_hits"] == ["bt00003", "bt00002"]
+    assert "last_hits=bt00003,bt00002" in memory.digest()
+
+
+def test_evidence_pointer_keeps_stable_beat_modality_time_reference(tmp_path: Path) -> None:
+    store = EvidenceStore.empty(tmp_path / "evidence.jsonl")
+    store.add(
+        EvidenceRecord(
+            evidence_id=store.next_id(),
+            beat_id="bt00002",
+            start_sec=4.0,
+            end_sec=8.0,
+            modality="asr",
+            pointer="bt00002@4.000-8.000",
+            verbatim="a blue sign appears",
+            claim="a blue sign appears",
+        )
+    )
+
+    payload = json.loads((tmp_path / "evidence.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert payload["evidence_id"] == "ev_0001"
+    assert payload["beat_id"] in payload["pointer"]
+    assert payload["modality"] == "asr"
+    assert payload["pointer"].endswith("@4.000-8.000")

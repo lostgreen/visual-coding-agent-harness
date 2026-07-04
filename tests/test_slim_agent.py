@@ -15,6 +15,10 @@ from vcah.types import Frame
 class ColorModel(ScriptedModel):
     embedding_dim = 3
 
+    def __init__(self, actions=()) -> None:
+        super().__init__(actions=actions)
+        self.embed_model = "color-test"
+
     def embed_image(self, paths: Sequence[str]) -> np.ndarray:
         rows = []
         for path in paths:
@@ -138,3 +142,32 @@ def test_visual_only_focus_clip_does_not_create_evidence(tmp_path: Path) -> None
     assert answer.answer == "Insufficient verified evidence."
     assert answer.citations == ()
     assert (tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_focus_clip_without_candidate_does_not_fall_back_to_first_beat(tmp_path: Path) -> None:
+    model = ColorModel(
+        actions=[
+            {"type": "focus_clip"},
+            {"type": "answer", "answer": "Unsupported first beat claim.", "citations": ["ev_0001"]},
+        ]
+    )
+    agent = VideoAgent(model=model, max_steps=3)
+
+    answer = agent.ask(
+        "/videos/demo.mp4",
+        "What happens?",
+        run_dir=tmp_path,
+        duration_sec=4.0,
+        asr_cues=({"start": 0.0, "end": 4.0, "text": "first beat has transcript"},),
+        range_detector=lambda _video_path, _duration: ((0.0, 4.0),),
+        keyframe_sampler=_sampler,
+    )
+    trace_lines = [
+        json.loads(line)
+        for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert answer.answer == "Insufficient verified evidence."
+    assert answer.citations == ()
+    assert (tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8") == ""
+    assert trace_lines[0]["result"]["payload"]["reason"] == "needs_candidate"

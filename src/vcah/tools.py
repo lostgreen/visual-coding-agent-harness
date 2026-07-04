@@ -52,7 +52,13 @@ class AgentTools:
     def focus_clip(self, beat_id: str, beat_ids: tuple[str, ...] = ()) -> ToolResult:
         if not beat_id:
             selected = self._selected_beat_ids(beat_ids)
-            beat_id = selected[0] if selected else (self.index.beats[0].beat_id if self.index.beats else "")
+            if not selected:
+                return ToolResult(
+                    tool="focus_clip",
+                    text="No candidate beat selected for focus_clip.",
+                    payload={"evidence_created": False, "reason": "needs_candidate"},
+                )
+            beat_id = selected[0]
         beat = self.index.get_beat(beat_id)
         if beat.asr_text.strip():
             record = EvidenceRecord(

@@ -101,6 +101,8 @@ class VisualIndex:
         self.embeddings = _l2_normalize(rows)
 
     def search(self, query: str, *, k: int = 20) -> tuple[Hit, ...]:
+        if getattr(self.model, "embed_model", "") == "local-hash" and not bool(getattr(self.model, "allow_placeholder_visual", False)):
+            return ()
         if not self.beat_ids or self.embeddings.size == 0 or k <= 0:
             return ()
         query_vec = np.asarray(self.model.embed_text((query,)), dtype=np.float32)

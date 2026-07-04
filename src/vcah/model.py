@@ -19,6 +19,7 @@ class ModelClient:
         self.vision_model = os.getenv("VCAH_VISION_MODEL", "local-placeholder")
         self.embed_model = os.getenv("VCAH_EMBED_MODEL", "local-hash")
         self.transcribe_model = os.getenv("VCAH_TRANSCRIBE_MODEL", "none")
+        self.allow_placeholder_visual = os.getenv("VCAH_ALLOW_PLACEHOLDER_VISUAL", "").casefold() in {"1", "true", "yes"}
 
     def controller(self, question: str, index_digest: str, memory_digest: str, evidence_digest: str) -> ToolAction:
         del index_digest

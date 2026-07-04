@@ -32,7 +32,10 @@ class AgentMemory:
             self.failed_searches.append(result.text or result.tool)
 
     def digest(self) -> str:
-        parts = self.observations[-4:] + [f"visited={','.join(self.visited_beats[-8:])}"]
+        parts = self.observations[-4:]
+        if self.last_hits:
+            parts.append(f"last_hits={','.join(self.last_hits[-8:])}")
+        parts.append(f"visited={','.join(self.visited_beats[-8:])}")
         return "\n".join(part for part in parts if part)
 
     def save(self) -> None:
