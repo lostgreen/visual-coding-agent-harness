@@ -7,6 +7,7 @@ from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope,
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport
 from visual_coding_agent_harness.evals.videomme.outputs import (
     export_multi_v3_evidence_chains,
+    export_multi_v3_exploration_records,
     export_multi_v3_training_trajectory,
     export_multi_v3_trajectory,
 )
@@ -36,6 +37,24 @@ def test_multi_v3_exports_longvideoagent_trajectory_and_evidence_chains(tmp_path
     assert chains["schema_version"] == "EvidenceChainsV1"
     assert chains["chain_count"] == 1
     assert chains_path.exists()
+
+
+def test_multi_v3_exports_exploration_records_jsonl(tmp_path: Path) -> None:
+    workspace = _seed_workspace(tmp_path / "run" / "multi_v3")
+    output_path = tmp_path / "run" / "artifacts" / "exploration_records" / "exploration_records.jsonl"
+
+    payload = export_multi_v3_exploration_records(workspace, output_path=output_path)
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+
+    assert payload["schema_version"] == "MultiV3ExplorationRecordsV1"
+    assert payload["record_count"] == 1
+    assert rows[0]["schema_version"] == "MultiV3ExplorationRecordV1"
+    assert rows[0]["query_id"] == "q1"
+    assert rows[0]["request"]["goal_id"] == "g1"
+    assert rows[0]["explore"]["candidate_count"] == 1
+    assert rows[0]["verify"][0]["finding_count"] == 1
+    assert rows[0]["report"]["status"] == "satisfied"
+    assert rows[0]["artifacts"]["verify"] == ["queries/q1/verify_sc01_sh001.json"]
 
 
 def test_multi_v3_exports_minimal_training_trajectory(tmp_path: Path) -> None:

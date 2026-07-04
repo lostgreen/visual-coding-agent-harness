@@ -21,6 +21,7 @@ from visual_coding_agent_harness.evals.videomme.indexing import SceneIndexCache
 from visual_coding_agent_harness.evals.videomme.outputs import (
     RunSummary,
     export_multi_v3_evidence_chains,
+    export_multi_v3_exploration_records,
     export_multi_v3_training_trajectory,
     export_multi_v3_trajectory,
     export_multi_v3_workspace_round_log,
@@ -287,6 +288,7 @@ def run_loop(
     reward_tags = _reward_tags_for_multi_v3(status=status, citations=citations)
     trajectory_path = workspace_run_root / "artifacts" / "trajectories" / "longvideoagent_trajectory.json"
     evidence_chains_path = workspace_run_root / "artifacts" / "evidence_chains" / "evidence_chains.json"
+    exploration_records_path = workspace_run_root / "artifacts" / "exploration_records" / "exploration_records.jsonl"
     final_payload = {
         "answer": answer,
         "status": status,
@@ -304,6 +306,10 @@ def run_loop(
     evidence_chains_payload = export_multi_v3_evidence_chains(
         investigator_workspace,
         output_path=evidence_chains_path,
+    )
+    exploration_records_payload = export_multi_v3_exploration_records(
+        investigator_workspace,
+        output_path=exploration_records_path,
     )
     workspace_round_log = export_multi_v3_workspace_round_log(
         investigator_workspace,
@@ -332,6 +338,8 @@ def run_loop(
         "trajectory_action_count": len(trajectory_payload.get("actions", [])),
         "evidence_chains_path": str(evidence_chains_path),
         "evidence_chain_count": int(evidence_chains_payload.get("chain_count", 0) or 0),
+        "exploration_records_path": str(exploration_records_path),
+        "exploration_record_count": int(exploration_records_payload.get("record_count", 0) or 0),
         "workspace_log_dir": str(workspace_log_dir),
         "workspace_round_log_path": workspace_round_log["path"],
         "workspace_round_log_round_count": workspace_round_log["round_count"],
@@ -513,6 +521,8 @@ def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
         "trajectory_action_count",
         "evidence_chains_path",
         "evidence_chain_count",
+        "exploration_records_path",
+        "exploration_record_count",
         "workspace_log_dir",
         "workspace_round_log_path",
         "workspace_round_log_round_count",

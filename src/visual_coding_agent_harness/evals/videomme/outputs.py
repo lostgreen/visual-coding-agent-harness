@@ -229,6 +229,27 @@ def export_multi_v3_evidence_chains(
     return payload
 
 
+def export_multi_v3_exploration_records(
+    investigator_workspace: Any,
+    *,
+    output_path: str | Path | None = None,
+) -> dict[str, Any]:
+    root = _workspace_root(investigator_workspace)
+    records = [_exploration_record(root, query_dir) for query_dir in _query_dirs(root)]
+    path = (
+        Path(output_path)
+        if output_path is not None
+        else root.parent / "artifacts" / "exploration_records" / "exploration_records.jsonl"
+    )
+    _write_jsonl(path, records)
+    return {
+        "schema_version": "MultiV3ExplorationRecordsV1",
+        "path": path.as_posix(),
+        "record_count": len(records),
+        "records": records,
+    }
+
+
 def export_multi_v3_training_trajectory(
     investigator_workspace: Any,
     *,
@@ -446,6 +467,108 @@ def _training_tool_io(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, 
     return calls, results
 
 
+def _exploration_record(root: Path, query_dir: Path) -> dict[str, Any]:
+    request = _read_json(query_dir / "request.json")
+    explore = _read_json(query_dir / "explore.json")
+    report = _read_json(query_dir / "report.json")
+    verify_paths = sorted(query_dir.glob("verify_*.json"))
+    verifications = [_verification_record(root, path) for path in verify_paths]
+    candidates = [
+        _candidate_record(candidate)
+        for candidate in explore.get("candidates", []) or []
+        if isinstance(candidate, Mapping)
+    ]
+    report_findings = [
+        _finding_record(finding)
+        for finding in report.get("findings", []) or []
+        if isinstance(finding, Mapping)
+    ]
+    return {
+        "schema_version": "MultiV3ExplorationRecordV1",
+        "query_id": query_dir.name,
+        "request": {
+            "goal_id": str(request.get("goal_id", "")),
+            "natural_query": str(request.get("natural_query", "")),
+            "scope": _mapping_value(request.get("scope")),
+            "expected_evidence": str(request.get("expected_evidence", "")),
+            "budget": _mapping_value(request.get("budget")),
+        },
+        "explore": {
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+        },
+        "verify": verifications,
+        "report": {
+            "status": str(report.get("status", "")),
+            "finding_count": len(report_findings),
+            "findings": report_findings,
+            "explored_shots": [str(item) for item in _sequence_value(report.get("explored_shots"))],
+            "verified_shots": [str(item) for item in _sequence_value(report.get("verified_shots"))],
+            "unresolved": _sequence_value(report.get("unresolved")),
+            "cost": _mapping_value(report.get("cost")),
+        },
+        "artifacts": {
+            "request": _workspace_relative(root, query_dir / "request.json"),
+            "explore": _workspace_relative(root, query_dir / "explore.json"),
+            "report": _workspace_relative(root, query_dir / "report.json"),
+            "verify": [_workspace_relative(root, path) for path in verify_paths],
+        },
+    }
+
+
+def _verification_record(root: Path, path: Path) -> dict[str, Any]:
+    payload = _read_json(path)
+    findings = [
+        _finding_record(finding)
+        for finding in payload.get("findings", []) or []
+        if isinstance(finding, Mapping)
+    ]
+    return {
+        "artifact": _workspace_relative(root, path),
+        "shot_id": str(payload.get("shot_id", "")),
+        "finding_count": len(findings),
+        "findings": findings,
+    }
+
+
+def _candidate_record(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "shot_id": str(candidate.get("shot_id", "")),
+        "score": candidate.get("score"),
+        "reason": str(candidate.get("reason", "")),
+    }
+
+
+def _finding_record(finding: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "finding_id": str(finding.get("finding_id", "")),
+        "query_id": str(finding.get("query_id", "")),
+        "shot_id": str(finding.get("shot_id", "")),
+        "summary": str(finding.get("summary", "")),
+        "supports_options": [str(item) for item in finding.get("supports_options", []) or []],
+        "refutes_options": [str(item) for item in finding.get("refutes_options", []) or []],
+        "citation_ids": [str(item) for item in finding.get("citation_ids", []) or []],
+        "confidence": finding.get("confidence"),
+    }
+
+
+def _workspace_relative(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _mapping_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _sequence_value(value: Any) -> list[Any]:
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        return []
+    return list(value)
+
+
 def _action(actions: Sequence[Mapping[str, Any]], *, tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
     step = len(actions) + 1
     return {
@@ -511,6 +634,12 @@ def _read_jsonl(path: Path) -> list[Mapping[str, Any]]:
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps(row, ensure_ascii=True, sort_keys=True) for row in rows]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def render_trajectory_markdown(
