@@ -10,6 +10,8 @@ from visual_coding_agent_harness.agents.playbook_programs import PROGRAMS
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse
 from visual_coding_agent_harness.contracts.playbook import Playbook
 from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope, ScopedQuery
+from visual_coding_agent_harness.contracts.report import Finding
+from visual_coding_agent_harness.workspace.investigator_ws import EvidenceRecordLedger
 from visual_coding_agent_harness.workspace.video_workspace import Beat, Chapter
 from visual_coding_agent_harness.workspace.visual_index import BeatHit
 from visual_coding_agent_harness.workspace.memo import MemoStore
@@ -152,6 +154,9 @@ def test_playbook_program_writes_and_reuses_observation_memos(tmp_path: Path) ->
     )
 
     assert "previous observation" in second_backend.requests[0].prompt
+    assert "Task query: red car" in second_backend.requests[0].prompt
+    assert "Expected evidence: red car" in second_backend.requests[0].prompt
+    assert "Playbook: identify_visual" in second_backend.requests[0].prompt
 
 
 def test_playbook_program_routes_split_queries_to_matching_indexes(tmp_path: Path) -> None:
@@ -202,3 +207,108 @@ def test_dense_playbook_passes_resolution_and_dense_sampling_to_frame_sampler(tm
 
     assert sampler_calls[0] == ("bt00001", 4, "high", True)
     assert len(verify_frames[0]) == 4
+
+
+def test_locate_statement_creates_stable_asr_evidence_when_asr_supports_claim(tmp_path: Path) -> None:
+    image = _image(tmp_path / "one.jpg")
+    beat = Beat("bt00001", "ch01", 0.0, 2.0, image, "The mayor says the bridge is closed.", (), ("sh001",))
+    workspace = SpyWorkspace((beat,))
+    backend = RecordingBackend()
+    ledger = EvidenceRecordLedger(tmp_path / "evidence_records.jsonl")
+    query = ScopedQuery(
+        query_id="q_asr",
+        goal_id="g1",
+        playbook=Playbook.LOCATE_STATEMENT,
+        natural_query="bridge closed",
+        text_queries=("bridge closed",),
+        scope=QueryScope(chapter_ids=("ch01",)),
+        expected_evidence="The bridge is closed.",
+        budget=QueryBudget(max_beats_to_verify=1, max_frames=3),
+    )
+
+    def verify_fn(*, query_id: str, request, frame_paths, backend):
+        del request, frame_paths, backend
+        return (
+            Finding("vlm_finding_1", query_id, "sh001", "The bridge closure is mentioned.", citation_ids=("dup",)),
+            Finding("vlm_finding_2", query_id, "sh001", "The same quote supports the claim.", citation_ids=("dup",)),
+        )
+
+    PROGRAMS[Playbook.LOCATE_STATEMENT].execute(
+        query=query,
+        workspace=workspace,
+        backend=backend,
+        frame_sampler=lambda beat, max_frames: (image,),
+        verify_fn=verify_fn,
+        evidence_ledger=ledger,
+    )
+
+    records = ledger.read_all()
+    assert [record.evidence_id for record in records] == ["ev_q_asr_bt00001_asr_001", "ev_q_asr_bt00001_asr_002"]
+    assert {record.modality for record in records} == {"asr"}
+    assert records[0].pointer == "bt00001"
+    assert records[0].verbatim == "The mayor says the bridge is closed."
+
+
+def test_read_text_creates_ocr_evidence_when_ocr_supports_claim(tmp_path: Path) -> None:
+    image = _image(tmp_path / "one.jpg")
+    beat = Beat("bt00001", "ch01", 0.0, 2.0, image, "", ("GATE 12",), ("sh001",))
+    workspace = SpyWorkspace((beat,))
+    backend = RecordingBackend()
+    ledger = EvidenceRecordLedger(tmp_path / "evidence_records.jsonl")
+    query = ScopedQuery(
+        query_id="q_ocr",
+        goal_id="g1",
+        playbook=Playbook.READ_TEXT,
+        natural_query="gate 12",
+        text_queries=("gate 12",),
+        scope=QueryScope(chapter_ids=("ch01",)),
+        expected_evidence="The sign reads GATE 12.",
+        budget=QueryBudget(max_beats_to_verify=1, max_frames=4),
+    )
+
+    PROGRAMS[Playbook.READ_TEXT].execute(
+        query=query,
+        workspace=workspace,
+        backend=backend,
+        frame_sampler=lambda beat, max_frames: (image,),
+        verify_fn=lambda *, query_id, request, frame_paths, backend: (
+            Finding("vlm_finding", query_id, "sh001", "The sign reads GATE 12.", citation_ids=("vlm_citation",)),
+        ),
+        evidence_ledger=ledger,
+    )
+
+    record = ledger.read_all()[0]
+    assert record.evidence_id == "ev_q_ocr_bt00001_ocr_001"
+    assert record.modality == "ocr"
+    assert record.pointer == "bt00001"
+    assert record.verbatim == "GATE 12"
+
+
+def test_compare_playbook_searches_and_verifies_scope_b(tmp_path: Path) -> None:
+    beats = (
+        Beat("bt00001", "ch01", 0.0, 2.0, _image(tmp_path / "one.jpg"), "first car", (), ("sh001",)),
+        Beat("bt00002", "ch02", 2.0, 4.0, _image(tmp_path / "two.jpg"), "second car", (), ("sh002",)),
+    )
+    workspace = SpyWorkspace(beats)
+    backend = RecordingBackend()
+    verified: list[str] = []
+    query = ScopedQuery(
+        query_id="q_compare",
+        goal_id="g1",
+        playbook=Playbook.COMPARE,
+        natural_query="compare cars",
+        scope=QueryScope(chapter_ids=("ch01",)),
+        scope_b=QueryScope(chapter_ids=("ch02",)),
+        expected_evidence="Compare the two cars.",
+        budget=QueryBudget(max_beats_to_verify=2, max_frames=3),
+    )
+
+    def verify_fn(*, query_id: str, request, frame_paths, backend):
+        del query_id, frame_paths, backend
+        verified.append(request.shot_id)
+        return ()
+
+    report = PROGRAMS[Playbook.COMPARE].execute(query=query, workspace=workspace, backend=backend, verify_fn=verify_fn)
+
+    assert set(verified) == {"sh001", "sh002"}
+    assert set(report.explored_shots) == {"sh001", "sh002"}

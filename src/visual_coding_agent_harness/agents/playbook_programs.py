@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import inspect
+import re
 from typing import Callable, Literal, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest
@@ -45,7 +46,26 @@ class PlaybookProgram:
         memo_store: MemoStore | None = None,
         evidence_ledger: EvidenceRecordLedger | None = None,
     ) -> InvestigationReport:
-        candidates = _candidate_beats(workspace, query=query, search_order=self.search_order, top_k=self.top_k_candidates)
+        candidates = _candidate_beats(
+            workspace,
+            query=query,
+            search_order=self.search_order,
+            top_k=self.top_k_candidates,
+            scope=query.scope,
+        )
+        if query.playbook == Playbook.COMPARE and query.scope_b is not None:
+            candidates = _unique_beats(
+                (
+                    *candidates,
+                    *_candidate_beats(
+                        workspace,
+                        query=query,
+                        search_order=self.search_order,
+                        top_k=self.top_k_candidates,
+                        scope=query.scope_b,
+                    ),
+                )
+            )
         if memo_store is not None and candidates:
             _record_observation_memos(
                 query=query,
@@ -169,8 +189,9 @@ def _candidate_beats(
     query: ScopedQuery,
     search_order: Sequence[str],
     top_k: int,
+    scope,
 ) -> tuple[Beat, ...]:
-    scoped = set(query.scope.chapter_ids)
+    scoped = set(scope.chapter_ids)
     beat_by_id = {beat.beat_id: beat for beat in workspace.beats}
     scores: dict[str, float] = {}
     for modality in search_order:
@@ -188,6 +209,17 @@ def _candidate_beats(
                 scores[hit.beat_id] = scores.get(hit.beat_id, 0.0) + 1.0 / float(60 + rank)
     ordered = sorted(scores, key=lambda beat_id: (-scores[beat_id], beat_id))
     return tuple(beat_by_id[beat_id] for beat_id in ordered[: max(0, int(top_k))])
+
+
+def _unique_beats(beats: Sequence[Beat]) -> tuple[Beat, ...]:
+    result: list[Beat] = []
+    seen: set[str] = set()
+    for beat in beats:
+        if beat.beat_id in seen:
+            continue
+        seen.add(beat.beat_id)
+        result.append(beat)
+    return tuple(result)
 
 
 def _default_frame_sampler(beat: Beat, max_frames: int) -> tuple[str, ...]:
@@ -222,28 +254,80 @@ def _evidence_records_from_findings(
     frame_paths: Sequence[str],
 ) -> tuple[EvidenceRecord, ...]:
     records: list[EvidenceRecord] = []
-    pointer = str(frame_paths[0]) if frame_paths else beat.beat_id
-    modality: Literal["frame", "asr", "ocr"] = "frame" if frame_paths else ("asr" if beat.asr_verbatim else "ocr")
-    verbatim = beat.asr_verbatim or " ".join(beat.ocr_verbatim)
-    for finding in findings:
+    modality, pointer, verbatim = _evidence_source(query=query, beat=beat, frame_paths=frame_paths)
+    for ordinal, finding in enumerate(findings, start=1):
         summary = finding.summary.strip()
-        evidence_id = (finding.citation_ids[0] if finding.citation_ids else finding.finding_id).strip()
-        if not evidence_id or not (summary or verbatim):
+        if not (summary or verbatim):
             continue
+        stance: Literal["supports", "refutes"] = "refutes" if finding.refutes_options and not finding.supports_options else "supports"
+        record_verbatim = verbatim if modality in {"asr", "ocr"} and verbatim else (summary or verbatim)
         records.append(
             EvidenceRecord(
-                evidence_id=evidence_id,
+                evidence_id=_stable_evidence_id(
+                    query_id=query.query_id,
+                    beat_id=beat.beat_id,
+                    modality=modality,
+                    ordinal=ordinal,
+                ),
                 claim=query.expected_evidence,
-                stance="supports",
+                stance=stance,
                 modality=modality,
                 time_sec=beat.start_sec,
                 pointer=pointer,
-                verbatim=summary or verbatim,
+                verbatim=record_verbatim,
                 query_id=query.query_id,
                 beat_id=beat.beat_id,
             )
         )
     return tuple(records)
+
+
+def _evidence_source(
+    *,
+    query: ScopedQuery,
+    beat: Beat,
+    frame_paths: Sequence[str],
+) -> tuple[Literal["frame", "asr", "ocr"], str, str]:
+    asr_text = beat.asr_verbatim.strip()
+    ocr_text = " ".join(beat.ocr_verbatim).strip()
+    raw_queries = (*query.text_queries, query.expected_evidence, query.natural_query)
+    if query.playbook == Playbook.LOCATE_STATEMENT and asr_text and _raw_text_matches(asr_text, raw_queries):
+        return "asr", beat.beat_id, asr_text
+    if query.playbook == Playbook.READ_TEXT and ocr_text and _raw_text_matches(ocr_text, raw_queries):
+        return "ocr", beat.beat_id, ocr_text
+    if query.playbook == Playbook.LOCATE_STATEMENT and asr_text:
+        return "asr", beat.beat_id, asr_text
+    if query.playbook == Playbook.READ_TEXT and ocr_text:
+        return "ocr", beat.beat_id, ocr_text
+    if frame_paths:
+        return "frame", str(frame_paths[0]), asr_text or ocr_text or "frame evidence"
+    if asr_text:
+        return "asr", beat.beat_id, asr_text
+    return "ocr", beat.beat_id, ocr_text
+
+
+def _raw_text_matches(text: str, queries: Sequence[str]) -> bool:
+    text_tokens = set(_tokens(text))
+    if not text_tokens:
+        return False
+    for query in queries:
+        query_tokens = tuple(token for token in _tokens(query) if token not in {"the", "a", "an", "is", "are", "to"})
+        if query_tokens and set(query_tokens).issubset(text_tokens):
+            return True
+    return False
+
+
+def _tokens(text: str) -> tuple[str, ...]:
+    return tuple(match.group(0).casefold() for match in re.finditer(r"\w+", str(text or "")))
+
+
+def _stable_evidence_id(*, query_id: str, beat_id: str, modality: str, ordinal: int) -> str:
+    return f"ev_{_slug(query_id)}_{_slug(beat_id)}_{_slug(modality)}_{int(ordinal):03d}"
+
+
+def _slug(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "").strip()).strip("_")
+    return text or "unknown"
 
 
 def _record_observation_memos(
@@ -256,7 +340,7 @@ def _record_observation_memos(
     response = backend.generate(
         BackendRequest(
             task="playbook_explore",
-            prompt=_memo_prompt(candidates, memo_store=memo_store),
+            prompt=_memo_prompt(query=query, candidates=candidates, memo_store=memo_store),
             frames=[beat.keyframe_path for beat in candidates if beat.keyframe_path],
             media_type="image",
             max_new_tokens=512,
@@ -282,8 +366,12 @@ def _record_observation_memos(
         )
 
 
-def _memo_prompt(candidates: Sequence[Beat], *, memo_store: MemoStore) -> str:
+def _memo_prompt(*, query: ScopedQuery, candidates: Sequence[Beat], memo_store: MemoStore) -> str:
     lines = [
+        f"Task query: {query.natural_query}",
+        f"Expected evidence: {query.expected_evidence}",
+        f"Playbook: {query.playbook.value}",
+        "Write observations useful for this query. Do not infer beyond visible frames or raw ASR/OCR cues.",
         "For each beat you inspect, return JSON observations only:",
         '{"observations":[{"beat_id":"bt00001","observation":"one factual visible description"}]}',
         "BeatMeta:",

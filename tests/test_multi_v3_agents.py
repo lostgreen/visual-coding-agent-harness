@@ -219,6 +219,11 @@ def test_investigator_runs_explore_then_verify_and_records_report(tmp_path: Path
     assert (tmp_path / "queries" / "q1" / "report.json").exists()
     ledger_rows = [json.loads(line) for line in (tmp_path / "evidence_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [row["finding_id"] for row in ledger_rows] == ["ev_0001"]
+    evidence_rows = [
+        json.loads(line) for line in (tmp_path / "evidence_records.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert evidence_rows[0]["evidence_id"] == "ev_q1_bt00001_frame_001"
+    assert evidence_rows[0]["modality"] == "frame"
 
 
 def test_investigator_dispatches_to_playbook_program_when_workspace_available(tmp_path: Path) -> None:

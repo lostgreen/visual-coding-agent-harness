@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Callable, Sequence
 
 from visual_coding_agent_harness.agents.playbook_programs import PROGRAMS, PlaybookProgram
@@ -137,22 +138,36 @@ def _evidence_records_from_findings(
     modality = "frame" if frame_paths else ("asr" if beat.asr_verbatim else "ocr")
     verbatim = beat.asr_verbatim or " ".join(beat.ocr_verbatim)
     records: list[EvidenceRecord] = []
-    for finding in findings:
+    for ordinal, finding in enumerate(findings, start=1):
         summary = finding.summary.strip()
-        evidence_id = (finding.citation_ids[0] if finding.citation_ids else finding.finding_id).strip()
-        if not evidence_id or not (summary or verbatim):
+        if not (summary or verbatim):
             continue
+        record_verbatim = verbatim if modality in {"asr", "ocr"} and verbatim else (summary or verbatim)
         records.append(
             EvidenceRecord(
-                evidence_id=evidence_id,
+                evidence_id=_stable_evidence_id(
+                    query_id=query.query_id,
+                    beat_id=beat.beat_id,
+                    modality=modality,
+                    ordinal=ordinal,
+                ),
                 claim=query.expected_evidence,
                 stance="supports",
                 modality=modality,  # type: ignore[arg-type]
                 time_sec=beat.start_sec,
                 pointer=pointer,
-                verbatim=summary or verbatim,
+                verbatim=record_verbatim,
                 query_id=query.query_id,
                 beat_id=beat.beat_id,
             )
         )
     return tuple(records)
+
+
+def _stable_evidence_id(*, query_id: str, beat_id: str, modality: str, ordinal: int) -> str:
+    return f"ev_{_slug(query_id)}_{_slug(beat_id)}_{_slug(modality)}_{int(ordinal):03d}"
+
+
+def _slug(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "").strip()).strip("_")
+    return text or "unknown"
