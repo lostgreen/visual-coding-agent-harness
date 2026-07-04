@@ -1,4 +1,4 @@
-"""Playbook choices for fixed investigator execution programs."""
+"""Investigation mode choices for fixed investigator execution programs."""
 
 from __future__ import annotations
 
@@ -12,13 +12,15 @@ class Playbook(str, Enum):
     IDENTIFY_VISUAL = "identify_visual"
     COUNT = "count"
     COMPARE = "compare"
-    MAIN_TOPIC = "main_topic"
+    COVERAGE = "coverage"
 
     @classmethod
     def parse(cls, value: object) -> "Playbook":
         if isinstance(value, cls):
             return value
         text = str(value or "").strip()
+        if text == "main_topic":
+            return cls.COVERAGE
         for item in cls:
             if item.value == text:
                 return item

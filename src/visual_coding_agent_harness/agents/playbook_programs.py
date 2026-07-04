@@ -66,6 +66,8 @@ class PlaybookProgram:
                     ),
                 )
             )
+        if query.playbook == Playbook.COVERAGE:
+            candidates = _diversify_by_chapter(candidates, max_beats=query.budget.max_beats_to_verify)
         if memo_store is not None and candidates:
             _record_observation_memos(
                 query=query,
@@ -127,6 +129,7 @@ class PlaybookProgram:
                 "explore_calls": len(self.search_order),
                 "verify_calls": len(verified_shots) if self.stop_when_supports else len(candidates),
                 "frames_read": frames_read,
+                "operator_count": len(self.search_order) + (1 if query.playbook == Playbook.COVERAGE else 0) + len(candidates),
             },
         )
 
@@ -180,7 +183,7 @@ PROGRAMS: dict[Playbook, PlaybookProgram] = {
         stop_when_supports=False,
         dense_sampling=False,
     ),
-    Playbook.MAIN_TOPIC: PlaybookProgram(
+    Playbook.COVERAGE: PlaybookProgram(
         search_order=("text", "visual"),
         top_k_candidates=15,
         verify_frames_per_beat=3,
@@ -228,6 +231,29 @@ def _unique_beats(beats: Sequence[Beat]) -> tuple[Beat, ...]:
         seen.add(beat.beat_id)
         result.append(beat)
     return tuple(result)
+
+
+def _diversify_by_chapter(beats: Sequence[Beat], *, max_beats: int) -> tuple[Beat, ...]:
+    limit = max(0, int(max_beats))
+    if limit <= 0:
+        return ()
+    selected: list[Beat] = []
+    used_chapters: set[str] = set()
+    for beat in beats:
+        chapter_id = str(beat.chapter_id or "")
+        if chapter_id in used_chapters:
+            continue
+        selected.append(beat)
+        used_chapters.add(chapter_id)
+        if len(selected) >= limit:
+            return tuple(selected)
+    for beat in beats:
+        if beat in selected:
+            continue
+        selected.append(beat)
+        if len(selected) >= limit:
+            break
+    return tuple(selected)
 
 
 def _default_frame_sampler(beat: Beat, max_frames: int) -> tuple[str, ...]:
@@ -299,11 +325,11 @@ def _evidence_source(
     asr_text = beat.asr_verbatim.strip()
     ocr_text = " ".join(beat.ocr_verbatim).strip()
     raw_queries = (*query.text_queries, query.expected_evidence, query.natural_query)
-    if query.playbook in {Playbook.LOCATE_STATEMENT, Playbook.MAIN_TOPIC} and asr_text and _raw_text_matches(asr_text, raw_queries):
+    if query.playbook in {Playbook.LOCATE_STATEMENT, Playbook.COVERAGE} and asr_text and _raw_text_matches(asr_text, raw_queries):
         return "asr", beat.beat_id, asr_text
     if query.playbook == Playbook.READ_TEXT and ocr_text and _raw_text_matches(ocr_text, raw_queries):
         return "ocr", beat.beat_id, ocr_text
-    if query.playbook in {Playbook.LOCATE_STATEMENT, Playbook.MAIN_TOPIC} and asr_text:
+    if query.playbook in {Playbook.LOCATE_STATEMENT, Playbook.COVERAGE} and asr_text:
         return "asr", beat.beat_id, asr_text
     if query.playbook == Playbook.READ_TEXT and ocr_text:
         return "ocr", beat.beat_id, ocr_text

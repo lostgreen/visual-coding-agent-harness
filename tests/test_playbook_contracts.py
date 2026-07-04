@@ -63,36 +63,52 @@ def test_reasoner_prompt_requires_playbook_and_falls_back_unknown_playbook() -> 
 
     decision = Reasoner(backend=backend).decide(question="What appears?", options={}, index_context="ch01")
 
-    assert "Available playbooks" in backend.requests[0].prompt
+    assert "Available investigation modes" in backend.requests[0].prompt
     assert decision.queries[0].playbook == Playbook.IDENTIFY_VISUAL
 
 
-def test_reasoner_prompt_exposes_main_topic_playbook_for_overall_topic_questions() -> None:
+def test_reasoner_prompt_exposes_generic_coverage_mode_without_main_topic_special_case() -> None:
     backend = RecordingBackend(
         json.dumps(
             {
                 "action": "plan",
                 "queries": [
                     {
-                        "query_id": "q_main",
-                        "goal_id": "g_main",
-                        "playbook": "main_topic",
-                        "natural_query": "Determine the main topic of the video.",
+                        "query_id": "q_coverage",
+                        "goal_id": "g_coverage",
+                        "playbook": "coverage",
+                        "natural_query": "Gather distributed evidence across the video.",
                         "text_queries": ["Wright brothers", "Gustave Whitehead", "first motorized flight"],
                         "visual_queries": ["archival aircraft photographs"],
                         "scope": {"chapter_ids": ["ch01", "ch02"]},
-                        "expected_evidence": "Recurring central topic across multiple chapters.",
+                        "expected_evidence": "Recurring evidence across multiple chapters.",
                     }
                 ],
             }
         )
     )
 
-    decision = Reasoner(backend=backend).decide(question="What is the video mainly about?", options={}, index_context="ch01")
+    decision = Reasoner(backend=backend).decide(question="Which candidate is supported across the video?", options={}, index_context="ch01")
 
-    assert "main_topic - overall topic / mainly-about questions" in backend.requests[0].prompt
-    assert "mainly about" in backend.requests[0].prompt
-    assert decision.queries[0].playbook == Playbook.MAIN_TOPIC
+    assert not hasattr(Playbook, "MAIN_TOPIC")
+    assert "coverage - gather distributed evidence across a broad scope" in backend.requests[0].prompt
+    assert "main_topic" not in backend.requests[0].prompt
+    assert decision.queries[0].playbook == Playbook.COVERAGE
+
+
+def test_legacy_main_topic_alias_parses_to_coverage_mode() -> None:
+    query = ScopedQuery.from_dict(
+        {
+            "query_id": "q_legacy",
+            "goal_id": "g1",
+            "playbook": "main_topic",
+            "natural_query": "legacy coverage query",
+            "scope": {"chapter_ids": ["ch01"]},
+            "expected_evidence": "distributed evidence",
+        }
+    )
+
+    assert query.playbook == Playbook.COVERAGE
 
 
 def test_reasoner_ignores_malformed_goals_without_dropping_valid_queries() -> None:
@@ -105,8 +121,8 @@ def test_reasoner_ignores_malformed_goals_without_dropping_valid_queries() -> No
                     {
                         "query_id": "q_main",
                         "goal_id": "g_main",
-                        "playbook": "main_topic",
-                        "natural_query": "Determine the main topic.",
+                        "playbook": "coverage",
+                        "natural_query": "Gather distributed evidence.",
                         "scope": {"chapter_ids": ["ch01"]},
                         "expected_evidence": "Recurring topic evidence.",
                     }
@@ -119,7 +135,7 @@ def test_reasoner_ignores_malformed_goals_without_dropping_valid_queries() -> No
 
     assert decision.goals == ()
     assert len(decision.queries) == 1
-    assert decision.queries[0].playbook == Playbook.MAIN_TOPIC
+    assert decision.queries[0].playbook == Playbook.COVERAGE
 
 
 def test_scoped_query_constructor_accepts_explicit_playbook() -> None:

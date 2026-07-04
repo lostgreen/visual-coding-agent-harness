@@ -104,7 +104,7 @@ def test_playbook_programs_use_expected_search_order(tmp_path: Path) -> None:
         Playbook.IDENTIFY_VISUAL: "visual",
         Playbook.COUNT: "visual",
         Playbook.COMPARE: "text",
-        Playbook.MAIN_TOPIC: "text",
+        Playbook.COVERAGE: "text",
     }
     for playbook, first_call in expected_first.items():
         workspace = SpyWorkspace(_beats(tmp_path / playbook.value))
@@ -125,15 +125,40 @@ def test_count_playbook_does_not_stop_after_first_supporting_finding(tmp_path: P
     assert report.verified_shots == ("sh001", "sh002")
 
 
-def test_main_topic_playbook_collects_multiple_supporting_beats(tmp_path: Path) -> None:
+def test_coverage_mode_collects_multiple_supporting_beats(tmp_path: Path) -> None:
     workspace = SpyWorkspace(_beats(tmp_path))
     backend = RecordingBackend()
 
-    report = PROGRAMS[Playbook.MAIN_TOPIC].execute(query=_query(Playbook.MAIN_TOPIC), workspace=workspace, backend=backend)
+    report = PROGRAMS[Playbook.COVERAGE].execute(query=_query(Playbook.COVERAGE), workspace=workspace, backend=backend)
 
     assert report.cost["verify_calls"] == 2
     assert report.verified_shots == ("sh001", "sh002")
     assert workspace.calls[0] == "text"
+
+
+def test_coverage_mode_diversifies_candidates_by_chapter(tmp_path: Path) -> None:
+    beats = (
+        Beat("bt00001", "ch01", 0.0, 2.0, _image(tmp_path / "one.jpg"), "theme", (), ("sh001",)),
+        Beat("bt00002", "ch01", 2.0, 4.0, _image(tmp_path / "two.jpg"), "theme", (), ("sh002",)),
+        Beat("bt00003", "ch02", 4.0, 6.0, _image(tmp_path / "three.jpg"), "theme", (), ("sh003",)),
+        Beat("bt00004", "ch03", 6.0, 8.0, _image(tmp_path / "four.jpg"), "theme", (), ("sh004",)),
+    )
+    workspace = SpyWorkspace(beats)
+    backend = RecordingBackend()
+    query = ScopedQuery(
+        query_id="q_coverage",
+        goal_id="g1",
+        playbook=Playbook.COVERAGE,
+        natural_query="theme",
+        scope=QueryScope(chapter_ids=("ch01", "ch02", "ch03")),
+        expected_evidence="distributed support across chapters",
+        budget=QueryBudget(max_beats_to_verify=3, max_frames=2),
+    )
+
+    report = PROGRAMS[Playbook.COVERAGE].execute(query=query, workspace=workspace, backend=backend)
+
+    assert report.verified_shots == ("sh001", "sh003", "sh004")
+    assert report.cost["operator_count"] >= 3
 
 
 def test_playbook_program_writes_and_reuses_observation_memos(tmp_path: Path) -> None:
