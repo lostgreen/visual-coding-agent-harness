@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, replace
 from collections import Counter
 import json
+from statistics import median
 from pathlib import Path
 import re
 from typing import Any, Callable, Sequence
@@ -60,6 +61,20 @@ class Chapter:
 
 
 @dataclass
+class VideoWorkspaceDiagnostics:
+    duration_sec: float
+    chapter_count: int
+    beat_count: int
+    median_beat_sec: float
+    max_beat_sec: float
+    avg_asr_chars_per_beat: float
+    visual_index_dim: int
+    visual_embedding_norm_mean: float
+    index_mode: str
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass
 class VideoWorkspace:
     video_path: str
     duration_sec: float
@@ -67,6 +82,7 @@ class VideoWorkspace:
     beats: tuple[Beat, ...]
     text_index: InvertedIndex
     visual_index: VisualIndex
+    diagnostics: VideoWorkspaceDiagnostics | None = None
     memos: dict[str, object] = field(default_factory=dict)
     evidence: tuple[object, ...] = ()
 
@@ -164,6 +180,11 @@ class VideoWorkspace:
         (artifact_dir / "workspace.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
         self.text_index.save(artifact_dir / "text_index.json")
         self.visual_index.save(artifact_dir / "visual_index.npz")
+        if self.diagnostics is not None:
+            (artifact_dir / "diagnostics.json").write_text(
+                json.dumps(asdict(self.diagnostics), ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
 
     @classmethod
     def load(cls, artifact_dir: Path, embedding_backend: EmbeddingBackend) -> "VideoWorkspace":
@@ -171,6 +192,22 @@ class VideoWorkspace:
         payload = json.loads((artifact_dir / "workspace.json").read_text(encoding="utf-8"))
         beats = tuple(Beat(**item) for item in payload.get("beats", ()))
         chapters = tuple(Chapter(**item) for item in payload.get("chapters", ()))
+        diagnostics_path = artifact_dir / "diagnostics.json"
+        diagnostics = None
+        if diagnostics_path.exists():
+            diagnostics_payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+            diagnostics = VideoWorkspaceDiagnostics(
+                duration_sec=float(diagnostics_payload.get("duration_sec", 0.0) or 0.0),
+                chapter_count=int(diagnostics_payload.get("chapter_count", 0) or 0),
+                beat_count=int(diagnostics_payload.get("beat_count", 0) or 0),
+                median_beat_sec=float(diagnostics_payload.get("median_beat_sec", 0.0) or 0.0),
+                max_beat_sec=float(diagnostics_payload.get("max_beat_sec", 0.0) or 0.0),
+                avg_asr_chars_per_beat=float(diagnostics_payload.get("avg_asr_chars_per_beat", 0.0) or 0.0),
+                visual_index_dim=int(diagnostics_payload.get("visual_index_dim", 0) or 0),
+                visual_embedding_norm_mean=float(diagnostics_payload.get("visual_embedding_norm_mean", 0.0) or 0.0),
+                index_mode=str(diagnostics_payload.get("index_mode") or ""),
+                warnings=_text_tuple(diagnostics_payload.get("warnings") or ()),
+            )
         return cls(
             video_path=str(payload.get("video_path") or ""),
             duration_sec=float(payload.get("duration_sec", 0.0) or 0.0),
@@ -178,6 +215,7 @@ class VideoWorkspace:
             beats=beats,
             text_index=InvertedIndex.load(artifact_dir / "text_index.json"),
             visual_index=VisualIndex.load(artifact_dir / "visual_index.npz", embedding_backend),
+            diagnostics=diagnostics,
         )
 
 
@@ -190,6 +228,9 @@ def build_video_workspace(
     ocr_lines_by_time: Sequence[Any] = (),
     embedding_backend: EmbeddingBackend,
     max_chapters: int = 40,
+    max_range_sec: float = 60.0,
+    max_beat_sec: float = 60.0,
+    index_mode: str = "fast_eval",
     shot_detector: ShotDetector | None = None,
     keyframe_sampler: KeyframeSampler | None = None,
 ) -> VideoWorkspace:
@@ -197,7 +238,8 @@ def build_video_workspace(
 
     artifact_dir = Path(artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    shot_ranges = tuple((float(start), float(end)) for start, end in _detect_shot_ranges(video_path, duration_sec, detector=shot_detector))
+    raw_shot_ranges = tuple((float(start), float(end)) for start, end in _detect_shot_ranges(video_path, duration_sec, detector=shot_detector))
+    shot_ranges = _normalize_workspace_ranges(raw_shot_ranges, duration_sec=float(duration_sec), max_range_sec=max_range_sec)
     if not shot_ranges:
         shot_ranges = tuple(detect_shots_uniform(duration_sec, window=max(1.0, min(float(duration_sec), 15.0))))
     sampler = keyframe_sampler or _sample_one_keyframe
@@ -207,7 +249,7 @@ def build_video_workspace(
         frames = tuple(sampler(str(video_path), float(start_sec), float(end_sec), 1, artifact_dir / "shot_keyframes" / f"sh{shot_number:05d}"))
         shot_frames.append(frames)
         keyframes.append(frames[0].thumb_path if frames else "")
-    groups = shots_to_beats(shot_ranges, keyframes, sim_threshold=0.85, max_beat_sec=60.0)
+    groups = shots_to_beats(shot_ranges, keyframes, sim_threshold=0.85, max_beat_sec=max_beat_sec)
     beats_without_chapters = tuple(
         _make_beat(
             beat_number=beat_number,
@@ -226,14 +268,22 @@ def build_video_workspace(
         text_index.add(beat.beat_id, " ".join(beat.ocr_verbatim), modality="ocr")
     visual_index = VisualIndex(embedding_backend)
     visual_index.build(beats)
-    return VideoWorkspace(
+    workspace = VideoWorkspace(
         video_path=str(video_path),
         duration_sec=float(duration_sec),
         chapters=chapters,
         beats=beats,
         text_index=text_index,
         visual_index=visual_index,
+        diagnostics=_workspace_diagnostics(
+            duration_sec=float(duration_sec),
+            chapters=chapters,
+            beats=beats,
+            visual_index=visual_index,
+            index_mode=str(index_mode or "fast_eval"),
+        ),
     )
+    return workspace
 
 
 def _make_beat(
@@ -308,9 +358,106 @@ def _detect_shot_ranges(video_path: str, duration_sec: float, *, detector: ShotD
         return detect_shots_uniform(float(duration_sec), window=15.0)
 
 
+def _normalize_workspace_ranges(
+    raw_ranges: Sequence[tuple[float, float]],
+    *,
+    duration_sec: float,
+    max_range_sec: float,
+) -> tuple[tuple[float, float], ...]:
+    duration = max(0.0, float(duration_sec))
+    max_range = max(0.1, float(max_range_sec))
+    clipped = sorted(
+        (
+            (max(0.0, min(duration, float(start))), max(0.0, min(duration, float(end))))
+            for start, end in raw_ranges
+        ),
+        key=lambda item: (item[0], item[1]),
+    )
+    ranges: list[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in clipped:
+        if end <= start:
+            continue
+        if start > cursor:
+            ranges.extend(_split_range(cursor, start, max_range_sec=max_range))
+        clipped_start = max(start, cursor)
+        if end > clipped_start:
+            ranges.extend(_split_range(clipped_start, end, max_range_sec=max_range))
+            cursor = max(cursor, end)
+    if cursor < duration:
+        ranges.extend(_split_range(cursor, duration, max_range_sec=max_range))
+    return tuple(ranges)
+
+
+def _split_range(start_sec: float, end_sec: float, *, max_range_sec: float) -> tuple[tuple[float, float], ...]:
+    start = float(start_sec)
+    end = float(end_sec)
+    if end <= start:
+        return ()
+    step = max(0.1, float(max_range_sec))
+    ranges: list[tuple[float, float]] = []
+    cursor = start
+    while cursor < end:
+        next_end = min(end, cursor + step)
+        ranges.append((round(cursor, 3), round(next_end, 3)))
+        cursor = next_end
+    return tuple(ranges)
+
+
 def _sample_one_keyframe(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> Sequence[Frame]:
     del n_frames
     return sample_shot_frames(video_path, start_sec, end_sec, n_frames=1, out_dir=out_dir)
+
+
+def _workspace_diagnostics(
+    *,
+    duration_sec: float,
+    chapters: Sequence[Chapter],
+    beats: Sequence[Beat],
+    visual_index: VisualIndex,
+    index_mode: str,
+) -> VideoWorkspaceDiagnostics:
+    durations = tuple(max(0.0, float(beat.end_sec) - float(beat.start_sec)) for beat in beats)
+    asr_chars = tuple(len(str(beat.asr_verbatim or "")) for beat in beats)
+    visual_dim = int(getattr(getattr(visual_index, "_embeddings", None), "shape", (0, 0))[1] or 0)
+    visual_norm_mean = _visual_norm_mean(visual_index)
+    warnings: list[str] = []
+    if str(index_mode) == "coarse_smoke":
+        warnings.append("coarse_smoke_not_for_eval")
+    if durations and median(durations) > 45.0:
+        warnings.append("median_beat_sec_gt_45")
+    if durations and max(durations) > 75.0:
+        warnings.append("max_beat_sec_gt_75")
+    if duration_sec > 0.0 and len(beats) < duration_sec / 75.0:
+        warnings.append("beat_count_below_duration_over_75")
+    if asr_chars and sum(asr_chars) / float(len(asr_chars)) > 1200.0:
+        warnings.append("avg_asr_chars_per_beat_gt_1200")
+    if visual_dim <= 1:
+        warnings.append("visual_index_dim_lte_1")
+    if visual_norm_mean <= 0.0:
+        warnings.append("visual_embedding_norm_mean_lte_0")
+    return VideoWorkspaceDiagnostics(
+        duration_sec=float(duration_sec),
+        chapter_count=len(chapters),
+        beat_count=len(beats),
+        median_beat_sec=float(median(durations)) if durations else 0.0,
+        max_beat_sec=float(max(durations)) if durations else 0.0,
+        avg_asr_chars_per_beat=float(sum(asr_chars) / len(asr_chars)) if asr_chars else 0.0,
+        visual_index_dim=visual_dim,
+        visual_embedding_norm_mean=visual_norm_mean,
+        index_mode=str(index_mode or "fast_eval"),
+        warnings=tuple(warnings),
+    )
+
+
+def _visual_norm_mean(visual_index: VisualIndex) -> float:
+    embeddings = getattr(visual_index, "_embeddings", None)
+    if embeddings is None or getattr(embeddings, "size", 0) == 0:
+        return 0.0
+    norms = []
+    for row in embeddings:
+        norms.append(float(sum(float(value) ** 2 for value in row) ** 0.5))
+    return float(sum(norms) / len(norms)) if norms else 0.0
 
 
 def _asr_text_for_range(cues: Sequence[Any], *, start_sec: float, end_sec: float) -> str:

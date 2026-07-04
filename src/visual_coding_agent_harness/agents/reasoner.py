@@ -93,6 +93,8 @@ def _reasoner_prompt(
             "  identify_visual - object/person/scene identification",
             "  count - broad candidate search plus dense verification",
             "  compare - compare evidence across two scopes; include scope_b",
+            "  main_topic - overall topic / mainly-about questions; gather recurring evidence across chapters",
+            'If the question asks "mainly about", "overall topic", "purpose", "central theme", or "main idea", choose main_topic and produce option-aware text_queries plus visual_queries across all relevant chapters.',
             'Return JSON: {"action":"plan","goals":[],"queries":[{"query_id":"q1","goal_id":"g1","playbook":"identify_visual","natural_query":"...","scope":{"chapter_ids":["ch01"]},"expected_evidence":"...","budget":{"max_beats_to_verify":3,"max_frames":8}}],"rationale":"..."} or {"action":"answer","answer":"A","confidence":"medium","citations":[]}',
         ]
     )

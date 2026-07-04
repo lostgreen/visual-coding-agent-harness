@@ -252,6 +252,34 @@ class EvalRunnerTest(unittest.TestCase):
             self.assertTrue((artifact_dir / "text_index.json").exists())
             self.assertTrue((artifact_dir / "visual_index.npz").exists())
 
+    def test_multi_v3_video_index_builder_splits_root_windows_into_fast_beats(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact_dir = Path(tmp) / "multi_v3_index"
+            frame_path = Path(tmp) / "frame_001.jpg"
+            scene_index = SceneIndex(
+                video_path="/videos/demo.mp4",
+                duration_sec=600.0,
+                segments=(
+                    VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=300.0),
+                    VideoSegment(segment_id="seg_0002", start_sec=300.0, end_sec=600.0),
+                ),
+            )
+
+            workspace = eval_runner._build_multi_v3_video_index(
+                video_path="/videos/demo.mp4",
+                duration_sec=600.0,
+                scene_index=scene_index,
+                artifact_dir=artifact_dir,
+                frame_sampler=lambda _video_path, _start, _end, _n_frames: (str(frame_path),),
+            )
+
+            self.assertEqual(len(workspace.chapters), 2)
+            self.assertEqual(len(workspace.beats), 20)
+            self.assertLessEqual(max(beat.end_sec - beat.start_sec for beat in workspace.beats), 30.0)
+            self.assertEqual([len(chapter.beat_ids) for chapter in workspace.chapters], [10, 10])
+
     def test_run_loop_keeps_default_verify_sampler_separate_from_index_sampler(self):
         from runs import eval_runner
 

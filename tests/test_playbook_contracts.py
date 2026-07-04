@@ -67,6 +67,34 @@ def test_reasoner_prompt_requires_playbook_and_falls_back_unknown_playbook() -> 
     assert decision.queries[0].playbook == Playbook.IDENTIFY_VISUAL
 
 
+def test_reasoner_prompt_exposes_main_topic_playbook_for_overall_topic_questions() -> None:
+    backend = RecordingBackend(
+        json.dumps(
+            {
+                "action": "plan",
+                "queries": [
+                    {
+                        "query_id": "q_main",
+                        "goal_id": "g_main",
+                        "playbook": "main_topic",
+                        "natural_query": "Determine the main topic of the video.",
+                        "text_queries": ["Wright brothers", "Gustave Whitehead", "first motorized flight"],
+                        "visual_queries": ["archival aircraft photographs"],
+                        "scope": {"chapter_ids": ["ch01", "ch02"]},
+                        "expected_evidence": "Recurring central topic across multiple chapters.",
+                    }
+                ],
+            }
+        )
+    )
+
+    decision = Reasoner(backend=backend).decide(question="What is the video mainly about?", options={}, index_context="ch01")
+
+    assert "main_topic - overall topic / mainly-about questions" in backend.requests[0].prompt
+    assert "mainly about" in backend.requests[0].prompt
+    assert decision.queries[0].playbook == Playbook.MAIN_TOPIC
+
+
 def test_scoped_query_constructor_accepts_explicit_playbook() -> None:
     query = ScopedQuery(
         query_id="q1",

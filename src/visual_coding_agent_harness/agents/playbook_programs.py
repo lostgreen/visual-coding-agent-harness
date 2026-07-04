@@ -180,6 +180,14 @@ PROGRAMS: dict[Playbook, PlaybookProgram] = {
         stop_when_supports=False,
         dense_sampling=False,
     ),
+    Playbook.MAIN_TOPIC: PlaybookProgram(
+        search_order=("text", "visual"),
+        top_k_candidates=15,
+        verify_frames_per_beat=3,
+        verify_resolution="low",
+        stop_when_supports=False,
+        dense_sampling=False,
+    ),
 }
 
 
@@ -291,11 +299,11 @@ def _evidence_source(
     asr_text = beat.asr_verbatim.strip()
     ocr_text = " ".join(beat.ocr_verbatim).strip()
     raw_queries = (*query.text_queries, query.expected_evidence, query.natural_query)
-    if query.playbook == Playbook.LOCATE_STATEMENT and asr_text and _raw_text_matches(asr_text, raw_queries):
+    if query.playbook in {Playbook.LOCATE_STATEMENT, Playbook.MAIN_TOPIC} and asr_text and _raw_text_matches(asr_text, raw_queries):
         return "asr", beat.beat_id, asr_text
     if query.playbook == Playbook.READ_TEXT and ocr_text and _raw_text_matches(ocr_text, raw_queries):
         return "ocr", beat.beat_id, ocr_text
-    if query.playbook == Playbook.LOCATE_STATEMENT and asr_text:
+    if query.playbook in {Playbook.LOCATE_STATEMENT, Playbook.MAIN_TOPIC} and asr_text:
         return "asr", beat.beat_id, asr_text
     if query.playbook == Playbook.READ_TEXT and ocr_text:
         return "ocr", beat.beat_id, ocr_text

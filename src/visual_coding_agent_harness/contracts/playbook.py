@@ -12,6 +12,7 @@ class Playbook(str, Enum):
     IDENTIFY_VISUAL = "identify_visual"
     COUNT = "count"
     COMPARE = "compare"
+    MAIN_TOPIC = "main_topic"
 
     @classmethod
     def parse(cls, value: object) -> "Playbook":

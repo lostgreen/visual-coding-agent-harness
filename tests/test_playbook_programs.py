@@ -104,6 +104,7 @@ def test_playbook_programs_use_expected_search_order(tmp_path: Path) -> None:
         Playbook.IDENTIFY_VISUAL: "visual",
         Playbook.COUNT: "visual",
         Playbook.COMPARE: "text",
+        Playbook.MAIN_TOPIC: "text",
     }
     for playbook, first_call in expected_first.items():
         workspace = SpyWorkspace(_beats(tmp_path / playbook.value))
@@ -122,6 +123,17 @@ def test_count_playbook_does_not_stop_after_first_supporting_finding(tmp_path: P
 
     assert report.cost["verify_calls"] == 2
     assert report.verified_shots == ("sh001", "sh002")
+
+
+def test_main_topic_playbook_collects_multiple_supporting_beats(tmp_path: Path) -> None:
+    workspace = SpyWorkspace(_beats(tmp_path))
+    backend = RecordingBackend()
+
+    report = PROGRAMS[Playbook.MAIN_TOPIC].execute(query=_query(Playbook.MAIN_TOPIC), workspace=workspace, backend=backend)
+
+    assert report.cost["verify_calls"] == 2
+    assert report.verified_shots == ("sh001", "sh002")
+    assert workspace.calls[0] == "text"
 
 
 def test_playbook_program_writes_and_reuses_observation_memos(tmp_path: Path) -> None:

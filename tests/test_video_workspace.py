@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -90,6 +91,30 @@ def test_timeline_text_can_fill_missing_titles_without_vlm(tmp_path: Path) -> No
 
     assert workspace.chapters[0].title is not None
     assert "shipyard" in text.lower()
+
+
+def test_build_video_workspace_splits_detector_ranges_and_saves_diagnostics(tmp_path: Path) -> None:
+    workspace = build_video_workspace(
+        "/videos/demo.mp4",
+        120.0,
+        artifact_dir=tmp_path / "workspace",
+        asr_cues=({"start": 0.0, "end": 120.0, "text": "Wright brothers and Whitehead first flight dispute"},),
+        embedding_backend=ColorEmbeddingBackend(),
+        shot_detector=lambda _video_path, _duration: ((0.0, 120.0),),
+        keyframe_sampler=_sampler,
+        max_range_sec=30.0,
+        max_beat_sec=30.0,
+    )
+
+    workspace.save(tmp_path / "saved")
+    diagnostics = json.loads((tmp_path / "saved" / "diagnostics.json").read_text(encoding="utf-8"))
+
+    assert len(workspace.beats) == 4
+    assert max(beat.end_sec - beat.start_sec for beat in workspace.beats) <= 30.0
+    assert diagnostics["beat_count"] == 4
+    assert diagnostics["max_beat_sec"] <= 30.0
+    assert diagnostics["index_mode"] == "fast_eval"
+    assert "coarse_smoke_not_for_eval" not in diagnostics["warnings"]
 
 
 def test_window_time_returns_beats_overlapping_requested_seconds() -> None:

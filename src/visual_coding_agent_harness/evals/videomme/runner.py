@@ -452,6 +452,10 @@ def _build_multi_v3_video_index(
         artifact_dir=artifact_dir,
         asr_cues=_scene_index_asr_cues(scene_index),
         embedding_backend=_ZeroEmbeddingBackend(),
+        max_chapters=max(1, len(ranges)),
+        max_range_sec=30.0,
+        max_beat_sec=30.0,
+        index_mode="fast_eval",
         shot_detector=lambda _video_path, _duration: ranges,
         keyframe_sampler=_keyframe_sampler_from_frame_sampler(frame_sampler)
         if frame_sampler is not None
