@@ -95,6 +95,33 @@ def test_reasoner_prompt_exposes_main_topic_playbook_for_overall_topic_questions
     assert decision.queries[0].playbook == Playbook.MAIN_TOPIC
 
 
+def test_reasoner_ignores_malformed_goals_without_dropping_valid_queries() -> None:
+    backend = RecordingBackend(
+        json.dumps(
+            {
+                "action": "plan",
+                "goals": [{"goal_id": "g_bad"}],
+                "queries": [
+                    {
+                        "query_id": "q_main",
+                        "goal_id": "g_main",
+                        "playbook": "main_topic",
+                        "natural_query": "Determine the main topic.",
+                        "scope": {"chapter_ids": ["ch01"]},
+                        "expected_evidence": "Recurring topic evidence.",
+                    }
+                ],
+            }
+        )
+    )
+
+    decision = Reasoner(backend=backend).decide(question="What is the video mainly about?", options={}, index_context="ch01")
+
+    assert decision.goals == ()
+    assert len(decision.queries) == 1
+    assert decision.queries[0].playbook == Playbook.MAIN_TOPIC
+
+
 def test_scoped_query_constructor_accepts_explicit_playbook() -> None:
     query = ScopedQuery(
         query_id="q1",

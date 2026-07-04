@@ -106,7 +106,7 @@ def _parse_decision(text: str) -> ReasonerDecision:
     if action == "answer":
         return ReasonerDecision(
             action="answer",
-            goals=tuple(VerifiableGoal.from_dict(item) for item in _sequence(payload.get("goals")) if isinstance(item, Mapping)),
+            goals=_parse_goals(payload.get("goals")),
             rationale=str(payload.get("rationale") or ""),
             answer=str(payload.get("answer") or ""),
             confidence=str(payload.get("confidence") or ""),
@@ -114,10 +114,34 @@ def _parse_decision(text: str) -> ReasonerDecision:
         )
     return ReasonerDecision(
         action="plan",
-        goals=tuple(VerifiableGoal.from_dict(item) for item in _sequence(payload.get("goals")) if isinstance(item, Mapping)),
-        queries=tuple(ScopedQuery.from_dict(item) for item in _sequence(payload.get("queries")) if isinstance(item, Mapping)),
+        goals=_parse_goals(payload.get("goals")),
+        queries=_parse_queries(payload.get("queries")),
         rationale=str(payload.get("rationale") or ""),
     )
+
+
+def _parse_goals(value: object) -> tuple[VerifiableGoal, ...]:
+    goals: list[VerifiableGoal] = []
+    for item in _sequence(value):
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            goals.append(VerifiableGoal.from_dict(item))
+        except ValueError:
+            continue
+    return tuple(goals)
+
+
+def _parse_queries(value: object) -> tuple[ScopedQuery, ...]:
+    queries: list[ScopedQuery] = []
+    for item in _sequence(value):
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            queries.append(ScopedQuery.from_dict(item))
+        except ValueError:
+            continue
+    return tuple(queries)
 
 
 def _json_payload(text: str) -> Mapping[str, Any]:
