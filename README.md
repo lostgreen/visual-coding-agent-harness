@@ -200,13 +200,10 @@ agents/
   investigator.py
   reasoner.py
 tools/
-  explore.py
-  verify.py
   frame_cache.py
+  vlm_tools.py
 workspace/
   investigator_ws.py
-  evidence.py
-  digest.py
 contracts/
   query.py
   report.py
@@ -215,6 +212,7 @@ video/
   index.py
   build.py
   overview.py
+  pipeline.py
 ```
 
 Everything else under `legacy/` is compatibility-only and must not be imported

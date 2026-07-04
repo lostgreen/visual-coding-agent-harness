@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Optional, Sequence
 
-from visual_coding_agent_harness.core.registry import ToolRegistry, tool
+from visual_coding_agent_harness.legacy.core.registry import ToolRegistry, tool
 from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 

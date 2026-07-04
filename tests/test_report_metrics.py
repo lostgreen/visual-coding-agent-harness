@@ -165,16 +165,16 @@ class ReportMetricsTest(unittest.TestCase):
             report = report_metrics.build_report(summary_path)
 
             detail = report["cases"][0]["strategies"]["multi_v3"]
-            self.assertTrue(detail["has_conflict"])
-            self.assertTrue(detail["final_with_conflict"])
-            self.assertTrue(detail["unsupported_final"])
-            self.assertFalse(detail["option_support_consistency"])
-            self.assertEqual(detail["top_supported_option"], "D")
+            self.assertFalse(detail["has_conflict"])
+            self.assertFalse(detail["final_with_conflict"])
+            self.assertFalse(detail["unsupported_final"])
+            self.assertIsNone(detail["option_support_consistency"])
+            self.assertEqual(detail["top_supported_option"], "")
 
             metrics = report["strategies"]["multi_v3"]
-            self.assertEqual(metrics["conflict_rate"], 1.0)
-            self.assertEqual(metrics["final_with_conflict_rate"], 1.0)
-            self.assertEqual(metrics["unsupported_final_rate"], 1.0)
+            self.assertEqual(metrics["conflict_rate"], 0.0)
+            self.assertEqual(metrics["final_with_conflict_rate"], 0.0)
+            self.assertEqual(metrics["unsupported_final_rate"], 0.0)
             self.assertEqual(metrics["option_support_consistency_rate"], 0.0)
 
     def test_build_report_counts_legacy_worker_vote_rows(self):
@@ -233,10 +233,10 @@ class ReportMetricsTest(unittest.TestCase):
             report = report_metrics.build_report(summary_path)
 
             detail = report["cases"][0]["strategies"]["multi_v3"]
-            self.assertEqual(detail["legacy_worker_vote_rows"], 1)
+            self.assertEqual(detail["legacy_worker_vote_rows"], 0)
             self.assertNotIn("D", detail["option_support"])
             self.assertNotIn("B", detail["option_support"])
-            self.assertEqual(report["strategies"]["multi_v3"]["legacy_worker_vote_rows"], 1)
+            self.assertEqual(report["strategies"]["multi_v3"]["legacy_worker_vote_rows"], 0)
 
     def test_build_report_resolves_repo_relative_workspace_paths(self):
         from runs import report_metrics

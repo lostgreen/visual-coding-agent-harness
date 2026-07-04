@@ -8,8 +8,8 @@ from typing import Any, Mapping, Sequence
 
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import DigestItem, InvestigationReport
-from visual_coding_agent_harness.workspace.digest import digest_reports
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
+from visual_coding_agent_harness.workspace.investigator_ws import digest_reports
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,6 @@ class MultiV3Driver:
         question: str,
         options: Mapping[str, str],
         index_context: str,
-        overview_path: str = "",
         overview_image_path: str = "",
     ) -> WorkspaceRunResult:
         previous_digest: tuple[DigestItem, ...] = ()
@@ -55,8 +54,7 @@ class MultiV3Driver:
                 question=question,
                 options=options,
                 index_context=index_context,
-                overview_path=overview_path,
-                overview_image_path=overview_image_path or overview_path,
+                overview_image_path=overview_image_path,
                 previous_digest=previous_digest,
                 round_number=round_number,
             )

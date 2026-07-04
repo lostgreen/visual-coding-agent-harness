@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from visual_coding_agent_harness.video import _keyframes as keyframe_module
 from visual_coding_agent_harness.video.build import build_video_index_from_scene_index, build_video_index_from_video
-from visual_coding_agent_harness.video._artifacts import compose_scene_timeline_grid
+from visual_coding_agent_harness.video.pipeline import compose_scene_timeline_grid
+from visual_coding_agent_harness.video import pipeline as keyframe_module
 from visual_coding_agent_harness.video.index import Frame, Scene, SceneIndex, Shot, VideoIndex, VideoSegment
 from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
 

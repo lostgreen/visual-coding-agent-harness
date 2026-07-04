@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from visual_coding_agent_harness.evidence.answer_operators import derive_answer_operator, derive_modality_route
+from visual_coding_agent_harness.legacy.evidence.answer_operators import derive_answer_operator, derive_modality_route
 
 
 def test_plain_factual_question_defaults_to_select_present() -> None:

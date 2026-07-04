@@ -5,30 +5,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import re
-from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-
-SlotName = Literal[
-    "task",
-    "trajectory",
-    "hypothesis",
-    "evidence",
-    "scene_index",
-    "feedback",
-    "budget",
-    "tooling",
-]
-
-DEFAULT_SLOT_RATIOS: Dict[SlotName, float] = {
-    "task": 0.08,
-    "trajectory": 0.07,
-    "hypothesis": 0.12,
-    "evidence": 0.28,
-    "scene_index": 0.22,
-    "feedback": 0.10,
-    "budget": 0.05,
-    "tooling": 0.08,
-}
+from visual_coding_agent_harness.core.budget import DEFAULT_SLOT_RATIOS, SlotName, parse_budget_ratios
 
 
 class BudgetExceededError(ValueError):
@@ -219,28 +198,6 @@ def default_context_budget_allocator(
     allocator.register_strategy("budget", TaskSlotCompact())
     allocator.register_strategy("tooling", TaskSlotCompact())
     return allocator
-
-
-def parse_budget_ratios(value: str) -> Dict[SlotName, float]:
-    ratios: Dict[SlotName, float] = {}
-    allowed = set(DEFAULT_SLOT_RATIOS)
-    for item in value.split(","):
-        if not item.strip():
-            continue
-        if ":" not in item:
-            raise ValueError(f"Invalid budget ratio item: {item}")
-        key, raw_ratio = item.split(":", 1)
-        slot = key.strip()
-        if slot not in allowed:
-            raise ValueError(f"Unknown budget slot: {slot}")
-        ratios[slot] = float(raw_ratio)
-    missing = allowed - set(ratios)
-    if missing:
-        raise ValueError(f"Missing budget ratios for: {', '.join(sorted(missing))}")
-    total = sum(ratios.values())
-    if abs(total - 1.0) > 0.001:
-        raise ValueError(f"Budget ratios must sum to 1.0, got {total:.3f}")
-    return ratios
 
 
 def _split_blocks(content: str) -> list[str]:

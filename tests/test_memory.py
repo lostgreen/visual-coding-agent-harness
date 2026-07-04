@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from visual_coding_agent_harness.legacy.contracts_v2 import OptionSpec, TargetRegistry, TargetSpec
-from visual_coding_agent_harness.memory import SourceAnchor
+from visual_coding_agent_harness.legacy.memory import SourceAnchor
 from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 

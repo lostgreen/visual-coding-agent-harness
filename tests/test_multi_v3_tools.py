@@ -9,8 +9,8 @@ from PIL import Image
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse
 from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope, ScopedQuery
 from visual_coding_agent_harness.contracts.report import VerifyRequest
-from visual_coding_agent_harness.tools.explore import explore
-from visual_coding_agent_harness.tools.verify import verify_window
+from visual_coding_agent_harness.tools.vlm_tools import explore
+from visual_coding_agent_harness.tools.vlm_tools import verify_window
 from visual_coding_agent_harness.video.index import Frame, Scene, Shot, VideoIndex
 
 

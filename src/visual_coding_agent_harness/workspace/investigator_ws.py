@@ -6,12 +6,45 @@ import fcntl
 import json
 import threading
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Mapping, Sequence
 
 from visual_coding_agent_harness.contracts.query import ScopedQuery
-from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport
+from visual_coding_agent_harness.contracts.report import CandidateShot, DigestItem, Finding, InvestigationReport
 
-from .evidence import EvidenceLedger
+
+class EvidenceLedger:
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+
+    def append(self, finding: Finding) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(finding.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
+
+    def extend(self, findings: Iterable[Finding]) -> None:
+        for finding in findings:
+            self.append(finding)
+
+    def read_all(self) -> list[Finding]:
+        if not self.path.exists():
+            return []
+        findings = []
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            findings.append(Finding.from_dict(json.loads(line)))
+        return findings
+
+
+def digest_reports(
+    reports: Sequence[InvestigationReport],
+    *,
+    query_goal_ids: Mapping[str, str],
+) -> tuple[DigestItem, ...]:
+    return tuple(
+        DigestItem.from_report(report, goal_id=str(query_goal_ids.get(report.query_id) or ""))
+        for report in reports
+    )
 
 
 class InvestigatorWorkspace:
@@ -79,3 +112,6 @@ class InvestigatorWorkspace:
     def _write_json(path: Path, payload: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+__all__ = ["EvidenceLedger", "InvestigatorWorkspace", "digest_reports"]

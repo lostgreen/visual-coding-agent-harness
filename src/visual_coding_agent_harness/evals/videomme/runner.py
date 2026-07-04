@@ -12,8 +12,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from visual_coding_agent_harness.core.budget import AgentBudget
-from visual_coding_agent_harness.legacy.workspace_v2.context_budget import parse_budget_ratios
+from visual_coding_agent_harness.core.budget import AgentBudget, parse_budget_ratios
 from visual_coding_agent_harness.agents.driver import MultiV3Driver
 from visual_coding_agent_harness.agents.investigator import Investigator as InvestigatorV3
 from visual_coding_agent_harness.agents.reasoner import Reasoner as ReasonerV3
@@ -30,15 +29,12 @@ from visual_coding_agent_harness.evals.videomme.multi_v3_export import (
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
 from visual_coding_agent_harness.video.build import build_video_index_from_scene_index, build_video_index_from_video
 from visual_coding_agent_harness.video.index import Frame, SceneIndex
-from visual_coding_agent_harness.video._keyframes import sample_shot_frames
+from visual_coding_agent_harness.video.pipeline import sample_shot_frames
 from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
-from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace as InvestigatorWorkspaceV3
 
 from .summary_schema import RunSummary, validate as validate_run_summary
-from .training_trajectory import TrainingTrajectory
 from .trajectory_markdown import write_trajectory_markdown
-from .workspace_round_log import export_workspace_round_log
 
 
 REMOTE_PYTHON = "/home/xuboshen/Anaconda/envs/visual-agent-harness/bin/python"
@@ -280,7 +276,6 @@ def run_loop(
             question=question,
             options=_extract_option_map(question),
             index_context=video_index.summary() if hasattr(video_index, "summary") else str(video_index),
-            overview_path=overview_image_path,
             overview_image_path=overview_image_path,
         )
     else:
@@ -494,61 +489,12 @@ def _result_round_count(result: Any) -> int:
     return 0
 
 
-def _result_tools_and_segments(result: Any, *, workspace: EvidenceWorkspace | None = None) -> tuple[list[str], list[str]]:
-    rounds = getattr(result, "rounds", ())
-    tools = []
-    segments = []
-    if not isinstance(rounds, int) and isinstance(rounds, Sequence):
-        for round_item in rounds:
-            program = getattr(round_item, "program", ())
-            for step in program:
-                if not isinstance(step, Mapping):
-                    continue
-                tools.append(str(step.get("tool", "")))
-                args = step.get("args", {}) if isinstance(step.get("args", {}), Mapping) else {}
-                if args.get("segment_id"):
-                    segments.append(str(args["segment_id"]))
-    if (not tools and not segments) and workspace is not None:
-        for event in _load_trace_events(workspace):
-            if _event_type(event) != "tool_use":
-                continue
-            payload = event.get("payload", {}) if isinstance(event.get("payload", {}), Mapping) else {}
-            tool_name = str(payload.get("tool") or "").strip()
-            if tool_name:
-                tools.append(tool_name)
-            arguments = payload.get("arguments", {}) if isinstance(payload.get("arguments", {}), Mapping) else {}
-            segment_id = _segment_id_from_tool_arguments(arguments)
-            if segment_id:
-                segments.append(segment_id)
-    return tools, segments
-
-
 def _reward_tags_for_multi_v3(*, status: str, citations: Sequence[str]) -> list[str]:
     tags = [str(status)] if status else []
     tags.append("has_citations" if citations else "missing_citations")
     if citations:
         tags.append("multi_v3_citations")
     return tags
-
-
-def _segment_id_from_tool_arguments(arguments: Mapping[str, Any]) -> str:
-    if arguments.get("segment_id"):
-        return str(arguments["segment_id"])
-    scope = arguments.get("scope")
-    if isinstance(scope, Mapping) and scope.get("segment_id"):
-        return str(scope["segment_id"])
-    return ""
-
-
-def _backend_call_counters(*, workspace: EvidenceWorkspace, scene_index: SceneIndex) -> dict[str, int]:
-    events = _load_trace_events(workspace)
-    return {
-        "root_index_backend_calls": sum(
-            1 for segment in scene_index.segments if getattr(segment, "index_level", "root") == "root"
-        ),
-        "refinement_backend_calls": sum(1 for event in events if _event_type(event) == "index_refinement_created"),
-        "verify_backend_calls": sum(1 for event in events if _event_type(event) == "segment_verify_dispatched"),
-    }
 
 
 def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
@@ -582,27 +528,6 @@ def summarize_strategy(raw: Mapping[str, Any], gt: str) -> dict[str, Any]:
         if key in raw:
             summary[key] = raw[key]
     return summary
-
-
-def _reward_tags_for_result(*, workspace: EvidenceWorkspace, status: str, citations: Sequence[str]) -> list[str]:
-    tags = []
-    if status == "final":
-        tags.append("final")
-    elif status:
-        tags.append(str(status))
-    if citations:
-        tags.append("has_citations")
-    else:
-        tags.append("missing_citations")
-    citation_set = {str(item).strip() for item in citations if str(item).strip()}
-    if workspace.has_non_navigation_visual_citation(citations):
-        tags.append("non_navigation_visual_citation")
-        for entry in workspace.memory_entries():
-            if entry.entry_id in citation_set:
-                tags.append(f"cited_kind:{entry.kind}")
-    else:
-        tags.append("no_non_navigation_visual_citation")
-    return tags
 
 
 def load_rows_by_id(parquet_path: Path, cases: Sequence[str]) -> dict[str, Any]:
@@ -1046,13 +971,6 @@ def _summary_payload(
     run_summary.per_case = results
     _populate_run_summary_metrics(run_summary, results)
     run_summary.training_trajectory_exported = _training_trajectory_exported(results)
-    workspaces = _workspaces_from_results(results)
-    if workspaces:
-        compliance, histogram = compute_nframes_metrics(workspaces)
-        run_summary.tool_nframes_compliance = compliance
-        run_summary.nframes_histogram = histogram
-        run_summary.evidence_provenance_completeness = _evidence_provenance_completeness(workspaces)
-        _populate_trace_summary_metrics(run_summary, workspaces)
     payload = run_summary.to_dict()
     payload["config"] = dict(config_payload)
     payload["cases"] = results
@@ -1075,30 +993,19 @@ def _export_training_trajectory(
     selected = str(strategy_summary.get("choice") or "") or None
     trajectory_path = (run_root / "trajectories" / f"{case_id}_{strategy}.json").resolve()
     multi_v3_root = workspace_path / "multi_v3"
-    if multi_v3_root.exists():
-        export_multi_v3_training_trajectory(
-            multi_v3_root,
-            case_id=case_id,
-            question=question,
-            options=options,
-            ground_truth=gt,
-            final_decision=str(strategy_summary.get("status", "")),
-            selected_option=selected,
-            is_correct=bool(strategy_summary.get("correct")) if selected else None,
-            output_path=trajectory_path,
-        )
-    else:
-        TrainingTrajectory.from_workspace(
-            EvidenceWorkspace(root=workspace_path),
-            case_id=case_id,
-            question=question,
-            options=options,
-            ground_truth=gt,
-            final_decision=str(strategy_summary.get("status", "")),
-            selected_option=selected,
-            is_correct=bool(strategy_summary.get("correct")) if selected else None,
-            output_path=trajectory_path,
-        )
+    if not multi_v3_root.exists():
+        return None
+    export_multi_v3_training_trajectory(
+        multi_v3_root,
+        case_id=case_id,
+        question=question,
+        options=options,
+        ground_truth=gt,
+        final_decision=str(strategy_summary.get("status", "")),
+        selected_option=selected,
+        is_correct=bool(strategy_summary.get("correct")) if selected else None,
+        output_path=trajectory_path,
+    )
     write_trajectory_markdown(trajectory_path)
     return trajectory_path
 
@@ -1131,24 +1038,19 @@ def _write_run_evidence_chains(run_root: Path, results: Sequence[Mapping[str, An
             if not isinstance(strategy_summary, Mapping):
                 strategy_summary = {}
             multi_v3_root = workspace_root / "multi_v3"
-            if multi_v3_root.exists():
-                payload = export_multi_v3_evidence_chains(multi_v3_root)
-                chains = payload.get("chains", []) if isinstance(payload, Mapping) else []
-                chain_rows = [
-                    [
-                        str(record.get("evidence_id", ""))
-                        for record in chain.get("records", [])
-                        if isinstance(record, Mapping)
-                    ]
-                    for chain in chains
-                    if isinstance(chain, Mapping)
+            if not multi_v3_root.exists():
+                continue
+            payload = export_multi_v3_evidence_chains(multi_v3_root)
+            chains = payload.get("chains", []) if isinstance(payload, Mapping) else []
+            chain_rows = [
+                [
+                    str(record.get("evidence_id", ""))
+                    for record in chain.get("records", [])
+                    if isinstance(record, Mapping)
                 ]
-            else:
-                chains = EvidenceWorkspace(root=workspace_root).evidence_chain_summaries(max_chains=100)
-                chain_rows = [
-                    [str(record.get("evidence_id", "")) for record in chain.get("records", [])]
-                    for chain in chains
-                ]
+                for chain in chains
+                if isinstance(chain, Mapping)
+            ]
             rows.append(
                 {
                     "case_id": str(case.get("question_id", "")),
@@ -1216,437 +1118,9 @@ def _populate_run_summary_metrics(summary: RunSummary, results: Sequence[Mapping
     )
 
 
-def _populate_trace_summary_metrics(summary: RunSummary, workspaces: Sequence[EvidenceWorkspace]) -> None:
-    route_violations = 0
-    followup_attempts: list[int] = []
-    followup_successes = 0
-    context_overflows = 0
-    context_turn_token_totals: list[int] = []
-    unsupported_citation_finals = 0
-    traced_finals = 0
-    mutex_conflicts = 0
-    timeline_scores: list[float] = []
-    degenerate_observations = 0
-    total_observations = 0
-    normalization_notes = 0
-    normalization_rounds = 0
-    option_biased_first_queries = 0
-    wrong_scope_caption_facts = 0
-    caption_fact_downgrades = 0
-    caption_fact_observations = 0
-    caption_support_finals = 0
-    visual_required_caption_finals = 0
-    final_cases = 0
-    planner_recovery_hints = 0
-    repeated_explores = 0
-    pending_candidate_workspaces = 0
-
-    for workspace in workspaces:
-        events = _load_trace_events(workspace)
-        route_violations += sum(1 for event in events if _event_type(event) == "route_violation")
-        attempts, success = _hard_skill_followup_trace_metrics(events)
-        followup_attempts.append(attempts)
-        if success:
-            followup_successes += 1
-        overflows, token_totals = _context_budget_trace_metrics(events)
-        context_overflows += overflows
-        context_turn_token_totals.extend(token_totals)
-        unsupported, finals = _unsupported_citation_trace_metrics(workspace, events)
-        unsupported_citation_finals += unsupported
-        traced_finals += finals
-        mutex_conflicts += _mutex_conflict_detection_count(events)
-        timeline_scores.extend(_timeline_completeness_scores(events))
-        degenerate_observations += _degenerate_observation_count(events)
-        total_observations += _observation_count(workspace)
-        notes, rounds = _normalization_note_trace_metrics(events)
-        normalization_notes += notes
-        normalization_rounds += rounds
-        caption_metrics = _caption_explore_trace_metrics(workspace)
-        option_biased_first_queries += caption_metrics["option_biased_first_query"]
-        wrong_scope_caption_facts += caption_metrics["wrong_scope_caption_facts"]
-        caption_fact_downgrades += caption_metrics["caption_fact_downgrades"]
-        caption_fact_observations += caption_metrics["caption_fact_observations"]
-        caption_support_finals += caption_metrics["caption_support_final"]
-        visual_required_caption_finals += caption_metrics["visual_required_but_caption_final"]
-        final_cases += caption_metrics["final_case"]
-        planner_recovery_hints += sum(1 for event in events if _event_type(event) == "planner_recovery_hint_emitted")
-        repeated_explores += sum(1 for event in events if _event_type(event) == "repeated_explore_detected")
-
-    summary.route_violations = route_violations
-    summary.context_budget_overflow_count = context_overflows
-    if context_turn_token_totals:
-        summary.avg_tokens_per_turn = int(sum(context_turn_token_totals) / len(context_turn_token_totals))
-    if followup_attempts:
-        summary.avg_followups_per_case = sum(followup_attempts) / len(followup_attempts)
-        attempted_cases = sum(1 for attempts in followup_attempts if attempts > 0)
-        summary.followup_success_rate = (followup_successes / attempted_cases) if attempted_cases else 0.0
-    if traced_finals:
-        summary.unsupported_citation_rate = unsupported_citation_finals / traced_finals
-    summary.mutex_conflict_detection_count = mutex_conflicts
-    if timeline_scores:
-        summary.timeline_completeness = sum(timeline_scores) / len(timeline_scores)
-    if total_observations:
-        summary.degenerate_observation_rate = degenerate_observations / total_observations
-    if normalization_rounds:
-        summary.normalization_notes_per_round = normalization_notes / normalization_rounds
-    if workspaces:
-        summary.option_biased_first_query_rate = option_biased_first_queries / len(workspaces)
-    if caption_fact_observations:
-        summary.wrong_scope_caption_fact_rate = wrong_scope_caption_facts / caption_fact_observations
-        summary.caption_fact_downgrade_rate = caption_fact_downgrades / caption_fact_observations
-    if final_cases:
-        summary.caption_support_final_rate = caption_support_finals / final_cases
-        summary.visual_required_but_caption_final_rate = visual_required_caption_finals / final_cases
-    if workspaces:
-        summary.planner_recovery_hint_rate = planner_recovery_hints / len(workspaces)
-        summary.repeated_explore_rate = repeated_explores / len(workspaces)
-        summary.ledger_pending_candidate_rate = pending_candidate_workspaces / len(workspaces)
-
-
-def _caption_explore_trace_metrics(workspace: EvidenceWorkspace) -> dict[str, int]:
-    observations = workspace._read_jsonl_dicts("observations.jsonl")
-    explore_observations = [
-        row for row in observations if str(row.get("tool") or row.get("tool_name") or "") == "explore"
-    ]
-    first_explore = explore_observations[0] if explore_observations else {}
-    first_raw = first_explore.get("raw_output") if isinstance(first_explore.get("raw_output"), Mapping) else {}
-    option_biased_first = int(bool((first_raw.get("query_analysis") or {}).get("is_option_biased")) if isinstance(first_raw.get("query_analysis"), Mapping) else False)
-    caption_facts = []
-    wrong_scope = 0
-    downgrades = 0
-    for row in explore_observations:
-        raw = row.get("raw_output") if isinstance(row.get("raw_output"), Mapping) else {}
-        if str(raw.get("mode") or "") not in {"caption_fact", "mixed"} and not raw.get("caption_fact_downgraded"):
-            continue
-        caption_facts.append(raw)
-        condition_match = raw.get("condition_match") if isinstance(raw.get("condition_match"), Mapping) else {}
-        if str(condition_match.get("match_level") or "") == "related_but_wrong_scope":
-            wrong_scope += 1
-        if bool(raw.get("caption_fact_downgraded")):
-            downgrades += 1
-    final_mem_ids = set()
-    for event in workspace._read_jsonl_dicts("trace.jsonl"):
-        event_type = str(event.get("type") or event.get("event_type") or "")
-        if event_type not in {"answer_accepted", "workspace_answer_accepted", "iterative_final", "low_confidence_final"}:
-            continue
-        payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
-        for citation in payload.get("citations") or payload.get("attempted_citations") or ():
-            final_mem_ids.add(str(citation))
-    caption_support_final = 0
-    visual_required_caption_final = 0
-    for memory in workspace.memory_entries():
-        if memory.entry_id not in final_mem_ids or memory.kind != "caption_support":
-            continue
-        caption_support_final = 1
-        if bool(memory.metadata.get("requires_visual_verify")) or bool(memory.metadata.get("cannot_final_cite")):
-            visual_required_caption_final = 1
-    return {
-        "option_biased_first_query": option_biased_first,
-        "wrong_scope_caption_facts": wrong_scope,
-        "caption_fact_downgrades": downgrades,
-        "caption_fact_observations": len(caption_facts),
-        "caption_support_final": caption_support_final,
-        "visual_required_but_caption_final": visual_required_caption_final,
-        "final_case": 1,
-    }
-
-
-def _evidence_provenance_completeness(workspaces: Sequence[EvidenceWorkspace]) -> float:
-    if not workspaces:
-        return 0.0
-    complete = sum(1 for workspace in workspaces if workspace.evidence_chain_summaries(max_chains=1))
-    return complete / len(workspaces)
-
-
-def _hard_skill_followup_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[int, bool]:
-    explicit_attempts = sum(1 for event in events if _event_type(event) == "followup_attempt")
-    if explicit_attempts:
-        return explicit_attempts, any(
-            _event_type(event) == "iterative_final"
-            or _event_type(event) == "low_confidence_final"
-            or (
-                _event_type(event) == "iterative_answer_agent"
-                and str(_event_payload(event).get("status", "")) in {"final", "low_confidence_final"}
-            )
-            for event in events
-        )
-    in_hard_skill = False
-    attempts = 0
-    success = False
-    for event in events:
-        event_type = _event_type(event)
-        payload = _event_payload(event)
-        if event_type == "hard_skill_runtime":
-            in_hard_skill = True
-            continue
-        if event_type == "tool_use" and in_hard_skill and str(payload.get("tool", "")) in {
-            "ground_question",
-            "caption_segment",
-            "vision_read",
-        }:
-            attempts += 1
-            continue
-        if event_type == "iterative_final" and str(payload.get("source", "")) in {
-            "hard_skill_runtime",
-            "timeline_ordering",
-        }:
-            success = True
-            in_hard_skill = False
-            continue
-        if event_type == "hard_skill_followup_handoff":
-            in_hard_skill = False
-    return attempts, success
-
-
-def _context_budget_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[int, list[int]]:
-    overflows = 0
-    token_totals: list[int] = []
-    for event in events:
-        if _event_type(event) != "context_budget_report":
-            continue
-        payload = _event_payload(event)
-        if bool(payload.get("overflow")):
-            overflows += 1
-        used = payload.get("used_tokens_per_slot", {})
-        if not isinstance(used, Mapping):
-            continue
-        token_totals.append(sum(int(value or 0) for value in used.values()))
-    return overflows, token_totals
-
-
-def _unsupported_citation_trace_metrics(
-    workspace: EvidenceWorkspace,
-    events: Sequence[Mapping[str, Any]],
-) -> tuple[int, int]:
-    observations = {
-        str(row.get("observation_id", "")): row
-        for row in _load_observations(workspace)
-        if row.get("observation_id")
-    }
-    unsupported_finals = 0
-    finals = 0
-    for event in events:
-        if _event_type(event) != "iterative_final":
-            continue
-        finals += 1
-        payload = _event_payload(event)
-        citations = payload.get("citations", [])
-        if not isinstance(citations, Sequence) or isinstance(citations, (str, bytes)):
-            continue
-        if any(_observation_confidence_signal(observations.get(str(citation), {})) == "unsupported" for citation in citations):
-            unsupported_finals += 1
-    return unsupported_finals, finals
-
-
-def _mutex_conflict_detection_count(events: Sequence[Mapping[str, Any]]) -> int:
-    count = 0
-    for event in events:
-        event_type = _event_type(event)
-        payload = _event_payload(event)
-        if event_type == "iterative_answer_agent" and str(payload.get("status", "")) != "need_more_evidence":
-            continue
-        if event_type not in {"iterative_answer_agent", "iterative_final_blocked", "answer_agent_need_more_evidence"}:
-            continue
-        if "mutex_conflict" in _payload_text(payload).lower():
-            count += 1
-    return count
-
-
-def _timeline_completeness_scores(events: Sequence[Mapping[str, Any]]) -> list[float]:
-    scores: list[float] = []
-    for event in events:
-        event_type = _event_type(event)
-        payload = _event_payload(event)
-        if event_type == "iterative_timeline_temporal_decision":
-            explicit = _explicit_completeness_score(payload)
-            if explicit is not None:
-                scores.append(explicit)
-                continue
-            matched = payload.get("matched_events", [])
-            if isinstance(matched, Sequence) and not isinstance(matched, (str, bytes)) and matched:
-                scores.append(1.0)
-            continue
-        if event_type != "timeline_ordering_missing_entity":
-            continue
-        explicit = _explicit_completeness_score(payload)
-        if explicit is not None:
-            scores.append(explicit)
-            continue
-        targets = _string_list(payload.get("target_facts", []))
-        missing = set(_string_list(payload.get("missing_entities", [])))
-        if targets:
-            satisfied = sum(1 for target in targets if target not in missing)
-            scores.append(satisfied / len(targets))
-    return scores
-
-
-def _degenerate_observation_count(events: Sequence[Mapping[str, Any]]) -> int:
-    observation_ids = set()
-    anonymous_events = 0
-    for event in events:
-        if _event_type(event) != "tool_output_degenerate":
-            continue
-        payload = _event_payload(event)
-        observation_id = str(payload.get("observation_id", "")).strip()
-        if observation_id:
-            observation_ids.add(observation_id)
-        else:
-            anonymous_events += 1
-    return len(observation_ids) + anonymous_events
-
-
-def _normalization_note_trace_metrics(events: Sequence[Mapping[str, Any]]) -> tuple[int, int]:
-    notes = 0
-    rounds = 0
-    for event in events:
-        if _event_type(event) != "iterative_normalization_empty":
-            continue
-        payload = _event_payload(event)
-        note_payload = payload.get("notes", [])
-        if not isinstance(note_payload, Sequence) or isinstance(note_payload, (str, bytes)):
-            continue
-        rounds += 1
-        notes += len(note_payload)
-    return notes, rounds
-
-
-def _observation_count(workspace: EvidenceWorkspace) -> int:
-    return len(_load_observations(workspace))
-
-
-def _load_observations(workspace: EvidenceWorkspace) -> list[dict[str, Any]]:
-    path = workspace.root / "observations.jsonl"
-    if not path.exists():
-        return []
-    observations: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                observations.append(payload)
-    return observations
-
-
-def _observation_confidence_signal(observation: Mapping[str, Any]) -> str:
-    signal = str(observation.get("confidence_signal", "")).strip().lower()
-    if signal:
-        return signal
-    raw_output = observation.get("raw_output", {})
-    if isinstance(raw_output, Mapping):
-        return str(raw_output.get("confidence_signal", "")).strip().lower()
-    return ""
-
-
-def _explicit_completeness_score(payload: Mapping[str, Any]) -> float | None:
-    if "required_slots" not in payload and "satisfied_slots" not in payload:
-        return None
-    required = _numeric_slot_count(payload.get("required_slots"))
-    if required <= 0:
-        return None
-    satisfied = _numeric_slot_count(payload.get("satisfied_slots"))
-    return max(0.0, min(1.0, satisfied / required))
-
-
-def _numeric_slot_count(value: Any) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return len(value)
-    return 0
-
-
-def _payload_text(payload: Any) -> str:
-    if isinstance(payload, Mapping):
-        return " ".join(_payload_text(value) for value in payload.values())
-    if isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
-        return " ".join(_payload_text(value) for value in payload)
-    return str(payload)
-
-
-def _string_list(value: Any) -> list[str]:
-    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        return []
-    return [str(item) for item in value if str(item)]
-
-
-def _load_trace_events(workspace: EvidenceWorkspace) -> list[dict[str, Any]]:
-    trace_path = workspace.root / "trace.jsonl"
-    if not trace_path.exists():
-        return []
-    events: list[dict[str, Any]] = []
-    with trace_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                events.append(payload)
-    return events
-
-
-def _event_type(event: Mapping[str, Any]) -> str:
-    return str(event.get("type") or event.get("event") or "")
-
-
-def _event_payload(event: Mapping[str, Any]) -> Mapping[str, Any]:
-    payload = event.get("payload", {})
-    return payload if isinstance(payload, Mapping) else {}
-
-
 def _case_strategies(case: Mapping[str, Any]) -> Mapping[str, Any]:
     strategies = case.get("strategies", {})
     return strategies if isinstance(strategies, Mapping) else {}
-
-
-def compute_nframes_metrics(
-    workspace: EvidenceWorkspace | Sequence[EvidenceWorkspace],
-) -> tuple[float, dict[str, dict[int, int]]]:
-    workspaces = [workspace] if isinstance(workspace, EvidenceWorkspace) else list(workspace)
-    manifests = [manifest for item in workspaces for manifest in item.load_all_manifests()]
-    if not manifests:
-        return 1.0, {}
-
-    hits = sum(1 for manifest in manifests if manifest.nframes == manifest.target_nframes)
-    histogram: dict[str, dict[int, int]] = {}
-    for manifest in manifests:
-        tool_histogram = histogram.setdefault(manifest.created_by_tool, {})
-        tool_histogram[manifest.nframes] = tool_histogram.get(manifest.nframes, 0) + 1
-    return hits / len(manifests), _sorted_histogram(histogram)
-
-
-def _workspaces_from_results(results: Sequence[Mapping[str, Any]]) -> list[EvidenceWorkspace]:
-    workspaces = []
-    for case in results:
-        raw_artifacts = case.get("raw_artifacts", {})
-        if not isinstance(raw_artifacts, Mapping):
-            continue
-        workspace_paths = raw_artifacts.get("workspaces", {})
-        if not isinstance(workspace_paths, Mapping):
-            continue
-        for path in workspace_paths.values():
-            workspace_root = Path(str(path))
-            if workspace_root.exists():
-                workspaces.append(EvidenceWorkspace(root=workspace_root))
-    return workspaces
-
-
-def _sorted_histogram(histogram: Mapping[str, Mapping[int, int]]) -> dict[str, dict[int, int]]:
-    return {
-        tool: {frames: counts[frames] for frames in sorted(counts)}
-        for tool, counts in sorted(histogram.items())
-    }
 
 
 def run_strategy(

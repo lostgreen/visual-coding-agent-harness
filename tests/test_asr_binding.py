@@ -5,7 +5,7 @@ from visual_coding_agent_harness.backends.base import BackendRequest, BackendRes
 from visual_coding_agent_harness.legacy.contracts_v2 import ClaimModality, TargetRegistry, TargetSpec
 from visual_coding_agent_harness.legacy.interpreter import ProgramInterpreter
 from visual_coding_agent_harness.legacy.tools.asr_binding import build_asr_binding_registry
-from visual_coding_agent_harness.video._map import VideoMap, VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.legacy.video_map import VideoMap, VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 

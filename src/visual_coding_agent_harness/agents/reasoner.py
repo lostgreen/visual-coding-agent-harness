@@ -12,7 +12,7 @@ from visual_coding_agent_harness.backends.base import BackendRequest, VisionLang
 from visual_coding_agent_harness.agents.driver import WorkspaceRunResult
 from visual_coding_agent_harness.contracts.query import ScopedQuery, VerifiableGoal
 from visual_coding_agent_harness.contracts.report import DigestItem
-from visual_coding_agent_harness.video._artifacts import is_image_path
+from visual_coding_agent_harness.video.pipeline import is_image_path
 
 
 @dataclass(frozen=True)
@@ -55,12 +55,11 @@ class Reasoner:
         question: str,
         options: Mapping[str, str],
         index_context: str,
-        overview_path: str = "",
         previous_digest: Sequence[DigestItem] = (),
         round_number: int = 1,
         overview_image_path: str = "",
     ) -> ReasonerDecision:
-        media_path = _valid_overview_image_path(overview_image_path or overview_path)
+        media_path = _valid_overview_image_path(overview_image_path)
         response = self.backend.generate(
             BackendRequest(
                 task="multi_v3_reasoner",

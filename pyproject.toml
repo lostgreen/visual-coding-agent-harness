@@ -24,3 +24,4 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+exclude = ["visual_coding_agent_harness.legacy*"]

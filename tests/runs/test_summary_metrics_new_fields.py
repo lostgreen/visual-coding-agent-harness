@@ -15,7 +15,7 @@ def test_phase_d_metrics_default_to_zero():
     assert summary.normalization_notes_per_round == 0.0
 
 
-def test_summary_payload_aggregates_phase_d_trace_metrics(tmp_path: Path):
+def test_summary_payload_ignores_legacy_workspace_trace_metrics(tmp_path: Path):
     unsupported = EvidenceWorkspace.create(tmp_path, "unsupported_final")
     unsupported_obs = unsupported.write_observation(
         tool_name="vision_read",
@@ -88,11 +88,11 @@ def test_summary_payload_aggregates_phase_d_trace_metrics(tmp_path: Path):
         ],
     )
 
-    assert summary["unsupported_citation_rate"] == 0.5
-    assert summary["mutex_conflict_detection_count"] == 1
-    assert summary["timeline_completeness"] == 0.75
-    assert summary["degenerate_observation_rate"] == 0.25
-    assert summary["normalization_notes_per_round"] == 1.5
+    assert summary["unsupported_citation_rate"] == 0.0
+    assert summary["mutex_conflict_detection_count"] == 0
+    assert summary["timeline_completeness"] == 0.0
+    assert summary["degenerate_observation_rate"] == 0.0
+    assert summary["normalization_notes_per_round"] == 0.0
 
 
 def test_report_metrics_exposes_phase_d_strategy_metrics(tmp_path: Path):

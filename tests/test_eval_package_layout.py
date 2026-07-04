@@ -6,7 +6,8 @@ from pathlib import Path
 
 
 def test_videomme_eval_code_lives_in_package_with_legacy_runs_compatibility():
-    from visual_coding_agent_harness.evals.videomme import metrics, runner, summary_schema, training_trajectory, trajectory_markdown
+    from visual_coding_agent_harness.evals.videomme import metrics, runner, summary_schema, trajectory_markdown
+    from visual_coding_agent_harness.legacy.evals.videomme import training_trajectory
     from runs import eval_runner, report_metrics
     from runs.summary_schema import RunSummary
     from runs.training_trajectory import TrainingTrajectory

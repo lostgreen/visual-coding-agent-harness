@@ -7,8 +7,8 @@ from typing import Callable, Sequence
 from visual_coding_agent_harness.backends.base import VisionLanguageBackend
 from visual_coding_agent_harness.contracts.query import ScopedQuery
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, InvestigationReport, VerifyRequest
-from visual_coding_agent_harness.tools.explore import explore
-from visual_coding_agent_harness.tools.verify import verify_window
+from visual_coding_agent_harness.tools.vlm_tools import explore
+from visual_coding_agent_harness.tools.vlm_tools import verify_window
 from visual_coding_agent_harness.video.index import Shot, VideoIndex
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
 

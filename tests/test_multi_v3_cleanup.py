@@ -22,7 +22,24 @@ def test_legacy_agent_tool_and_ledger_modules_are_removed() -> None:
         "visual_coding_agent_harness.agents.workspace_agent",
         "visual_coding_agent_harness.agents.multi",
         "visual_coding_agent_harness.agents.result",
+        "visual_coding_agent_harness.agents.debug_hooks",
+        "visual_coding_agent_harness.core.registry",
+        "visual_coding_agent_harness.core.protocol",
+        "visual_coding_agent_harness.evidence",
+        "visual_coding_agent_harness.evidence.answer_operators",
+        "visual_coding_agent_harness.evidence.frame_set",
+        "visual_coding_agent_harness.evidence.item",
+        "visual_coding_agent_harness.evidence.lexicon",
+        "visual_coding_agent_harness.evidence.option_relations",
+        "visual_coding_agent_harness.evidence.projection",
+        "visual_coding_agent_harness.memory",
+        "visual_coding_agent_harness.memory.anchor",
+        "visual_coding_agent_harness.memory.entry",
+        "visual_coding_agent_harness.task",
+        "visual_coding_agent_harness.task.spec",
         "visual_coding_agent_harness.tools.workspace_primitives",
+        "visual_coding_agent_harness.tools.explore",
+        "visual_coding_agent_harness.tools.verify",
         "visual_coding_agent_harness.tools.asr_binding",
         "visual_coding_agent_harness.tools.dummy",
         "visual_coding_agent_harness.tools.image_atomic",
@@ -41,6 +58,8 @@ def test_legacy_agent_tool_and_ledger_modules_are_removed() -> None:
         "visual_coding_agent_harness.tools.verification",
         "visual_coding_agent_harness.workspace.search_ledger",
         "visual_coding_agent_harness.workspace.views",
+        "visual_coding_agent_harness.workspace.digest",
+        "visual_coding_agent_harness.workspace.evidence",
         "visual_coding_agent_harness.workspace.context_budget",
         "visual_coding_agent_harness.workspace.distill",
         "visual_coding_agent_harness.workspace.evidence_ledger",
@@ -55,19 +74,22 @@ def test_legacy_agent_tool_and_ledger_modules_are_removed() -> None:
         "visual_coding_agent_harness.contracts.target_registry",
         "visual_coding_agent_harness.contracts.targets",
         "visual_coding_agent_harness.video.artifacts",
+        "visual_coding_agent_harness.video._artifacts",
         "visual_coding_agent_harness.video.keyframes",
+        "visual_coding_agent_harness.video._keyframes",
         "visual_coding_agent_harness.video.map",
+        "visual_coding_agent_harness.video._map",
         "visual_coding_agent_harness.video.scene_aggregate",
+        "visual_coding_agent_harness.video._scene_aggregate",
         "visual_coding_agent_harness.video.shot_detect",
+        "visual_coding_agent_harness.video._shot_detect",
         "visual_coding_agent_harness.video.text_norm",
-        "visual_coding_agent_harness.evidence.need",
-        "visual_coding_agent_harness.evidence.ledger",
-        "visual_coding_agent_harness.evidence.order_extraction",
-        "visual_coding_agent_harness.evidence.order_hypotheses",
-        "visual_coding_agent_harness.evidence.predicates",
+        "visual_coding_agent_harness.video._text_norm",
+        "visual_coding_agent_harness.evals.videomme.training_trajectory",
+        "visual_coding_agent_harness.evals.videomme.workspace_round_log",
     )
 
-    assert {name: importlib.util.find_spec(name) for name in removed_modules} == {
+    assert {name: _safe_find_spec(name) for name in removed_modules} == {
         name: None for name in removed_modules
     }
 
@@ -77,22 +99,24 @@ def test_active_surface_file_inventory_is_small() -> None:
 
     assert _py_files(repo / "src/visual_coding_agent_harness/agents") <= {
         "__init__.py",
-        "debug_hooks.py",
         "driver.py",
         "investigator.py",
         "reasoner.py",
     }
     assert _py_files(repo / "src/visual_coding_agent_harness/workspace") <= {
         "__init__.py",
-        "digest.py",
-        "evidence.py",
         "investigator_ws.py",
     }
     assert _py_files(repo / "src/visual_coding_agent_harness/tools") <= {
         "__init__.py",
-        "explore.py",
         "frame_cache.py",
-        "verify.py",
+        "vlm_tools.py",
+    }
+    assert _py_files(repo / "src/visual_coding_agent_harness/core") <= {
+        "__init__.py",
+        "budget.py",
+        "contracts.py",
+        "schemas.py",
     }
     assert _py_files(repo / "src/visual_coding_agent_harness/contracts") <= {
         "__init__.py",
@@ -105,6 +129,7 @@ def test_active_surface_file_inventory_is_small() -> None:
         "build.py",
         "index.py",
         "overview.py",
+        "pipeline.py",
     }
 
 
@@ -114,12 +139,12 @@ def test_active_multi_v3_modules_do_not_import_legacy_workspace_surface() -> Non
         "src/visual_coding_agent_harness/agents/driver.py",
         "src/visual_coding_agent_harness/agents/investigator.py",
         "src/visual_coding_agent_harness/agents/reasoner.py",
-        "src/visual_coding_agent_harness/tools/explore.py",
-        "src/visual_coding_agent_harness/tools/verify.py",
+        "src/visual_coding_agent_harness/evals/videomme/metrics.py",
+        "src/visual_coding_agent_harness/evals/videomme/runner.py",
+        "src/visual_coding_agent_harness/tools/frame_cache.py",
+        "src/visual_coding_agent_harness/tools/vlm_tools.py",
         "src/visual_coding_agent_harness/workspace/__init__.py",
         "src/visual_coding_agent_harness/workspace/investigator_ws.py",
-        "src/visual_coding_agent_harness/workspace/evidence.py",
-        "src/visual_coding_agent_harness/workspace/digest.py",
         "src/visual_coding_agent_harness/contracts/__init__.py",
         "src/visual_coding_agent_harness/contracts/evidence.py",
         "src/visual_coding_agent_harness/contracts/query.py",
@@ -128,9 +153,14 @@ def test_active_multi_v3_modules_do_not_import_legacy_workspace_surface() -> Non
         "src/visual_coding_agent_harness/video/index.py",
         "src/visual_coding_agent_harness/video/build.py",
         "src/visual_coding_agent_harness/video/overview.py",
+        "src/visual_coding_agent_harness/video/pipeline.py",
     )
     forbidden = (
+        "visual_coding_agent_harness.legacy",
         "visual_coding_agent_harness.agents.result",
+        "visual_coding_agent_harness.agents.debug_hooks",
+        "visual_coding_agent_harness.tools.explore",
+        "visual_coding_agent_harness.tools.verify",
         "visual_coding_agent_harness.tools.asr_binding",
         "visual_coding_agent_harness.tools.dummy",
         "visual_coding_agent_harness.tools.image_atomic",
@@ -146,11 +176,19 @@ def test_active_multi_v3_modules_do_not_import_legacy_workspace_surface() -> Non
         "visual_coding_agent_harness.contracts.target_registry",
         "visual_coding_agent_harness.contracts.targets",
         "visual_coding_agent_harness.video.artifacts",
+        "visual_coding_agent_harness.video._artifacts",
         "visual_coding_agent_harness.video.keyframes",
+        "visual_coding_agent_harness.video._keyframes",
         "visual_coding_agent_harness.video.map",
+        "visual_coding_agent_harness.video._map",
         "visual_coding_agent_harness.video.scene_aggregate",
+        "visual_coding_agent_harness.video._scene_aggregate",
         "visual_coding_agent_harness.video.shot_detect",
+        "visual_coding_agent_harness.video._shot_detect",
         "visual_coding_agent_harness.video.text_norm",
+        "visual_coding_agent_harness.video._text_norm",
+        "visual_coding_agent_harness.workspace.digest",
+        "visual_coding_agent_harness.workspace.evidence",
         "visual_coding_agent_harness.workspace.context_budget",
         "visual_coding_agent_harness.workspace.distill",
         "visual_coding_agent_harness.workspace.evidence_ledger",
@@ -173,7 +211,7 @@ def test_active_multi_v3_modules_do_not_import_legacy_workspace_surface() -> Non
             else:
                 continue
             for imported in imports:
-                if imported in forbidden:
+                if any(imported == item or imported.startswith(item + ".") for item in forbidden):
                     offenders.append(f"{relative_path}: {imported}")
 
     assert offenders == []
@@ -181,6 +219,13 @@ def test_active_multi_v3_modules_do_not_import_legacy_workspace_surface() -> Non
 
 def _py_files(path: Path) -> set[str]:
     return {item.name for item in path.glob("*.py")}
+
+
+def _safe_find_spec(name: str):
+    try:
+        return importlib.util.find_spec(name)
+    except ModuleNotFoundError:
+        return None
 
 
 def _public_py_files(path: Path) -> set[str]:

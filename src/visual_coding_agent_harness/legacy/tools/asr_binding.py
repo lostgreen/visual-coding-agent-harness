@@ -7,8 +7,8 @@ import re
 from typing import Any, Mapping, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
-from visual_coding_agent_harness.core.registry import ToolRegistry, tool
-from visual_coding_agent_harness.video._map import VideoMapSegment, VideoMapStore
+from visual_coding_agent_harness.legacy.core.registry import ToolRegistry, tool
+from visual_coding_agent_harness.legacy.video_map import VideoMapSegment, VideoMapStore
 from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
 
 

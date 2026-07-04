@@ -12,7 +12,7 @@ from string import Formatter
 from typing import Any, Callable, Dict, Mapping, Sequence
 
 from ..core.contracts import resolve_nframes
-from ..core.registry import ToolRegistry
+from .core.registry import ToolRegistry
 from .workspace_v2 import EvidenceRecord, EvidenceWorkspace, MapUpdateProposal, Observation
 from .workspace_v2.distill import distill
 from .workspace_v2.output_quality import DEGENERATE_CONFIDENCE_SIGNAL, is_degenerate

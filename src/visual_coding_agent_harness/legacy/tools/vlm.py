@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
-from visual_coding_agent_harness.core.registry import ToolRegistry, tool
+from visual_coding_agent_harness.legacy.core.registry import ToolRegistry, tool
 from visual_coding_agent_harness.legacy.tools import image_atomic
 from visual_coding_agent_harness.legacy.workspace_v2.open_questions import exploration_question
 from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace

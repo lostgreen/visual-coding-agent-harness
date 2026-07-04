@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from visual_coding_agent_harness.legacy.contracts_v2 import TargetRegistry, TargetSpec
-from visual_coding_agent_harness.evidence.projection import ProjectionEvidence, project_option_support
-from visual_coding_agent_harness.task.spec import TaskSpec, build_task_spec
+from visual_coding_agent_harness.legacy.evidence.projection import ProjectionEvidence, project_option_support
+from visual_coding_agent_harness.legacy.task.spec import TaskSpec, build_task_spec
 
 
 def _target(target_id: str, text: str, *aliases: str) -> TargetSpec:

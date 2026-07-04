@@ -22,7 +22,7 @@ from ..contracts_v2 import (
     build_ordered_transcript_sequence,
 )
 from ...core.schemas import EvidenceRowV2
-from ...memory import MemoryEntry, SourceAnchor, excerpt_hash, normalized_text
+from ..memory import MemoryEntry, SourceAnchor, excerpt_hash, normalized_text
 
 
 _TARGET_REF_RE = re.compile(r"^T[1-9]\d*$")

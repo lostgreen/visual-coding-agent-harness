@@ -12,7 +12,7 @@ from visual_coding_agent_harness.agents.reasoner import Reasoner
 from visual_coding_agent_harness.backends.base import BackendRequest, BackendResponse
 from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope, ScopedQuery, VerifiableGoal
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, VerifyRequest
-from visual_coding_agent_harness.tools.explore import ExploreResult
+from visual_coding_agent_harness.tools.vlm_tools import ExploreResult
 from visual_coding_agent_harness.video.index import Frame, Scene, Shot, VideoIndex
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
 
@@ -108,7 +108,7 @@ def test_reasoner_parses_plan_action_into_goals_and_scoped_queries() -> None:
         question="Which option is supported?",
         options={"A": "red car", "C": "blue car"},
         index_context="sc01 [0-8] Street",
-        overview_path="/overview/scene_timeline_grid.json",
+        overview_image_path="/overview/scene_timeline_grid.json",
         previous_digest=(),
         round_number=1,
     )
@@ -132,7 +132,7 @@ def test_reasoner_only_attaches_existing_image_overview(tmp_path: Path) -> None:
         question="Which option is supported?",
         options={"A": "red car"},
         index_context="sc01",
-        overview_path=str(overview),
+        overview_image_path=str(overview),
         previous_digest=(),
         round_number=1,
     )
@@ -161,7 +161,7 @@ def test_reasoner_parses_answer_action_into_result() -> None:
         question="Which option is supported?",
         options={"A": "red car"},
         index_context="sc01",
-        overview_path="/overview.json",
+        overview_image_path="/overview.json",
         previous_digest=(),
         round_number=2,
     )
@@ -268,7 +268,7 @@ def test_driver_dispatches_queries_in_parallel_and_returns_reasoner_answer(tmp_p
         question="Which option is supported?",
         options={"A": "red car"},
         index_context="sc01",
-        overview_path="/overview.json",
+        overview_image_path="/overview.json",
     )
 
     assert time.perf_counter() - started < 0.15

@@ -72,7 +72,7 @@ class EvalRunnerTest(unittest.TestCase):
                 self.valid_scene_ids = tuple(valid_scene_ids)
                 created["drivers"].append(self)
 
-            def run(self, *, question, options, index_context, overview_path, overview_image_path=""):
+            def run(self, *, question, options, index_context, overview_image_path=""):
                 self.workspace.root.mkdir(parents=True, exist_ok=True)
                 query_dir = self.workspace.root / "queries" / "q1"
                 query_dir.mkdir(parents=True, exist_ok=True)
@@ -141,23 +141,18 @@ class EvalRunnerTest(unittest.TestCase):
                         with patch.object(eval_runner, "ReasonerV3", FakeReasoner, create=True):
                             with patch.object(eval_runner, "InvestigatorV3", FakeInvestigator, create=True):
                                 with patch.object(eval_runner, "MultiV3Driver", FakeDriver, create=True):
-                                    with patch.object(
-                                        eval_runner.EvidenceWorkspace,
-                                        "create",
-                                        side_effect=AssertionError("legacy workspace create should not run"),
-                                    ):
-                                        raw = eval_runner.run_loop(
-                                            backend=object(),
-                                            video_path="/videos/demo.mp4",
-                                            question="Question: Which object is visible?\nOptions:\nA. red car\nB. blue car",
-                                            duration_sec=12.0,
-                                            run_id="case_multi_v3",
-                                            scene_index=scene_index,
-                                            workspace_root=workspace_root,
-                                            budget=AgentBudget(max_rounds=4),
-                                            extract_clips=False,
-                                            strategy="multi_v3",
-                                        )
+                                    raw = eval_runner.run_loop(
+                                        backend=object(),
+                                        video_path="/videos/demo.mp4",
+                                        question="Question: Which object is visible?\nOptions:\nA. red car\nB. blue car",
+                                        duration_sec=12.0,
+                                        run_id="case_multi_v3",
+                                        scene_index=scene_index,
+                                        workspace_root=workspace_root,
+                                        budget=AgentBudget(max_rounds=4),
+                                        extract_clips=False,
+                                        strategy="multi_v3",
+                                    )
 
             self.assertEqual(created["indexes"][0][0], scene_index)
             self.assertIsInstance(created["overviews"][0][0], FakeVideoIndex)

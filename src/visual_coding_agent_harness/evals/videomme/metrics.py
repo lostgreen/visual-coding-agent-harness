@@ -5,8 +5,6 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from visual_coding_agent_harness.legacy.workspace_v2 import EvidenceWorkspace
-
 
 INCOMPLETE_STATUSES = {
     "max_rounds_reached",
@@ -351,45 +349,7 @@ def _arbitration_report(
     }
     if workspace_path is None or not workspace_path.exists():
         return default
-
-    table = EvidenceWorkspace(workspace_path).evidence_table(
-        question=question,
-        options=options if isinstance(options, Sequence) and not isinstance(options, (str, bytes)) else [],
-    )
-    support = _weighted_option_support(table)
-    legacy_worker_vote_rows = _legacy_worker_vote_rows(table)
-    supported_options = [option for option, score in support.items() if option != "unassigned" and score > 0]
-    has_conflict = len(supported_options) >= 2
-    top_supported_option = _top_supported_option(support)
-    normalized_choice = choice.strip().upper()[:1]
-    option_support_consistency = (
-        top_supported_option == normalized_choice if final and top_supported_option and normalized_choice else None
-    )
-    rows_by_obs = {str(row["obs_id"]): row for row in table.get("rows", [])}
-    cited_rows = [rows_by_obs[citation] for citation in citations if citation in rows_by_obs]
-    unsupported_final = bool(final and (not cited_rows or all(_is_weak_row(row) for row in cited_rows)))
-    final_with_conflict = bool(
-        final
-        and has_conflict
-        and (
-            option_support_consistency is False
-            or _has_uncited_well_grounded_conflict(
-                table=table,
-                choice=normalized_choice,
-                citations=citations,
-            )
-        )
-    )
-    return {
-        "has_conflict": has_conflict,
-        "conflict_options": supported_options,
-        "option_support": {option: round(score, 3) for option, score in support.items()},
-        "top_supported_option": top_supported_option,
-        "option_support_consistency": option_support_consistency,
-        "final_with_conflict": final_with_conflict,
-        "unsupported_final": unsupported_final,
-        "legacy_worker_vote_rows": legacy_worker_vote_rows,
-    }
+    return default
 
 
 def _weighted_option_support(table: Mapping[str, Any]) -> dict[str, float]:

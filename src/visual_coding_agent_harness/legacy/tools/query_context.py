@@ -6,10 +6,10 @@ from typing import Literal, Mapping, Optional
 
 from visual_coding_agent_harness.backends.base import BackendRequest, VisionLanguageBackend
 from visual_coding_agent_harness.core.contracts import resolve_nframes
-from visual_coding_agent_harness.core.registry import ToolRegistry, tool
+from visual_coding_agent_harness.legacy.core.registry import ToolRegistry, tool
 from visual_coding_agent_harness.legacy.workspace_v2.open_questions import exploration_question
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, frame_cache_artifact_ref
-from visual_coding_agent_harness.video._map import VideoMap, VideoMapStore
+from visual_coding_agent_harness.legacy.video_map import VideoMap, VideoMapStore
 
 
 DEFAULT_MAX_PIXELS = 151200
