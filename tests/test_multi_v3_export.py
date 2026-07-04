@@ -49,12 +49,36 @@ def test_multi_v3_exports_exploration_records_jsonl(tmp_path: Path) -> None:
     assert payload["schema_version"] == "MultiV3ExplorationRecordsV1"
     assert payload["record_count"] == 1
     assert rows[0]["schema_version"] == "MultiV3ExplorationRecordV1"
+    assert rows[0]["record_type"] == "query_exploration"
     assert rows[0]["query_id"] == "q1"
     assert rows[0]["request"]["goal_id"] == "g1"
     assert rows[0]["explore"]["candidate_count"] == 1
     assert rows[0]["verify"][0]["finding_count"] == 1
     assert rows[0]["report"]["status"] == "satisfied"
     assert rows[0]["artifacts"]["verify"] == ["queries/q1/verify_sc01_sh001.json"]
+
+
+def test_multi_v3_exports_direct_final_exploration_record(tmp_path: Path) -> None:
+    workspace = InvestigatorWorkspace(tmp_path / "run" / "multi_v3")
+    output_path = tmp_path / "run" / "artifacts" / "exploration_records" / "exploration_records.jsonl"
+
+    payload = export_multi_v3_exploration_records(
+        workspace,
+        question="Question: What is the video mainly about?",
+        video_path="/videos/demo.mp4",
+        final={"answer": "C", "status": "final", "citations": ["sc01_sh001"], "confidence": "medium"},
+        round_count=1,
+        output_path=output_path,
+    )
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
+
+    assert payload["record_count"] == 1
+    assert rows[0]["record_type"] == "final_decision"
+    assert rows[0]["query_id"] == "__final__"
+    assert rows[0]["case"]["question"] == "Question: What is the video mainly about?"
+    assert rows[0]["final"]["answer"] == "C"
+    assert rows[0]["final"]["round_count"] == 1
+    assert rows[0]["explore"]["candidate_count"] == 0
 
 
 def test_multi_v3_exports_minimal_training_trajectory(tmp_path: Path) -> None:

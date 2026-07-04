@@ -309,6 +309,10 @@ def run_loop(
     )
     exploration_records_payload = export_multi_v3_exploration_records(
         investigator_workspace,
+        question=question,
+        video_path=video_path,
+        final=final_payload,
+        round_count=_result_round_count(result),
         output_path=exploration_records_path,
     )
     workspace_round_log = export_multi_v3_workspace_round_log(

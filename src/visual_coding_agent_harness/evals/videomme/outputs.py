@@ -232,10 +232,18 @@ def export_multi_v3_evidence_chains(
 def export_multi_v3_exploration_records(
     investigator_workspace: Any,
     *,
+    question: str = "",
+    video_path: str = "",
+    final: Mapping[str, Any] | None = None,
+    round_count: int | None = None,
     output_path: str | Path | None = None,
 ) -> dict[str, Any]:
     root = _workspace_root(investigator_workspace)
-    records = [_exploration_record(root, query_dir) for query_dir in _query_dirs(root)]
+    case = _case_record(question=question, video_path=video_path)
+    final_record = _final_record(final or {}, round_count=round_count)
+    records = [_exploration_record(root, query_dir, case=case, final=final_record) for query_dir in _query_dirs(root)]
+    if not records:
+        records.append(_direct_final_record(root, case=case, final=final_record))
     path = (
         Path(output_path)
         if output_path is not None
@@ -467,7 +475,7 @@ def _training_tool_io(root: Path) -> tuple[list[dict[str, Any]], list[dict[str, 
     return calls, results
 
 
-def _exploration_record(root: Path, query_dir: Path) -> dict[str, Any]:
+def _exploration_record(root: Path, query_dir: Path, *, case: Mapping[str, Any], final: Mapping[str, Any]) -> dict[str, Any]:
     request = _read_json(query_dir / "request.json")
     explore = _read_json(query_dir / "explore.json")
     report = _read_json(query_dir / "report.json")
@@ -485,7 +493,9 @@ def _exploration_record(root: Path, query_dir: Path) -> dict[str, Any]:
     ]
     return {
         "schema_version": "MultiV3ExplorationRecordV1",
+        "record_type": "query_exploration",
         "query_id": query_dir.name,
+        "case": dict(case),
         "request": {
             "goal_id": str(request.get("goal_id", "")),
             "natural_query": str(request.get("natural_query", "")),
@@ -507,12 +517,68 @@ def _exploration_record(root: Path, query_dir: Path) -> dict[str, Any]:
             "unresolved": _sequence_value(report.get("unresolved")),
             "cost": _mapping_value(report.get("cost")),
         },
+        "final": dict(final),
         "artifacts": {
             "request": _workspace_relative(root, query_dir / "request.json"),
             "explore": _workspace_relative(root, query_dir / "explore.json"),
             "report": _workspace_relative(root, query_dir / "report.json"),
             "verify": [_workspace_relative(root, path) for path in verify_paths],
         },
+    }
+
+
+def _direct_final_record(root: Path, *, case: Mapping[str, Any], final: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "MultiV3ExplorationRecordV1",
+        "record_type": "final_decision",
+        "query_id": "__final__",
+        "case": dict(case),
+        "request": {
+            "goal_id": "final_decision",
+            "natural_query": str(case.get("question", "")),
+            "scope": {},
+            "expected_evidence": "",
+            "budget": {},
+        },
+        "explore": {
+            "candidate_count": 0,
+            "candidates": [],
+        },
+        "verify": [],
+        "report": {
+            "status": str(final.get("status", "")),
+            "finding_count": 0,
+            "findings": [],
+            "explored_shots": [],
+            "verified_shots": [],
+            "unresolved": [],
+            "cost": {},
+        },
+        "final": dict(final),
+        "artifacts": {
+            "workspace_root": root.as_posix(),
+            "request": "",
+            "explore": "",
+            "report": "",
+            "verify": [],
+        },
+    }
+
+
+def _case_record(*, question: str, video_path: str) -> dict[str, Any]:
+    return {
+        "question": str(question),
+        "video_path": str(video_path),
+    }
+
+
+def _final_record(final: Mapping[str, Any], *, round_count: int | None) -> dict[str, Any]:
+    return {
+        "answer": str(final.get("answer", "")),
+        "status": str(final.get("status", "")),
+        "citations": [str(item) for item in final.get("citations", []) or []],
+        "confidence": final.get("confidence"),
+        "round_count": round_count,
     }
 
 
