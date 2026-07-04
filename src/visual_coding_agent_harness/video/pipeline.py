@@ -10,7 +10,7 @@ from typing import Sequence
 
 from PIL import Image
 
-from .index import Frame, Scene, Shot
+from .index import Frame
 
 
 IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
@@ -36,45 +36,6 @@ def compose_shot_grid(
     if not sources:
         raise ValueError("compose_shot_grid requires at least one readable image frame")
     cells = [_fit_image(source, cell_size=cell_size) for source in sources]
-    return _write_grid(cells, out_path=out_path, cols=cols, cell_size=cell_size)
-
-
-def compose_scene_thumb(
-    scene: Scene,
-    shots: Sequence[Shot],
-    out_path: Path,
-    *,
-    cell_size: tuple[int, int] = (320, 180),
-) -> Path:
-    """Create a scene thumbnail from the first shot grid or a placeholder."""
-
-    source = _first_existing_image(
-        [shot.lowres_grid_path for shot in shots]
-        + [frame.thumb_path for shot in shots for frame in shot.frames]
-    )
-    if source is None:
-        image = _placeholder(cell_size)
-    else:
-        image = _fit_image(source, cell_size=cell_size)
-    return _save_jpeg(image, out_path)
-
-
-def compose_scene_timeline_grid(
-    scenes: Sequence[Scene],
-    out_path: Path,
-    *,
-    cols: int = 8,
-    cell_size: tuple[int, int] = (320, 180),
-) -> Path:
-    cells = []
-    for scene in scenes:
-        source = _first_existing_image((scene.scene_thumb_path,))
-        if source is None:
-            cells.append(_placeholder(cell_size))
-        else:
-            cells.append(_fit_image(source, cell_size=cell_size))
-    if not cells:
-        cells = [_placeholder(cell_size)]
     return _write_grid(cells, out_path=out_path, cols=cols, cell_size=cell_size)
 
 
@@ -144,28 +105,40 @@ def sample_shot_frames(
     return tuple(frames)
 
 
-def aggregate_shot_ranges_by_duration(
-    shot_ranges: Sequence[tuple[float, float]],
+def shots_to_beats(
+    shots: Sequence[tuple[float, float]],
+    keyframes: Sequence[str],
     *,
-    max_scene_sec: float = 600.0,
-) -> tuple[tuple[tuple[float, float], ...], ...]:
-    groups: list[list[tuple[float, float]]] = []
-    current: list[tuple[float, float]] = []
-    current_start: float | None = None
-    limit = max(1.0, float(max_scene_sec))
-    for start_sec, end_sec in shot_ranges:
-        start = float(start_sec)
-        end = float(end_sec)
-        if current and current_start is not None and end - current_start > limit:
-            groups.append(current)
-            current = []
-            current_start = None
-        if current_start is None:
-            current_start = start
-        current.append((start, end))
+    sim_threshold: float = 0.85,
+    max_beat_sec: float = 60.0,
+) -> tuple[tuple[int, ...], ...]:
+    """Return adjacent shot-index groups using lightweight perceptual similarity."""
+
+    ranges = tuple((float(start), float(end)) for start, end in shots)
+    if not ranges:
+        return ()
+    signatures = tuple(_image_signature(path) for path in keyframes)
+    groups: list[tuple[int, ...]] = []
+    current: list[int] = [0]
+    current_start = ranges[0][0]
+    previous_signature = signatures[0] if signatures else None
+    threshold = max(0.0, min(1.0, float(sim_threshold)))
+    max_duration = max(0.1, float(max_beat_sec))
+    for index in range(1, len(ranges)):
+        start_sec, end_sec = ranges[index]
+        signature = signatures[index] if index < len(signatures) else None
+        similar = _signature_similarity(previous_signature, signature) >= threshold
+        within_duration = float(end_sec) - float(current_start) <= max_duration
+        if similar and within_duration:
+            current.append(index)
+        else:
+            groups.append(tuple(current))
+            current = [index]
+            current_start = float(start_sec)
+        previous_signature = signature
     if current:
-        groups.append(current)
-    return tuple(tuple(group) for group in groups)
+        groups.append(tuple(current))
+    return tuple(groups)
 
 
 def detect_shots_ffmpeg(
@@ -257,6 +230,27 @@ def _resize_in_place(path: Path, *, size: tuple[int, int]) -> None:
         image = image.convert("RGB")
         image.thumbnail(size)
         image.save(path, format="JPEG", quality=88)
+
+
+def _image_signature(path: str) -> tuple[int, ...] | None:
+    if not is_image_path(path, must_exist=True):
+        return None
+    try:
+        with Image.open(path) as image:
+            small = image.convert("RGB").resize((8, 8))
+            values: list[int] = []
+            for red, green, blue in small.getdata():
+                values.extend((int(red) // 32, int(green) // 32, int(blue) // 32))
+            return tuple(values)
+    except OSError:
+        return None
+
+
+def _signature_similarity(left: tuple[int, ...] | None, right: tuple[int, ...] | None) -> float:
+    if left is None or right is None or len(left) != len(right) or not left:
+        return 0.0
+    same = sum(1 for lhs, rhs in zip(left, right) if lhs == rhs)
+    return float(same) / float(len(left))
 
 
 def _probe_duration(video_path: str) -> float:

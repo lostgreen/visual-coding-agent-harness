@@ -12,6 +12,9 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+import numpy as np
+from PIL import Image
+
 from visual_coding_agent_harness.core.budget import AgentBudget, parse_budget_ratios
 from visual_coding_agent_harness.agents.driver import MultiV3Driver
 from visual_coding_agent_harness.agents.investigator import Investigator as InvestigatorV3
@@ -31,7 +34,7 @@ from visual_coding_agent_harness.evals.videomme.outputs import (
     write_trajectory_markdown,
 )
 from visual_coding_agent_harness.tools.frame_cache import FrameSampler, build_frame_cache_for_video
-from visual_coding_agent_harness.video.build import build_video_index_from_scene_index, build_video_index_from_video
+from visual_coding_agent_harness.video.build import build_video_workspace
 from visual_coding_agent_harness.video.index import Frame, SceneIndex
 from visual_coding_agent_harness.video.pipeline import sample_shot_frames
 from visual_coding_agent_harness.video.overview import build_scene_timeline_overview
@@ -257,9 +260,9 @@ def run_loop(
         overview_image_path = getattr(overview, "grid_image_path", getattr(overview, "grid_path", ""))
         investigator_workspace = InvestigatorWorkspaceV3(workspace_run_root / "multi_v3")
         investigator_kwargs = {
-            "index": video_index,
             "workspace": investigator_workspace,
             "backend": backend,
+            "video_workspace": video_index,
         }
         if verify_frame_sampler is not None:
             investigator_kwargs["frame_sampler"] = _multi_v3_frame_sampler(video_path=video_path, frame_sampler=verify_frame_sampler)
@@ -270,12 +273,13 @@ def run_loop(
             investigator=investigator,
             workspace=investigator_workspace,
             max_rounds=budget.max_rounds,
-            valid_scene_ids=tuple(scene.scene_id for scene in video_index.scenes),
+            valid_scene_ids=tuple(chapter.chapter_id for chapter in video_index.chapters),
+            video_workspace=video_index,
         )
         result = driver.run(
             question=question,
             options=_extract_option_map(question),
-            index_context=video_index.summary() if hasattr(video_index, "summary") else str(video_index),
+            index_context=video_index.timeline_text(fill_missing_titles=True),
             overview_image_path=overview_image_path,
         )
     else:
@@ -391,27 +395,17 @@ def _build_multi_v3_video_index(
     artifact_dir: Path,
     frame_sampler: FrameSampler | None,
 ):
-    if Path(video_path).exists():
-        try:
-            return build_video_index_from_video(
-                video_path,
-                duration_sec,
-                artifact_dir=artifact_dir,
-                asr_cues=_scene_index_asr_cues(scene_index),
-                source_segments=scene_index.segments,
-                keyframe_sampler=_keyframe_sampler_from_frame_sampler(frame_sampler) if frame_sampler is not None else None,
-            )
-        except RuntimeError as exc:
-            raise RuntimeError(
-                "multi_v3 video indexing failed for an existing video; install ffmpeg/ffprobe "
-                "or provide a working frame sampler instead of falling back to the legacy scene-index adapter"
-            ) from exc
-    return build_video_index_from_scene_index(
-        scene_index,
+    ranges = tuple((float(segment.start_sec), float(segment.end_sec)) for segment in scene_index.segments)
+    return build_video_workspace(
+        video_path,
+        duration_sec,
         artifact_dir=artifact_dir,
-        shot_frame_paths=_scene_segment_frame_paths(video_path=video_path, frame_sampler=frame_sampler)
+        asr_cues=_scene_index_asr_cues(scene_index),
+        embedding_backend=_ZeroEmbeddingBackend(),
+        shot_detector=lambda _video_path, _duration: ranges,
+        keyframe_sampler=_keyframe_sampler_from_frame_sampler(frame_sampler)
         if frame_sampler is not None
-        else None,
+        else _placeholder_keyframe_sampler,
     )
 
 
@@ -424,13 +418,6 @@ def _keyframe_sampler_from_frame_sampler(frame_sampler: FrameSampler):
     return sample
 
 
-def _scene_segment_frame_paths(*, video_path: str, frame_sampler: FrameSampler):
-    def paths(segment) -> tuple[str, ...]:
-        return tuple(frame_sampler(video_path, float(segment.start_sec), float(segment.end_sec), DEFAULT_NFRAMES))
-
-    return paths
-
-
 def _frames_from_paths(paths: Sequence[str], *, start_sec: float, end_sec: float) -> tuple[Frame, ...]:
     if not paths:
         return ()
@@ -440,6 +427,24 @@ def _frames_from_paths(paths: Sequence[str], *, start_sec: float, end_sec: float
         time_sec = float(start_sec) if len(paths) == 1 else float(start_sec) + span * float(index - 1) / float(len(paths) - 1)
         frames.append(Frame(frame_id=f"fr{index:03d}", time_sec=round(time_sec, 3), thumb_path=str(path)))
     return tuple(frames)
+
+
+def _placeholder_keyframe_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
+    del video_path, end_sec, n_frames
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "frame_001.jpg"
+    Image.new("RGB", (256, 144), color=(42, 48, 56)).save(path)
+    return (Frame(frame_id="fr001", time_sec=float(start_sec), thumb_path=str(path)),)
+
+
+class _ZeroEmbeddingBackend:
+    embedding_dim = 1
+
+    def encode_images(self, paths: Sequence[str]) -> np.ndarray:
+        return np.zeros((len(paths), 1), dtype=np.float32)
+
+    def encode_text(self, queries: Sequence[str]) -> np.ndarray:
+        return np.zeros((len(queries), 1), dtype=np.float32)
 
 
 def _scene_index_asr_cues(scene_index: SceneIndex) -> tuple[dict[str, Any], ...]:

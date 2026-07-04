@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
+from visual_coding_agent_harness.contracts.playbook import Playbook
+
 
 GoalKind = Literal["locate", "count", "compare", "order", "identify", "temporal"]
 
@@ -40,18 +42,33 @@ class VerifiableGoal:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class QueryScope:
-    scene_ids: Sequence[str]
+    chapter_ids: Sequence[str]
     time_range: tuple[float, float] | None = None
     entity_hints: Sequence[str] = field(default_factory=tuple)
     modality_hint: Sequence[str] = field(default_factory=tuple)
 
+    def __init__(
+        self,
+        chapter_ids: Sequence[str] | None = None,
+        *,
+        scene_ids: Sequence[str] | None = None,
+        time_range: tuple[float, float] | None = None,
+        entity_hints: Sequence[str] = (),
+        modality_hint: Sequence[str] = (),
+    ) -> None:
+        object.__setattr__(self, "chapter_ids", _text_tuple(chapter_ids if chapter_ids is not None else scene_ids))
+        object.__setattr__(self, "time_range", time_range)
+        object.__setattr__(self, "entity_hints", entity_hints)
+        object.__setattr__(self, "modality_hint", modality_hint)
+        self.__post_init__()
+
     def __post_init__(self) -> None:
-        scene_ids = _text_tuple(self.scene_ids)
-        if not scene_ids:
-            raise ValueError("scene_ids must contain at least one scene id")
-        object.__setattr__(self, "scene_ids", scene_ids)
+        chapter_ids = _text_tuple(self.chapter_ids)
+        if not chapter_ids:
+            raise ValueError("chapter_ids/scene_ids must contain at least one chapter id")
+        object.__setattr__(self, "chapter_ids", chapter_ids)
         object.__setattr__(self, "entity_hints", _text_tuple(self.entity_hints))
         object.__setattr__(self, "modality_hint", _text_tuple(self.modality_hint))
         if self.time_range is not None:
@@ -60,9 +77,13 @@ class QueryScope:
                 raise ValueError("time_range end must be greater than or equal to start")
             object.__setattr__(self, "time_range", (float(start), float(end)))
 
+    @property
+    def scene_ids(self) -> tuple[str, ...]:
+        return tuple(self.chapter_ids)
+
     def to_dict(self) -> dict[str, object]:
         return {
-            "scene_ids": list(self.scene_ids),
+            "chapter_ids": list(self.chapter_ids),
             "time_range": list(self.time_range) if self.time_range is not None else None,
             "entity_hints": list(self.entity_hints),
             "modality_hint": list(self.modality_hint),
@@ -71,32 +92,48 @@ class QueryScope:
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "QueryScope":
         return cls(
-            scene_ids=_text_tuple(value.get("scene_ids") or ()),
+            chapter_ids=_text_tuple(value.get("chapter_ids") or value.get("scene_ids") or ()),
             time_range=_float_pair(value.get("time_range")),
             entity_hints=_text_tuple(value.get("entity_hints") or ()),
             modality_hint=_text_tuple(value.get("modality_hint") or ()),
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class QueryBudget:
-    max_shots_to_verify: int = 3
+    max_beats_to_verify: int = 3
     max_frames: int = 128
 
+    def __init__(
+        self,
+        max_beats_to_verify: int | None = None,
+        max_frames: int = 128,
+        *,
+        max_shots_to_verify: int | None = None,
+    ) -> None:
+        value = max_beats_to_verify if max_beats_to_verify is not None else max_shots_to_verify
+        object.__setattr__(self, "max_beats_to_verify", 3 if value is None else int(value))
+        object.__setattr__(self, "max_frames", int(max_frames))
+        self.__post_init__()
+
     def __post_init__(self) -> None:
-        if self.max_shots_to_verify < 0:
-            raise ValueError("max_shots_to_verify must be non-negative")
+        if self.max_beats_to_verify < 0:
+            raise ValueError("max_beats_to_verify must be non-negative")
         if self.max_frames < 0:
             raise ValueError("max_frames must be non-negative")
 
+    @property
+    def max_shots_to_verify(self) -> int:
+        return int(self.max_beats_to_verify)
+
     def to_dict(self) -> dict[str, object]:
-        return {"max_shots_to_verify": int(self.max_shots_to_verify), "max_frames": int(self.max_frames)}
+        return {"max_beats_to_verify": int(self.max_beats_to_verify), "max_frames": int(self.max_frames)}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any] | None) -> "QueryBudget":
         value = value or {}
         return cls(
-            max_shots_to_verify=int(value.get("max_shots_to_verify", 3) or 0),
+            max_beats_to_verify=int(value.get("max_beats_to_verify", value.get("max_shots_to_verify", 3)) or 0),
             max_frames=int(value.get("max_frames", 128) or 0),
         )
 
@@ -109,8 +146,11 @@ class ScopedQuery:
     scope: QueryScope
     expected_evidence: str
     budget: QueryBudget = field(default_factory=QueryBudget)
+    playbook: Playbook = Playbook.IDENTIFY_VISUAL
+    scope_b: QueryScope | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "playbook", Playbook.parse(self.playbook))
         if not self.query_id:
             raise ValueError("query_id is required")
         if not self.goal_id:
@@ -122,8 +162,10 @@ class ScopedQuery:
         return {
             "query_id": self.query_id,
             "goal_id": self.goal_id,
+            "playbook": self.playbook.value,
             "natural_query": self.natural_query,
             "scope": self.scope.to_dict(),
+            "scope_b": self.scope_b.to_dict() if self.scope_b is not None else None,
             "expected_evidence": self.expected_evidence,
             "budget": self.budget.to_dict(),
         }
@@ -132,6 +174,7 @@ class ScopedQuery:
     def from_dict(cls, value: Mapping[str, Any]) -> "ScopedQuery":
         scope = value.get("scope") if isinstance(value.get("scope"), Mapping) else {}
         budget = value.get("budget") if isinstance(value.get("budget"), Mapping) else {}
+        scope_b = value.get("scope_b") if isinstance(value.get("scope_b"), Mapping) else None
         return cls(
             query_id=str(value.get("query_id") or ""),
             goal_id=str(value.get("goal_id") or ""),
@@ -139,6 +182,8 @@ class ScopedQuery:
             scope=QueryScope.from_dict(scope),
             expected_evidence=str(value.get("expected_evidence") or ""),
             budget=QueryBudget.from_dict(budget),
+            playbook=Playbook.parse(value.get("playbook")),
+            scope_b=QueryScope.from_dict(scope_b) if scope_b is not None else None,
         )
 
 

@@ -8,7 +8,32 @@ from unittest.mock import patch
 
 from visual_coding_agent_harness.agents.driver import WorkspaceRunResult
 from visual_coding_agent_harness.core.budget import AgentBudget
-from visual_coding_agent_harness.video.index import Frame, Scene, SceneIndex, Shot, VideoIndex, VideoSegment
+from visual_coding_agent_harness.video.index import Frame, SceneIndex, VideoSegment
+from visual_coding_agent_harness.workspace.text_index import InvertedIndex
+from visual_coding_agent_harness.workspace.video_workspace import Beat, Chapter, VideoWorkspace
+from visual_coding_agent_harness.workspace.visual_index import VisualIndex
+
+
+class EmptyEmbeddingBackend:
+    embedding_dim = 1
+
+    def encode_images(self, paths):
+        raise AssertionError("not used")
+
+    def encode_text(self, queries):
+        raise AssertionError("not used")
+
+
+def _fake_workspace() -> VideoWorkspace:
+    beat = Beat("bt00001", "ch01", 0.0, 12.0, "", "red car", (), ("sc01_sh001",))
+    return VideoWorkspace(
+        video_path="/videos/demo.mp4",
+        duration_sec=12.0,
+        chapters=(Chapter("ch01", 0.0, 12.0, ("bt00001",), ""),),
+        beats=(beat,),
+        text_index=InvertedIndex(),
+        visual_index=VisualIndex(EmptyEmbeddingBackend()),
+    )
 
 
 class EvalRunnerTest(unittest.TestCase):
@@ -56,20 +81,31 @@ class EvalRunnerTest(unittest.TestCase):
                 created["reasoners"].append(self)
 
         class FakeInvestigator:
-            def __init__(self, *, index, workspace, backend):
-                self.index = index
+            def __init__(self, *, video_workspace, workspace, backend):
+                self.video_workspace = video_workspace
                 self.workspace = workspace
                 self.backend = backend
                 created["investigators"].append(self)
 
         class FakeDriver:
-            def __init__(self, *, reasoner, investigator, workspace, max_rounds, max_concurrency=4, valid_scene_ids=()):
+            def __init__(
+                self,
+                *,
+                reasoner,
+                investigator,
+                workspace,
+                max_rounds,
+                max_concurrency=4,
+                valid_scene_ids=(),
+                video_workspace=None,
+            ):
                 self.reasoner = reasoner
                 self.investigator = investigator
                 self.workspace = workspace
                 self.max_rounds = max_rounds
                 self.max_concurrency = max_concurrency
                 self.valid_scene_ids = tuple(valid_scene_ids)
+                self.video_workspace = video_workspace
                 created["drivers"].append(self)
 
             def run(self, *, question, options, index_context, overview_image_path=""):
@@ -114,15 +150,9 @@ class EvalRunnerTest(unittest.TestCase):
                 self.root = Path(root)
                 created["workspaces"].append(self)
 
-        class FakeVideoIndex:
-            scenes = (type("Scene", (), {"scene_id": "sc01"})(),)
-
-            def summary(self):
-                return "sc01 [0-12]"
-
-        def fake_build_video_index(scene_index, **kwargs):
-            created["indexes"].append((scene_index, kwargs))
-            return FakeVideoIndex()
+        def fake_build_workspace(*args, **kwargs):
+            created["indexes"].append((args, kwargs))
+            return _fake_workspace()
 
         def fake_build_overview(index, *, output_dir, cols=8):
             created["overviews"].append((index, output_dir, cols))
@@ -135,7 +165,7 @@ class EvalRunnerTest(unittest.TestCase):
                 duration_sec=12.0,
                 segments=[VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=12.0)],
             )
-            with patch.object(eval_runner, "build_video_index_from_scene_index", side_effect=fake_build_video_index, create=True):
+            with patch.object(eval_runner, "build_video_workspace", side_effect=fake_build_workspace, create=True):
                 with patch.object(eval_runner, "build_scene_timeline_overview", side_effect=fake_build_overview, create=True):
                     with patch.object(eval_runner, "InvestigatorWorkspaceV3", FakeInvestigatorWorkspace, create=True):
                         with patch.object(eval_runner, "ReasonerV3", FakeReasoner, create=True):
@@ -154,10 +184,10 @@ class EvalRunnerTest(unittest.TestCase):
                                         strategy="multi_v3",
                                     )
 
-            self.assertEqual(created["indexes"][0][0], scene_index)
-            self.assertIsInstance(created["overviews"][0][0], FakeVideoIndex)
+            self.assertEqual(created["indexes"][0][0][0], "/videos/demo.mp4")
+            self.assertIsInstance(created["overviews"][0][0], VideoWorkspace)
             self.assertEqual(created["drivers"][0].max_rounds, 4)
-            self.assertEqual(created["drivers"][0].valid_scene_ids, ("sc01",))
+            self.assertEqual(created["drivers"][0].valid_scene_ids, ("ch01",))
             self.assertEqual(raw["answer"], "A. v3 answer")
             self.assertEqual(raw["choice"], "A")
             self.assertEqual(raw["status"], "final")
@@ -195,29 +225,14 @@ class EvalRunnerTest(unittest.TestCase):
         from runs import eval_runner
 
         captured = {"index_kwargs": None, "sample_calls": []}
-
-        shot = Shot(
-            shot_id="sc01_sh001",
-            scene_id="sc01",
-            start_sec=1.0,
-            end_sec=3.0,
-            frames=(Frame(frame_id="thumb", time_sec=1.0, thumb_path="/index/thumb.jpg"),),
-            lowres_grid_path="/index/grid.jpg",
-        )
-        video_index = VideoIndex(
+        beat = Beat("bt00001", "ch01", 1.0, 3.0, "/index/thumb.jpg", "", (), ("sc01_sh001",))
+        video_index = VideoWorkspace(
             video_path="/videos/demo.mp4",
             duration_sec=4.0,
-            scenes=(
-                Scene(
-                    scene_id="sc01",
-                    start_sec=0.0,
-                    end_sec=4.0,
-                    title="Scene 1",
-                    summary="demo",
-                    shots=(shot,),
-                    scene_thumb_path="/index/thumb.jpg",
-                ),
-            ),
+            chapters=(Chapter("ch01", 0.0, 4.0, ("bt00001",), "/index/thumb.jpg"),),
+            beats=(beat,),
+            text_index=InvertedIndex(),
+            visual_index=VisualIndex(EmptyEmbeddingBackend()),
         )
 
         class FakeOverview:
@@ -234,27 +249,38 @@ class EvalRunnerTest(unittest.TestCase):
                 self.backend = backend
 
         class FakeInvestigator:
-            def __init__(self, *, index, workspace, backend, frame_sampler=None):
-                self.index = index
+            def __init__(self, *, video_workspace, workspace, backend, frame_sampler=None):
+                self.video_workspace = video_workspace
                 self.workspace = workspace
                 self.backend = backend
                 self.frame_sampler = frame_sampler
 
         class FakeDriver:
-            def __init__(self, *, reasoner, investigator, workspace, max_rounds, max_concurrency=4, valid_scene_ids=()):
+            def __init__(
+                self,
+                *,
+                reasoner,
+                investigator,
+                workspace,
+                max_rounds,
+                max_concurrency=4,
+                valid_scene_ids=(),
+                video_workspace=None,
+            ):
                 self.investigator = investigator
                 self.workspace = workspace
+                self.video_workspace = video_workspace
 
             def run(self, **kwargs):
                 del kwargs
                 self.workspace.root.mkdir(parents=True, exist_ok=True)
                 assert self.investigator.frame_sampler is not None
-                paths = self.investigator.frame_sampler(shot, 1)
+                paths = self.investigator.frame_sampler(beat, 1)
                 assert "multi_v3_verify_frames" in paths[0]
-                assert paths[0] != shot.frames[0].thumb_path
+                assert paths[0] != beat.keyframe_path
                 return WorkspaceRunResult(answer="A", citations=(), confidence="medium", rounds=1, metadata={"status": "final"})
 
-        def fake_build_video_index_from_video(*args, **kwargs):
+        def fake_build_workspace(*args, **kwargs):
             captured["index_kwargs"] = kwargs
             return video_index
 
@@ -271,7 +297,7 @@ class EvalRunnerTest(unittest.TestCase):
                 duration_sec=4.0,
                 segments=(VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=4.0),),
             )
-            with patch.object(eval_runner, "build_video_index_from_video", side_effect=fake_build_video_index_from_video):
+            with patch.object(eval_runner, "build_video_workspace", side_effect=fake_build_workspace):
                 with patch.object(eval_runner, "sample_shot_frames", side_effect=fake_sample_shot_frames):
                     with patch.object(eval_runner, "build_scene_timeline_overview", return_value=FakeOverview()):
                         with patch.object(eval_runner, "InvestigatorWorkspaceV3", FakeInvestigatorWorkspace, create=True):
@@ -290,7 +316,7 @@ class EvalRunnerTest(unittest.TestCase):
                                             strategy="multi_v3",
                                         )
 
-        self.assertIsNone(captured["index_kwargs"]["keyframe_sampler"])
+        self.assertIs(captured["index_kwargs"]["keyframe_sampler"], eval_runner._placeholder_keyframe_sampler)
         self.assertEqual(captured["sample_calls"][0][-1], None)
 
 

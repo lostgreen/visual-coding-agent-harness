@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -106,11 +107,16 @@ def test_active_surface_file_inventory_is_small() -> None:
         "__init__.py",
         "driver.py",
         "investigator.py",
+        "playbook_programs.py",
         "reasoner.py",
     }
     assert _py_files(repo / "src/visual_coding_agent_harness/workspace") <= {
         "__init__.py",
         "investigator_ws.py",
+        "memo.py",
+        "text_index.py",
+        "video_workspace.py",
+        "visual_index.py",
     }
     assert _py_files(repo / "src/visual_coding_agent_harness/tools") <= {
         "__init__.py",
@@ -126,9 +132,20 @@ def test_active_surface_file_inventory_is_small() -> None:
     assert _py_files(repo / "src/visual_coding_agent_harness/contracts") <= {
         "__init__.py",
         "evidence.py",
+        "playbook.py",
         "query.py",
         "report.py",
     }
+
+
+def test_old_scene_shot_index_surface_is_removed() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    source_text = "\n".join(path.read_text(encoding="utf-8") for path in (repo / "src").rglob("*.py"))
+
+    assert re.search(r"\bclass\s+Scene\b", source_text) is None
+    assert re.search(r"\bclass\s+Shot\b", source_text) is None
+    assert "source_segments" not in source_text
+    assert "aggregate_shot_ranges_by_duration" not in source_text
     assert _public_py_files(repo / "src/visual_coding_agent_harness/video") <= {
         "__init__.py",
         "build.py",

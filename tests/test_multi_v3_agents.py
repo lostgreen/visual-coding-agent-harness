@@ -13,8 +13,10 @@ from visual_coding_agent_harness.backends.base import BackendRequest, BackendRes
 from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope, ScopedQuery, VerifiableGoal
 from visual_coding_agent_harness.contracts.report import CandidateShot, Finding, VerifyRequest
 from visual_coding_agent_harness.tools.vlm_tools import ExploreResult
-from visual_coding_agent_harness.video.index import Frame, Scene, Shot, VideoIndex
 from visual_coding_agent_harness.workspace.investigator_ws import InvestigatorWorkspace
+from visual_coding_agent_harness.workspace.text_index import InvertedIndex
+from visual_coding_agent_harness.workspace.video_workspace import Beat, Chapter, VideoWorkspace
+from visual_coding_agent_harness.workspace.visual_index import VisualIndex
 
 
 class RecordingBackend:
@@ -27,33 +29,34 @@ class RecordingBackend:
         return BackendResponse(text=self.responses.pop(0))
 
 
-def _index() -> VideoIndex:
-    shot = Shot(
-        shot_id="sc01_sh001",
-        scene_id="sc01",
+class EmptyEmbeddingBackend:
+    embedding_dim = 1
+
+    def encode_images(self, paths):
+        raise AssertionError("not used")
+
+    def encode_text(self, queries):
+        raise AssertionError("not used")
+
+
+def _video_workspace() -> VideoWorkspace:
+    beat = Beat(
+        beat_id="bt00001",
+        chapter_id="ch01",
         start_sec=0.0,
         end_sec=8.0,
-        frames=(Frame(frame_id="fr1", time_sec=1.0, thumb_path="/thumbs/fr1.jpg"),),
-        visual_caption="A red car on a street.",
-        asr_text="",
-        ocr_lines=(),
-        entities=("car",),
-        lowres_grid_path="/grids/sc01_sh001.jpg",
+        keyframe_path="/grids/bt00001.jpg",
+        asr_verbatim="",
+        ocr_verbatim=(),
+        shot_ids=("sc01_sh001",),
     )
-    return VideoIndex(
+    return VideoWorkspace(
         video_path="/videos/demo.mp4",
         duration_sec=8.0,
-        scenes=(
-            Scene(
-                scene_id="sc01",
-                start_sec=0.0,
-                end_sec=8.0,
-                title="Street",
-                summary="A red car appears.",
-                shots=(shot,),
-                scene_thumb_path="/thumbs/sc01.jpg",
-            ),
-        ),
+        chapters=(Chapter("ch01", 0.0, 8.0, ("bt00001",), beat.keyframe_path),),
+        beats=(beat,),
+        text_index=InvertedIndex(),
+        visual_index=VisualIndex(EmptyEmbeddingBackend()),
     )
 
 
@@ -62,7 +65,7 @@ def _query(query_id: str = "q1") -> ScopedQuery:
         query_id=query_id,
         goal_id="g1",
         natural_query="Find the red car.",
-        scope=QueryScope(scene_ids=("sc01",), entity_hints=("car",), modality_hint=("visual",)),
+        scope=QueryScope(chapter_ids=("ch01",), entity_hints=("car",), modality_hint=("visual",)),
         expected_evidence="A red car is visible.",
         budget=QueryBudget(max_shots_to_verify=1, max_frames=16),
     )
@@ -176,8 +179,8 @@ def test_reasoner_parses_answer_action_into_result() -> None:
 def test_investigator_runs_explore_then_verify_and_records_report(tmp_path: Path) -> None:
     calls: list[str] = []
 
-    def fake_explore(*, query, index, backend, batch_size=16):
-        del index, backend, batch_size
+    def fake_explore(*, query, workspace, backend, batch_size=16):
+        del workspace, backend, batch_size
         calls.append(f"explore:{query.query_id}")
         return ExploreResult((CandidateShot("sc01_sh001", 0.95, "red car visible"),), batch_count=3)
 
@@ -196,12 +199,13 @@ def test_investigator_runs_explore_then_verify_and_records_report(tmp_path: Path
         )
 
     investigator = Investigator(
-        index=_index(),
         workspace=InvestigatorWorkspace(tmp_path),
         backend=object(),
         explore_fn=fake_explore,
         verify_fn=fake_verify,
         frame_sampler=lambda shot, budget: ("/frames/0001.jpg", "/frames/0002.jpg"),
+        video_workspace=_video_workspace(),
+        programs={},
     )
 
     report = investigator.run(_query())
@@ -213,6 +217,70 @@ def test_investigator_runs_explore_then_verify_and_records_report(tmp_path: Path
     assert (tmp_path / "queries" / "q1" / "report.json").exists()
     ledger_rows = [json.loads(line) for line in (tmp_path / "evidence_ledger.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [row["finding_id"] for row in ledger_rows] == ["ev_0001"]
+
+
+def test_investigator_dispatches_to_playbook_program_when_workspace_available(tmp_path: Path) -> None:
+    calls = []
+    cold_workspace = VideoWorkspace(
+        video_path="/videos/demo.mp4",
+        duration_sec=8.0,
+        chapters=(Chapter("ch01", 0.0, 8.0, ("bt00001",), ""),),
+        beats=(Beat("bt00001", "ch01", 0.0, 8.0, "", "red car", (), ("sc01_sh001",)),),
+        text_index=InvertedIndex(),
+        visual_index=VisualIndex(EmptyEmbeddingBackend()),
+    )
+
+    class FakeProgram:
+        def execute(self, *, query, workspace, backend, frame_sampler, verify_fn):
+            del backend, frame_sampler, verify_fn
+            calls.append(f"program:{query.query_id}:{len(workspace.beats)}")
+            return type(
+                "Report",
+                (),
+                {
+                    "query_id": query.query_id,
+                    "status": "satisfied",
+                    "findings": (),
+                    "explored_shots": ("sc01_sh001",),
+                    "verified_shots": (),
+                    "unresolved": (),
+                    "cost": {},
+                    "to_dict": lambda self: {
+                        "query_id": query.query_id,
+                        "status": "satisfied",
+                        "findings": [],
+                        "explored_shots": ["sc01_sh001"],
+                        "verified_shots": [],
+                        "unresolved": [],
+                        "cost": {},
+                    },
+                },
+            )()
+
+    def fake_verify(*, query_id: str, request: VerifyRequest, frame_paths, backend):
+        del frame_paths, backend
+        return (
+            Finding(
+                finding_id="ev_search",
+                query_id=query_id,
+                shot_id=request.shot_id,
+                summary="A red car is visible.",
+            ),
+        )
+
+    investigator = Investigator(
+        workspace=InvestigatorWorkspace(tmp_path),
+        backend=object(),
+        verify_fn=fake_verify,
+        frame_sampler=lambda shot, budget: (),
+        video_workspace=cold_workspace,
+        programs={_query().playbook: FakeProgram()},
+    )
+
+    report = investigator.run(_query())
+
+    assert calls == ["program:q1:1"]
+    assert report.status == "satisfied"
 
 
 def test_driver_dispatches_queries_in_parallel_and_returns_reasoner_answer(tmp_path: Path) -> None:
@@ -267,7 +335,7 @@ def test_driver_dispatches_queries_in_parallel_and_returns_reasoner_answer(tmp_p
     ).run(
         question="Which option is supported?",
         options={"A": "red car"},
-        index_context="sc01",
+            index_context="ch01",
         overview_image_path="/overview.json",
     )
 
@@ -283,7 +351,7 @@ def test_driver_filters_invalid_scene_ids_before_dispatch(tmp_path: Path) -> Non
         query_id=mixed_query.query_id,
         goal_id=mixed_query.goal_id,
         natural_query=mixed_query.natural_query,
-        scope=QueryScope(scene_ids=("sc01", "missing_scene")),
+            scope=QueryScope(chapter_ids=("ch01", "missing_scene")),
         expected_evidence=mixed_query.expected_evidence,
         budget=mixed_query.budget,
     )
@@ -324,14 +392,14 @@ def test_driver_filters_invalid_scene_ids_before_dispatch(tmp_path: Path) -> Non
         workspace=InvestigatorWorkspace(tmp_path),
         max_rounds=1,
         max_concurrency=1,
-        valid_scene_ids=("sc01",),
+            valid_scene_ids=("ch01",),
     ).run(
         question="Which option is supported?",
         options={"A": "red car"},
-        index_context="sc01",
-    )
+            index_context="ch01",
+        )
 
-    assert investigator.queries[0].scope.scene_ids == ("sc01",)
+    assert investigator.queries[0].scope.chapter_ids == ("ch01",)
     trace = (tmp_path / "trace.jsonl").read_text(encoding="utf-8")
     assert "invalid_scene_ids_filtered" in trace
     assert "missing_scene" in trace

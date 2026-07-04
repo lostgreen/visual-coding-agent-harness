@@ -86,7 +86,14 @@ def _reasoner_prompt(
             index_context,
             "PreviousDigest:",
             json.dumps([item.to_dict() for item in previous_digest], ensure_ascii=False),
-            'Return JSON: {"action":"plan","goals":[],"queries":[],"rationale":"..."} or {"action":"answer","answer":"A","confidence":"medium","citations":[]}',
+            "Available playbooks (choose ONE per query):",
+            "  locate_statement - ASR/verbatim statement search",
+            "  read_text - OCR or screen/document text",
+            "  order_actions - temporal action ordering with dense sampling",
+            "  identify_visual - object/person/scene identification",
+            "  count - broad candidate search plus dense verification",
+            "  compare - compare evidence across two scopes; include scope_b",
+            'Return JSON: {"action":"plan","goals":[],"queries":[{"query_id":"q1","goal_id":"g1","playbook":"identify_visual","natural_query":"...","scope":{"chapter_ids":["ch01"]},"expected_evidence":"...","budget":{"max_beats_to_verify":3,"max_frames":8}}],"rationale":"..."} or {"action":"answer","answer":"A","confidence":"medium","citations":[]}',
         ]
     )
 

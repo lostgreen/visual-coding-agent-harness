@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image
@@ -11,7 +10,9 @@ from visual_coding_agent_harness.contracts.query import QueryBudget, QueryScope,
 from visual_coding_agent_harness.contracts.report import VerifyRequest
 from visual_coding_agent_harness.tools.vlm_tools import explore
 from visual_coding_agent_harness.tools.vlm_tools import verify_window
-from visual_coding_agent_harness.video.index import Frame, Scene, Shot, VideoIndex
+from visual_coding_agent_harness.workspace.text_index import InvertedIndex
+from visual_coding_agent_harness.workspace.video_workspace import Beat, Chapter, VideoWorkspace
+from visual_coding_agent_harness.workspace.visual_index import VisualIndex
 
 
 class RecordingBackend:
@@ -30,41 +31,44 @@ def _write_image(path: Path) -> str:
     return str(path)
 
 
-def _index(image_dir: Path | None = None) -> VideoIndex:
-    shots = []
+class EmptyEmbeddingBackend:
+    embedding_dim = 1
+
+    def encode_images(self, paths):
+        raise AssertionError("not used")
+
+    def encode_text(self, queries):
+        raise AssertionError("not used")
+
+
+def _workspace(image_dir: Path | None = None) -> VideoWorkspace:
+    beats = []
     for idx in range(1, 4):
-        shot_id = f"sc01_sh{idx:03d}"
-        lowres_grid_path = f"/grids/{shot_id}.jpg"
+        beat_id = f"bt{idx:05d}"
+        keyframe_path = f"/grids/{beat_id}.jpg"
         if image_dir is not None:
-            lowres_grid_path = _write_image(image_dir / f"{shot_id}.jpg")
-        shots.append(
-            Shot(
-                shot_id=shot_id,
-                scene_id="sc01",
+            keyframe_path = _write_image(image_dir / f"{beat_id}.jpg")
+        beats.append(
+            Beat(
+                beat_id=beat_id,
+                chapter_id="ch01",
                 start_sec=float(idx * 10),
                 end_sec=float(idx * 10 + 8),
-                frames=(Frame(frame_id=f"{shot_id}_fr001", time_sec=float(idx * 10), thumb_path=f"/thumbs/{shot_id}.jpg"),),
-                visual_caption=f"Shot {idx} visual caption.",
-                asr_text=f"Shot {idx} transcript.",
-                ocr_lines=(),
-                entities=("car",) if idx == 2 else (),
-                lowres_grid_path=lowres_grid_path,
+                keyframe_path=keyframe_path,
+                asr_verbatim=f"Beat {idx} transcript.",
+                ocr_verbatim=(),
+                shot_ids=(f"sc01_sh{idx:03d}",),
             )
         )
-    return VideoIndex(
+    return VideoWorkspace(
         video_path="/videos/demo.mp4",
         duration_sec=60.0,
-        scenes=(
-            Scene(
-                scene_id="sc01",
-                start_sec=0.0,
-                end_sec=60.0,
-                title="Street scene",
-                summary="Cars appear on a street.",
-                shots=tuple(shots),
-                scene_thumb_path="/thumbs/sc01.jpg",
-            ),
+        chapters=(
+            Chapter("ch01", 0.0, 60.0, tuple(beat.beat_id for beat in beats), beats[0].keyframe_path),
         ),
+        beats=tuple(beats),
+        text_index=InvertedIndex(),
+        visual_index=VisualIndex(EmptyEmbeddingBackend()),
     )
 
 
@@ -73,7 +77,7 @@ def _query() -> ScopedQuery:
         query_id="q1",
         goal_id="g1",
         natural_query="Find the car.",
-        scope=QueryScope(scene_ids=("sc01",), entity_hints=("car",), modality_hint=("visual",)),
+        scope=QueryScope(chapter_ids=("ch01",), entity_hints=("car",), modality_hint=("visual",)),
         expected_evidence="A car is visible.",
         budget=QueryBudget(max_shots_to_verify=2, max_frames=16),
     )
@@ -85,35 +89,35 @@ def test_explore_batches_lowres_grids_and_sorts_candidate_picks(tmp_path: Path) 
             {
                 "picks": [
                     {"shot_id": "sc01_sh001", "score": 0.2, "reason": "weak match"},
-                    {"shot_id": "sc01_sh002", "score": 0.92, "reason": "car visible"},
+                    {"shot_id": "bt00002", "score": 0.92, "reason": "car visible"},
                 ]
             }
         )
     )
 
-    picks = explore(query=_query(), index=_index(tmp_path), backend=backend, batch_size=16)
+    picks = explore(query=_query(), workspace=_workspace(tmp_path), backend=backend, batch_size=16)
 
     assert [pick.shot_id for pick in picks] == ["sc01_sh002", "sc01_sh001"]
     assert picks.batch_count == 1
     assert picks.degraded is False
     assert backend.requests[0].task == "multi_v3_explore"
-    assert [Path(path).name for path in backend.requests[0].frames] == ["sc01_sh001.jpg", "sc01_sh002.jpg", "sc01_sh003.jpg"]
-    assert "ShotMeta" in backend.requests[0].prompt
+    assert [Path(path).name for path in backend.requests[0].frames] == ["bt00001.jpg", "bt00002.jpg", "bt00003.jpg"]
+    assert "BeatMeta" in backend.requests[0].prompt
     assert "ExpectedEvidence" not in backend.requests[0].prompt
 
 
 def test_explore_filters_non_image_grid_paths_and_marks_degraded(tmp_path: Path) -> None:
-    index = _index()
-    scene = index.scenes[0]
-    shots = (
-        replace(scene.shots[0], lowres_grid_path=_write_image(tmp_path / "ok.jpg")),
-        replace(scene.shots[1], lowres_grid_path="/grids/bad.json"),
-        replace(scene.shots[2], lowres_grid_path=""),
+    workspace = _workspace()
+    beats = (
+        Beat("bt00001", "ch01", 10.0, 18.0, _write_image(tmp_path / "ok.jpg"), "Beat 1 transcript.", (), ("sc01_sh001",)),
+        Beat("bt00002", "ch01", 20.0, 28.0, "/grids/bad.json", "Beat 2 transcript.", (), ("sc01_sh002",)),
+        Beat("bt00003", "ch01", 30.0, 38.0, "", "Beat 3 transcript.", (), ("sc01_sh003",)),
     )
-    index = replace(index, scenes=(replace(scene, shots=shots),))
+    workspace.beats = beats
+    workspace.chapters = (Chapter("ch01", 0.0, 60.0, tuple(beat.beat_id for beat in beats), beats[0].keyframe_path),)
     backend = RecordingBackend(json.dumps({"picks": []}))
 
-    explore(query=_query(), index=index, backend=backend)
+    explore(query=_query(), workspace=workspace, backend=backend)
 
     assert [Path(path).name for path in backend.requests[0].frames] == ["ok.jpg"]
     assert backend.requests[0].media_type == "image"
@@ -123,7 +127,7 @@ def test_explore_filters_non_image_grid_paths_and_marks_degraded(tmp_path: Path)
 def test_explore_reports_actual_batch_count(tmp_path: Path) -> None:
     backend = RecordingBackend(json.dumps({"picks": []}))
 
-    picks = explore(query=_query(), index=_index(tmp_path), backend=backend, batch_size=2)
+    picks = explore(query=_query(), workspace=_workspace(tmp_path), backend=backend, batch_size=2)
 
     assert picks.batch_count == 2
     assert len(backend.requests) == 2
