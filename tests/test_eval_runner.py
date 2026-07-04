@@ -227,6 +227,31 @@ class EvalRunnerTest(unittest.TestCase):
         self.assertEqual(paths, (str(Path(tmp) / "1.250_3.750_5" / "frame_001.jpg"),))
         self.assertEqual(calls, [("/videos/demo.mp4", 1.25, 3.75, 5, "1.250_3.750_5", None)])
 
+    def test_multi_v3_video_index_builder_saves_cold_workspace_artifacts(self):
+        from runs import eval_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact_dir = Path(tmp) / "multi_v3_index"
+            frame_path = Path(tmp) / "frame_001.jpg"
+            scene_index = SceneIndex(
+                video_path="/videos/demo.mp4",
+                duration_sec=4.0,
+                segments=(VideoSegment(segment_id="seg_0001", start_sec=0.0, end_sec=4.0),),
+            )
+
+            workspace = eval_runner._build_multi_v3_video_index(
+                video_path="/videos/demo.mp4",
+                duration_sec=4.0,
+                scene_index=scene_index,
+                artifact_dir=artifact_dir,
+                frame_sampler=lambda _video_path, _start, _end, _n_frames: (str(frame_path),),
+            )
+
+            self.assertEqual(len(workspace.beats), 1)
+            self.assertTrue((artifact_dir / "workspace.json").exists())
+            self.assertTrue((artifact_dir / "text_index.json").exists())
+            self.assertTrue((artifact_dir / "visual_index.npz").exists())
+
     def test_run_loop_keeps_default_verify_sampler_separate_from_index_sampler(self):
         from runs import eval_runner
 

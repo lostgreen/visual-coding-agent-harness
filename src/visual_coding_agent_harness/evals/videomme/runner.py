@@ -446,7 +446,7 @@ def _build_multi_v3_video_index(
     frame_sampler: FrameSampler | None,
 ):
     ranges = tuple((float(segment.start_sec), float(segment.end_sec)) for segment in scene_index.segments)
-    return build_video_workspace(
+    workspace = build_video_workspace(
         video_path,
         duration_sec,
         artifact_dir=artifact_dir,
@@ -457,6 +457,8 @@ def _build_multi_v3_video_index(
         if frame_sampler is not None
         else _placeholder_keyframe_sampler,
     )
+    workspace.save(artifact_dir)
+    return workspace
 
 
 def _keyframe_sampler_from_frame_sampler(frame_sampler: FrameSampler):
