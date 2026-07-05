@@ -109,12 +109,20 @@ def window_overlap_ratio(requested: Window, actuals: Iterable[Window]) -> float:
     requested_len = requested.end_sec - requested.start_sec
     if requested_len <= 0:
         return 0.0
-    covered = 0.0
+    intervals: list[tuple[float, float]] = []
     for actual in actuals:
         overlap_start = max(requested.start_sec, actual.start_sec)
         overlap_end = min(requested.end_sec, actual.end_sec)
         if overlap_end > overlap_start:
-            covered += overlap_end - overlap_start
+            intervals.append((overlap_start, overlap_end))
+    intervals.sort()
+    merged: list[list[float]] = []
+    for start, end in intervals:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        else:
+            merged[-1][1] = max(merged[-1][1], end)
+    covered = sum(end - start for start, end in merged)
     return min(1.0, covered / requested_len)
 
 
@@ -126,6 +134,9 @@ class ToolAction:
     beat_ids: tuple[str, ...] = ()
     windows: tuple[Window, ...] = ()
     modalities: tuple[Literal["asr", "ocr", "frames"], ...] = ()
+    selected: str = ""
+    evidence_table: Mapping[str, Any] = field(default_factory=dict)
+    investigator_payload: Mapping[str, Any] = field(default_factory=dict)
     answer: str = ""
     citations: tuple[str, ...] = ()
 
@@ -148,6 +159,9 @@ class ToolAction:
             beat_ids=tuple(str(item) for item in beat_ids),
             windows=windows,
             modalities=tuple(_normalize_modality(item) for item in modalities if _normalize_modality(item)),
+            selected=str(payload.get("selected") or payload.get("option") or ""),
+            evidence_table=_mapping(payload.get("evidence_table")),
+            investigator_payload=_mapping(payload.get("investigator_payload")),
             answer=str(payload.get("answer") or ""),
             citations=tuple(str(item) for item in citations),
         )
@@ -299,6 +313,10 @@ def _normalize_modality(value: object) -> Literal["asr", "ocr", "frames"] | None
     if text == "frame":
         return "frames"
     return None
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def _is_negative_question(question: str) -> bool:

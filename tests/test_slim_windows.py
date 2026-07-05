@@ -33,6 +33,8 @@ def test_window_overlap_ratio() -> None:
     assert window_overlap_ratio(Window(100, 200), (Window(90, 210),)) == 1.0
     assert window_overlap_ratio(Window(100, 200), (Window(100, 150),)) == 0.5
     assert window_overlap_ratio(Window(100, 200), (Window(300, 400),)) == 0.0
+    assert window_overlap_ratio(Window(100, 200), (Window(100, 170), Window(130, 200))) == 1.0
+    assert window_overlap_ratio(Window(100, 200), (Window(100, 160), Window(130, 170))) == 0.7
 
 
 def test_tool_action_parses_inspect_windows() -> None:
@@ -76,6 +78,11 @@ def test_inspect_window_executes_requested_window_and_traces_coverage(tmp_path: 
     assert trace[0]["fallback_used"] is False
     assert trace[0]["actual_windows"][0]["start_sec"] == 100.0
     assert trace[1]["final_verification"]["passed"] is True
+    evidence = json.loads((tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert evidence["start_sec"] == 110.0
+    assert evidence["end_sec"] == 150.0
+    evidence_window = [item for item in trace[0]["actual_windows"] if item.get("evidence_id") == "ev_0001"][0]["evidence_window"]
+    assert evidence_window == {"start_sec": 110.0, "end_sec": 150.0}
 
 
 def test_inspect_window_fails_closed_when_coverage_is_low(tmp_path: Path) -> None:
@@ -102,6 +109,62 @@ def test_inspect_window_fails_closed_when_coverage_is_low(tmp_path: Path) -> Non
     assert trace[0]["result"]["text"] == "window_coverage_failed"
     assert trace[0]["window_coverage_report"][0]["coverage"] == 0.0
     assert (tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_multi_window_partial_fail_creates_no_evidence(tmp_path: Path) -> None:
+    model = ScriptedModel(
+        actions=[
+            {
+                "type": "inspect_window",
+                "inspect_windows": [{"start_sec": 110, "end_sec": 150}, {"start_sec": 500, "end_sec": 600}],
+                "modalities": ["asr"],
+            },
+            {"type": "answer", "answer": "Unsupported.", "citations": ["ev_0001"]},
+        ]
+    )
+    agent = VideoAgent(model=model, max_steps=3)
+
+    answer = agent.ask(
+        "/videos/demo.mp4",
+        "What happens in two windows?",
+        run_dir=tmp_path,
+        duration_sec=300.0,
+        asr_cues=({"start": 100.0, "end": 200.0, "text": "first window transcript"},),
+        range_detector=lambda _video_path, _duration: ((0.0, 100.0), (100.0, 200.0), (200.0, 300.0)),
+        keyframe_sampler=_sampler,
+    )
+    trace = [json.loads(line) for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert answer.answer == "Insufficient verified evidence."
+    assert trace[0]["result"]["text"] == "window_coverage_failed"
+    assert (tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_same_video_different_questions_get_different_actual_windows(tmp_path: Path) -> None:
+    actual_windows = []
+    for idx, window in enumerate(((10.0, 20.0), (110.0, 120.0), (210.0, 220.0)), start=1):
+        model = ScriptedModel(actions=[{"type": "inspect_window", "start_sec": window[0], "end_sec": window[1], "modalities": ["asr"]}])
+        agent = VideoAgent(model=model, max_steps=1)
+        run_dir = tmp_path / f"q{idx}"
+        agent.ask(
+            "/videos/demo.mp4",
+            f"Question {idx}",
+            run_dir=run_dir,
+            duration_sec=300.0,
+            asr_cues=(
+                {"start": 0.0, "end": 100.0, "text": "early"},
+                {"start": 100.0, "end": 200.0, "text": "middle"},
+                {"start": 200.0, "end": 300.0, "text": "late"},
+            ),
+            range_detector=lambda _video_path, _duration: ((0.0, 100.0), (100.0, 200.0), (200.0, 300.0)),
+            keyframe_sampler=_sampler,
+        )
+        trace = [json.loads(line) for line in (run_dir / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+        actual_windows.append(
+            tuple((item["start_sec"], item["end_sec"]) for item in trace[0]["actual_windows"] if item.get("source") == "beat")
+        )
+
+    assert len(set(actual_windows)) == 3
 
 
 def test_investigator_hypothesis_and_output_validation() -> None:
@@ -133,3 +196,67 @@ def test_final_verifier_respects_question_polarity() -> None:
     assert verify_final_answer("Which statement is correct?", table, "A")["passed"]
     assert verify_final_answer("Which statement is not correct?", table, "B")["passed"]
     assert not verify_final_answer("Which statement is not correct?", table, "A")["passed"]
+
+
+def test_agent_final_verifier_blocks_contradicted_positive_option(tmp_path: Path) -> None:
+    model = ScriptedModel(
+        actions=[
+            {"type": "inspect_window", "start_sec": 110, "end_sec": 150, "modalities": ["asr"]},
+            {
+                "type": "answer",
+                "selected": "B",
+                "answer": "B",
+                "citations": ["ev_0001"],
+                "evidence_table": {
+                    "B": {"status": "contradicted", "support": [], "contradict": [{"text": "William won."}]}
+                },
+            },
+        ]
+    )
+    agent = VideoAgent(model=model, max_steps=3)
+
+    answer = agent.ask(
+        "/videos/demo.mp4",
+        "Which statement is correct?",
+        run_dir=tmp_path,
+        duration_sec=300.0,
+        asr_cues=({"start": 100.0, "end": 200.0, "text": "William won."},),
+        range_detector=lambda _video_path, _duration: ((0.0, 100.0), (100.0, 200.0), (200.0, 300.0)),
+        keyframe_sampler=_sampler,
+    )
+    trace = [json.loads(line) for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert answer.answer == "Insufficient verified evidence."
+    assert trace[1]["final_verification"]["reason"] == "selected_option_not_supported"
+
+
+def test_agent_final_guard_blocks_investigator_hypothesis_payload(tmp_path: Path) -> None:
+    model = ScriptedModel(
+        actions=[
+            {"type": "inspect_window", "start_sec": 110, "end_sec": 150, "modalities": ["asr"]},
+            {
+                "type": "answer",
+                "selected": "A",
+                "answer": "A",
+                "citations": ["ev_0001"],
+                "investigator_payload": {"answer_hypothesis": "A"},
+                "evidence_table": {"A": {"status": "supported", "support": [{"text": "supported"}], "contradict": []}},
+            },
+        ]
+    )
+    agent = VideoAgent(model=model, max_steps=3)
+
+    answer = agent.ask(
+        "/videos/demo.mp4",
+        "Which statement is correct?",
+        run_dir=tmp_path,
+        duration_sec=300.0,
+        asr_cues=({"start": 100.0, "end": 200.0, "text": "supported"},),
+        range_detector=lambda _video_path, _duration: ((0.0, 100.0), (100.0, 200.0), (200.0, 300.0)),
+        keyframe_sampler=_sampler,
+    )
+    trace = [json.loads(line) for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert answer.answer == "Insufficient verified evidence."
+    assert trace[1]["investigator_received_hypothesis"] is True
+    assert trace[1]["final_verification"]["reason"] == "investigator_input_contains_hypothesis"

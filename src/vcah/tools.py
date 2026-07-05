@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import dataclass
 
 from vcah.index import ColdIndex
 from vcah.memory import AgentMemory, EvidenceStore
 from vcah.types import EvidenceRecord, ToolAction, ToolResult, Window, window_overlap_ratio
 from vcah.video import render_timeline_grid
+
+
+@dataclass(frozen=True)
+class _ResolvedWindow:
+    requested: Window
+    beats: tuple[object, ...]
+    coverage: float
 
 
 class AgentTools:
@@ -112,12 +120,9 @@ class AgentTools:
                 },
             )
         selected_modalities = set(modalities or ("asr", "ocr", "frames"))
-        beat_ids: list[str] = []
-        evidence_ids: list[str] = []
+        resolved: list[_ResolvedWindow] = []
         actual_windows: list[dict[str, object]] = []
         coverage_report: list[dict[str, object]] = []
-        texts: list[str] = []
-
         for requested in windows:
             beats = tuple(
                 beat
@@ -126,70 +131,94 @@ class AgentTools:
             )
             actuals = tuple(Window(beat.start_sec, beat.end_sec) for beat in beats)
             coverage = window_overlap_ratio(requested, actuals)
-            coverage_item = {
-                "requested": _window_payload(requested),
-                "coverage": coverage,
-                "passed": coverage >= 0.8,
-            }
-            coverage_report.append(coverage_item)
-            if coverage < 0.8:
-                return ToolResult(
-                    tool="inspect_window",
-                    beat_ids=tuple(beat_ids),
-                    text="window_coverage_failed",
-                    payload={
-                        "requested_windows": [_window_payload(window) for window in windows],
-                        "actual_windows": actual_windows,
-                        "window_coverage_report": coverage_report,
-                        "fallback_used": False,
-                        "fallback_reason": None,
-                        "error": "window_coverage_failed",
-                    },
-                )
-            for beat in beats:
+            coverage_report.append(
+                {
+                    "requested": _window_payload(requested),
+                    "coverage": coverage,
+                    "passed": coverage >= 0.8,
+                }
+            )
+            actual_windows.extend(
+                {
+                    "start_sec": beat.start_sec,
+                    "end_sec": beat.end_sec,
+                    "source": "beat",
+                    "beat_id": beat.beat_id,
+                    "requested_window": _window_payload(requested),
+                }
+                for beat in beats
+            )
+            resolved.append(_ResolvedWindow(requested=requested, beats=beats, coverage=coverage))
+
+        if any(item.coverage < 0.8 for item in resolved):
+            return ToolResult(
+                tool="inspect_window",
+                text="window_coverage_failed",
+                payload={
+                    "requested_windows": [_window_payload(window) for window in windows],
+                    "actual_windows": actual_windows,
+                    "window_coverage_report": coverage_report,
+                    "fallback_used": False,
+                    "fallback_reason": None,
+                    "error": "window_coverage_failed",
+                },
+            )
+
+        beat_ids: list[str] = []
+        evidence_ids: list[str] = []
+        texts: list[str] = []
+
+        for item in resolved:
+            for beat in item.beats:
                 if beat.beat_id not in beat_ids:
                     beat_ids.append(beat.beat_id)
-                actual_windows.append(
-                    {
-                        "start_sec": beat.start_sec,
-                        "end_sec": beat.end_sec,
-                        "source": "beat",
-                        "beat_id": beat.beat_id,
-                        "requested_window": _window_payload(requested),
-                    }
+                evidence_window = Window(
+                    max(beat.start_sec, item.requested.start_sec),
+                    min(beat.end_sec, item.requested.end_sec),
                 )
+                metadata = {
+                    "requested_window": _window_payload(item.requested),
+                    "actual_beat_window": {"start_sec": beat.start_sec, "end_sec": beat.end_sec},
+                    "evidence_window": _window_payload(evidence_window),
+                }
                 if "asr" in selected_modalities and beat.asr_text.strip():
                     record = self._add_evidence(
                         beat_id=beat.beat_id,
-                        start_sec=beat.start_sec,
-                        end_sec=beat.end_sec,
+                        start_sec=evidence_window.start_sec,
+                        end_sec=evidence_window.end_sec,
                         modality="asr",
                         verbatim=beat.asr_text.strip(),
                     )
                     evidence_ids.append(record.evidence_id)
                     texts.append(record.verbatim)
+                    actual_windows.append({**metadata, "source": "asr", "beat_id": beat.beat_id, "evidence_id": record.evidence_id})
                 if "ocr" in selected_modalities and beat.ocr_text:
                     verbatim = " ".join(beat.ocr_text).strip()
                     record = self._add_evidence(
                         beat_id=beat.beat_id,
-                        start_sec=beat.start_sec,
-                        end_sec=beat.end_sec,
+                        start_sec=evidence_window.start_sec,
+                        end_sec=evidence_window.end_sec,
                         modality="ocr",
                         verbatim=verbatim,
                     )
                     evidence_ids.append(record.evidence_id)
                     texts.append(record.verbatim)
+                    actual_windows.append({**metadata, "source": "ocr", "beat_id": beat.beat_id, "evidence_id": record.evidence_id})
                 if "frames" in selected_modalities and beat.frame_paths:
-                    verbatim = f"Frame evidence for {beat.beat_id} at {beat.start_sec:.1f}-{beat.end_sec:.1f}s: {', '.join(beat.frame_paths)}"
+                    verbatim = (
+                        f"Frame evidence for {beat.beat_id} at "
+                        f"{evidence_window.start_sec:.1f}-{evidence_window.end_sec:.1f}s: {', '.join(beat.frame_paths)}"
+                    )
                     record = self._add_evidence(
                         beat_id=beat.beat_id,
-                        start_sec=beat.start_sec,
-                        end_sec=beat.end_sec,
+                        start_sec=evidence_window.start_sec,
+                        end_sec=evidence_window.end_sec,
                         modality="frame",
                         verbatim=verbatim,
                     )
                     evidence_ids.append(record.evidence_id)
                     texts.append(record.verbatim)
+                    actual_windows.append({**metadata, "source": "frame", "beat_id": beat.beat_id, "evidence_id": record.evidence_id})
 
         return ToolResult(
             tool="inspect_window",

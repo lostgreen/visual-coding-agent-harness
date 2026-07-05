@@ -9,7 +9,7 @@ from vcah.index import build_cold_index
 from vcah.memory import AgentMemory, EvidenceStore, TraceStore
 from vcah.model import ModelClient
 from vcah.tools import AgentTools
-from vcah.types import Answer, ToolAction
+from vcah.types import Answer, InvestigatorOutputInvalid, ToolAction, validate_investigator_input, verify_final_answer
 from vcah.video import probe_duration
 
 
@@ -57,8 +57,15 @@ class VideoAgent:
                 action = ToolAction.from_mapping(action)
             result = tools.run(action)
             if action.type == "answer":
-                verification = _verify_answer_citations(evidence, action)
-                result = replace(result, payload={**dict(result.payload), "final_verification": verification})
+                verification = _verify_answer_citations(evidence, action, question)
+                result = replace(
+                    result,
+                    payload={
+                        **dict(result.payload),
+                        "final_verification": verification,
+                        "investigator_received_hypothesis": bool(verification.get("investigator_received_hypothesis")),
+                    },
+                )
             memory.record_result(result)
             trace.append(action, result)
             memory.save()
@@ -77,9 +84,28 @@ class VideoAgent:
         return answer
 
 
-def _verify_answer_citations(evidence: EvidenceStore, action: ToolAction) -> dict[str, object]:
-    if evidence.valid(action.citations):
-        return {"passed": True, "reason": None}
+def _verify_answer_citations(evidence: EvidenceStore, action: ToolAction, question: str = "") -> dict[str, object]:
+    if action.investigator_payload:
+        try:
+            validate_investigator_input(action.investigator_payload)
+        except InvestigatorOutputInvalid:
+            return {
+                "passed": False,
+                "reason": "investigator_input_contains_hypothesis",
+                "investigator_received_hypothesis": True,
+            }
+    citations_valid = evidence.valid(action.citations)
+    if citations_valid and action.evidence_table:
+        selected = action.selected
+        verification = verify_final_answer(question, action.evidence_table, selected)
+        return {
+            **verification,
+            "citations_valid": True,
+            "selected": selected,
+            "investigator_received_hypothesis": False,
+        }
+    if citations_valid:
+        return {"passed": True, "reason": None, "citations_valid": True, "investigator_received_hypothesis": False}
     if not action.citations:
-        return {"passed": False, "reason": "missing_citations"}
-    return {"passed": False, "reason": "unknown_citations"}
+        return {"passed": False, "reason": "missing_citations", "citations_valid": False}
+    return {"passed": False, "reason": "unknown_citations", "citations_valid": False}
