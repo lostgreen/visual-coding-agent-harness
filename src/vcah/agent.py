@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -55,11 +56,14 @@ class VideoAgent:
             if not isinstance(action, ToolAction):
                 action = ToolAction.from_mapping(action)
             result = tools.run(action)
+            if action.type == "answer":
+                verification = _verify_answer_citations(evidence, action)
+                result = replace(result, payload={**dict(result.payload), "final_verification": verification})
             memory.record_result(result)
             trace.append(action, result)
             memory.save()
             if action.type == "answer":
-                if evidence.valid(action.citations):
+                if result.payload.get("final_verification", {}).get("passed"):
                     return self._write_answer(run_artifacts, Answer(action.answer, action.citations, run_dir))
                 return self._write_answer(run_artifacts, Answer("Insufficient verified evidence.", (), run_dir))
 
@@ -71,3 +75,11 @@ class VideoAgent:
             encoding="utf-8",
         )
         return answer
+
+
+def _verify_answer_citations(evidence: EvidenceStore, action: ToolAction) -> dict[str, object]:
+    if evidence.valid(action.citations):
+        return {"passed": True, "reason": None}
+    if not action.citations:
+        return {"passed": False, "reason": "missing_citations"}
+    return {"passed": False, "reason": "unknown_citations"}

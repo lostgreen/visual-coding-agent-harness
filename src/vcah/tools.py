@@ -4,7 +4,7 @@ from pathlib import Path
 
 from vcah.index import ColdIndex
 from vcah.memory import AgentMemory, EvidenceStore
-from vcah.types import EvidenceRecord, ToolAction, ToolResult
+from vcah.types import EvidenceRecord, ToolAction, ToolResult, Window, window_overlap_ratio
 from vcah.video import render_timeline_grid
 
 
@@ -24,6 +24,8 @@ class AgentTools:
             return self.open_grid(action.beat_ids)
         if action.type == "focus_clip":
             return self.focus_clip(action.beat_id, action.beat_ids)
+        if action.type == "inspect_window":
+            return self.inspect_window(action.windows, action.modalities)
         if action.type == "answer":
             return ToolResult(tool="answer", evidence_ids=action.citations, text=action.answer)
         return ToolResult(tool=action.type or "unknown", text="unknown action")
@@ -95,12 +97,147 @@ class AgentTools:
             payload={"evidence_created": False, "reason": "visual_only_requires_verification"},
         )
 
+    def inspect_window(self, windows: tuple[Window, ...], modalities: tuple[str, ...] = ()) -> ToolResult:
+        if not windows:
+            return ToolResult(
+                tool="inspect_window",
+                text="No requested windows supplied.",
+                payload={
+                    "requested_windows": [],
+                    "actual_windows": [],
+                    "window_coverage_report": [],
+                    "fallback_used": False,
+                    "fallback_reason": None,
+                    "error": "missing_requested_window",
+                },
+            )
+        selected_modalities = set(modalities or ("asr", "ocr", "frames"))
+        beat_ids: list[str] = []
+        evidence_ids: list[str] = []
+        actual_windows: list[dict[str, object]] = []
+        coverage_report: list[dict[str, object]] = []
+        texts: list[str] = []
+
+        for requested in windows:
+            beats = tuple(
+                beat
+                for beat in self.index.beats
+                if beat.end_sec > requested.start_sec and beat.start_sec < requested.end_sec
+            )
+            actuals = tuple(Window(beat.start_sec, beat.end_sec) for beat in beats)
+            coverage = window_overlap_ratio(requested, actuals)
+            coverage_item = {
+                "requested": _window_payload(requested),
+                "coverage": coverage,
+                "passed": coverage >= 0.8,
+            }
+            coverage_report.append(coverage_item)
+            if coverage < 0.8:
+                return ToolResult(
+                    tool="inspect_window",
+                    beat_ids=tuple(beat_ids),
+                    text="window_coverage_failed",
+                    payload={
+                        "requested_windows": [_window_payload(window) for window in windows],
+                        "actual_windows": actual_windows,
+                        "window_coverage_report": coverage_report,
+                        "fallback_used": False,
+                        "fallback_reason": None,
+                        "error": "window_coverage_failed",
+                    },
+                )
+            for beat in beats:
+                if beat.beat_id not in beat_ids:
+                    beat_ids.append(beat.beat_id)
+                actual_windows.append(
+                    {
+                        "start_sec": beat.start_sec,
+                        "end_sec": beat.end_sec,
+                        "source": "beat",
+                        "beat_id": beat.beat_id,
+                        "requested_window": _window_payload(requested),
+                    }
+                )
+                if "asr" in selected_modalities and beat.asr_text.strip():
+                    record = self._add_evidence(
+                        beat_id=beat.beat_id,
+                        start_sec=beat.start_sec,
+                        end_sec=beat.end_sec,
+                        modality="asr",
+                        verbatim=beat.asr_text.strip(),
+                    )
+                    evidence_ids.append(record.evidence_id)
+                    texts.append(record.verbatim)
+                if "ocr" in selected_modalities and beat.ocr_text:
+                    verbatim = " ".join(beat.ocr_text).strip()
+                    record = self._add_evidence(
+                        beat_id=beat.beat_id,
+                        start_sec=beat.start_sec,
+                        end_sec=beat.end_sec,
+                        modality="ocr",
+                        verbatim=verbatim,
+                    )
+                    evidence_ids.append(record.evidence_id)
+                    texts.append(record.verbatim)
+                if "frames" in selected_modalities and beat.frame_paths:
+                    verbatim = f"Frame evidence for {beat.beat_id} at {beat.start_sec:.1f}-{beat.end_sec:.1f}s: {', '.join(beat.frame_paths)}"
+                    record = self._add_evidence(
+                        beat_id=beat.beat_id,
+                        start_sec=beat.start_sec,
+                        end_sec=beat.end_sec,
+                        modality="frame",
+                        verbatim=verbatim,
+                    )
+                    evidence_ids.append(record.evidence_id)
+                    texts.append(record.verbatim)
+
+        return ToolResult(
+            tool="inspect_window",
+            beat_ids=tuple(beat_ids),
+            evidence_ids=tuple(evidence_ids),
+            text="\n".join(texts) or "No ASR/OCR/frame evidence found in requested windows.",
+            payload={
+                "requested_windows": [_window_payload(window) for window in windows],
+                "actual_windows": actual_windows,
+                "window_coverage_report": coverage_report,
+                "fallback_used": False,
+                "fallback_reason": None,
+                "evidence_created": bool(evidence_ids),
+            },
+        )
+
     def _selected_beat_ids(self, beat_ids: tuple[str, ...]) -> tuple[str, ...]:
         selected = tuple(beat_id for beat_id in beat_ids if beat_id)
         if not selected:
             selected = tuple(self.memory.last_hits)
         return selected
 
+    def _add_evidence(
+        self,
+        *,
+        beat_id: str,
+        start_sec: float,
+        end_sec: float,
+        modality: str,
+        verbatim: str,
+    ) -> EvidenceRecord:
+        record = EvidenceRecord(
+            evidence_id=self.evidence.next_id(),
+            beat_id=beat_id,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            modality=modality,  # type: ignore[arg-type]
+            pointer=_pointer(beat_id, start_sec, end_sec),
+            verbatim=verbatim,
+            claim=verbatim,
+        )
+        self.evidence.add(record)
+        return record
+
 
 def _pointer(beat_id: str, start_sec: float, end_sec: float) -> str:
     return f"{beat_id}@{float(start_sec):.3f}-{float(end_sec):.3f}"
+
+
+def _window_payload(window: Window) -> dict[str, float]:
+    return {"start_sec": window.start_sec, "end_sec": window.end_sec}

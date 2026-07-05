@@ -93,5 +93,18 @@ class TraceStore:
         self.path.write_text("", encoding="utf-8")
 
     def append(self, action: ToolAction, result: ToolResult) -> None:
+        entry = {"action": to_jsonable(action), "result": to_jsonable(result)}
+        for key in (
+            "requested_windows",
+            "actual_windows",
+            "window_coverage_report",
+            "fallback_used",
+            "fallback_reason",
+            "investigator_received_hypothesis",
+            "investigator_evidence_table",
+            "final_verification",
+        ):
+            if key in result.payload:
+                entry[key] = to_jsonable(result.payload[key])
         with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"action": to_jsonable(action), "result": to_jsonable(result)}, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
