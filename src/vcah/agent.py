@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
@@ -9,7 +10,15 @@ from vcah.index import build_cold_index
 from vcah.memory import AgentMemory, EvidenceStore, TraceStore
 from vcah.model import ModelClient
 from vcah.tools import AgentTools
-from vcah.types import Answer, InvestigatorOutputInvalid, ToolAction, validate_investigator_input, verify_final_answer
+from vcah.types import (
+    Answer,
+    InvestigatorOutputEmpty,
+    InvestigatorOutputInvalid,
+    ToolAction,
+    validate_investigator_input,
+    validate_investigator_output,
+    verify_final_answer,
+)
 from vcah.video import probe_duration
 
 
@@ -95,8 +104,20 @@ def _verify_answer_citations(evidence: EvidenceStore, action: ToolAction, questi
                 "investigator_received_hypothesis": True,
             }
     citations_valid = evidence.valid(action.citations)
-    if citations_valid and action.evidence_table:
-        selected = action.selected
+    requires_table = bool(action.selected) or _looks_like_mcq(question)
+    if not citations_valid:
+        if not action.citations:
+            return {"passed": False, "reason": "missing_citations", "citations_valid": False}
+        return {"passed": False, "reason": "unknown_citations", "citations_valid": False}
+    if requires_table and not action.evidence_table:
+        return {"passed": False, "reason": "missing_evidence_table", "citations_valid": True}
+    if action.evidence_table:
+        options = _evidence_options(question, action.evidence_table, action.selected)
+        try:
+            validate_investigator_output(action.evidence_table, options=options)
+        except (InvestigatorOutputEmpty, InvestigatorOutputInvalid) as exc:
+            return {"passed": False, "reason": "invalid_evidence_table", "detail": str(exc), "citations_valid": True}
+        selected = action.selected or _selected_from_answer(action.answer)
         verification = verify_final_answer(question, action.evidence_table, selected)
         return {
             **verification,
@@ -104,8 +125,25 @@ def _verify_answer_citations(evidence: EvidenceStore, action: ToolAction, questi
             "selected": selected,
             "investigator_received_hypothesis": False,
         }
-    if citations_valid:
-        return {"passed": True, "reason": None, "citations_valid": True, "investigator_received_hypothesis": False}
-    if not action.citations:
-        return {"passed": False, "reason": "missing_citations", "citations_valid": False}
-    return {"passed": False, "reason": "unknown_citations", "citations_valid": False}
+    return {"passed": True, "reason": None, "citations_valid": True, "investigator_received_hypothesis": False}
+
+
+def _looks_like_mcq(question: str) -> bool:
+    return bool(re.search(r"(?m)(^|\n)\s*[A-H][\).:]\s+\S+", question))
+
+
+def _evidence_options(question: str, evidence_table: object, selected: str) -> tuple[str, ...]:
+    labels = tuple(sorted(set(re.findall(r"(?m)(?:^|\n)\s*([A-H])[\).:]\s+\S+", question))))
+    if labels:
+        return labels
+    if isinstance(evidence_table, dict):
+        table_labels = tuple(sorted(key for key in evidence_table if re.fullmatch(r"[A-H]", str(key))))
+        if table_labels:
+            return table_labels
+    selected = selected.strip().upper()
+    return (selected,) if selected else ("A", "B", "C", "D")
+
+
+def _selected_from_answer(answer: str) -> str:
+    match = re.search(r"\b([A-H])\b", answer.upper())
+    return match.group(1) if match else ""

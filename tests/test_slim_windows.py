@@ -85,6 +85,36 @@ def test_inspect_window_executes_requested_window_and_traces_coverage(tmp_path: 
     assert evidence_window == {"start_sec": 110.0, "end_sec": 150.0}
 
 
+def test_inspect_window_verbatim_is_clipped_to_timed_cues(tmp_path: Path) -> None:
+    model = ScriptedModel(
+        actions=[
+            {"type": "inspect_window", "start_sec": 110, "end_sec": 150, "modalities": ["asr"]},
+            {"type": "answer", "answer": "A", "citations": ["ev_0001"]},
+        ]
+    )
+    agent = VideoAgent(model=model, max_steps=3)
+
+    agent.ask(
+        "/videos/demo.mp4",
+        "What is discussed in the requested window?",
+        run_dir=tmp_path,
+        duration_sec=300.0,
+        asr_cues=(
+            {"start": 100.0, "end": 120.0, "text": "irrelevant setup"},
+            {"start": 170.0, "end": 190.0, "text": "answer clue outside requested window"},
+        ),
+        range_detector=lambda _video_path, _duration: ((0.0, 100.0), (100.0, 200.0), (200.0, 300.0)),
+        keyframe_sampler=_sampler,
+    )
+    evidence = json.loads((tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    trace = [json.loads(line) for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    evidence_window = [item for item in trace[0]["actual_windows"] if item.get("evidence_id") == "ev_0001"][0]
+
+    assert evidence["verbatim"] == "irrelevant setup"
+    assert "answer clue" not in evidence["verbatim"]
+    assert evidence_window["verbatim_is_window_local"] is True
+
+
 def test_inspect_window_fails_closed_when_coverage_is_low(tmp_path: Path) -> None:
     model = ScriptedModel(
         actions=[
@@ -228,6 +258,30 @@ def test_agent_final_verifier_blocks_contradicted_positive_option(tmp_path: Path
 
     assert answer.answer == "Insufficient verified evidence."
     assert trace[1]["final_verification"]["reason"] == "selected_option_not_supported"
+
+
+def test_agent_requires_evidence_table_for_selected_answer(tmp_path: Path) -> None:
+    model = ScriptedModel(
+        actions=[
+            {"type": "inspect_window", "start_sec": 110, "end_sec": 150, "modalities": ["asr"]},
+            {"type": "answer", "selected": "A", "answer": "A", "citations": ["ev_0001"]},
+        ]
+    )
+    agent = VideoAgent(model=model, max_steps=3)
+
+    answer = agent.ask(
+        "/videos/demo.mp4",
+        "Which statement is correct?",
+        run_dir=tmp_path,
+        duration_sec=300.0,
+        asr_cues=({"start": 100.0, "end": 200.0, "text": "supported"},),
+        range_detector=lambda _video_path, _duration: ((0.0, 100.0), (100.0, 200.0), (200.0, 300.0)),
+        keyframe_sampler=_sampler,
+    )
+    trace = [json.loads(line) for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert answer.answer == "Insufficient verified evidence."
+    assert trace[1]["final_verification"]["reason"] == "missing_evidence_table"
 
 
 def test_agent_final_guard_blocks_investigator_hypothesis_payload(tmp_path: Path) -> None:

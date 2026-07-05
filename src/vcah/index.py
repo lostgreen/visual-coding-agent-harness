@@ -285,6 +285,8 @@ def _make_beat(
         asr_text=_text_for_range(asr_cues, start_sec=start_sec, end_sec=end_sec),
         ocr_text=_ocr_for_range(ocr_lines, start_sec=start_sec, end_sec=end_sec),
         frame_paths=frame_paths,
+        asr_cues=_asr_cues_for_range(asr_cues, start_sec=start_sec, end_sec=end_sec),
+        ocr_cues=_ocr_cues_for_range(ocr_lines, start_sec=start_sec, end_sec=end_sec),
     )
 
 
@@ -394,6 +396,19 @@ def _text_for_range(cues: Sequence[Any], *, start_sec: float, end_sec: float) ->
     return " ".join(lines)
 
 
+def _asr_cues_for_range(cues: Sequence[Any], *, start_sec: float, end_sec: float) -> tuple[dict[str, object], ...]:
+    result = []
+    for cue in cues:
+        cue_start = float(_field(cue, "start_sec", _field(cue, "start", 0.0)) or 0.0)
+        cue_end = float(_field(cue, "end_sec", _field(cue, "end", cue_start)) or cue_start)
+        if cue_end < start_sec or cue_start > end_sec:
+            continue
+        text = str(_field(cue, "text", "") or "").strip()
+        if text:
+            result.append({"start_sec": cue_start, "end_sec": cue_end, "text": text})
+    return tuple(result)
+
+
 def _ocr_for_range(lines: Sequence[Any], *, start_sec: float, end_sec: float) -> tuple[str, ...]:
     result = []
     for item in lines:
@@ -409,6 +424,24 @@ def _ocr_for_range(lines: Sequence[Any], *, start_sec: float, end_sec: float) ->
             text = str(text_raw or "").strip()
         if start_sec <= time_sec <= end_sec and text:
             result.append(text)
+    return tuple(result)
+
+
+def _ocr_cues_for_range(lines: Sequence[Any], *, start_sec: float, end_sec: float) -> tuple[dict[str, object], ...]:
+    result = []
+    for item in lines:
+        if isinstance(item, dict):
+            time_sec = float(item.get("time_sec", item.get("time", 0.0)) or 0.0)
+            text = str(item.get("text", "") or "").strip()
+        else:
+            try:
+                time_raw, text_raw = item
+            except (TypeError, ValueError):
+                continue
+            time_sec = float(time_raw)
+            text = str(text_raw or "").strip()
+        if start_sec <= time_sec <= end_sec and text:
+            result.append({"start_sec": time_sec, "end_sec": time_sec, "text": text})
     return tuple(result)
 
 

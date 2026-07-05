@@ -24,6 +24,8 @@ class Beat:
     asr_text: str = ""
     ocr_text: tuple[str, ...] = ()
     frame_paths: tuple[str, ...] = ()
+    asr_cues: tuple[Mapping[str, Any], ...] = ()
+    ocr_cues: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if float(self.end_sec) < float(self.start_sec):
@@ -32,6 +34,8 @@ class Beat:
         object.__setattr__(self, "end_sec", float(self.end_sec))
         object.__setattr__(self, "ocr_text", tuple(str(item) for item in self.ocr_text if str(item).strip()))
         object.__setattr__(self, "frame_paths", tuple(str(item) for item in self.frame_paths if str(item).strip()))
+        object.__setattr__(self, "asr_cues", tuple(_cue_mapping(item) for item in self.asr_cues))
+        object.__setattr__(self, "ocr_cues", tuple(_cue_mapping(item) for item in self.ocr_cues))
 
 
 @dataclass(frozen=True)
@@ -317,6 +321,16 @@ def _normalize_modality(value: object) -> Literal["asr", "ocr", "frames"] | None
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _cue_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return {
+            "start_sec": float(value.get("start_sec", value.get("start", value.get("time_sec", value.get("time", 0.0)))) or 0.0),
+            "end_sec": float(value.get("end_sec", value.get("end", value.get("time_sec", value.get("time", 0.0)))) or 0.0),
+            "text": str(value.get("text", "") or ""),
+        }
+    return _mapping(value)
 
 
 def _is_negative_question(question: str) -> bool:

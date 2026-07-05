@@ -182,18 +182,37 @@ class AgentTools:
                     "evidence_window": _window_payload(evidence_window),
                 }
                 if "asr" in selected_modalities and beat.asr_text.strip():
+                    verbatim, source_window = _clip_cue_text(beat.asr_cues, evidence_window, fallback=beat.asr_text.strip(), beat_window=Window(beat.start_sec, beat.end_sec))
+                    if not verbatim:
+                        continue
                     record = self._add_evidence(
                         beat_id=beat.beat_id,
                         start_sec=evidence_window.start_sec,
                         end_sec=evidence_window.end_sec,
                         modality="asr",
-                        verbatim=beat.asr_text.strip(),
+                        verbatim=verbatim,
                     )
                     evidence_ids.append(record.evidence_id)
                     texts.append(record.verbatim)
-                    actual_windows.append({**metadata, "source": "asr", "beat_id": beat.beat_id, "evidence_id": record.evidence_id})
+                    actual_windows.append(
+                        {
+                            **metadata,
+                            "source": "asr",
+                            "beat_id": beat.beat_id,
+                            "evidence_id": record.evidence_id,
+                            "verbatim_source_window": _window_payload(source_window),
+                            "verbatim_is_window_local": _contains_window(evidence_window, source_window),
+                        }
+                    )
                 if "ocr" in selected_modalities and beat.ocr_text:
-                    verbatim = " ".join(beat.ocr_text).strip()
+                    verbatim, source_window = _clip_cue_text(
+                        beat.ocr_cues,
+                        evidence_window,
+                        fallback=" ".join(beat.ocr_text).strip(),
+                        beat_window=Window(beat.start_sec, beat.end_sec),
+                    )
+                    if not verbatim:
+                        continue
                     record = self._add_evidence(
                         beat_id=beat.beat_id,
                         start_sec=evidence_window.start_sec,
@@ -203,7 +222,16 @@ class AgentTools:
                     )
                     evidence_ids.append(record.evidence_id)
                     texts.append(record.verbatim)
-                    actual_windows.append({**metadata, "source": "ocr", "beat_id": beat.beat_id, "evidence_id": record.evidence_id})
+                    actual_windows.append(
+                        {
+                            **metadata,
+                            "source": "ocr",
+                            "beat_id": beat.beat_id,
+                            "evidence_id": record.evidence_id,
+                            "verbatim_source_window": _window_payload(source_window),
+                            "verbatim_is_window_local": _contains_window(evidence_window, source_window),
+                        }
+                    )
                 if "frames" in selected_modalities and beat.frame_paths:
                     verbatim = (
                         f"Frame evidence for {beat.beat_id} at "
@@ -270,3 +298,35 @@ def _pointer(beat_id: str, start_sec: float, end_sec: float) -> str:
 
 def _window_payload(window: Window) -> dict[str, float]:
     return {"start_sec": window.start_sec, "end_sec": window.end_sec}
+
+
+def _clip_cue_text(
+    cues: tuple[object, ...],
+    window: Window,
+    *,
+    fallback: str,
+    beat_window: Window,
+) -> tuple[str, Window]:
+    lines = []
+    source_start: float | None = None
+    source_end: float | None = None
+    for cue in cues:
+        if not isinstance(cue, dict):
+            continue
+        cue_start = float(cue.get("start_sec", 0.0) or 0.0)
+        cue_end = float(cue.get("end_sec", cue_start) or cue_start)
+        if cue_end < window.start_sec or cue_start > window.end_sec:
+            continue
+        text = str(cue.get("text", "") or "").strip()
+        if not text:
+            continue
+        lines.append(text)
+        source_start = cue_start if source_start is None else min(source_start, cue_start)
+        source_end = cue_end if source_end is None else max(source_end, cue_end)
+    if lines:
+        return " ".join(lines), Window(max(window.start_sec, source_start or window.start_sec), min(window.end_sec, source_end or window.end_sec))
+    return str(fallback or "").strip(), beat_window
+
+
+def _contains_window(container: Window, item: Window) -> bool:
+    return item.start_sec >= container.start_sec and item.end_sec <= container.end_sec
