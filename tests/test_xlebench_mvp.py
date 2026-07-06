@@ -154,6 +154,72 @@ def test_lifelog_builder_resumes_and_retriever_filters_by_scope(tmp_path: Path) 
     assert result.candidates[0].frame_refs[0].video_uid == "seg_b"
 
 
+def test_lifelog_builder_uses_segment_fingerprint_for_resume(tmp_path: Path) -> None:
+    root = tmp_path / "xle"
+    root.mkdir()
+    (root / "cases.json").write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "case-1",
+                    "query": "blue object",
+                    "videos": [
+                        {"video_uid": "seg_a", "duration_sec": 20.0, "video_path": "seg_a.mp4"},
+                        {"video_uid": "seg_b", "duration_sec": 20.0, "video_path": "seg_b.mp4"},
+                    ],
+                    "query_range": [0.0, 20.0],
+                    "video_uid": "seg_b",
+                    "gt_interval": [0.0, 20.0],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
+    calls: list[str] = []
+
+    def range_detector(video_path: str, duration_sec: float) -> tuple[tuple[float, float], ...]:
+        del duration_sec
+        calls.append(Path(video_path).stem)
+        return ((0.0, 20.0),)
+
+    builder = LifeLogColdIndexBuilder(
+        manifest,
+        LifeLogIndexConfig(max_range_sec=20.0, max_beat_sec=20.0),
+        model=KeywordColorModel(),
+        range_detector=range_detector,
+        keyframe_sampler=_sampler,
+    )
+    first = builder.build(tmp_path / "run", resume=True)
+    second = builder.build(tmp_path / "run", resume=True)
+
+    state_path = tmp_path / "run" / "segments" / "seg_b" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert calls == ["seg_a", "seg_b"]
+    assert state["schema"] == "vcah.xle.segment_state.v1"
+    assert state["fingerprint_inputs"]["video_uid"] == "seg_b"
+    assert state["fingerprint_inputs"]["duration_sec"] == 20.0
+    assert state["fingerprint_inputs"]["max_range_sec"] == 20.0
+    assert first.segment("seg_a").resumed is False
+    assert second.segment("seg_a").resumed is True
+
+    changed = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
+    changed_segments = tuple(
+        type(segment)(segment.video_uid, segment.video_path, 24.0 if segment.video_uid == "seg_b" else segment.duration_sec, segment.virtual_start_sec)
+        for segment in changed.segments
+    )
+    changed_manifest = type(changed)(changed_segments, changed.cases)
+    LifeLogColdIndexBuilder(
+        changed_manifest,
+        LifeLogIndexConfig(max_range_sec=20.0, max_beat_sec=20.0),
+        model=KeywordColorModel(),
+        range_detector=range_detector,
+        keyframe_sampler=_sampler,
+    ).build(tmp_path / "run", resume=True)
+
+    assert calls == ["seg_a", "seg_b", "seg_b"]
+
+
 def test_xle_diagnose_reports_cold_recall_and_candidate_coverage(tmp_path: Path) -> None:
     root = tmp_path / "xle"
     root.mkdir()

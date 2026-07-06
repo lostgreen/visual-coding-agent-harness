@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 from time import perf_counter
@@ -228,7 +229,14 @@ class LifeLogColdIndexBuilder:
     def build_segment(self, segment: LifeLogSegment, run_dir: Path, *, resume: bool = True) -> SegmentColdIndex:
         segment_root = Path(run_dir) / "segments" / _safe_id(segment.video_uid)
         index_dir = segment_root / "cold_index"
-        if resume and (index_dir / "index.json").exists() and (index_dir / "visual_index.npz").exists():
+        state_path = segment_root / "state.json"
+        fingerprint_inputs = _segment_fingerprint_inputs(segment, self.config, self.model)
+        fingerprint = _fingerprint(fingerprint_inputs)
+        if (
+            resume
+            and _segment_artifacts_exist(index_dir)
+            and _state_matches(state_path, fingerprint)
+        ):
             return SegmentColdIndex(
                 segment=segment,
                 index=ColdIndex.load(index_dir, model=self.model),
@@ -248,11 +256,20 @@ class LifeLogColdIndexBuilder:
             max_beat_sec=self.config.max_beat_sec,
             index_mode=self.config.index_mode,
         )
+        build_seconds = perf_counter() - start
+        _write_segment_state(
+            state_path,
+            fingerprint=fingerprint,
+            fingerprint_inputs=fingerprint_inputs,
+            segment=segment,
+            index=cold,
+            index_dir=index_dir,
+        )
         return SegmentColdIndex(
             segment=segment,
             index=cold,
             index_dir=index_dir,
-            build_seconds=perf_counter() - start,
+            build_seconds=build_seconds,
             resumed=False,
         )
 
@@ -608,6 +625,68 @@ def _append_unique(values: Sequence[str], value: str) -> tuple[str, ...]:
 
 def _any_candidate_hits(candidates: Iterable[CandidateWindow], intervals: Sequence[GroundTruthInterval]) -> bool:
     return any(candidate.overlap_ratio(interval) > 0.0 for candidate in candidates for interval in intervals)
+
+
+def _segment_fingerprint_inputs(segment: LifeLogSegment, config: LifeLogIndexConfig, model: ModelClient) -> dict[str, Any]:
+    return {
+        "video_uid": segment.video_uid,
+        "video_path": str(segment.video_path),
+        "duration_sec": segment.duration_sec,
+        "virtual_start_sec": segment.virtual_start_sec,
+        "max_chapters": config.max_chapters,
+        "max_range_sec": config.max_range_sec,
+        "max_beat_sec": config.max_beat_sec,
+        "index_mode": config.index_mode,
+        "model_fingerprint": _model_fingerprint(model),
+    }
+
+
+def _model_fingerprint(model: ModelClient) -> dict[str, Any]:
+    return {
+        "class": model.__class__.__name__,
+        "embedding_dim": int(getattr(model, "embedding_dim", 0) or 0),
+        "embed_model": str(getattr(model, "embed_model", model.__class__.__name__) or "unknown"),
+        "vision_model": str(getattr(model, "vision_model", "") or ""),
+    }
+
+
+def _fingerprint(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _segment_artifacts_exist(index_dir: Path) -> bool:
+    return (index_dir / "index.json").exists() and (index_dir / "diagnostics.json").exists() and (index_dir / "visual_index.npz").exists()
+
+
+def _state_matches(state_path: Path, fingerprint: str) -> bool:
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return False
+    return str(payload.get("schema")) == "vcah.xle.segment_state.v1" and str(payload.get("fingerprint")) == fingerprint
+
+
+def _write_segment_state(
+    state_path: Path,
+    *,
+    fingerprint: str,
+    fingerprint_inputs: Mapping[str, Any],
+    segment: LifeLogSegment,
+    index: ColdIndex,
+    index_dir: Path,
+) -> None:
+    payload = {
+        "schema": "vcah.xle.segment_state.v1",
+        "fingerprint": fingerprint,
+        "fingerprint_inputs": dict(fingerprint_inputs),
+        "video_uid": segment.video_uid,
+        "index_dir": str(index_dir),
+        "beat_count": len(index.beats),
+        "chapter_count": len(index.chapters),
+    }
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _safe_id(value: str) -> str:
