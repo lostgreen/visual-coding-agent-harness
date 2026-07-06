@@ -299,7 +299,7 @@ def test_agent_final_verifier_blocks_contradicted_positive_option(tmp_path: Path
     trace = [json.loads(line) for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
 
     assert answer.answer == "Insufficient verified evidence."
-    assert trace[1]["final_verification"]["reason"] == "selected_option_not_supported"
+    assert trace[1]["final_verification"]["reason"] == "invalid_evidence_table"
 
 
 def test_agent_requires_evidence_table_for_selected_answer(tmp_path: Path) -> None:

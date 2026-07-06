@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -85,7 +86,10 @@ class VideoAgent:
             verdicts: tuple[ClaimVerdict, ...] = ()
             if action.claims:
                 candidate_evidence = _candidate_evidence(evidence, new_evidence)
-                verdicts = tuple(self.model.verify(tuple(QueryClaim.from_claim(claim) for claim in action.claims), candidate_evidence))
+                if type(self.model).verify is ModelClient.verify:
+                    verdicts = tuple(self.model.verify_claims(action.claims, candidate_evidence))
+                else:
+                    verdicts = tuple(self.model.verify(tuple(QueryClaim.from_claim(claim) for claim in action.claims), candidate_evidence))
                 _validate_verdict_citations(evidence, verdicts)
                 memory.update_ledger(action.claims, verdicts)
             if action.type == "answer":
@@ -147,7 +151,8 @@ def _verify_answer_citations(
             "investigator_received_hypothesis": False,
         }
     selected = action.selected or _selected_from_answer(action.answer)
-    if selected and claim_ledger and any(getattr(claim, "option", "") for claim, _verdict in claim_ledger.values()):
+    has_option_ledger = bool(claim_ledger and any(getattr(claim, "option", "") for claim, _verdict in claim_ledger.values()))
+    if selected and has_option_ledger:
         coverage = _verify_option_claim_coverage(question, claim_ledger)
         if not coverage["passed"]:
             return {**coverage, "citations_valid": True, "selected": selected, "investigator_received_hypothesis": False}
@@ -163,6 +168,14 @@ def _verify_answer_citations(
             }
         return {
             **verification,
+            "citations_valid": True,
+            "selected": selected,
+            "investigator_received_hypothesis": False,
+        }
+    if _looks_like_mcq(question) and not has_option_ledger and not _allow_legacy_table_final():
+        return {
+            "passed": False,
+            "reason": "missing_claim_ledger_for_mcq",
             "citations_valid": True,
             "selected": selected,
             "investigator_received_hypothesis": False,
@@ -279,3 +292,7 @@ def _path_only_visual_citations(evidence: EvidenceStore, citations: tuple[str, .
         for citation in citations
         if citation in records_by_id and is_path_only_visual_evidence(records_by_id[citation])
     ]
+
+
+def _allow_legacy_table_final() -> bool:
+    return os.getenv("VCAH_ALLOW_LEGACY_TABLE_FINAL", "").casefold() in {"1", "true", "yes", "on"}

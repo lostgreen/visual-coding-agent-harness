@@ -109,7 +109,8 @@ class EvidenceStore:
             text = " ".join(str(record.verbatim or "").split())
             if len(text) > 180:
                 text = text[:177] + "..."
-            lines.append(f"{record.evidence_id} [{record.modality}] {record.pointer}: {text}")
+            capability = f"{record.modality}/{record.temporal_scope}/{record.evidence_kind}/{record.observation_polarity}"
+            lines.append(f"{record.evidence_id} [{capability}] {record.pointer}: {text}")
         return "\n".join(lines)
 
 
@@ -136,6 +137,7 @@ class TraceStore:
             "requested_windows",
             "actual_windows",
             "window_coverage_report",
+            "window_lineage",
             "fallback_used",
             "fallback_reason",
             "investigator_received_hypothesis",

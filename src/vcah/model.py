@@ -6,7 +6,8 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from vcah.types import ClaimVerdict, EvidenceRecord, QueryClaim, ToolAction, is_path_only_visual_evidence
+from vcah.types import Claim, ClaimVerdict, EvidenceRecord, QueryClaim, ToolAction
+from vcah.verifier import verify_claim, verify_query_claim
 
 
 ATTESTATION_PROMPT = (
@@ -49,23 +50,12 @@ class ModelClient:
     def verify(self, query_claims: Sequence[QueryClaim], evidence: Sequence[EvidenceRecord]) -> tuple[ClaimVerdict, ...]:
         self.last_verify_claims = tuple(query_claims)
         self.last_verify_evidence = tuple(evidence)
-        verdicts = []
-        for claim in query_claims:
-            claim_tokens = set(_tokens(claim.text))
-            best: EvidenceRecord | None = None
-            best_overlap = 0
-            for record in evidence:
-                if is_path_only_visual_evidence(record):
-                    continue
-                overlap = len(claim_tokens & set(_tokens(record.verbatim)))
-                if overlap > best_overlap:
-                    best = record
-                    best_overlap = overlap
-            if best is not None and best_overlap >= max(1, int(len(claim_tokens) * 0.35)):
-                verdicts.append(ClaimVerdict(claim.claim_id, "supported", (best.evidence_id,)))
-            else:
-                verdicts.append(ClaimVerdict(claim.claim_id, "unknown", ()))
-        return tuple(verdicts)
+        return tuple(verify_query_claim(claim, evidence) for claim in query_claims)
+
+    def verify_claims(self, claims: Sequence[Claim], evidence: Sequence[EvidenceRecord]) -> tuple[ClaimVerdict, ...]:
+        self.last_verify_claims = tuple(QueryClaim.from_claim(claim) for claim in claims)
+        self.last_verify_evidence = tuple(evidence)
+        return tuple(verify_claim(claim, evidence) for claim in claims)
 
     def embed_text(self, queries: Sequence[str]) -> np.ndarray:
         return np.asarray([_hash_embedding(query, self.embedding_dim) for query in queries], dtype=np.float32)

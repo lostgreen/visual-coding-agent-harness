@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from dataclasses import dataclass
 
 from vcah.index import ColdIndex
 from vcah.memory import AgentMemory, EvidenceStore
 from vcah.model import ATTESTATION_PROMPT
-from vcah.types import EvidenceRecord, ToolAction, ToolResult, Window, window_overlap_ratio
+from vcah.types import CoverageSegment, EvidenceRecord, ToolAction, ToolResult, Window, window_overlap_ratio
 from vcah.video import render_timeline_grid
 
 
@@ -32,7 +33,7 @@ class AgentTools:
         if action.type == "open_grid":
             return self.open_grid(action.beat_ids)
         if action.type == "focus_clip":
-            return self.focus_clip(action.beat_id, action.beat_ids)
+            return self.focus_clip(action.beat_id, action.beat_ids, action.modalities)
         if action.type == "inspect_window":
             return self.inspect_window(action.windows, action.modalities)
         if action.type == "answer":
@@ -60,7 +61,7 @@ class AgentTools:
             payload={"path": str(path), "beat_ids": tuple(beat.beat_id for beat in beats)},
         )
 
-    def focus_clip(self, beat_id: str, beat_ids: tuple[str, ...] = ()) -> ToolResult:
+    def focus_clip(self, beat_id: str, beat_ids: tuple[str, ...] = (), modalities: tuple[str, ...] = ()) -> ToolResult:
         if not beat_id:
             selected = self._selected_beat_ids(beat_ids)
             if not selected:
@@ -71,45 +72,56 @@ class AgentTools:
                 )
             beat_id = selected[0]
         beat = self.index.get_beat(beat_id)
-        if beat.asr_text.strip():
-            record = EvidenceRecord(
-                evidence_id=self.evidence.next_id(),
-                beat_id=beat.beat_id,
-                start_sec=beat.start_sec,
-                end_sec=beat.end_sec,
-                modality="asr",
-                pointer=_pointer(beat.beat_id, beat.start_sec, beat.end_sec),
-                verbatim=beat.asr_text.strip(),
-                claim=beat.asr_text.strip(),
+        selected_modalities = set(modalities or ("asr", "ocr", "frames"))
+        records: list[EvidenceRecord] = []
+        if "asr" in selected_modalities and beat.asr_text.strip():
+            records.append(
+                self._add_evidence(
+                    beat_id=beat.beat_id,
+                    start_sec=beat.start_sec,
+                    end_sec=beat.end_sec,
+                    modality="asr",
+                    verbatim=beat.asr_text.strip(),
+                    temporal_scope="window",
+                    evidence_kind="quote",
+                    sampling_coverage="complete_for_manifest",
+                    request_ids=("focus_clip",),
+                    coverage_manifest=(CoverageSegment("focus_clip", beat.start_sec, beat.end_sec, "asr", 1.0),),
+                )
             )
-            self.evidence.add(record)
-            return ToolResult(tool="focus_clip", beat_ids=(beat.beat_id,), evidence_ids=(record.evidence_id,), text=record.verbatim, n_new=1)
-        if beat.ocr_text:
+        if "ocr" in selected_modalities and beat.ocr_text:
             verbatim = " ".join(beat.ocr_text).strip()
-            record = EvidenceRecord(
-                evidence_id=self.evidence.next_id(),
-                beat_id=beat.beat_id,
-                start_sec=beat.start_sec,
-                end_sec=beat.end_sec,
-                modality="ocr",
-                pointer=_pointer(beat.beat_id, beat.start_sec, beat.end_sec),
-                verbatim=verbatim,
-                claim=verbatim,
+            records.append(
+                self._add_evidence(
+                    beat_id=beat.beat_id,
+                    start_sec=beat.start_sec,
+                    end_sec=beat.end_sec,
+                    modality="ocr",
+                    verbatim=verbatim,
+                    temporal_scope="window",
+                    evidence_kind="quote",
+                    sampling_coverage="complete_for_manifest",
+                    request_ids=("focus_clip",),
+                    coverage_manifest=(CoverageSegment("focus_clip", beat.start_sec, beat.end_sec, "ocr", 1.0),),
+                )
             )
-            self.evidence.add(record)
-            return ToolResult(tool="focus_clip", beat_ids=(beat.beat_id,), evidence_ids=(record.evidence_id,), text=record.verbatim, n_new=1)
-        records = self._attest_visual_evidence(
-            beat_id=beat.beat_id,
-            start_sec=beat.start_sec,
-            end_sec=beat.end_sec,
-            frame_refs=beat.frame_paths or ((beat.keyframe_path,) if beat.keyframe_path else ()),
-        )
+        if "frames" in selected_modalities:
+            records.extend(
+                self._attest_visual_evidence(
+                    beat_id=beat.beat_id,
+                    start_sec=beat.start_sec,
+                    end_sec=beat.end_sec,
+                    frame_refs=beat.frame_paths or ((beat.keyframe_path,) if beat.keyframe_path else ()),
+                    request_ids=("focus_clip",),
+                    coverage_manifest=(CoverageSegment("focus_clip", beat.start_sec, beat.end_sec, "visual", 1.0),),
+                )
+            )
         return ToolResult(
             tool="focus_clip",
             beat_ids=(beat.beat_id,),
             evidence_ids=tuple(record.evidence_id for record in records),
-            text="\n".join(record.verbatim for record in records) or "No visual observations attested.",
-            payload={"evidence_created": bool(records), "reason": None if records else "visual_attestation_empty"},
+            text="\n".join(record.verbatim for record in records) or "No evidence found for selected modalities.",
+            payload={"evidence_created": bool(records), "reason": None if records else "no_selected_modality_evidence"},
             n_new=len(records),
         )
 
@@ -131,16 +143,23 @@ class AgentTools:
         resolved: list[_ResolvedWindow] = []
         actual_windows: list[dict[str, object]] = []
         coverage_report: list[dict[str, object]] = []
-        for requested in windows:
+        requested_ids = tuple(_request_id(index, requested) for index, requested in enumerate(windows, start=1))
+        executed_request_ids: list[str] = []
+        materialized_request_ids: list[str] = []
+        for ordinal, requested in enumerate(windows, start=1):
+            request_id = _request_id(ordinal, requested)
             beats = tuple(
                 beat
                 for beat in self.index.beats
                 if beat.end_sec > requested.start_sec and beat.start_sec < requested.end_sec
             )
+            if beats:
+                executed_request_ids.append(request_id)
             actuals = tuple(Window(beat.start_sec, beat.end_sec) for beat in beats)
             coverage = window_overlap_ratio(requested, actuals)
             coverage_report.append(
                 {
+                    "request_id": request_id,
                     "requested": _window_payload(requested),
                     "coverage": coverage,
                     "passed": coverage >= 0.8,
@@ -152,6 +171,7 @@ class AgentTools:
                     "end_sec": beat.end_sec,
                     "source": "beat",
                     "beat_id": beat.beat_id,
+                    "request_id": request_id,
                     "requested_window": _window_payload(requested),
                 }
                 for beat in beats
@@ -166,6 +186,7 @@ class AgentTools:
                     "requested_windows": [_window_payload(window) for window in windows],
                     "actual_windows": actual_windows,
                     "window_coverage_report": coverage_report,
+                    "window_lineage": _lineage_payload(requested_ids, executed_request_ids, materialized_request_ids),
                     "fallback_used": False,
                     "fallback_reason": None,
                     "error": "window_coverage_failed",
@@ -185,10 +206,12 @@ class AgentTools:
                     min(beat.end_sec, item.requested.end_sec),
                 )
                 metadata = {
+                    "request_id": _request_id(tuple(windows).index(item.requested) + 1, item.requested),
                     "requested_window": _window_payload(item.requested),
                     "actual_beat_window": {"start_sec": beat.start_sec, "end_sec": beat.end_sec},
                     "evidence_window": _window_payload(evidence_window),
                 }
+                request_id = str(metadata["request_id"])
                 if "asr" in selected_modalities and beat.asr_text.strip():
                     verbatim, source_window = _clip_cue_text(beat.asr_cues, evidence_window, fallback=beat.asr_text.strip(), beat_window=Window(beat.start_sec, beat.end_sec))
                     if not verbatim:
@@ -212,8 +235,15 @@ class AgentTools:
                         end_sec=evidence_window.end_sec,
                         modality="asr",
                         verbatim=verbatim,
+                        temporal_scope="window",
+                        evidence_kind="quote",
+                        sampling_coverage="complete_for_manifest",
+                        request_ids=(request_id,),
+                        coverage_manifest=(CoverageSegment(request_id, evidence_window.start_sec, evidence_window.end_sec, "asr", item.coverage),),
                     )
                     evidence_ids.append(record.evidence_id)
+                    if request_id not in materialized_request_ids:
+                        materialized_request_ids.append(request_id)
                     texts.append(record.verbatim)
                     actual_windows.append(
                         {
@@ -253,8 +283,15 @@ class AgentTools:
                         end_sec=evidence_window.end_sec,
                         modality="ocr",
                         verbatim=verbatim,
+                        temporal_scope="window",
+                        evidence_kind="quote",
+                        sampling_coverage="complete_for_manifest",
+                        request_ids=(request_id,),
+                        coverage_manifest=(CoverageSegment(request_id, evidence_window.start_sec, evidence_window.end_sec, "ocr", item.coverage),),
                     )
                     evidence_ids.append(record.evidence_id)
+                    if request_id not in materialized_request_ids:
+                        materialized_request_ids.append(request_id)
                     texts.append(record.verbatim)
                     actual_windows.append(
                         {
@@ -272,9 +309,13 @@ class AgentTools:
                         start_sec=evidence_window.start_sec,
                         end_sec=evidence_window.end_sec,
                         frame_refs=beat.frame_paths,
+                        request_ids=(request_id,),
+                        coverage_manifest=(CoverageSegment(request_id, evidence_window.start_sec, evidence_window.end_sec, "visual", item.coverage),),
                     )
                     for record in records:
                         evidence_ids.append(record.evidence_id)
+                        if request_id not in materialized_request_ids:
+                            materialized_request_ids.append(request_id)
                         texts.append(record.verbatim)
                         actual_windows.append({**metadata, "source": "visual", "beat_id": beat.beat_id, "evidence_id": record.evidence_id})
 
@@ -287,6 +328,7 @@ class AgentTools:
                 "requested_windows": [_window_payload(window) for window in windows],
                 "actual_windows": actual_windows,
                 "window_coverage_report": coverage_report,
+                "window_lineage": _lineage_payload(requested_ids, executed_request_ids, materialized_request_ids),
                 "fallback_used": False,
                 "fallback_reason": None,
                 "evidence_created": bool(evidence_ids),
@@ -310,6 +352,13 @@ class AgentTools:
         verbatim: str,
         frame_refs: tuple[str, ...] = (),
         attestation_model: str = "",
+        temporal_scope: str = "window",
+        evidence_kind: str = "quote",
+        observation_polarity: str = "unknown",
+        sampling_coverage: str = "unknown",
+        parent_evidence_ids: tuple[str, ...] = (),
+        request_ids: tuple[str, ...] = (),
+        coverage_manifest: tuple[CoverageSegment, ...] = (),
     ) -> EvidenceRecord:
         record = EvidenceRecord(
             evidence_id=self.evidence.next_id(),
@@ -322,6 +371,13 @@ class AgentTools:
             claim=verbatim,
             frame_refs=frame_refs,
             attestation_model=attestation_model,
+            temporal_scope=temporal_scope,  # type: ignore[arg-type]
+            evidence_kind=evidence_kind,  # type: ignore[arg-type]
+            observation_polarity=observation_polarity,  # type: ignore[arg-type]
+            sampling_coverage=sampling_coverage,  # type: ignore[arg-type]
+            parent_evidence_ids=parent_evidence_ids,
+            request_ids=request_ids,
+            coverage_manifest=coverage_manifest,
         )
         self.evidence.add(record)
         return record
@@ -333,13 +389,14 @@ class AgentTools:
         start_sec: float,
         end_sec: float,
         frame_refs: tuple[str, ...],
+        request_ids: tuple[str, ...] = (),
+        coverage_manifest: tuple[CoverageSegment, ...] = (),
     ) -> tuple[EvidenceRecord, ...]:
         model = getattr(self.index.visual_index, "model", None)
         if model is None or not frame_refs:
             return ()
-        observations = tuple(str(item).strip() for item in model.attest(frame_refs, ATTESTATION_PROMPT) if str(item).strip())
         records = []
-        for observation in observations:
+        for observation, polarity in _visual_observations(model.attest(frame_refs, ATTESTATION_PROMPT)):
             records.append(
                 self._add_evidence(
                     beat_id=beat_id,
@@ -349,6 +406,12 @@ class AgentTools:
                     verbatim=observation,
                     frame_refs=frame_refs,
                     attestation_model=str(getattr(model, "vision_model", "") or ""),
+                    temporal_scope="local_frame",
+                    evidence_kind="visual_observation",
+                    observation_polarity=polarity,
+                    sampling_coverage="sparse",
+                    request_ids=request_ids,
+                    coverage_manifest=coverage_manifest,
                 )
             )
         return tuple(records)
@@ -358,8 +421,79 @@ def _pointer(beat_id: str, start_sec: float, end_sec: float) -> str:
     return f"{beat_id}@{float(start_sec):.3f}-{float(end_sec):.3f}"
 
 
-def _window_payload(window: Window) -> dict[str, float]:
-    return {"start_sec": window.start_sec, "end_sec": window.end_sec}
+def _window_payload(window: Window) -> dict[str, object]:
+    payload: dict[str, float | str] = {"start_sec": window.start_sec, "end_sec": window.end_sec}
+    if window.request_id:
+        payload["request_id"] = window.request_id
+    return payload
+
+
+def _request_id(ordinal: int, window: Window) -> str:
+    if window.request_id:
+        return window.request_id
+    return f"win_{int(ordinal):04d}_{int(window.start_sec * 1000):010d}_{int(window.end_sec * 1000):010d}"
+
+
+def _lineage_payload(
+    requested_ids: tuple[str, ...],
+    executed_request_ids: list[str],
+    materialized_request_ids: list[str],
+) -> dict[str, object]:
+    requested = list(requested_ids)
+    executed = list(dict.fromkeys(executed_request_ids))
+    materialized = list(dict.fromkeys(materialized_request_ids))
+    error = None
+    if set(executed) != set(requested):
+        error = "window_request_execution_loss"
+    elif set(materialized) and not set(materialized).issubset(set(executed)):
+        error = "window_request_materialization_loss"
+    return {
+        "raw_requested_ids": requested,
+        "parsed_requested_ids": requested,
+        "dispatched_request_ids": requested,
+        "executed_request_ids": executed,
+        "materialized_request_ids": materialized,
+        "error": error,
+        "dropped_request_ids": [item for item in requested if item not in executed],
+    }
+
+
+def _visual_observations(raw_items: tuple[object, ...]) -> tuple[tuple[str, str], ...]:
+    observations: list[tuple[str, str]] = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            text = str(item.get("observation") or item.get("text") or item.get("verbatim") or "").strip()
+            polarity = _clean_polarity(item.get("polarity") or item.get("observation_polarity"))
+            if text:
+                observations.append((text, polarity))
+            continue
+        text = str(item or "").strip()
+        if not text:
+            continue
+        parsed = _json_payload(text)
+        if isinstance(parsed, dict):
+            nested = parsed.get("observations") or parsed.get("evidence") or ()
+            if isinstance(nested, list):
+                observations.extend(_visual_observations(tuple(nested)))
+                continue
+            observation = str(parsed.get("observation") or parsed.get("text") or "").strip()
+            if observation:
+                observations.append((observation, _clean_polarity(parsed.get("polarity") or parsed.get("observation_polarity"))))
+                continue
+        observations.append((text, "unknown"))
+    return tuple(observations)
+
+
+def _json_payload(text: str) -> object:
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def _clean_polarity(value: object) -> str:
+    text = str(value or "").strip().casefold()
+    return text if text in {"positive", "negative", "unknown"} else "unknown"
 
 
 def _clip_cue_text(
