@@ -17,6 +17,7 @@ class AgentMemory:
         self.last_hits: list[str] = []
         self.last_query = ""
         self.claim_ledger: dict[str, tuple[Claim, ClaimVerdict]] = {}
+        self.integrity_failures: list[str] = []
 
     @classmethod
     def empty(cls, path: Path) -> "AgentMemory":
@@ -32,6 +33,7 @@ class AgentMemory:
             self.last_hits = list(result.beat_ids)
         if result.tool.startswith("search") and not result.beat_ids:
             self.failed_searches.append(result.text or result.tool)
+        self._record_integrity_failures(result)
 
     def open_claims(self) -> tuple[Claim, ...]:
         return tuple(claim for claim, verdict in self.claim_ledger.values() if verdict.status == "unknown")
@@ -48,6 +50,8 @@ class AgentMemory:
             parts.append("open_claims=" + "; ".join(claim.text for claim in self.open_claims()[-4:]))
         if self.last_hits:
             parts.append(f"last_hits={','.join(self.last_hits[-8:])}")
+        if self.integrity_failures:
+            parts.append("integrity_failures=" + "; ".join(self.integrity_failures[-4:]))
         parts.append(f"visited={','.join(self.visited_beats[-8:])}")
         return "\n".join(part for part in parts if part)
 
@@ -60,6 +64,7 @@ class AgentMemory:
                     "failed_searches": self.failed_searches,
                     "last_hits": self.last_hits,
                     "last_query": self.last_query,
+                    "integrity_failures": self.integrity_failures,
                     "visited_beats": self.visited_beats,
                     "claim_ledger": {
                         claim_id: {"claim": to_jsonable(claim), "verdict": to_jsonable(verdict)}
@@ -72,6 +77,18 @@ class AgentMemory:
             ),
             encoding="utf-8",
         )
+
+    def _record_integrity_failures(self, result: ToolResult) -> None:
+        lineage = result.payload.get("window_lineage") if isinstance(result.payload, dict) else None
+        if not isinstance(lineage, dict):
+            return
+        error = str(lineage.get("error") or "").strip()
+        if not error:
+            return
+        dropped = ",".join(str(item) for item in lineage.get("dropped_request_ids", ()) if str(item).strip())
+        fingerprint = f"{error}:{dropped}" if dropped else error
+        if fingerprint not in self.integrity_failures:
+            self.integrity_failures.append(fingerprint)
 
 
 class EvidenceStore:

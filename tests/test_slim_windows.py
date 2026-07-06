@@ -35,6 +35,18 @@ def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, o
     return (Frame(frame_id="fr001", time_sec=start_sec, path=str(path)),)
 
 
+class AttestSpyModel(ScriptedModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_paths: tuple[str, ...] = ()
+        self.vision_model = "vision-spy"
+
+    def attest(self, image_paths: Sequence[str], prompt: str) -> tuple[str, ...]:
+        del prompt
+        self.seen_paths = tuple(image_paths)
+        return tuple(f"Visible clue in {Path(path).name}." for path in image_paths)
+
+
 def test_window_overlap_ratio() -> None:
     assert window_overlap_ratio(Window(100, 200), (Window(90, 210),)) == 1.0
     assert window_overlap_ratio(Window(100, 200), (Window(100, 150),)) == 0.5
@@ -155,6 +167,37 @@ def test_inspect_window_does_not_create_window_evidence_from_whole_beat_fallback
     assert result.payload["actual_windows"][-1]["verbatim_is_window_local"] is False
     assert result.payload["actual_windows"][-1]["skipped_reason"] == "non_window_local_verbatim"
     assert (tmp_path / "evidence.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_inspect_window_filters_out_of_window_frame_refs(tmp_path: Path) -> None:
+    text_index = TextIndex()
+    model = AttestSpyModel()
+    index = ColdIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=40.0,
+        chapters=(Chapter("ch01", 0.0, 40.0, ("bt00001",)),),
+        beats=(
+            Beat(
+                "bt00001",
+                "ch01",
+                0.0,
+                40.0,
+                "",
+                frame_paths=("frame_012.jpg", "frame_999.jpg"),
+            ),
+        ),
+        text_index=text_index,
+        visual_index=VisualIndex(model),
+        diagnostics=IndexDiagnostics(40.0, 1, 1, 40.0, 40.0, 0, 0.0, "test", "fast"),
+    )
+    evidence = EvidenceStore.empty(tmp_path / "evidence.jsonl")
+    tools = AgentTools(index, AgentMemory.empty(tmp_path / "memory.json"), evidence, tmp_path)
+
+    result = tools.inspect_window((Window(10.0, 20.0),), ("frames",))
+
+    assert model.seen_paths == ("frame_012.jpg",)
+    assert result.evidence_ids == ("ev_0001",)
+    assert evidence.records[0].frame_refs == ("frame_012.jpg",)
 
 
 def test_inspect_window_fails_closed_when_coverage_is_low(tmp_path: Path) -> None:

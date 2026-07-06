@@ -8,15 +8,12 @@ from vcah.types import Claim, ClaimContract, ClaimVerdict, EvidenceRecord, Query
 
 def verify_claim(claim: Claim, evidence: Sequence[EvidenceRecord]) -> ClaimVerdict:
     contract = claim.contract or ClaimContract()
-    capability_failures = _capability_failures(contract, evidence)
-    if capability_failures:
-        return ClaimVerdict(
-            claim.claim_id,
-            "unknown",
-            capability_checks=tuple(capability_failures),
-            reason=capability_failures[0],
-        )
+    semantic = _semantic_verify_claim(claim, evidence)
+    return apply_capability_gate(claim, semantic, evidence, contract=contract)
 
+
+def _semantic_verify_claim(claim: Claim, evidence: Sequence[EvidenceRecord]) -> ClaimVerdict:
+    contract = claim.contract or ClaimContract()
     claim_tokens = set(_tokens(claim.text))
     best: EvidenceRecord | None = None
     best_overlap = 0
@@ -63,7 +60,6 @@ def verify_claim(claim: Claim, evidence: Sequence[EvidenceRecord]) -> ClaimVerdi
         "supported",
         support_evidence_ids=(best.evidence_id,),
         entailment_kind="derived" if best.modality == "derived" else "direct",
-        capability_checks=("scope_compatible", "observability_compatible"),
     )
 
 
@@ -75,6 +71,47 @@ def verify_claims(claims: Sequence[Claim], evidence: Sequence[EvidenceRecord]) -
     return tuple(verify_claim(claim, evidence) for claim in claims)
 
 
+def apply_capability_gate(
+    claim: Claim,
+    semantic_verdict: ClaimVerdict | None,
+    evidence: Sequence[EvidenceRecord],
+    *,
+    contract: ClaimContract | None = None,
+) -> ClaimVerdict:
+    contract = contract or claim.contract or ClaimContract()
+    semantic = semantic_verdict or ClaimVerdict(claim.claim_id, "unknown", reason="missing_semantic_verdict")
+    cited_evidence = _cited_records(semantic, evidence)
+    gate_input = cited_evidence if semantic.status in {"supported", "contradicted"} else evidence
+    failures = _capability_failures(contract, gate_input)
+    if failures:
+        return ClaimVerdict(
+            claim.claim_id,
+            "unknown",
+            capability_checks=tuple(failures),
+            reason=failures[0],
+            source=semantic.source,
+        )
+    if semantic.status == "unknown":
+        return semantic
+    return ClaimVerdict(
+        claim.claim_id,
+        semantic.status,
+        support_evidence_ids=semantic.support_evidence_ids if semantic.status == "supported" else (),
+        contradict_evidence_ids=semantic.contradict_evidence_ids if semantic.status == "contradicted" else (),
+        entailment_kind=semantic.entailment_kind,
+        capability_checks=tuple(dict.fromkeys((*semantic.capability_checks, "scope_compatible", "observability_compatible"))),
+        reason=semantic.reason,
+        source=semantic.source,
+    )
+
+
+def _cited_records(verdict: ClaimVerdict, evidence: Sequence[EvidenceRecord]) -> tuple[EvidenceRecord, ...]:
+    citations = set(verdict.citations)
+    if not citations:
+        return ()
+    return tuple(record for record in evidence if record.evidence_id in citations)
+
+
 def _capability_failures(contract: ClaimContract, evidence: Sequence[EvidenceRecord]) -> list[str]:
     usable = tuple(record for record in evidence if not is_path_only_visual_evidence(record))
     if not usable:
@@ -82,18 +119,29 @@ def _capability_failures(contract: ClaimContract, evidence: Sequence[EvidenceRec
     if contract.required_observability:
         modalities = {record.modality for record in usable}
         modalities.update(segment.modality for record in usable for segment in record.coverage_manifest)
-        if not set(contract.required_observability) & modalities:
+        required = set(contract.required_observability)
+        if contract.observability_mode == "any":
+            compatible = bool(required & modalities)
+        else:
+            compatible = required.issubset(modalities)
+        if not compatible:
             return ["observability_mismatch"]
-    if contract.required_scope == "full_video" and not any(record.temporal_scope == "full_video" for record in usable):
-        if contract.quantifier in {"distinct_count", "total_count", "universal"}:
-            return ["aggregation_or_coverage_missing"]
-    if contract.required_scope == "multi_window" and not any(record.temporal_scope in {"multi_window", "full_video"} for record in usable):
-        if len({rid for record in usable for rid in record.request_ids}) < 2:
-            return ["insufficient_scope"]
+    if not _has_required_scope(contract.required_scope, usable):
+        return ["insufficient_scope" if contract.required_scope != "full_video" else "aggregation_or_coverage_missing"]
     if contract.aggregation != "none" or contract.quantifier in {"distinct_count", "total_count", "order", "comparison"}:
         if not any(record.modality == "derived" and record.parent_evidence_ids and record.coverage_manifest for record in usable):
             return ["aggregation_or_coverage_missing"]
     return []
+
+
+def _has_required_scope(required_scope: str, evidence: Sequence[EvidenceRecord]) -> bool:
+    scope_rank = {"local": 0, "local_frame": 0, "window": 1, "multi_window": 2, "full_video": 3}
+    required = scope_rank.get(required_scope, 1)
+    if any(scope_rank.get(record.temporal_scope, 1) >= required for record in evidence):
+        return True
+    if required_scope == "multi_window":
+        return len({rid for record in evidence for rid in record.request_ids}) >= 2
+    return False
 
 
 def _record_claim_incompatibility(claim: Claim, contract: ClaimContract, record: EvidenceRecord) -> str:

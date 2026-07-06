@@ -72,29 +72,47 @@ def count_entity_bounds(
             parent[find(relation.right_observation_id)] = find(relation.left_observation_id)
 
     groups = {find(obs_id) for obs_id in ids}
-    explicit_different = {
-        tuple(sorted((relation.left_observation_id, relation.right_observation_id)))
-        for relation in relations
-        if relation.relation == "different_entity"
-    }
-    lower_bound = max(1 if observations else 0, _different_lower_bound(ids, explicit_different))
+    conflict_edges: set[tuple[str, str]] = set()
+    relation_confidences: list[float] = []
+    for relation in relations:
+        if relation.relation == "unknown":
+            continue
+        if relation.left_observation_id not in parent or relation.right_observation_id not in parent:
+            continue
+        left = find(relation.left_observation_id)
+        right = find(relation.right_observation_id)
+        if relation.relation == "different_entity":
+            if left == right:
+                raise ValueError("Conflicting same_entity and different_entity relations")
+            conflict_edges.add(tuple(sorted((left, right))))
+            relation_confidences.append(relation.confidence)
+        elif relation.relation == "same_entity":
+            relation_confidences.append(relation.confidence)
+    lower_bound = max(1 if observations else 0, _max_clique_size(tuple(groups), conflict_edges))
     upper_bound = len(groups) if ids else 0
     if any(relation.relation == "unknown" for relation in relations):
         upper_bound = len(ids)
+    confidence = min(relation_confidences) if relation_confidences else 0.5
+    if lower_bound == upper_bound and coverage_manifest:
+        confidence = min(1.0, max(confidence, 0.5))
     return EntityCountResult(
         lower_bound=lower_bound,
         upper_bound=upper_bound,
-        confidence=1.0 if lower_bound == upper_bound and coverage_manifest else 0.5,
+        confidence=confidence,
         supporting_observation_ids=ids,
         coverage_manifest=coverage_manifest,
     )
 
 
-def _different_lower_bound(ids: tuple[str, ...], pairs: set[tuple[str, str]]) -> int:
-    if not ids:
+def _max_clique_size(nodes: tuple[str, ...], edges: set[tuple[str, str]]) -> int:
+    if not nodes:
         return 0
     best = 1
-    for obs_id in ids:
-        different = {other for pair in pairs if obs_id in pair for other in pair if other != obs_id}
-        best = max(best, 1 + len(different))
+    node_list = tuple(nodes)
+    for mask in range(1, 1 << len(node_list)):
+        clique = [node_list[index] for index in range(len(node_list)) if mask & (1 << index)]
+        if len(clique) <= best:
+            continue
+        if all(tuple(sorted((left, right))) in edges for index, left in enumerate(clique) for right in clique[index + 1 :]):
+            best = len(clique)
     return best

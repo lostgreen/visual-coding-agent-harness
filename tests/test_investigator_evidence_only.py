@@ -51,3 +51,23 @@ def test_investigator_output_rejects_mixed_evidence_and_option_judgment() -> Non
                 "status": "supported",
             }
         )
+
+
+def test_investigator_output_rejects_unknown_nested_evidence_keys() -> None:
+    with pytest.raises(InvestigatorOutputInvalid):
+        validate_investigator_output(
+            {
+                "evidence": [
+                    {
+                        "evidence_id": "ev_0001",
+                        "beat_id": "bt00001",
+                        "start_sec": 1.0,
+                        "end_sec": 1.0,
+                        "modality": "visual",
+                        "pointer": "bt00001@1.000-1.000",
+                        "verbatim": "A boat is visible.",
+                        "status": "supported",
+                    }
+                ]
+            }
+        )

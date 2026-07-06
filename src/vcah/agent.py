@@ -28,6 +28,7 @@ from vcah.types import (
     verify_final_answer,
 )
 from vcah.video import probe_duration
+from vcah.verifier import apply_capability_gate
 
 
 class VideoAgent:
@@ -86,14 +87,17 @@ class VideoAgent:
             verdicts: tuple[ClaimVerdict, ...] = ()
             if action.claims:
                 candidate_evidence = _candidate_evidence(evidence, new_evidence)
-                if type(self.model).verify is ModelClient.verify:
-                    verdicts = tuple(self.model.verify_claims(action.claims, candidate_evidence))
-                else:
-                    verdicts = tuple(self.model.verify(tuple(QueryClaim.from_claim(claim) for claim in action.claims), candidate_evidence))
+                semantic_verdicts = tuple(self.model.verify(tuple(QueryClaim.from_claim(claim) for claim in action.claims), candidate_evidence))
+                _validate_verdict_citations(evidence, semantic_verdicts)
+                semantic_by_id = {verdict.claim_id: verdict for verdict in semantic_verdicts}
+                verdicts = tuple(
+                    apply_capability_gate(claim, semantic_by_id.get(claim.claim_id), candidate_evidence)
+                    for claim in action.claims
+                )
                 _validate_verdict_citations(evidence, verdicts)
                 memory.update_ledger(action.claims, verdicts)
             if action.type == "answer":
-                verification = _verify_answer_citations(evidence, action, question, memory.claim_ledger)
+                verification = _verify_answer_citations(evidence, action, question, memory.claim_ledger, memory.integrity_failures)
                 result = replace(
                     result,
                     payload={
@@ -125,7 +129,15 @@ def _verify_answer_citations(
     action: ToolAction,
     question: str = "",
     claim_ledger: dict[str, tuple[Claim, ClaimVerdict]] | None = None,
+    integrity_failures: tuple[str, ...] = (),
 ) -> dict[str, object]:
+    if integrity_failures:
+        return {
+            "passed": False,
+            "reason": "run_integrity_failure",
+            "integrity_failures": list(integrity_failures),
+            "investigator_received_hypothesis": False,
+        }
     if action.investigator_payload:
         try:
             validate_investigator_input(action.investigator_payload)

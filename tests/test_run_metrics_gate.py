@@ -58,3 +58,16 @@ def test_regression_gate_blocks_known_target_wrong_answer(tmp_path: Path) -> Non
 
     assert gate["passed"] is False
     assert "target_case_still_wrong:1810" in gate["failures"]
+
+
+def test_regression_gate_fails_when_expected_case_is_missing(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.json"
+    summary.write_text(
+        json.dumps({"cases": [{"case_id": "1810", "gold": "C", "final_answer": "C", "correct": True}]}),
+        encoding="utf-8",
+    )
+
+    gate = evaluate_gate(summary, expected_case_ids={"1810", "1817"})
+
+    assert gate["passed"] is False
+    assert "missing_expected_cases:1817" in gate["failures"]

@@ -68,6 +68,41 @@ class LaterClaimVerifierModel(ScriptedModel):
         return (ClaimVerdict("cl_R2_01", "unknown", ()),)
 
 
+class OverconfidentScopeVerifierModel(ScriptedModel):
+    def __init__(self) -> None:
+        super().__init__(
+            actions=[
+                {
+                    "type": "inspect_window",
+                    "start_sec": 0,
+                    "end_sec": 4,
+                    "modalities": ["asr"],
+                    "claims": [
+                        {
+                            "claim_id": "cl_scope_A",
+                            "option": "A",
+                            "text": "The bridge is the main topic of the full video.",
+                            "contract": {
+                                "required_scope": "full_video",
+                                "observation_target": "relation",
+                                "required_observability": ["asr"],
+                            },
+                        },
+                        {"claim_id": "cl_scope_B", "option": "B", "text": "The tower is mentioned."},
+                    ],
+                },
+                {"type": "answer", "selected": "A", "answer": "A", "citations": ["ev_0001"]},
+            ]
+        )
+
+    def verify(self, query_claims: Sequence[QueryClaim], evidence: Sequence[EvidenceRecord]) -> tuple[ClaimVerdict, ...]:
+        del query_claims, evidence
+        return (
+            ClaimVerdict("cl_scope_A", "supported", ("ev_0001",)),
+            ClaimVerdict("cl_scope_B", "unknown", ()),
+        )
+
+
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
     del video_path, end_sec, n_frames
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -134,3 +169,24 @@ def test_agent_verifier_can_use_recent_evidence_when_later_claim_creates_no_new_
     )
 
     assert any(record.evidence_id == "ev_0001" for record in model.seen_evidence)
+
+
+def test_custom_verifier_cannot_bypass_claim_contract_scope_gate(tmp_path: Path) -> None:
+    model = OverconfidentScopeVerifierModel()
+    agent = VideoAgent(model=model, max_steps=3)
+
+    answer = agent.ask(
+        "/videos/demo.mp4",
+        "Which statement is correct?\nA. The bridge is the main topic of the full video.\nB. The tower is mentioned.",
+        run_dir=tmp_path,
+        duration_sec=4.0,
+        asr_cues=({"start": 0.0, "end": 4.0, "text": "The bridge is mentioned."},),
+        range_detector=lambda _video_path, _duration: ((0.0, 4.0),),
+        keyframe_sampler=_sampler,
+    )
+    trace = [json.loads(line) for line in (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert answer.answer == "Insufficient verified evidence."
+    assert trace[0]["claim_verdicts"][0]["status"] == "unknown"
+    assert trace[0]["claim_verdicts"][0]["reason"] == "aggregation_or_coverage_missing"
+    assert trace[1]["final_verification"]["reason"] == "insufficient_verified_evidence"

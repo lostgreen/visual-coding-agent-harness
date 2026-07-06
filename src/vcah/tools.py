@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -35,7 +36,12 @@ class AgentTools:
         if action.type == "focus_clip":
             return self.focus_clip(action.beat_id, action.beat_ids, action.modalities)
         if action.type == "inspect_window":
-            return self.inspect_window(action.windows, action.modalities)
+            return self.inspect_window(
+                action.windows,
+                action.modalities,
+                raw_window_count=action.raw_window_count,
+                window_parse_errors=action.window_parse_errors,
+            )
         if action.type == "answer":
             return ToolResult(tool="answer", evidence_ids=action.citations, text=action.answer)
         return ToolResult(tool=action.type or "unknown", text="unknown action")
@@ -125,8 +131,16 @@ class AgentTools:
             n_new=len(records),
         )
 
-    def inspect_window(self, windows: tuple[Window, ...], modalities: tuple[str, ...] = ()) -> ToolResult:
+    def inspect_window(
+        self,
+        windows: tuple[Window, ...],
+        modalities: tuple[str, ...] = (),
+        *,
+        raw_window_count: int = 0,
+        window_parse_errors: tuple[str, ...] = (),
+    ) -> ToolResult:
         if not windows:
+            raw_ids = _raw_request_ids(max(int(raw_window_count), len(windows)))
             return ToolResult(
                 tool="inspect_window",
                 text="No requested windows supplied.",
@@ -134,6 +148,7 @@ class AgentTools:
                     "requested_windows": [],
                     "actual_windows": [],
                     "window_coverage_report": [],
+                    "window_lineage": _lineage_payload(raw_ids, (), [], [], parse_errors=window_parse_errors),
                     "fallback_used": False,
                     "fallback_reason": None,
                     "error": "missing_requested_window",
@@ -144,6 +159,10 @@ class AgentTools:
         actual_windows: list[dict[str, object]] = []
         coverage_report: list[dict[str, object]] = []
         requested_ids = tuple(_request_id(index, requested) for index, requested in enumerate(windows, start=1))
+        if window_parse_errors or int(raw_window_count) > len(windows):
+            raw_ids = _raw_request_ids(max(int(raw_window_count), len(windows)))
+        else:
+            raw_ids = requested_ids
         executed_request_ids: list[str] = []
         materialized_request_ids: list[str] = []
         for ordinal, requested in enumerate(windows, start=1):
@@ -186,7 +205,7 @@ class AgentTools:
                     "requested_windows": [_window_payload(window) for window in windows],
                     "actual_windows": actual_windows,
                     "window_coverage_report": coverage_report,
-                    "window_lineage": _lineage_payload(requested_ids, executed_request_ids, materialized_request_ids),
+                    "window_lineage": _lineage_payload(raw_ids, requested_ids, executed_request_ids, materialized_request_ids, parse_errors=window_parse_errors),
                     "fallback_used": False,
                     "fallback_reason": None,
                     "error": "window_coverage_failed",
@@ -304,11 +323,15 @@ class AgentTools:
                         }
                     )
                 if "frames" in selected_modalities and beat.frame_paths:
+                    frame_refs = _frame_refs_in_window(beat.frame_paths, evidence_window)
+                    if not frame_refs:
+                        actual_windows.append({**metadata, "source": "visual", "beat_id": beat.beat_id, "skipped_reason": "no_in_window_frame_refs"})
+                        continue
                     records = self._attest_visual_evidence(
                         beat_id=beat.beat_id,
                         start_sec=evidence_window.start_sec,
                         end_sec=evidence_window.end_sec,
-                        frame_refs=beat.frame_paths,
+                        frame_refs=frame_refs,
                         request_ids=(request_id,),
                         coverage_manifest=(CoverageSegment(request_id, evidence_window.start_sec, evidence_window.end_sec, "visual", item.coverage),),
                     )
@@ -328,7 +351,7 @@ class AgentTools:
                 "requested_windows": [_window_payload(window) for window in windows],
                 "actual_windows": actual_windows,
                 "window_coverage_report": coverage_report,
-                "window_lineage": _lineage_payload(requested_ids, executed_request_ids, materialized_request_ids),
+                "window_lineage": _lineage_payload(raw_ids, requested_ids, executed_request_ids, materialized_request_ids, parse_errors=window_parse_errors),
                 "fallback_used": False,
                 "fallback_reason": None,
                 "evidence_created": bool(evidence_ids),
@@ -434,28 +457,75 @@ def _request_id(ordinal: int, window: Window) -> str:
     return f"win_{int(ordinal):04d}_{int(window.start_sec * 1000):010d}_{int(window.end_sec * 1000):010d}"
 
 
+def _raw_request_ids(count: int) -> tuple[str, ...]:
+    return tuple(f"raw_window_{index:04d}" for index in range(1, max(0, int(count)) + 1))
+
+
 def _lineage_payload(
+    raw_request_ids: tuple[str, ...],
     requested_ids: tuple[str, ...],
     executed_request_ids: list[str],
     materialized_request_ids: list[str],
+    *,
+    parse_errors: tuple[str, ...] = (),
 ) -> dict[str, object]:
+    raw = list(raw_request_ids or requested_ids)
     requested = list(requested_ids)
+    dispatched = requested
     executed = list(dict.fromkeys(executed_request_ids))
     materialized = list(dict.fromkeys(materialized_request_ids))
-    error = None
-    if set(executed) != set(requested):
-        error = "window_request_execution_loss"
-    elif set(materialized) and not set(materialized).issubset(set(executed)):
-        error = "window_request_materialization_loss"
+    error = _lineage_error(raw, requested, dispatched, executed, materialized, parse_errors)
+    dropped_source = raw if error == "window_request_parse_loss" else requested
+    dropped_target = requested if error == "window_request_parse_loss" else executed
+    if error == "window_request_materialization_loss":
+        dropped_source = executed
+        dropped_target = materialized
     return {
-        "raw_requested_ids": requested,
+        "raw_requested_ids": raw,
         "parsed_requested_ids": requested,
-        "dispatched_request_ids": requested,
+        "dispatched_request_ids": dispatched,
         "executed_request_ids": executed,
         "materialized_request_ids": materialized,
         "error": error,
-        "dropped_request_ids": [item for item in requested if item not in executed],
+        "parse_errors": list(parse_errors),
+        "dropped_request_ids": [item for item in dropped_source if item not in dropped_target],
     }
+
+
+def _lineage_error(
+    raw: list[str],
+    parsed: list[str],
+    dispatched: list[str],
+    executed: list[str],
+    materialized: list[str],
+    parse_errors: tuple[str, ...],
+) -> str | None:
+    if parse_errors or len(parsed) < len(raw):
+        return "window_request_parse_loss"
+    if set(parsed) - set(dispatched):
+        return "window_request_dispatch_loss"
+    if set(dispatched) - set(executed):
+        return "window_request_execution_loss"
+    if executed and (not materialized or set(executed) - set(materialized)):
+        return "window_request_materialization_loss"
+    if set(materialized) - set(executed):
+        return "window_request_materialization_loss"
+    return None
+
+
+def _frame_refs_in_window(frame_refs: tuple[str, ...], window: Window) -> tuple[str, ...]:
+    kept = tuple(ref for ref in frame_refs if _frame_ref_in_window(ref, window))
+    return kept
+
+
+def _frame_ref_in_window(frame_ref: str, window: Window) -> bool:
+    matches = re.findall(r"(\d+(?:\.\d+)?)", Path(str(frame_ref)).stem)
+    if not matches:
+        return True
+    value = float(matches[-1])
+    if value > 100000:
+        return True
+    return window.start_sec <= value <= window.end_sec
 
 
 def _visual_observations(raw_items: tuple[object, ...]) -> tuple[tuple[str, str], ...]:

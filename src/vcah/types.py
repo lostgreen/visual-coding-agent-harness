@@ -102,6 +102,7 @@ class ClaimContract:
     observation_target: Literal["text", "entity", "object", "event", "action", "relation", "attribute"] = "text"
     aggregation: Literal["none", "deduplicate", "count", "order", "compare", "summarize"] = "none"
     required_observability: tuple[Literal["asr", "ocr", "visual"], ...] = ()
+    observability_mode: Literal["all", "any"] = "all"
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -109,6 +110,8 @@ class ClaimContract:
             "required_observability",
             tuple(item for item in self.required_observability if item in {"asr", "ocr", "visual"}),
         )
+        if self.observability_mode not in {"all", "any"}:
+            object.__setattr__(self, "observability_mode", "all")
 
 
 @dataclass(frozen=True)
@@ -154,7 +157,12 @@ class EvidenceRecord:
         )
         if modality == "visual" and self.evidence_kind == "quote":
             object.__setattr__(self, "evidence_kind", "visual_observation")
-        if modality in {"asr", "ocr"} and self.evidence_kind == "quote" and self.sampling_coverage == "unknown":
+        if (
+            modality in {"asr", "ocr"}
+            and self.evidence_kind == "quote"
+            and self.sampling_coverage == "unknown"
+            and _manifest_covers_modality(self.coverage_manifest, modality)
+        ):
             object.__setattr__(self, "sampling_coverage", "complete_for_manifest")
         if modality == "derived" and not self.parent_evidence_ids:
             raise ValueError("Derived evidence requires parent_evidence_ids")
@@ -294,6 +302,15 @@ class WindowCoverage:
     passed: bool
 
 
+@dataclass(frozen=True)
+class SelectionPolicy:
+    mode: Literal["choose_supported", "choose_contradicted", "choose_best_score"] = "choose_supported"
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"choose_supported", "choose_contradicted", "choose_best_score"}:
+            object.__setattr__(self, "mode", "choose_supported")
+
+
 def window_overlap_ratio(requested: Window, actuals: Iterable[Window]) -> float:
     requested_len = requested.end_sec - requested.start_sec
     if requested_len <= 0:
@@ -329,6 +346,9 @@ class ToolAction:
     answer: str = ""
     citations: tuple[str, ...] = ()
     claims: tuple[Claim, ...] = ()
+    raw_window_count: int = 0
+    parsed_window_count: int = 0
+    window_parse_errors: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "ToolAction":
@@ -338,7 +358,7 @@ class ToolAction:
         beat_ids = payload.get("beat_ids") or ()
         if isinstance(beat_ids, str):
             beat_ids = (beat_ids,)
-        windows = _parse_windows(payload)
+        windows, raw_window_count, window_parse_errors = _parse_windows_with_report(payload)
         modalities = payload.get("modalities") or ()
         if isinstance(modalities, str):
             modalities = (modalities,)
@@ -355,6 +375,9 @@ class ToolAction:
             answer=str(payload.get("answer") or ""),
             citations=tuple(str(item) for item in citations),
             claims=_parse_claims(payload.get("claims") or ()),
+            raw_window_count=raw_window_count,
+            parsed_window_count=len(windows),
+            window_parse_errors=window_parse_errors,
         )
 
 
@@ -509,9 +532,11 @@ def verify_final_answer(
     *,
     claim_ledger: Mapping[str, tuple[Claim, ClaimVerdict]] | None = None,
     threshold: float = 0.34,
+    selection_policy: SelectionPolicy | None = None,
 ) -> dict[str, Any]:
     if claim_ledger:
-        return verify_claim_ledger_answer(claim_ledger, selected, threshold=threshold)
+        policy = selection_policy or _selection_policy_for_question(question)
+        return verify_claim_ledger_answer(claim_ledger, selected, threshold=threshold, selection_policy=policy)
     selected = str(selected).strip().upper()
     if not selected:
         return {"passed": False, "reason": "missing_selected_option"}
@@ -526,12 +551,25 @@ def verify_final_answer(
 
 
 def score_claim_ledger(claim_ledger: Mapping[str, tuple[Claim, ClaimVerdict]]) -> dict[str, float]:
+    return _score_claim_ledger(claim_ledger, mode="choose_supported")
+
+
+def _score_claim_ledger(
+    claim_ledger: Mapping[str, tuple[Claim, ClaimVerdict]],
+    *,
+    mode: Literal["choose_supported", "choose_contradicted", "choose_best_score"],
+) -> dict[str, float]:
     totals: dict[str, float] = {}
     counts: dict[str, int] = {}
     for claim, verdict in claim_ledger.values():
         if not claim.option:
             continue
-        totals[claim.option] = totals.get(claim.option, 0.0) + _claim_sign(claim, verdict)
+        score = _claim_sign(claim, verdict)
+        if mode == "choose_contradicted":
+            score = -score
+        elif mode == "choose_best_score":
+            score = abs(score)
+        totals[claim.option] = totals.get(claim.option, 0.0) + score
         counts[claim.option] = counts.get(claim.option, 0) + 1
     return {option: totals.get(option, 0.0) / max(1, counts.get(option, 0)) for option in sorted(counts)}
 
@@ -541,11 +579,13 @@ def verify_claim_ledger_answer(
     selected: str,
     *,
     threshold: float = 0.34,
+    selection_policy: SelectionPolicy | None = None,
 ) -> dict[str, Any]:
     selected = str(selected).strip().upper()
     if not selected:
         return {"passed": False, "reason": "missing_selected_option"}
-    scores = score_claim_ledger(claim_ledger)
+    policy = selection_policy or SelectionPolicy()
+    scores = _score_claim_ledger(claim_ledger, mode=policy.mode)
     if not scores:
         return {"passed": False, "reason": "missing_claim_ledger", "scores": scores}
     ordered = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
@@ -562,6 +602,7 @@ def verify_claim_ledger_answer(
             "scores": scores,
             "margin": margin,
             "threshold": float(threshold),
+            "selection_policy": policy.mode,
         }
     if selected != winner:
         return {
@@ -572,6 +613,7 @@ def verify_claim_ledger_answer(
             "scores": scores,
             "margin": margin,
             "threshold": float(threshold),
+            "selection_policy": policy.mode,
         }
     return {
         "passed": True,
@@ -581,6 +623,7 @@ def verify_claim_ledger_answer(
         "scores": scores,
         "margin": margin,
         "threshold": float(threshold),
+        "selection_policy": policy.mode,
     }
 
 
@@ -607,27 +650,44 @@ def to_jsonable(value: object) -> object:
 
 
 def _parse_windows(payload: Mapping[str, Any]) -> tuple[Window, ...]:
+    windows, _raw_count, _errors = _parse_windows_with_report(payload)
+    return windows
+
+
+def _parse_windows_with_report(payload: Mapping[str, Any]) -> tuple[tuple[Window, ...], int, tuple[str, ...]]:
     raw_windows = payload.get("windows") or payload.get("inspect_windows") or ()
     windows: list[Window] = []
+    errors: list[str] = []
+    raw_count = 0
     if payload.get("start_sec") is not None or payload.get("end_sec") is not None:
-        windows.append(
-            Window(
-                _parse_seconds(payload.get("start_sec")),
-                _parse_seconds(payload.get("end_sec")),
-                str(payload.get("request_id") or ""),
+        raw_count += 1
+        try:
+            windows.append(
+                Window(
+                    _parse_seconds(payload.get("start_sec")),
+                    _parse_seconds(payload.get("end_sec")),
+                    str(payload.get("request_id") or ""),
+                )
             )
-        )
+        except (TypeError, ValueError) as exc:
+            errors.append(f"inline:{exc}")
     if isinstance(raw_windows, Mapping):
         raw_windows = (raw_windows,)
-    for item in raw_windows:
+    for index, item in enumerate(raw_windows, start=1):
+        raw_count += 1
         if not isinstance(item, Mapping):
+            errors.append(f"window_{index}:not_mapping")
             continue
         start = item.get("start_sec", item.get("start"))
         end = item.get("end_sec", item.get("end"))
         if start is None or end is None:
+            errors.append(f"window_{index}:missing_start_or_end")
             continue
-        windows.append(Window(_parse_seconds(start), _parse_seconds(end), str(item.get("request_id") or item.get("id") or "")))
-    return tuple(windows)
+        try:
+            windows.append(Window(_parse_seconds(start), _parse_seconds(end), str(item.get("request_id") or item.get("id") or "")))
+        except (TypeError, ValueError) as exc:
+            errors.append(f"window_{index}:{exc}")
+    return tuple(windows), raw_count, tuple(errors)
 
 
 def _parse_claims(value: Any) -> tuple[Claim, ...]:
@@ -706,6 +766,7 @@ def _claim_contract(value: Any) -> ClaimContract:
         observation_target=str(payload.get("observation_target") or "text"),  # type: ignore[arg-type]
         aggregation=str(payload.get("aggregation") or "none"),  # type: ignore[arg-type]
         required_observability=tuple(observability),  # type: ignore[arg-type]
+        observability_mode=str(payload.get("observability_mode") or "all"),  # type: ignore[arg-type]
     )
 
 
@@ -713,6 +774,30 @@ def _evidence_record(value: Any) -> EvidenceRecord:
     if isinstance(value, EvidenceRecord):
         return value
     payload = _mapping(value)
+    allowed = {
+        "attestation_model",
+        "beat_id",
+        "claim",
+        "coverage_manifest",
+        "end_sec",
+        "evidence_id",
+        "evidence_kind",
+        "frame_refs",
+        "id",
+        "modality",
+        "observation_polarity",
+        "parent_evidence_ids",
+        "pointer",
+        "request_ids",
+        "sampling_coverage",
+        "start_sec",
+        "temporal_scope",
+        "text",
+        "verbatim",
+    }
+    unknown = sorted(str(key) for key in payload if str(key) not in allowed)
+    if unknown:
+        raise InvestigatorOutputInvalid(f"Unknown evidence item keys: {', '.join(unknown)}")
     return EvidenceRecord(
         evidence_id=str(payload.get("evidence_id") or payload.get("id") or ""),
         beat_id=str(payload.get("beat_id") or ""),
@@ -748,6 +833,10 @@ def _is_negative_question(question: str) -> bool:
     return bool(re.search(r"\b(not correct|incorrect|false|not true|except)\b", question, re.IGNORECASE))
 
 
+def _selection_policy_for_question(question: str) -> SelectionPolicy:
+    return SelectionPolicy("choose_contradicted" if _is_negative_question(question) else "choose_supported")
+
+
 def _claim_sign(claim: Claim, verdict: ClaimVerdict) -> float:
     if verdict.status == "unknown":
         return 0.0
@@ -760,3 +849,7 @@ def _claim_sign(claim: Claim, verdict: ClaimVerdict) -> float:
     if supported and not assertive:
         return -1.0
     return 1.0
+
+
+def _manifest_covers_modality(segments: Sequence[CoverageSegment], modality: str) -> bool:
+    return any(segment.modality == modality and segment.coverage > 0 for segment in segments)
