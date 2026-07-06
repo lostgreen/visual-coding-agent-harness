@@ -7,9 +7,11 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+import numpy as np
+
 from vcah.index import ColdIndex, KeyframeSampler, RangeDetector, build_cold_index
 from vcah.model import ModelClient
-from vcah.types import Beat
+from vcah.types import Beat, Hit
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,7 @@ class SegmentColdIndex:
     segment: LifeLogSegment
     index: ColdIndex
     index_dir: Path
+    frame_visual_index: "FrameVisualIndex | None" = None
     build_seconds: float = 0.0
     resumed: bool = False
 
@@ -164,11 +167,85 @@ class LifeLogColdIndex:
                     segment=segment,
                     index=ColdIndex.load(index_dir, model=model),
                     index_dir=index_dir,
+                    frame_visual_index=FrameVisualIndex.load(index_dir.parent / "frame_visual_index.npz", model)
+                    if (index_dir.parent / "frame_visual_index.npz").exists()
+                    else None,
                     build_seconds=float(item.get("build_seconds", 0.0)),
                     resumed=True,
                 )
             )
         return cls(LifeLogManifest(tuple(manifest_segments)), tuple(segments), run_dir)
+
+
+class FrameVisualIndex:
+    def __init__(self, model: ModelClient) -> None:
+        self.model = model
+        self.beat_ids: tuple[str, ...] = ()
+        self.frame_paths: tuple[str, ...] = ()
+        self.frame_times: tuple[float, ...] = ()
+        self.embeddings = np.zeros((0, int(getattr(model, "embedding_dim", 0) or 0)), dtype=np.float32)
+
+    @property
+    def frame_count(self) -> int:
+        return len(self.frame_paths)
+
+    def build(self, beats: Sequence[Beat]) -> None:
+        entries = tuple(
+            (beat.beat_id, path, time_sec)
+            for beat in beats
+            for path, time_sec in zip(beat.frame_paths, beat.frame_times)
+            if str(path).strip()
+        )
+        self.beat_ids = tuple(beat_id for beat_id, _path, _time_sec in entries)
+        self.frame_paths = tuple(str(path) for _beat_id, path, _time_sec in entries)
+        self.frame_times = tuple(float(time_sec) for _beat_id, _path, time_sec in entries)
+        if not self.frame_paths:
+            return
+        rows = np.asarray(self.model.embed_image(self.frame_paths), dtype=np.float32)
+        if rows.ndim != 2 or rows.shape[0] != len(self.frame_paths):
+            raise ValueError("embed_image must return an (N, D) array")
+        self.embeddings = _l2_normalize(rows)
+
+    def search(self, query: str, *, k: int = 20) -> tuple[Hit, ...]:
+        if getattr(self.model, "embed_model", "") == "local-hash" and not bool(getattr(self.model, "allow_placeholder_visual", False)):
+            return ()
+        if not self.frame_paths or self.embeddings.size == 0 or k <= 0:
+            return ()
+        query_vec = np.asarray(self.model.embed_text((query,)), dtype=np.float32)
+        if query_vec.ndim != 2 or query_vec.shape[0] != 1:
+            raise ValueError("embed_text must return a (1, D) array")
+        scores = self.embeddings @ _l2_normalize(query_vec)[0]
+        best_by_beat: dict[str, float] = {}
+        for idx, score in enumerate(scores):
+            value = float(score)
+            if value <= 0.0:
+                continue
+            beat_id = self.beat_ids[idx]
+            best_by_beat[beat_id] = max(best_by_beat.get(beat_id, 0.0), value)
+        return tuple(
+            Hit(beat_id, score, "visual")
+            for beat_id, score in sorted(best_by_beat.items(), key=lambda item: (-item[1], item[0]))[: max(0, int(k))]
+        )
+
+    def save(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            path,
+            beat_ids=np.asarray(self.beat_ids, dtype=str),
+            frame_paths=np.asarray(self.frame_paths, dtype=str),
+            frame_times=np.asarray(self.frame_times, dtype=np.float32),
+            embeddings=self.embeddings,
+        )
+
+    @classmethod
+    def load(cls, path: Path, model: ModelClient) -> "FrameVisualIndex":
+        index = cls(model)
+        payload = np.load(path, allow_pickle=False)
+        index.beat_ids = tuple(str(item) for item in payload["beat_ids"].tolist())
+        index.frame_paths = tuple(str(item) for item in payload["frame_paths"].tolist())
+        index.frame_times = tuple(float(item) for item in payload["frame_times"].tolist())
+        index.embeddings = np.asarray(payload["embeddings"], dtype=np.float32)
+        return index
 
 
 @dataclass(frozen=True)
@@ -241,6 +318,7 @@ class LifeLogColdIndexBuilder:
                 segment=segment,
                 index=ColdIndex.load(index_dir, model=self.model),
                 index_dir=index_dir,
+                frame_visual_index=FrameVisualIndex.load(segment_root / "frame_visual_index.npz", self.model),
                 resumed=True,
             )
         start = perf_counter()
@@ -256,6 +334,9 @@ class LifeLogColdIndexBuilder:
             max_beat_sec=self.config.max_beat_sec,
             index_mode=self.config.index_mode,
         )
+        frame_visual_index = FrameVisualIndex(self.model)
+        frame_visual_index.build(cold.beats)
+        frame_visual_index.save(segment_root / "frame_visual_index.npz")
         build_seconds = perf_counter() - start
         _write_segment_state(
             state_path,
@@ -269,6 +350,7 @@ class LifeLogColdIndexBuilder:
             segment=segment,
             index=cold,
             index_dir=index_dir,
+            frame_visual_index=frame_visual_index,
             build_seconds=build_seconds,
             resumed=False,
         )
@@ -284,7 +366,12 @@ class LifeLogRetriever:
         for segment_index in self.index.segments:
             if scope and scope.video_uid and segment_index.segment.video_uid != scope.video_uid:
                 continue
-            hits = [*segment_index.index.search_text(query), *segment_index.index.search_visual(query, k=top_k)]
+            visual_hits = (
+                segment_index.frame_visual_index.search(query, k=top_k)
+                if segment_index.frame_visual_index is not None
+                else segment_index.index.search_visual(query, k=top_k)
+            )
+            hits = [*segment_index.index.search_text(query), *visual_hits]
             for hit in hits:
                 beat = segment_index.index.get_beat(hit.beat_id)
                 if not _beat_overlaps_scope(beat, scope):
@@ -347,7 +434,7 @@ def diagnose_cold_recall(
             "segments": len(index.segments),
             "beats": sum(len(segment.index.beats) for segment in index.segments),
             "frames": sum(len(beat.frame_paths) for segment in index.segments for beat in segment.index.beats),
-            "embeddings": sum(len(segment.index.visual_index.beat_ids) for segment in index.segments),
+            "embeddings": sum(_visual_embedding_count(segment) for segment in index.segments),
         },
     }
 
@@ -656,7 +743,13 @@ def _fingerprint(payload: Mapping[str, Any]) -> str:
 
 
 def _segment_artifacts_exist(index_dir: Path) -> bool:
-    return (index_dir / "index.json").exists() and (index_dir / "diagnostics.json").exists() and (index_dir / "visual_index.npz").exists()
+    segment_root = index_dir.parent
+    return (
+        (index_dir / "index.json").exists()
+        and (index_dir / "diagnostics.json").exists()
+        and (index_dir / "visual_index.npz").exists()
+        and (segment_root / "frame_visual_index.npz").exists()
+    )
 
 
 def _state_matches(state_path: Path, fingerprint: str) -> bool:
@@ -687,6 +780,19 @@ def _write_segment_state(
     }
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _visual_embedding_count(segment: SegmentColdIndex) -> int:
+    if segment.frame_visual_index is not None:
+        return segment.frame_visual_index.frame_count
+    return len(segment.index.visual_index.beat_ids)
+
+
+def _l2_normalize(values: np.ndarray) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float32)
+    norms = np.linalg.norm(array, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    return array / norms
 
 
 def _safe_id(value: str) -> str:

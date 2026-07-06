@@ -75,6 +75,25 @@ def _misleading_name_sampler(
     return (Frame(frame_id="fr001", time_sec=start_sec + 5.0, path=str(path)),)
 
 
+def _red_keyframe_blue_second_sampler(
+    video_path: str,
+    start_sec: float,
+    end_sec: float,
+    n_frames: int,
+    out_dir: Path,
+) -> tuple[Frame, ...]:
+    del video_path, end_sec, n_frames
+    out_dir.mkdir(parents=True, exist_ok=True)
+    red_path = out_dir / "frame_key_red.jpg"
+    blue_path = out_dir / "frame_later_blue.jpg"
+    Image.new("RGB", (32, 18), color=(240, 20, 20)).save(red_path)
+    Image.new("RGB", (32, 18), color=(20, 40, 230)).save(blue_path)
+    return (
+        Frame(frame_id="fr001", time_sec=start_sec, path=str(red_path)),
+        Frame(frame_id="fr002", time_sec=start_sec + 5.0, path=str(blue_path)),
+    )
+
+
 def test_xlebench_manifest_adapter_maps_source_and_virtual_time(tmp_path: Path) -> None:
     root = tmp_path / "xle"
     root.mkdir()
@@ -293,3 +312,40 @@ def test_xle_frame_refs_use_sampled_frame_time_not_filename_or_beat_start(tmp_pa
     assert Path(result.candidates[0].frame_refs[0].path).name == "frame_001.jpg"
     assert result.candidates[0].frame_refs[0].source_time_sec == 17005.0
     assert result.candidates[0].frame_refs[0].virtual_time_sec == 17005.0
+
+
+def test_xle_retriever_uses_frame_level_visual_index_not_keyframe_only(tmp_path: Path) -> None:
+    root = tmp_path / "xle"
+    root.mkdir()
+    (root / "cases.json").write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "case-blue-frame",
+                    "question": "Find the blue object",
+                    "video_uid": "seg_a",
+                    "videos": [{"video_uid": "seg_a", "duration_sec": 20.0, "video_path": "seg_a.mp4"}],
+                    "query_range": {"start_sec": 0.0, "end_sec": 20.0},
+                    "gt_interval": {"start_sec": 0.0, "end_sec": 20.0},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
+    index = LifeLogColdIndexBuilder(
+        manifest,
+        LifeLogIndexConfig(max_range_sec=20.0, max_beat_sec=20.0),
+        model=KeywordColorModel(),
+        range_detector=lambda _path, duration: ((0.0, duration),),
+        keyframe_sampler=_red_keyframe_blue_second_sampler,
+    ).build(tmp_path / "run")
+
+    result = LifeLogRetriever(index).retrieve("blue object", scope=manifest.cases[0].scope, top_k=1)
+    report = diagnose_cold_recall(index, manifest.cases, top_ks=(5,))
+
+    assert result.candidates
+    assert "visual" in result.candidates[0].modalities
+    assert result.candidates[0].frame_refs[1].source_time_sec == 5.0
+    assert report["counts"]["frames"] == 2
+    assert report["counts"]["embeddings"] == 2
