@@ -150,6 +150,7 @@ class LifeLogColdIndex:
     @classmethod
     def load(cls, run_dir: Path, *, model: ModelClient | None = None) -> "LifeLogColdIndex":
         run_dir = Path(run_dir)
+        model = model or ModelClient()
         payload = json.loads((run_dir / "lifelog_index.json").read_text(encoding="utf-8"))
         segments = []
         manifest_segments = []

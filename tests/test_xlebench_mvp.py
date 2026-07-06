@@ -9,6 +9,7 @@ from PIL import Image
 
 from vcah.types import Frame
 from vcah.xlebench import (
+    LifeLogColdIndex,
     LifeLogColdIndexBuilder,
     LifeLogIndexConfig,
     LifeLogRetriever,
@@ -349,6 +350,40 @@ def test_xle_retriever_uses_frame_level_visual_index_not_keyframe_only(tmp_path:
     assert result.candidates[0].frame_refs[1].source_time_sec == 5.0
     assert report["counts"]["frames"] == 2
     assert report["counts"]["embeddings"] == 2
+
+
+def test_lifelog_load_without_model_keeps_frame_visual_search_safe(tmp_path: Path) -> None:
+    root = tmp_path / "xle"
+    root.mkdir()
+    (root / "cases.json").write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "case-blue-frame",
+                    "question": "Find the blue object",
+                    "video_uid": "seg_a",
+                    "videos": [{"video_uid": "seg_a", "duration_sec": 20.0, "video_path": "seg_a.mp4"}],
+                    "query_range": {"start_sec": 0.0, "end_sec": 20.0},
+                    "gt_interval": {"start_sec": 0.0, "end_sec": 20.0},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
+    LifeLogColdIndexBuilder(
+        manifest,
+        LifeLogIndexConfig(max_range_sec=20.0, max_beat_sec=20.0),
+        model=KeywordColorModel(),
+        range_detector=lambda _path, duration: ((0.0, duration),),
+        keyframe_sampler=_red_keyframe_blue_second_sampler,
+    ).build(tmp_path / "run")
+
+    loaded = LifeLogColdIndex.load(tmp_path / "run")
+    result = LifeLogRetriever(loaded).retrieve("blue object", scope=manifest.cases[0].scope, top_k=1)
+
+    assert loaded.segment("seg_a").frame_visual_index is not None
+    assert result.candidates == ()
 
 
 def test_xle_retrieval_reports_minimal_hierarchical_debug(tmp_path: Path) -> None:

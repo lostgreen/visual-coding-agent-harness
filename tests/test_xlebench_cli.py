@@ -5,6 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import main
+from vcah.xlebench import LifeLogColdIndex, LifeLogManifest
+
 
 def _run_help(*args: str) -> str:
     env = {**os.environ, "PYTHONPATH": "src:."}
@@ -31,3 +34,49 @@ def test_xle_cli_exposes_split_index_and_diagnose_commands() -> None:
     assert "Run X-LeBench cold-recall diagnostics from an existing index." in diagnose_help
     assert "--build" in diagnose_help
     assert "--load-only" not in diagnose_help
+
+
+def test_xle_diagnose_build_path_registers_index_args(monkeypatch, tmp_path: Path, capsys) -> None:
+    seen: dict[str, object] = {}
+    manifest = LifeLogManifest(())
+
+    class DummyBuilder:
+        def __init__(self, loaded_manifest, config) -> None:
+            seen["manifest"] = loaded_manifest
+            seen["max_range_sec"] = config.max_range_sec
+            seen["max_beat_sec"] = config.max_beat_sec
+
+        def build(self, run_dir: Path, *, resume: bool = True) -> LifeLogColdIndex:
+            seen["run_dir"] = Path(run_dir)
+            seen["resume"] = resume
+            return LifeLogColdIndex(manifest, (), Path(run_dir))
+
+    monkeypatch.setattr(main, "load_xlebench_manifest", lambda *args, **kwargs: manifest)
+    monkeypatch.setattr(main, "LifeLogColdIndexBuilder", DummyBuilder)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "main.py",
+            "xle-diagnose",
+            str(tmp_path / "xle"),
+            "--run-dir",
+            str(tmp_path / "run"),
+            "--build",
+            "--top-k",
+            "5",
+            "--max-range-sec",
+            "12",
+            "--max-beat-sec",
+            "6",
+            "--no-resume",
+        ],
+    )
+
+    main.main()
+
+    captured = capsys.readouterr()
+    assert '"case_count": 0' in captured.out
+    assert seen["max_range_sec"] == 12.0
+    assert seen["max_beat_sec"] == 6.0
+    assert seen["resume"] is False
