@@ -12,6 +12,7 @@ from vcah.model import ModelClient
 from vcah.tools import AgentTools
 from vcah.types import (
     Answer,
+    Claim,
     ClaimVerdict,
     EvidenceRecord,
     InvestigatorOutputEmpty,
@@ -82,7 +83,8 @@ class VideoAgent:
             new_evidence = _new_evidence(evidence, result)
             verdicts: tuple[ClaimVerdict, ...] = ()
             if action.claims:
-                verdicts = tuple(self.model.verify(tuple(QueryClaim.from_claim(claim) for claim in action.claims), new_evidence))
+                candidate_evidence = _candidate_evidence(evidence, new_evidence)
+                verdicts = tuple(self.model.verify(tuple(QueryClaim.from_claim(claim) for claim in action.claims), candidate_evidence))
                 _validate_verdict_citations(evidence, verdicts)
                 memory.update_ledger(action.claims, verdicts)
             if action.type == "answer":
@@ -117,7 +119,7 @@ def _verify_answer_citations(
     evidence: EvidenceStore,
     action: ToolAction,
     question: str = "",
-    claim_ledger: dict[str, tuple[object, object]] | None = None,
+    claim_ledger: dict[str, tuple[Claim, ClaimVerdict]] | None = None,
 ) -> dict[str, object]:
     if action.investigator_payload:
         try:
@@ -136,7 +138,19 @@ def _verify_answer_citations(
         return {"passed": False, "reason": "unknown_citations", "citations_valid": False}
     selected = action.selected or _selected_from_answer(action.answer)
     if selected and claim_ledger and any(getattr(claim, "option", "") for claim, _verdict in claim_ledger.values()):
-        verification = verify_final_answer(question, {}, selected, claim_ledger=claim_ledger)  # type: ignore[arg-type]
+        coverage = _verify_option_claim_coverage(question, claim_ledger)
+        if not coverage["passed"]:
+            return {**coverage, "citations_valid": True, "selected": selected, "investigator_received_hypothesis": False}
+        verification = verify_final_answer(question, {}, selected, claim_ledger=claim_ledger)
+        if verification.get("passed") and not _citations_support_selected_claims(selected, action.citations, claim_ledger):
+            return {
+                **verification,
+                "passed": False,
+                "reason": "citations_do_not_support_selected_claims",
+                "citations_valid": True,
+                "selected": selected,
+                "investigator_received_hypothesis": False,
+            }
         return {
             **verification,
             "citations_valid": True,
@@ -192,9 +206,55 @@ def _new_evidence(evidence: EvidenceStore, result: ToolResult) -> tuple[Evidence
     return tuple(evidence.records[-result.n_new :])
 
 
+def _candidate_evidence(
+    evidence: EvidenceStore,
+    new_evidence: tuple[EvidenceRecord, ...],
+    *,
+    max_records: int = 24,
+) -> tuple[EvidenceRecord, ...]:
+    candidates = tuple(new_evidence) + tuple(evidence.records[-max(0, int(max_records)) :])
+    selected: list[EvidenceRecord] = []
+    seen: set[str] = set()
+    for record in candidates:
+        if record.evidence_id in seen:
+            continue
+        seen.add(record.evidence_id)
+        selected.append(record)
+    return tuple(selected[: max(0, int(max_records))])
+
+
 def _validate_verdict_citations(evidence: EvidenceStore, verdicts: tuple[ClaimVerdict, ...]) -> None:
     for verdict in verdicts:
         if verdict.status == "unknown" and not verdict.citations:
             continue
         if not evidence.valid(verdict.citations):
             raise InvestigatorOutputInvalid(f"Verifier returned invalid citations for {verdict.claim_id}")
+
+
+def _verify_option_claim_coverage(
+    question: str,
+    claim_ledger: dict[str, tuple[Claim, ClaimVerdict]],
+) -> dict[str, object]:
+    required_options = set(_question_options(question))
+    if not required_options:
+        return {"passed": True, "reason": None}
+    represented = {claim.option for claim, _verdict in claim_ledger.values() if claim.option}
+    missing = sorted(required_options - represented)
+    if missing:
+        return {"passed": False, "reason": "incomplete_option_claim_coverage", "missing_options": missing}
+    return {"passed": True, "reason": None}
+
+
+def _citations_support_selected_claims(
+    selected: str,
+    citations: tuple[str, ...],
+    claim_ledger: dict[str, tuple[Claim, ClaimVerdict]],
+) -> bool:
+    citation_set = set(citations)
+    selected = selected.strip().upper()
+    for claim, verdict in claim_ledger.values():
+        if claim.option != selected or verdict.status != "supported":
+            continue
+        if citation_set & set(verdict.citations):
+            return True
+    return False

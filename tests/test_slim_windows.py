@@ -7,9 +7,15 @@ from typing import Sequence
 from PIL import Image
 
 from vcah.agent import VideoAgent
+from vcah.index import ColdIndex, TextIndex, VisualIndex
+from vcah.memory import AgentMemory, EvidenceStore
 from vcah.model import ScriptedModel
+from vcah.tools import AgentTools
 from vcah.types import (
+    Beat,
+    Chapter,
     Frame,
+    IndexDiagnostics,
     InvestigatorOutputEmpty,
     InvestigatorOutputInvalid,
     ToolAction,
@@ -113,6 +119,42 @@ def test_inspect_window_verbatim_is_clipped_to_timed_cues(tmp_path: Path) -> Non
     assert evidence["verbatim"] == "irrelevant setup"
     assert "answer clue" not in evidence["verbatim"]
     assert evidence_window["verbatim_is_window_local"] is True
+
+
+def test_inspect_window_does_not_create_window_evidence_from_whole_beat_fallback(tmp_path: Path) -> None:
+    text_index = TextIndex()
+    text_index.add("bt00001", "whole beat transcript includes outside-window facts", modality="asr")
+    model = ScriptedModel()
+    index = ColdIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=200.0,
+        chapters=(Chapter("ch01", 100.0, 200.0, ("bt00001",)),),
+        beats=(
+            Beat(
+                "bt00001",
+                "ch01",
+                100.0,
+                200.0,
+                "",
+                asr_text="whole beat transcript includes outside-window facts",
+                asr_cues=(),
+            ),
+        ),
+        text_index=text_index,
+        visual_index=VisualIndex(model),
+        diagnostics=IndexDiagnostics(200.0, 1, 1, 100.0, 100.0, 0, 0.0, "test", "fast"),
+    )
+    evidence = EvidenceStore.empty(tmp_path / "evidence.jsonl")
+    tools = AgentTools(index, AgentMemory.empty(tmp_path / "memory.json"), evidence, tmp_path)
+
+    result = tools.inspect_window((Window(120.0, 140.0),), ("asr",))
+
+    assert result.evidence_ids == ()
+    assert result.payload["evidence_created"] is False
+    assert result.payload["actual_windows"][-1]["source"] == "asr"
+    assert result.payload["actual_windows"][-1]["verbatim_is_window_local"] is False
+    assert result.payload["actual_windows"][-1]["skipped_reason"] == "non_window_local_verbatim"
+    assert (tmp_path / "evidence.jsonl").read_text(encoding="utf-8") == ""
 
 
 def test_inspect_window_fails_closed_when_coverage_is_low(tmp_path: Path) -> None:

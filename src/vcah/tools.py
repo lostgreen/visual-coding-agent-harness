@@ -193,6 +193,19 @@ class AgentTools:
                     verbatim, source_window = _clip_cue_text(beat.asr_cues, evidence_window, fallback=beat.asr_text.strip(), beat_window=Window(beat.start_sec, beat.end_sec))
                     if not verbatim:
                         continue
+                    is_window_local = _contains_window(evidence_window, source_window)
+                    if not is_window_local:
+                        actual_windows.append(
+                            {
+                                **metadata,
+                                "source": "asr",
+                                "beat_id": beat.beat_id,
+                                "verbatim_source_window": _window_payload(source_window),
+                                "verbatim_is_window_local": False,
+                                "skipped_reason": "non_window_local_verbatim",
+                            }
+                        )
+                        continue
                     record = self._add_evidence(
                         beat_id=beat.beat_id,
                         start_sec=evidence_window.start_sec,
@@ -209,7 +222,7 @@ class AgentTools:
                             "beat_id": beat.beat_id,
                             "evidence_id": record.evidence_id,
                             "verbatim_source_window": _window_payload(source_window),
-                            "verbatim_is_window_local": _contains_window(evidence_window, source_window),
+                            "verbatim_is_window_local": is_window_local,
                         }
                     )
                 if "ocr" in selected_modalities and beat.ocr_text:
@@ -220,6 +233,19 @@ class AgentTools:
                         beat_window=Window(beat.start_sec, beat.end_sec),
                     )
                     if not verbatim:
+                        continue
+                    is_window_local = _contains_window(evidence_window, source_window)
+                    if not is_window_local:
+                        actual_windows.append(
+                            {
+                                **metadata,
+                                "source": "ocr",
+                                "beat_id": beat.beat_id,
+                                "verbatim_source_window": _window_payload(source_window),
+                                "verbatim_is_window_local": False,
+                                "skipped_reason": "non_window_local_verbatim",
+                            }
+                        )
                         continue
                     record = self._add_evidence(
                         beat_id=beat.beat_id,
@@ -237,7 +263,7 @@ class AgentTools:
                             "beat_id": beat.beat_id,
                             "evidence_id": record.evidence_id,
                             "verbatim_source_window": _window_payload(source_window),
-                            "verbatim_is_window_local": _contains_window(evidence_window, source_window),
+                            "verbatim_is_window_local": is_window_local,
                         }
                     )
                 if "frames" in selected_modalities and beat.frame_paths:
