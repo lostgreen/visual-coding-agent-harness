@@ -36,6 +36,10 @@ class ColorModel(ScriptedModel):
             rows.append([0.0, 0.0, 1.0] if "blue" in query.lower() else [1.0, 0.0, 0.0])
         return np.asarray(rows, dtype=np.float32)
 
+    def attest(self, image_paths: Sequence[str], prompt: str) -> tuple[str, ...]:
+        del prompt
+        return tuple(f"Blue frame observation from {Path(path).name}." for path in image_paths)
+
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
     del video_path, end_sec, n_frames
@@ -121,7 +125,7 @@ def test_agent_uses_last_hits_for_grid_and_focus_clip(tmp_path: Path) -> None:
     assert evidence["modality"] == "asr"
 
 
-def test_visual_only_focus_clip_does_not_create_evidence(tmp_path: Path) -> None:
+def test_visual_only_focus_clip_creates_atomic_visual_evidence(tmp_path: Path) -> None:
     model = ColorModel(
         actions=[
             {"type": "focus_clip", "beat_id": "bt00001"},
@@ -139,9 +143,12 @@ def test_visual_only_focus_clip_does_not_create_evidence(tmp_path: Path) -> None
         keyframe_sampler=_sampler,
     )
 
-    assert answer.answer == "Insufficient verified evidence."
-    assert answer.citations == ()
-    assert (tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8") == ""
+    evidence = json.loads((tmp_path / "run" / "evidence.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+    assert answer.citations == ("ev_0001",)
+    assert evidence["modality"] == "visual"
+    assert evidence["frame_refs"]
+    assert evidence["verbatim"].startswith("Blue frame observation")
 
 
 def test_focus_clip_without_candidate_does_not_fall_back_to_first_beat(tmp_path: Path) -> None:

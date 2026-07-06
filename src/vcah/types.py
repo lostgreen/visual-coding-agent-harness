@@ -81,10 +81,58 @@ class EvidenceRecord:
     beat_id: str
     start_sec: float
     end_sec: float
-    modality: Literal["asr", "ocr", "frame"]
+    modality: Literal["asr", "ocr", "visual", "frame"]
     pointer: str
     verbatim: str
     claim: str = ""
+    frame_refs: tuple[str, ...] = ()
+    attestation_model: str = ""
+
+    def __post_init__(self) -> None:
+        modality = "visual" if self.modality == "frame" else self.modality
+        object.__setattr__(self, "modality", modality)
+        object.__setattr__(self, "frame_refs", tuple(str(item) for item in self.frame_refs if str(item).strip()))
+
+
+@dataclass(frozen=True)
+class Claim:
+    claim_id: str
+    option: str
+    text: str
+    polarity: Literal["assert", "negate"] = "assert"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "claim_id", str(self.claim_id).strip())
+        object.__setattr__(self, "option", str(self.option or "").strip().upper())
+        object.__setattr__(self, "text", str(self.text or "").strip())
+        object.__setattr__(self, "polarity", "negate" if self.polarity == "negate" else "assert")
+        validate_investigator_input({"claim": self.text})
+
+
+@dataclass(frozen=True)
+class QueryClaim:
+    claim_id: str
+    text: str
+
+    @classmethod
+    def from_claim(cls, claim: Claim) -> "QueryClaim":
+        return cls(claim.claim_id, claim.text)
+
+
+@dataclass(frozen=True)
+class ClaimVerdict:
+    claim_id: str
+    status: Literal["supported", "contradicted", "unknown"]
+    citations: tuple[str, ...]
+    source: Literal["verifier"] = "verifier"
+
+    def __post_init__(self) -> None:
+        status = str(self.status or "unknown")
+        if status not in {"supported", "contradicted", "unknown"}:
+            status = "unknown"
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "citations", tuple(str(item) for item in self.citations if str(item).strip()))
+        object.__setattr__(self, "source", "verifier")
 
 
 @dataclass(frozen=True)
@@ -143,6 +191,7 @@ class ToolAction:
     investigator_payload: Mapping[str, Any] = field(default_factory=dict)
     answer: str = ""
     citations: tuple[str, ...] = ()
+    claims: tuple[Claim, ...] = ()
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "ToolAction":
@@ -168,6 +217,7 @@ class ToolAction:
             investigator_payload=_mapping(payload.get("investigator_payload")),
             answer=str(payload.get("answer") or ""),
             citations=tuple(str(item) for item in citations),
+            claims=_parse_claims(payload.get("claims") or ()),
         )
 
 
@@ -178,6 +228,7 @@ class ToolResult:
     evidence_ids: tuple[str, ...] = ()
     text: str = ""
     payload: Mapping[str, Any] = field(default_factory=dict)
+    n_new: int = 0
 
 
 @dataclass(frozen=True)
@@ -208,6 +259,8 @@ HYPOTHESIS_PATTERNS = (
     re.compile(r"\blikely answer\b", re.IGNORECASE),
     re.compile(r"\banswer hypothesis\b", re.IGNORECASE),
     re.compile(r"\bhypothesis\s*:", re.IGNORECASE),
+    re.compile(r"\boption\s+[A-H]\b", re.IGNORECASE),
+    re.compile(r"选项\s*[A-H]", re.IGNORECASE),
     re.compile(r"\bverify option\s+[A-H]\b", re.IGNORECASE),
 )
 
@@ -232,6 +285,24 @@ def validate_investigator_input(payload: Mapping[str, Any]) -> None:
         raise InvestigatorOutputInvalid("Investigator input contains answer hypothesis")
 
 
+AGGREGATE_CLAIM_PATTERN = re.compile(r"\b(count|total|all|every|never)\b", re.IGNORECASE)
+CLAIM_ANCHOR_PATTERN = re.compile(r"\b(?:ev_\d{4,}|bt\d{5,}|beat\s+bt\d{5,})\b", re.IGNORECASE)
+
+
+def validate_reasoner_claims(claims: Sequence[Claim], *, options: Sequence[str] = ()) -> None:
+    option_labels = tuple(str(option).strip().upper() for option in options if str(option).strip())
+    counts = {option: 0 for option in option_labels}
+    for claim in claims:
+        validate_investigator_input({"claim": claim.text})
+        if AGGREGATE_CLAIM_PATTERN.search(claim.text) and not CLAIM_ANCHOR_PATTERN.search(claim.text):
+            raise InvestigatorOutputInvalid("Aggregate-sensitive claim must cite an evidence_id or beat_id anchor")
+        if claim.option:
+            counts.setdefault(claim.option, 0)
+            counts[claim.option] += 1
+    if len(counts) >= 2 and max(counts.values()) - min(counts.values()) > 1:
+        raise InvestigatorOutputInvalid("Reasoner claim counts differ by more than one across options")
+
+
 def validate_investigator_output(output: Mapping[str, Any] | None, *, options: Sequence[str] = ("A", "B", "C", "D")) -> None:
     if not output:
         raise InvestigatorOutputEmpty("Investigator output is empty")
@@ -248,7 +319,16 @@ def validate_investigator_output(output: Mapping[str, Any] | None, *, options: S
                 raise InvestigatorOutputInvalid(f"Option {option} {bucket} must be a list")
 
 
-def verify_final_answer(question: str, evidence_table: Mapping[str, Any], selected: str) -> dict[str, Any]:
+def verify_final_answer(
+    question: str,
+    evidence_table: Mapping[str, Any],
+    selected: str,
+    *,
+    claim_ledger: Mapping[str, tuple[Claim, ClaimVerdict]] | None = None,
+    threshold: float = 0.34,
+) -> dict[str, Any]:
+    if claim_ledger:
+        return verify_claim_ledger_answer(claim_ledger, selected, threshold=threshold)
     selected = str(selected).strip().upper()
     if not selected:
         return {"passed": False, "reason": "missing_selected_option"}
@@ -260,6 +340,65 @@ def verify_final_answer(question: str, evidence_table: Mapping[str, Any], select
     if entry.get("status") != expected:
         return {"passed": False, "reason": f"selected_option_not_{expected}", "polarity": polarity}
     return {"passed": True, "reason": None, "polarity": polarity}
+
+
+def score_claim_ledger(claim_ledger: Mapping[str, tuple[Claim, ClaimVerdict]]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for claim, verdict in claim_ledger.values():
+        if not claim.option:
+            continue
+        totals[claim.option] = totals.get(claim.option, 0.0) + _claim_sign(claim, verdict)
+        counts[claim.option] = counts.get(claim.option, 0) + 1
+    return {option: totals.get(option, 0.0) / max(1, counts.get(option, 0)) for option in sorted(counts)}
+
+
+def verify_claim_ledger_answer(
+    claim_ledger: Mapping[str, tuple[Claim, ClaimVerdict]],
+    selected: str,
+    *,
+    threshold: float = 0.34,
+) -> dict[str, Any]:
+    selected = str(selected).strip().upper()
+    if not selected:
+        return {"passed": False, "reason": "missing_selected_option"}
+    scores = score_claim_ledger(claim_ledger)
+    if not scores:
+        return {"passed": False, "reason": "missing_claim_ledger", "scores": scores}
+    ordered = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    winner, top_score = ordered[0]
+    runner_up = ordered[1][1] if len(ordered) > 1 else 0.0
+    tied = len(ordered) > 1 and ordered[1][1] == top_score
+    margin = top_score - runner_up
+    if tied or margin < float(threshold):
+        return {
+            "passed": False,
+            "reason": "insufficient_verified_evidence",
+            "winner": winner,
+            "selected": selected,
+            "scores": scores,
+            "margin": margin,
+            "threshold": float(threshold),
+        }
+    if selected != winner:
+        return {
+            "passed": False,
+            "reason": "selected_option_not_top_scoring",
+            "winner": winner,
+            "selected": selected,
+            "scores": scores,
+            "margin": margin,
+            "threshold": float(threshold),
+        }
+    return {
+        "passed": True,
+        "reason": None,
+        "winner": winner,
+        "selected": selected,
+        "scores": scores,
+        "margin": margin,
+        "threshold": float(threshold),
+    }
 
 
 def to_jsonable(value: object) -> object:
@@ -292,6 +431,25 @@ def _parse_windows(payload: Mapping[str, Any]) -> tuple[Window, ...]:
             continue
         windows.append(Window(_parse_seconds(start), _parse_seconds(end)))
     return tuple(windows)
+
+
+def _parse_claims(value: Any) -> tuple[Claim, ...]:
+    if isinstance(value, Mapping):
+        value = (value,)
+    claims = []
+    for item in value:
+        if isinstance(item, Claim):
+            claims.append(item)
+        elif isinstance(item, Mapping):
+            claims.append(
+                Claim(
+                    claim_id=str(item.get("claim_id") or item.get("id") or ""),
+                    option=str(item.get("option") or ""),
+                    text=str(item.get("text") or item.get("claim") or ""),
+                    polarity="negate" if item.get("polarity") == "negate" else "assert",
+                )
+            )
+    return tuple(claims)
 
 
 def _parse_seconds(value: Any) -> float:
@@ -335,3 +493,17 @@ def _cue_mapping(value: Any) -> Mapping[str, Any]:
 
 def _is_negative_question(question: str) -> bool:
     return bool(re.search(r"\b(not correct|incorrect|false|not true|except)\b", question, re.IGNORECASE))
+
+
+def _claim_sign(claim: Claim, verdict: ClaimVerdict) -> float:
+    if verdict.status == "unknown":
+        return 0.0
+    supported = verdict.status == "supported"
+    assertive = claim.polarity == "assert"
+    if supported and assertive:
+        return 1.0
+    if (not supported) and assertive:
+        return -1.0
+    if supported and not assertive:
+        return -1.0
+    return 1.0

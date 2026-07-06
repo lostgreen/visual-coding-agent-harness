@@ -167,11 +167,40 @@ class ColdIndex:
         end = target.end_sec + max(0.0, float(after_sec))
         return tuple(beat for beat in self.beats if beat.end_sec >= start and beat.start_sec <= end)
 
-    def timeline_digest(self) -> str:
+    def timeline_digest(
+        self,
+        query: str = "",
+        *,
+        open_claims: Sequence[str] = (),
+        visited_beats: Sequence[str] = (),
+        k: int = 12,
+    ) -> str:
         lines = [f"{len(self.chapters)} chapters, {len(self.beats)} beats"]
-        for chapter in self.chapters[:12]:
+        query_text = " ".join(item for item in (str(query or ""), *(str(claim or "") for claim in open_claims)) if item.strip())
+        if not query_text:
+            for chapter in self.chapters[:12]:
+                lines.append(
+                    f"{chapter.chapter_id} [{_clock(chapter.start_sec)}-{_clock(chapter.end_sec)}] "
+                    f"{len(chapter.beat_ids)} beats"
+                )
+            return "\n".join(lines)
+
+        hot_beats = {hit.beat_id for hit in self.text_index.search(query_text)[: max(1, int(k))]}
+        visited = set(visited_beats)
+
+        def chapter_rank(chapter: Chapter) -> tuple[int, int, float]:
+            is_hot = any(beat_id in hot_beats for beat_id in chapter.beat_ids)
+            first_hot = min((idx for idx, beat_id in enumerate(chapter.beat_ids) if beat_id in hot_beats), default=10_000)
+            return (0 if is_hot else 1, first_hot, chapter.start_sec)
+
+        for chapter in sorted(self.chapters, key=chapter_rank)[: max(1, int(k))]:
+            tags = []
+            tags.append("hot" if any(beat_id in hot_beats for beat_id in chapter.beat_ids) else "cold")
+            if any(beat_id in visited for beat_id in chapter.beat_ids):
+                tags.append("seen")
+            prefix = "".join(f"[{tag}]" for tag in tags)
             lines.append(
-                f"{chapter.chapter_id} [{_clock(chapter.start_sec)}-{_clock(chapter.end_sec)}] "
+                f"{prefix} {chapter.chapter_id} [{_clock(chapter.start_sec)}-{_clock(chapter.end_sec)}] "
                 f"{len(chapter.beat_ids)} beats"
             )
         return "\n".join(lines)

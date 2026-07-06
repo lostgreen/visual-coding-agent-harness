@@ -6,7 +6,13 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from vcah.types import ToolAction
+from vcah.types import ClaimVerdict, EvidenceRecord, QueryClaim, ToolAction
+
+
+ATTESTATION_PROMPT = (
+    "Return a JSON list of atomic visual observations. Each item must be one sentence or less, "
+    "describe only visible facts such as people, text, objects, actions, or scene details, and avoid inference."
+)
 
 
 class ModelClient:
@@ -17,9 +23,12 @@ class ModelClient:
     def __init__(self) -> None:
         self.controller_model = os.getenv("VCAH_CONTROLLER_MODEL", "local-scripted")
         self.vision_model = os.getenv("VCAH_VISION_MODEL", "local-placeholder")
+        self.verifier_model = os.getenv("VCAH_VERIFIER_MODEL", self.controller_model)
         self.embed_model = os.getenv("VCAH_EMBED_MODEL", "local-hash")
         self.transcribe_model = os.getenv("VCAH_TRANSCRIBE_MODEL", "none")
         self.allow_placeholder_visual = os.getenv("VCAH_ALLOW_PLACEHOLDER_VISUAL", "").casefold() in {"1", "true", "yes"}
+        self.last_verify_claims: tuple[QueryClaim, ...] = ()
+        self.last_verify_evidence: tuple[EvidenceRecord, ...] = ()
 
     def controller(self, question: str, index_digest: str, memory_digest: str, evidence_digest: str) -> ToolAction:
         del index_digest
@@ -31,8 +40,30 @@ class ModelClient:
         return ToolAction(type="focus_clip", beat_id="")
 
     def vision(self, image_paths: Sequence[str], prompt: str) -> str:
-        del image_paths
-        return prompt
+        return "\n".join(self.attest(image_paths, prompt))
+
+    def attest(self, image_paths: Sequence[str], prompt: str) -> tuple[str, ...]:
+        del image_paths, prompt
+        return ()
+
+    def verify(self, query_claims: Sequence[QueryClaim], evidence: Sequence[EvidenceRecord]) -> tuple[ClaimVerdict, ...]:
+        self.last_verify_claims = tuple(query_claims)
+        self.last_verify_evidence = tuple(evidence)
+        verdicts = []
+        for claim in query_claims:
+            claim_tokens = set(_tokens(claim.text))
+            best: EvidenceRecord | None = None
+            best_overlap = 0
+            for record in evidence:
+                overlap = len(claim_tokens & set(_tokens(record.verbatim)))
+                if overlap > best_overlap:
+                    best = record
+                    best_overlap = overlap
+            if best is not None and best_overlap >= max(1, int(len(claim_tokens) * 0.35)):
+                verdicts.append(ClaimVerdict(claim.claim_id, "supported", (best.evidence_id,)))
+            else:
+                verdicts.append(ClaimVerdict(claim.claim_id, "unknown", ()))
+        return tuple(verdicts)
 
     def embed_text(self, queries: Sequence[str]) -> np.ndarray:
         return np.asarray([_hash_embedding(query, self.embedding_dim) for query in queries], dtype=np.float32)
@@ -65,3 +96,7 @@ def _hash_embedding(text: str, dim: int) -> list[float]:
     values = [float(digest[index] - 127) for index in range(max(1, int(dim)))]
     norm = sum(value * value for value in values) ** 0.5 or 1.0
     return [value / norm for value in values]
+
+
+def _tokens(text: str) -> tuple[str, ...]:
+    return tuple(token for token in str(text or "").casefold().replace(".", " ").split() if token)

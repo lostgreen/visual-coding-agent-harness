@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from vcah.index import ColdIndex
 from vcah.memory import AgentMemory, EvidenceStore
+from vcah.model import ATTESTATION_PROMPT
 from vcah.types import EvidenceRecord, ToolAction, ToolResult, Window, window_overlap_ratio
 from vcah.video import render_timeline_grid
 
@@ -82,7 +83,7 @@ class AgentTools:
                 claim=beat.asr_text.strip(),
             )
             self.evidence.add(record)
-            return ToolResult(tool="focus_clip", beat_ids=(beat.beat_id,), evidence_ids=(record.evidence_id,), text=record.verbatim)
+            return ToolResult(tool="focus_clip", beat_ids=(beat.beat_id,), evidence_ids=(record.evidence_id,), text=record.verbatim, n_new=1)
         if beat.ocr_text:
             verbatim = " ".join(beat.ocr_text).strip()
             record = EvidenceRecord(
@@ -96,13 +97,20 @@ class AgentTools:
                 claim=verbatim,
             )
             self.evidence.add(record)
-            return ToolResult(tool="focus_clip", beat_ids=(beat.beat_id,), evidence_ids=(record.evidence_id,), text=record.verbatim)
-        observation = f"Observed frames for {beat.beat_id} at {beat.start_sec:.1f}-{beat.end_sec:.1f}s; no verified ASR/OCR evidence."
+            return ToolResult(tool="focus_clip", beat_ids=(beat.beat_id,), evidence_ids=(record.evidence_id,), text=record.verbatim, n_new=1)
+        records = self._attest_visual_evidence(
+            beat_id=beat.beat_id,
+            start_sec=beat.start_sec,
+            end_sec=beat.end_sec,
+            frame_refs=beat.frame_paths or ((beat.keyframe_path,) if beat.keyframe_path else ()),
+        )
         return ToolResult(
             tool="focus_clip",
             beat_ids=(beat.beat_id,),
-            text=observation,
-            payload={"evidence_created": False, "reason": "visual_only_requires_verification"},
+            evidence_ids=tuple(record.evidence_id for record in records),
+            text="\n".join(record.verbatim for record in records) or "No visual observations attested.",
+            payload={"evidence_created": bool(records), "reason": None if records else "visual_attestation_empty"},
+            n_new=len(records),
         )
 
     def inspect_window(self, windows: tuple[Window, ...], modalities: tuple[str, ...] = ()) -> ToolResult:
@@ -233,20 +241,16 @@ class AgentTools:
                         }
                     )
                 if "frames" in selected_modalities and beat.frame_paths:
-                    verbatim = (
-                        f"Frame evidence for {beat.beat_id} at "
-                        f"{evidence_window.start_sec:.1f}-{evidence_window.end_sec:.1f}s: {', '.join(beat.frame_paths)}"
-                    )
-                    record = self._add_evidence(
+                    records = self._attest_visual_evidence(
                         beat_id=beat.beat_id,
                         start_sec=evidence_window.start_sec,
                         end_sec=evidence_window.end_sec,
-                        modality="frame",
-                        verbatim=verbatim,
+                        frame_refs=beat.frame_paths,
                     )
-                    evidence_ids.append(record.evidence_id)
-                    texts.append(record.verbatim)
-                    actual_windows.append({**metadata, "source": "frame", "beat_id": beat.beat_id, "evidence_id": record.evidence_id})
+                    for record in records:
+                        evidence_ids.append(record.evidence_id)
+                        texts.append(record.verbatim)
+                        actual_windows.append({**metadata, "source": "visual", "beat_id": beat.beat_id, "evidence_id": record.evidence_id})
 
         return ToolResult(
             tool="inspect_window",
@@ -261,6 +265,7 @@ class AgentTools:
                 "fallback_reason": None,
                 "evidence_created": bool(evidence_ids),
             },
+            n_new=len(evidence_ids),
         )
 
     def _selected_beat_ids(self, beat_ids: tuple[str, ...]) -> tuple[str, ...]:
@@ -277,6 +282,8 @@ class AgentTools:
         end_sec: float,
         modality: str,
         verbatim: str,
+        frame_refs: tuple[str, ...] = (),
+        attestation_model: str = "",
     ) -> EvidenceRecord:
         record = EvidenceRecord(
             evidence_id=self.evidence.next_id(),
@@ -287,9 +294,38 @@ class AgentTools:
             pointer=_pointer(beat_id, start_sec, end_sec),
             verbatim=verbatim,
             claim=verbatim,
+            frame_refs=frame_refs,
+            attestation_model=attestation_model,
         )
         self.evidence.add(record)
         return record
+
+    def _attest_visual_evidence(
+        self,
+        *,
+        beat_id: str,
+        start_sec: float,
+        end_sec: float,
+        frame_refs: tuple[str, ...],
+    ) -> tuple[EvidenceRecord, ...]:
+        model = getattr(self.index.visual_index, "model", None)
+        if model is None or not frame_refs:
+            return ()
+        observations = tuple(str(item).strip() for item in model.attest(frame_refs, ATTESTATION_PROMPT) if str(item).strip())
+        records = []
+        for observation in observations:
+            records.append(
+                self._add_evidence(
+                    beat_id=beat_id,
+                    start_sec=start_sec,
+                    end_sec=end_sec,
+                    modality="visual",
+                    verbatim=observation,
+                    frame_refs=frame_refs,
+                    attestation_model=str(getattr(model, "vision_model", "") or ""),
+                )
+            )
+        return tuple(records)
 
 
 def _pointer(beat_id: str, start_sec: float, end_sec: float) -> str:

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from vcah.types import EvidenceRecord, ToolAction, ToolResult, to_jsonable
+from vcah.types import Claim, ClaimVerdict, EvidenceRecord, ToolAction, ToolResult, to_jsonable
 
 
 class AgentMemory:
@@ -15,6 +15,8 @@ class AgentMemory:
         self.failed_searches: list[str] = []
         self.visited_beats: list[str] = []
         self.last_hits: list[str] = []
+        self.last_query = ""
+        self.claim_ledger: dict[str, tuple[Claim, ClaimVerdict]] = {}
 
     @classmethod
     def empty(cls, path: Path) -> "AgentMemory":
@@ -31,8 +33,19 @@ class AgentMemory:
         if result.tool.startswith("search") and not result.beat_ids:
             self.failed_searches.append(result.text or result.tool)
 
+    def open_claims(self) -> tuple[Claim, ...]:
+        return tuple(claim for claim, verdict in self.claim_ledger.values() if verdict.status == "unknown")
+
+    def update_ledger(self, claims: tuple[Claim, ...], verdicts: tuple[ClaimVerdict, ...]) -> None:
+        verdict_by_id = {verdict.claim_id: verdict for verdict in verdicts}
+        for claim in claims:
+            verdict = verdict_by_id.get(claim.claim_id, ClaimVerdict(claim.claim_id, "unknown", ()))
+            self.claim_ledger[claim.claim_id] = (claim, verdict)
+
     def digest(self) -> str:
         parts = self.observations[-4:]
+        if self.open_claims():
+            parts.append("open_claims=" + "; ".join(claim.text for claim in self.open_claims()[-4:]))
         if self.last_hits:
             parts.append(f"last_hits={','.join(self.last_hits[-8:])}")
         parts.append(f"visited={','.join(self.visited_beats[-8:])}")
@@ -46,7 +59,12 @@ class AgentMemory:
                     "observations": self.observations,
                     "failed_searches": self.failed_searches,
                     "last_hits": self.last_hits,
+                    "last_query": self.last_query,
                     "visited_beats": self.visited_beats,
+                    "claim_ledger": {
+                        claim_id: {"claim": to_jsonable(claim), "verdict": to_jsonable(verdict)}
+                        for claim_id, (claim, verdict) in self.claim_ledger.items()
+                    },
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -92,8 +110,19 @@ class TraceStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("", encoding="utf-8")
 
-    def append(self, action: ToolAction, result: ToolResult) -> None:
-        entry = {"action": to_jsonable(action), "result": to_jsonable(result)}
+    def append(
+        self,
+        action: ToolAction,
+        result: ToolResult,
+        evidence_records: tuple[EvidenceRecord, ...] = (),
+        claim_verdicts: tuple[ClaimVerdict, ...] = (),
+    ) -> None:
+        entry = {
+            "action": to_jsonable(action),
+            "evidence_records": to_jsonable(evidence_records),
+            "claim_verdicts": to_jsonable(claim_verdicts),
+            "result": to_jsonable(result),
+        }
         for key in (
             "requested_windows",
             "actual_windows",
