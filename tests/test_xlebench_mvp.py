@@ -349,3 +349,46 @@ def test_xle_retriever_uses_frame_level_visual_index_not_keyframe_only(tmp_path:
     assert result.candidates[0].frame_refs[1].source_time_sec == 5.0
     assert report["counts"]["frames"] == 2
     assert report["counts"]["embeddings"] == 2
+
+
+def test_xle_retrieval_reports_minimal_hierarchical_debug(tmp_path: Path) -> None:
+    root = tmp_path / "xle"
+    root.mkdir()
+    (root / "cases.json").write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "case-blue-frame",
+                    "question": "Find the blue object",
+                    "video_uid": "seg_b",
+                    "videos": [
+                        {"video_uid": "seg_a", "duration_sec": 20.0, "video_path": "seg_a.mp4"},
+                        {"video_uid": "seg_b", "duration_sec": 20.0, "video_path": "seg_b.mp4"},
+                    ],
+                    "query_range": {"start_sec": 0.0, "end_sec": 20.0},
+                    "gt_interval": {"start_sec": 0.0, "end_sec": 20.0},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
+    index = LifeLogColdIndexBuilder(
+        manifest,
+        LifeLogIndexConfig(max_range_sec=20.0, max_beat_sec=20.0),
+        model=KeywordColorModel(),
+        range_detector=lambda _path, duration: ((0.0, duration),),
+        keyframe_sampler=_sampler,
+    ).build(tmp_path / "run")
+
+    result = LifeLogRetriever(index).retrieve("blue object", scope=manifest.cases[0].scope, top_k=5)
+    report = diagnose_cold_recall(index, manifest.cases, top_ks=(5,))
+
+    assert result.debug["retrieval_mode"] == "hierarchical-mvp"
+    assert result.per_level_hits["segment"] == ("seg_b",)
+    assert result.per_level_hits["beat"][0].startswith("seg_b:")
+    assert result.per_level_hits["frame"][0].startswith("seg_b:")
+    assert result.fusion_weights == {"text": 1.0, "visual": 1.0, "segment": 0.05}
+    assert report["per_level_recall"]["segment@5"] == 1.0
+    assert report["per_level_recall"]["beat@5"] == 1.0
+    assert report["per_level_recall"]["frame@5"] == 1.0

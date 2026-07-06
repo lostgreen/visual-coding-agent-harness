@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
@@ -276,6 +276,8 @@ class RetrievalResult:
     candidates: tuple[CandidateWindow, ...]
     per_channel_hits: Mapping[str, tuple[str, ...]]
     debug: Mapping[str, Any]
+    per_level_hits: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    fusion_weights: Mapping[str, float] = field(default_factory=dict)
 
 
 class LifeLogColdIndexBuilder:
@@ -363,6 +365,9 @@ class LifeLogRetriever:
     def retrieve(self, query: str, *, scope: LifeLogScope | None = None, top_k: int = 20) -> RetrievalResult:
         candidates: dict[tuple[str, str], CandidateWindow] = {}
         per_channel: dict[str, list[str]] = {"text": [], "visual": []}
+        segment_scores: dict[str, float] = {}
+        frame_level_hits: list[str] = []
+        fusion_weights = {"text": 1.0, "visual": 1.0, "segment": 0.05}
         for segment_index in self.index.segments:
             if scope and scope.video_uid and segment_index.segment.video_uid != scope.video_uid:
                 continue
@@ -372,6 +377,8 @@ class LifeLogRetriever:
                 else segment_index.index.search_visual(query, k=top_k)
             )
             hits = [*segment_index.index.search_text(query), *visual_hits]
+            if hits:
+                segment_scores[segment_index.segment.video_uid] = sum(max(0.0, float(hit.score)) for hit in hits)
             for hit in hits:
                 beat = segment_index.index.get_beat(hit.beat_id)
                 if not _beat_overlaps_scope(beat, scope):
@@ -379,18 +386,32 @@ class LifeLogRetriever:
                 key = (segment_index.segment.video_uid, beat.beat_id)
                 previous = candidates.get(key)
                 modalities = _append_unique(previous.modalities if previous else (), hit.modality)
-                score = float(hit.score) + (previous.score if previous else 0.0)
+                segment_boost = fusion_weights["segment"] * segment_scores.get(segment_index.segment.video_uid, 0.0)
+                score = float(hit.score) + (previous.score if previous else 0.0) + (segment_boost if previous is None else 0.0)
                 candidates[key] = _candidate_from_beat(segment_index.segment, beat, score=score, modalities=modalities)
                 per_channel.setdefault(hit.modality, []).append(f"{segment_index.segment.video_uid}:{beat.beat_id}")
+                if hit.modality == "visual":
+                    frame_level_hits.append(f"{segment_index.segment.video_uid}:{beat.beat_id}")
         ranked = tuple(sorted(candidates.values(), key=lambda item: (-item.score, item.video_uid, item.source_start_sec))[:top_k])
+        per_level_hits = {
+            "segment": tuple(
+                video_uid
+                for video_uid, _score in sorted(segment_scores.items(), key=lambda item: (-item[1], item[0]))[:top_k]
+            ),
+            "beat": tuple(f"{candidate.video_uid}:{candidate.beat_id}" for candidate in ranked),
+            "frame": _dedupe(frame_level_hits)[:top_k],
+        }
         return RetrievalResult(
             candidates=ranked,
             per_channel_hits={key: tuple(values) for key, values in per_channel.items()},
             debug={
+                "retrieval_mode": "hierarchical-mvp",
                 "segment_count": len(self.index.segments),
                 "scope_video_uid": scope.video_uid if scope else None,
                 "top_k": int(top_k),
             },
+            per_level_hits=per_level_hits,
+            fusion_weights=fusion_weights,
         )
 
 
@@ -404,6 +425,7 @@ def diagnose_cold_recall(
     max_k = max(top_ks, default=20)
     hits = {k: 0 for k in top_ks}
     channel_hits = {f"text@{k}": 0 for k in top_ks} | {f"visual@{k}": 0 for k in top_ks}
+    level_hits = {f"segment@{k}": 0 for k in top_ks} | {f"beat@{k}": 0 for k in top_ks} | {f"frame@{k}": 0 for k in top_ks}
     coverage_values = []
     evaluated = 0
     retriever = LifeLogRetriever(index)
@@ -424,12 +446,19 @@ def diagnose_cold_recall(
             for channel in ("text", "visual"):
                 if _any_candidate_hits([item for item in top if channel in item.modalities], case.gt_intervals):
                     channel_hits[f"{channel}@{k}"] += 1
+            if _level_hits_interval(result.per_level_hits.get("segment", ())[:k], case.gt_intervals, level="segment"):
+                level_hits[f"segment@{k}"] += 1
+            if _any_candidate_hits(top, case.gt_intervals):
+                level_hits[f"beat@{k}"] += 1
+            if _any_candidate_hits([item for item in top if "visual" in item.modalities], case.gt_intervals):
+                level_hits[f"frame@{k}"] += 1
     denominator = max(1, evaluated)
     return {
         "case_count": evaluated,
         **{f"cold_recall@{k}": hits[k] / denominator for k in top_ks},
         "gt_interval_candidate_coverage": sum(coverage_values) / denominator if coverage_values else 0.0,
         "per_channel_recall": {key: value / denominator for key, value in channel_hits.items()},
+        "per_level_recall": {key: value / denominator for key, value in level_hits.items()},
         "counts": {
             "segments": len(index.segments),
             "beats": sum(len(segment.index.beats) for segment in index.segments),
@@ -714,6 +743,12 @@ def _any_candidate_hits(candidates: Iterable[CandidateWindow], intervals: Sequen
     return any(candidate.overlap_ratio(interval) > 0.0 for candidate in candidates for interval in intervals)
 
 
+def _level_hits_interval(ids: Sequence[str], intervals: Sequence[GroundTruthInterval], *, level: str) -> bool:
+    if level == "segment":
+        return any(interval.video_uid in ids for interval in intervals)
+    return False
+
+
 def _segment_fingerprint_inputs(segment: LifeLogSegment, config: LifeLogIndexConfig, model: ModelClient) -> dict[str, Any]:
     return {
         "video_uid": segment.video_uid,
@@ -786,6 +821,14 @@ def _visual_embedding_count(segment: SegmentColdIndex) -> int:
     if segment.frame_visual_index is not None:
         return segment.frame_visual_index.frame_count
     return len(segment.index.visual_index.beat_ids)
+
+
+def _dedupe(values: Sequence[str]) -> tuple[str, ...]:
+    result = []
+    for value in values:
+        if value not in result:
+            result.append(value)
+    return tuple(result)
 
 
 def _l2_normalize(values: np.ndarray) -> np.ndarray:
