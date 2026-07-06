@@ -94,6 +94,26 @@ class EvidenceRecord:
         object.__setattr__(self, "frame_refs", tuple(str(item) for item in self.frame_refs if str(item).strip()))
 
 
+IMAGE_PATH_PATTERN = re.compile(r"\.(?:jpe?g|png|webp|bmp)(?:$|\b)", re.IGNORECASE)
+
+
+def is_path_only_visual_evidence(record: EvidenceRecord) -> bool:
+    if record.modality != "visual":
+        return False
+    text = str(record.verbatim or "").strip()
+    if not text:
+        return True
+    if not str(record.attestation_model or "").strip() and IMAGE_PATH_PATTERN.search(text):
+        return True
+    return _looks_like_image_path_only(text)
+
+
+def _looks_like_image_path_only(text: str) -> bool:
+    tokens = [token.strip(" ,;:()[]{}<>\"'") for token in str(text or "").split()]
+    tokens = [token for token in tokens if token]
+    return bool(tokens) and all(IMAGE_PATH_PATTERN.search(token) for token in tokens)
+
+
 @dataclass(frozen=True)
 class Claim:
     claim_id: str

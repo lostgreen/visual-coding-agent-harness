@@ -6,7 +6,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from vcah.types import ClaimVerdict, EvidenceRecord, QueryClaim, ToolAction
+from vcah.types import ClaimVerdict, EvidenceRecord, QueryClaim, ToolAction, is_path_only_visual_evidence
 
 
 ATTESTATION_PROMPT = (
@@ -55,6 +55,8 @@ class ModelClient:
             best: EvidenceRecord | None = None
             best_overlap = 0
             for record in evidence:
+                if is_path_only_visual_evidence(record):
+                    continue
                 overlap = len(claim_tokens & set(_tokens(record.verbatim)))
                 if overlap > best_overlap:
                     best = record

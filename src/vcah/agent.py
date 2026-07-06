@@ -20,6 +20,7 @@ from vcah.types import (
     QueryClaim,
     ToolAction,
     ToolResult,
+    is_path_only_visual_evidence,
     validate_investigator_input,
     validate_investigator_output,
     validate_reasoner_claims,
@@ -136,6 +137,15 @@ def _verify_answer_citations(
         if not action.citations:
             return {"passed": False, "reason": "missing_citations", "citations_valid": False}
         return {"passed": False, "reason": "unknown_citations", "citations_valid": False}
+    path_only_visual = _path_only_visual_citations(evidence, action.citations)
+    if path_only_visual:
+        return {
+            "passed": False,
+            "reason": "path_only_visual_evidence",
+            "citations_valid": True,
+            "path_only_visual_citations": path_only_visual,
+            "investigator_received_hypothesis": False,
+        }
     selected = action.selected or _selected_from_answer(action.answer)
     if selected and claim_ledger and any(getattr(claim, "option", "") for claim, _verdict in claim_ledger.values()):
         coverage = _verify_option_claim_coverage(question, claim_ledger)
@@ -229,6 +239,8 @@ def _validate_verdict_citations(evidence: EvidenceStore, verdicts: tuple[ClaimVe
             continue
         if not evidence.valid(verdict.citations):
             raise InvestigatorOutputInvalid(f"Verifier returned invalid citations for {verdict.claim_id}")
+        if _path_only_visual_citations(evidence, verdict.citations):
+            raise InvestigatorOutputInvalid(f"Verifier cited path-only visual evidence for {verdict.claim_id}")
 
 
 def _verify_option_claim_coverage(
@@ -258,3 +270,12 @@ def _citations_support_selected_claims(
         if citation_set & set(verdict.citations):
             return True
     return False
+
+
+def _path_only_visual_citations(evidence: EvidenceStore, citations: tuple[str, ...]) -> list[str]:
+    records_by_id = {record.evidence_id: record for record in evidence.records}
+    return [
+        citation
+        for citation in citations
+        if citation in records_by_id and is_path_only_visual_evidence(records_by_id[citation])
+    ]

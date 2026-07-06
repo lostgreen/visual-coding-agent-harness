@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from vcah.types import Claim, ClaimVerdict, EvidenceRecord, ToolAction, ToolResult, to_jsonable
+from vcah.types import Claim, ClaimVerdict, EvidenceRecord, ToolAction, ToolResult, is_path_only_visual_evidence, to_jsonable
 
 
 class AgentMemory:
@@ -101,7 +101,16 @@ class EvidenceStore:
         return all(citation in known for citation in citations)
 
     def digest(self) -> str:
-        return " ".join(record.evidence_id for record in self.records)
+        lines = []
+        for record in self.records[-8:]:
+            if is_path_only_visual_evidence(record):
+                lines.append(f"{record.evidence_id} [visual_pointer] {record.pointer}: no attested visual observation")
+                continue
+            text = " ".join(str(record.verbatim or "").split())
+            if len(text) > 180:
+                text = text[:177] + "..."
+            lines.append(f"{record.evidence_id} [{record.modality}] {record.pointer}: {text}")
+        return "\n".join(lines)
 
 
 class TraceStore:
