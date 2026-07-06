@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -323,7 +322,7 @@ class AgentTools:
                         }
                     )
                 if "frames" in selected_modalities and beat.frame_paths:
-                    frame_refs = _frame_refs_in_window(beat.frame_paths, evidence_window)
+                    frame_refs = _frame_refs_in_window(beat.frame_paths, beat.frame_times, evidence_window)
                     if not frame_refs:
                         actual_windows.append({**metadata, "source": "visual", "beat_id": beat.beat_id, "skipped_reason": "no_in_window_frame_refs"})
                         continue
@@ -513,19 +512,14 @@ def _lineage_error(
     return None
 
 
-def _frame_refs_in_window(frame_refs: tuple[str, ...], window: Window) -> tuple[str, ...]:
-    kept = tuple(ref for ref in frame_refs if _frame_ref_in_window(ref, window))
-    return kept
-
-
-def _frame_ref_in_window(frame_ref: str, window: Window) -> bool:
-    matches = re.findall(r"(\d+(?:\.\d+)?)", Path(str(frame_ref)).stem)
-    if not matches:
-        return True
-    value = float(matches[-1])
-    if value > 100000:
-        return True
-    return window.start_sec <= value <= window.end_sec
+def _frame_refs_in_window(frame_refs: tuple[str, ...], frame_times: tuple[float, ...], window: Window) -> tuple[str, ...]:
+    if not frame_times:
+        return ()
+    kept = []
+    for ref, time_sec in zip(frame_refs, frame_times):
+        if window.start_sec <= float(time_sec) <= window.end_sec:
+            kept.append(ref)
+    return tuple(kept)
 
 
 def _visual_observations(raw_items: tuple[object, ...]) -> tuple[tuple[str, str], ...]:

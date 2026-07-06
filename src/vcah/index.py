@@ -304,7 +304,9 @@ def _make_beat(
 ) -> Beat:
     start_sec = min(frame_ranges[index][0] for index in group)
     end_sec = max(frame_ranges[index][1] for index in group)
-    frame_paths = tuple(frame.path for index in group for frame in frames_by_range[index])
+    frames = tuple(frame for index in group for frame in frames_by_range[index])
+    frame_paths = tuple(frame.path for frame in frames)
+    frame_times = tuple(frame.time_sec for frame in frames)
     return Beat(
         beat_id=f"bt{number:05d}",
         chapter_id="",
@@ -314,6 +316,7 @@ def _make_beat(
         asr_text=_text_for_range(asr_cues, start_sec=start_sec, end_sec=end_sec),
         ocr_text=_ocr_for_range(ocr_lines, start_sec=start_sec, end_sec=end_sec),
         frame_paths=frame_paths,
+        frame_times=frame_times,
         asr_cues=_asr_cues_for_range(asr_cues, start_sec=start_sec, end_sec=end_sec),
         ocr_cues=_ocr_cues_for_range(ocr_lines, start_sec=start_sec, end_sec=end_sec),
     )

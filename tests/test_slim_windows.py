@@ -184,6 +184,7 @@ def test_inspect_window_filters_out_of_window_frame_refs(tmp_path: Path) -> None
                 40.0,
                 "",
                 frame_paths=("frame_012.jpg", "frame_999.jpg"),
+                frame_times=(12.0, 999.0),
             ),
         ),
         text_index=text_index,
@@ -198,6 +199,37 @@ def test_inspect_window_filters_out_of_window_frame_refs(tmp_path: Path) -> None
     assert model.seen_paths == ("frame_012.jpg",)
     assert result.evidence_ids == ("ev_0001",)
     assert evidence.records[0].frame_refs == ("frame_012.jpg",)
+
+
+def test_inspect_window_does_not_infer_frame_time_from_path(tmp_path: Path) -> None:
+    text_index = TextIndex()
+    model = AttestSpyModel()
+    index = ColdIndex(
+        video_path="/videos/demo.mp4",
+        duration_sec=40.0,
+        chapters=(Chapter("ch01", 0.0, 40.0, ("bt00001",)),),
+        beats=(
+            Beat(
+                "bt00001",
+                "ch01",
+                0.0,
+                40.0,
+                "",
+                frame_paths=("frame_012.jpg",),
+            ),
+        ),
+        text_index=text_index,
+        visual_index=VisualIndex(model),
+        diagnostics=IndexDiagnostics(40.0, 1, 1, 40.0, 40.0, 0, 0.0, "test", "fast"),
+    )
+    evidence = EvidenceStore.empty(tmp_path / "evidence.jsonl")
+    tools = AgentTools(index, AgentMemory.empty(tmp_path / "memory.json"), evidence, tmp_path)
+
+    result = tools.inspect_window((Window(10.0, 20.0),), ("frames",))
+
+    assert model.seen_paths == ()
+    assert result.evidence_ids == ()
+    assert result.payload["actual_windows"][-1]["skipped_reason"] == "no_in_window_frame_refs"
 
 
 def test_inspect_window_fails_closed_when_coverage_is_low(tmp_path: Path) -> None:

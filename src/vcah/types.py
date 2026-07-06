@@ -24,6 +24,7 @@ class Beat:
     asr_text: str = ""
     ocr_text: tuple[str, ...] = ()
     frame_paths: tuple[str, ...] = ()
+    frame_times: tuple[float, ...] = ()
     asr_cues: tuple[Mapping[str, Any], ...] = ()
     ocr_cues: tuple[Mapping[str, Any], ...] = ()
 
@@ -34,6 +35,7 @@ class Beat:
         object.__setattr__(self, "end_sec", float(self.end_sec))
         object.__setattr__(self, "ocr_text", tuple(str(item) for item in self.ocr_text if str(item).strip()))
         object.__setattr__(self, "frame_paths", tuple(str(item) for item in self.frame_paths if str(item).strip()))
+        object.__setattr__(self, "frame_times", tuple(float(item) for item in self.frame_times))
         object.__setattr__(self, "asr_cues", tuple(_cue_mapping(item) for item in self.asr_cues))
         object.__setattr__(self, "ocr_cues", tuple(_cue_mapping(item) for item in self.ocr_cues))
 

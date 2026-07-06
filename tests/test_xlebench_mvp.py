@@ -60,6 +60,21 @@ def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, o
     return (Frame(frame_id="fr001", time_sec=start_sec, path=str(path)),)
 
 
+def _misleading_name_sampler(
+    video_path: str,
+    start_sec: float,
+    end_sec: float,
+    n_frames: int,
+    out_dir: Path,
+) -> tuple[Frame, ...]:
+    del video_path, end_sec, n_frames
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "frame_001.jpg"
+    color = (20, 40, 230) if start_sec >= 17000.0 else (240, 20, 20)
+    Image.new("RGB", (32, 18), color=color).save(path)
+    return (Frame(frame_id="fr001", time_sec=start_sec + 5.0, path=str(path)),)
+
+
 def test_xlebench_manifest_adapter_maps_source_and_virtual_time(tmp_path: Path) -> None:
     root = tmp_path / "xle"
     root.mkdir()
@@ -177,3 +192,38 @@ def test_xle_diagnose_reports_cold_recall_and_candidate_coverage(tmp_path: Path)
     assert report["gt_interval_candidate_coverage"] == 1.0
     assert report["per_channel_recall"]["visual@5"] == 1.0
     assert report["counts"]["segments"] == 2
+
+
+def test_xle_frame_refs_use_sampled_frame_time_not_filename_or_beat_start(tmp_path: Path) -> None:
+    root = tmp_path / "xle"
+    root.mkdir()
+    (root / "cases.json").write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "case-late-blue",
+                    "question": "Find the blue object",
+                    "video_uid": "seg_long",
+                    "videos": [{"video_uid": "seg_long", "duration_sec": 18000.0, "video_path": "seg_long.mp4"}],
+                    "query_range": {"start_sec": 17000.0, "end_sec": 17010.0},
+                    "gt_interval": {"start_sec": 17004.0, "end_sec": 17006.0},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
+    index = LifeLogColdIndexBuilder(
+        manifest,
+        LifeLogIndexConfig(max_range_sec=20.0, max_beat_sec=20.0),
+        model=KeywordColorModel(),
+        range_detector=lambda _path, _duration: ((17000.0, 17010.0),),
+        keyframe_sampler=_misleading_name_sampler,
+    ).build(tmp_path / "run")
+
+    result = LifeLogRetriever(index).retrieve("blue object", scope=manifest.cases[0].scope, top_k=1)
+
+    assert result.candidates[0].source_start_sec == 17000.0
+    assert Path(result.candidates[0].frame_refs[0].path).name == "frame_001.jpg"
+    assert result.candidates[0].frame_refs[0].source_time_sec == 17005.0
+    assert result.candidates[0].frame_refs[0].virtual_time_sec == 17005.0

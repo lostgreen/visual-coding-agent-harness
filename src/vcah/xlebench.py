@@ -590,11 +590,11 @@ def _frame_refs(segment: LifeLogSegment, beat: Beat) -> tuple[FrameRef, ...]:
             video_uid=segment.video_uid,
             beat_id=beat.beat_id,
             chapter_id=beat.chapter_id,
-            source_time_sec=beat.start_sec,
-            virtual_time_sec=segment.virtual_start_sec + beat.start_sec,
+            source_time_sec=float(time_sec),
+            virtual_time_sec=segment.virtual_start_sec + float(time_sec),
             path=str(path),
         )
-        for path in paths
+        for path, time_sec in zip(paths, beat.frame_times)
         if str(path).strip()
     )
 
