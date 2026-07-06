@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -281,6 +282,187 @@ class RetrievalResult:
     fusion_weights: Mapping[str, float] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class InvestigationPlan:
+    task_type: str
+    max_steps: int
+    strategy: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class InvestigationWindow:
+    candidate_id: int
+    video_uid: str
+    beat_id: str
+    source_start_sec: float
+    source_end_sec: float
+    virtual_start_sec: float
+    virtual_end_sec: float
+    frame_refs: tuple[FrameRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class InvestigationEvidence:
+    evidence_id: str
+    candidate_id: int
+    window: InvestigationWindow
+    text: str
+    answer: str = ""
+    confidence: float = 0.0
+    frame_refs: tuple[FrameRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class InvestigationClaim:
+    claim_id: str
+    text: str
+    answer: str
+    evidence_id: str
+    status: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class InvestigationResult:
+    case_id: str
+    question: str
+    plan: InvestigationPlan
+    answer: str
+    selected_interval: InvestigationWindow | None
+    verified_claim: InvestigationClaim | None
+    evidence: tuple[InvestigationEvidence, ...]
+    trace: tuple[Mapping[str, Any], ...]
+
+
+class LifeLogInvestigator:
+    """Minimal X-LeBench cold-to-hot investigator loop."""
+
+    def __init__(
+        self,
+        index: LifeLogColdIndex,
+        *,
+        model: ModelClient | None = None,
+        max_steps: int = 3,
+        inspect_top_n: int = 3,
+        retrieve_top_k: int = 20,
+        max_window_sec: float = 30.0,
+        min_confidence: float = 0.5,
+    ) -> None:
+        self.index = index
+        self.model = model or ModelClient()
+        self.max_steps = max(1, int(max_steps))
+        self.inspect_top_n = max(1, int(inspect_top_n))
+        self.retrieve_top_k = max(1, int(retrieve_top_k))
+        self.max_window_sec = max(1.0, float(max_window_sec))
+        self.min_confidence = max(0.0, min(1.0, float(min_confidence)))
+
+    def answer(self, case: XLEBenchCase) -> InvestigationResult:
+        plan = _plan_investigation(case.question, max_steps=self.max_steps)
+        trace: list[Mapping[str, Any]] = [
+            {"type": "plan", "task_type": plan.task_type, "max_steps": plan.max_steps, "strategy": list(plan.strategy)}
+        ]
+        retrieval = LifeLogRetriever(self.index).retrieve(case.question, scope=case.scope, top_k=self.retrieve_top_k)
+        candidates = retrieval.candidates[: self.inspect_top_n]
+        trace.append(
+            {
+                "type": "retrieve",
+                "top_k": self.retrieve_top_k,
+                "inspect_top_n": self.inspect_top_n,
+                "candidate_count": len(retrieval.candidates),
+                "inspected_candidate_ids": list(range(1, len(candidates) + 1)),
+            }
+        )
+
+        evidence: list[InvestigationEvidence] = []
+        claims: list[InvestigationClaim] = []
+        for candidate_id, candidate in enumerate(candidates, start=1):
+            for window in _split_candidate_window(candidate, candidate_id, max_window_sec=self.max_window_sec):
+                inspected = self._inspect_window(case.question, candidate, window)
+                if not inspected.text.strip() and not inspected.answer.strip():
+                    trace.append(
+                        {
+                            "type": "inspect_window",
+                            "candidate_id": candidate_id,
+                            "window": _investigation_window_payload(window),
+                            "evidence_id": None,
+                            "claim_id": None,
+                            "status": "unknown",
+                        }
+                    )
+                    continue
+                evidence.append(inspected)
+                claim = _verify_investigation_evidence(
+                    inspected,
+                    claim_id=f"claim_{len(claims) + 1:04d}",
+                    min_confidence=self.min_confidence,
+                )
+                claims.append(claim)
+                trace.append(
+                    {
+                        "type": "inspect_window",
+                        "candidate_id": candidate_id,
+                        "window": _investigation_window_payload(window),
+                        "frame_times": [frame.source_time_sec for frame in window.frame_refs],
+                        "evidence_id": inspected.evidence_id,
+                        "claim_id": claim.claim_id,
+                        "status": claim.status,
+                        "confidence": claim.confidence,
+                    }
+                )
+
+        verified = _best_supported_claim(claims)
+        selected_interval = _evidence_by_id(evidence, verified.evidence_id).window if verified else None
+        answer = verified.answer if verified and verified.answer.strip() else "Insufficient verified evidence."
+        trace.append(
+            {
+                "type": "verify",
+                "supported_claim_ids": [claim.claim_id for claim in claims if claim.status == "supported"],
+                "selected_claim_id": verified.claim_id if verified else None,
+            }
+        )
+        trace.append(
+            {
+                "type": "answer",
+                "answer": answer,
+                "selected_interval": _investigation_window_payload(selected_interval) if selected_interval else None,
+            }
+        )
+        return InvestigationResult(
+            case_id=case.case_id,
+            question=case.question,
+            plan=plan,
+            answer=answer,
+            selected_interval=selected_interval,
+            verified_claim=verified,
+            evidence=tuple(evidence),
+            trace=tuple(trace),
+        )
+
+    def _inspect_window(
+        self,
+        question: str,
+        candidate: CandidateWindow,
+        window: InvestigationWindow,
+    ) -> InvestigationEvidence:
+        hook = getattr(self.model, "investigate_xle_window", None)
+        if callable(hook):
+            raw = hook(question, candidate=candidate, subwindow=window, frame_refs=window.frame_refs)
+        else:
+            raw = _default_investigate_window(self.model, question, window)
+        payload = raw if isinstance(raw, Mapping) else {"evidence": str(raw or "")}
+        text = str(payload.get("claim") or payload.get("evidence") or payload.get("observation") or "").strip()
+        answer = str(payload.get("answer") or "").strip()
+        return InvestigationEvidence(
+            evidence_id=_investigation_evidence_id(window),
+            candidate_id=window.candidate_id,
+            window=window,
+            text=text,
+            answer=answer,
+            confidence=max(0.0, min(1.0, float(payload.get("confidence") or 0.0))),
+            frame_refs=window.frame_refs,
+        )
+
+
 class LifeLogColdIndexBuilder:
     def __init__(
         self,
@@ -500,6 +682,175 @@ def write_diagnose_report(report: Mapping[str, Any], path: Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def write_investigation_report(result: InvestigationResult, path: Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_investigation_result_payload(result), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _plan_investigation(question: str, *, max_steps: int) -> InvestigationPlan:
+    text = str(question or "").casefold()
+    if re.search(r"\bwhat\b.*\b(put|placed?|set|left)\b", text):
+        task_type = "object"
+    elif any(token in text for token in ("how many", "count", "number of")):
+        task_type = "counting"
+    elif any(token in text for token in ("before", "after", "then", "order", "first", "last")):
+        task_type = "ordering"
+    elif any(token in text for token in ("who", "person", "people", "someone")):
+        task_type = "people"
+    elif any(token in text for token in ("doing", "action", "did i", "what happened")):
+        task_type = "action"
+    elif text.strip().startswith(("is ", "are ", "was ", "were ", "did ", "do ", "does ", "can ")):
+        task_type = "yes-no"
+    else:
+        task_type = "object"
+    return InvestigationPlan(
+        task_type=task_type,
+        max_steps=max(1, int(max_steps)),
+        strategy=(
+            "retrieve cold candidates",
+            "split long candidate windows",
+            "inspect subwindows for claim evidence",
+            "verify strongest supported claim",
+        ),
+    )
+
+
+def _split_candidate_window(
+    candidate: CandidateWindow,
+    candidate_id: int,
+    *,
+    max_window_sec: float,
+) -> tuple[InvestigationWindow, ...]:
+    width = max(1.0, float(max_window_sec))
+    windows = []
+    cursor = float(candidate.source_start_sec)
+    end = float(candidate.source_end_sec)
+    while cursor < end:
+        next_end = min(end, cursor + width)
+        frames = tuple(frame for frame in candidate.frame_refs if cursor <= frame.source_time_sec <= next_end)
+        windows.append(
+            InvestigationWindow(
+                candidate_id=int(candidate_id),
+                video_uid=candidate.video_uid,
+                beat_id=candidate.beat_id,
+                source_start_sec=round(cursor, 3),
+                source_end_sec=round(next_end, 3),
+                virtual_start_sec=round(candidate.virtual_start_sec + (cursor - candidate.source_start_sec), 3),
+                virtual_end_sec=round(candidate.virtual_start_sec + (next_end - candidate.source_start_sec), 3),
+                frame_refs=frames,
+            )
+        )
+        cursor = next_end
+    return tuple(windows)
+
+
+def _default_investigate_window(model: ModelClient, question: str, window: InvestigationWindow) -> Mapping[str, Any]:
+    if not window.frame_refs or not hasattr(model, "attest"):
+        return {"claim": "", "answer": "", "evidence": "", "confidence": 0.0}
+    prompt = (
+        "Inspect this X-LeBench subwindow for evidence relevant to the question. "
+        "Return concise visual observations only. "
+        f"Question: {question}"
+    )
+    observations = tuple(str(item or "").strip() for item in model.attest([frame.path for frame in window.frame_refs], prompt) if str(item or "").strip())
+    if not observations:
+        return {"claim": "", "answer": "", "evidence": "", "confidence": 0.0}
+    evidence = " ".join(observations)
+    return {"claim": evidence, "answer": "", "evidence": evidence, "confidence": 0.6}
+
+
+def _verify_investigation_evidence(
+    evidence: InvestigationEvidence,
+    *,
+    claim_id: str,
+    min_confidence: float,
+) -> InvestigationClaim:
+    supported = bool(evidence.text.strip()) and evidence.confidence >= float(min_confidence)
+    return InvestigationClaim(
+        claim_id=claim_id,
+        text=evidence.text,
+        answer=evidence.answer,
+        evidence_id=evidence.evidence_id,
+        status="supported" if supported else "unknown",
+        confidence=evidence.confidence,
+    )
+
+
+def _best_supported_claim(claims: Sequence[InvestigationClaim]) -> InvestigationClaim | None:
+    supported = [claim for claim in claims if claim.status == "supported"]
+    if not supported:
+        return None
+    return sorted(supported, key=lambda claim: (-claim.confidence, claim.claim_id))[0]
+
+
+def _evidence_by_id(evidence: Sequence[InvestigationEvidence], evidence_id: str) -> InvestigationEvidence:
+    for item in evidence:
+        if item.evidence_id == evidence_id:
+            return item
+    raise ValueError(f"Unknown investigation evidence_id: {evidence_id}")
+
+
+def _investigation_evidence_id(window: InvestigationWindow) -> str:
+    return f"xe_{window.candidate_id:03d}_{int(window.source_start_sec * 1000):010d}_{int(window.source_end_sec * 1000):010d}"
+
+
+def _investigation_window_payload(window: InvestigationWindow) -> dict[str, Any]:
+    return {
+        "candidate_id": window.candidate_id,
+        "video_uid": window.video_uid,
+        "beat_id": window.beat_id,
+        "source_start_sec": window.source_start_sec,
+        "source_end_sec": window.source_end_sec,
+        "virtual_start_sec": window.virtual_start_sec,
+        "virtual_end_sec": window.virtual_end_sec,
+        "frame_refs": [
+            {
+                "path": frame.path,
+                "source_time_sec": frame.source_time_sec,
+                "virtual_time_sec": frame.virtual_time_sec,
+            }
+            for frame in window.frame_refs
+        ],
+    }
+
+
+def _investigation_result_payload(result: InvestigationResult) -> dict[str, Any]:
+    return {
+        "case_id": result.case_id,
+        "question": result.question,
+        "plan": {
+            "task_type": result.plan.task_type,
+            "max_steps": result.plan.max_steps,
+            "strategy": list(result.plan.strategy),
+        },
+        "answer": result.answer,
+        "selected_interval": _investigation_window_payload(result.selected_interval) if result.selected_interval else None,
+        "verified_claim": {
+            "claim_id": result.verified_claim.claim_id,
+            "text": result.verified_claim.text,
+            "answer": result.verified_claim.answer,
+            "evidence_id": result.verified_claim.evidence_id,
+            "status": result.verified_claim.status,
+            "confidence": result.verified_claim.confidence,
+        }
+        if result.verified_claim
+        else None,
+        "evidence": [
+            {
+                "evidence_id": item.evidence_id,
+                "candidate_id": item.candidate_id,
+                "text": item.text,
+                "answer": item.answer,
+                "confidence": item.confidence,
+                "window": _investigation_window_payload(item.window),
+            }
+            for item in result.evidence
+        ],
+        "trace": list(result.trace),
+    }
 
 
 def _load_records(path: Path) -> tuple[Mapping[str, Any], ...]:

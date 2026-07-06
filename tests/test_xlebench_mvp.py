@@ -12,6 +12,7 @@ from vcah.xlebench import (
     LifeLogColdIndex,
     LifeLogColdIndexBuilder,
     LifeLogIndexConfig,
+    LifeLogInvestigator,
     LifeLogRetriever,
     diagnose_cold_recall,
     load_xlebench_manifest,
@@ -93,6 +94,48 @@ def _red_keyframe_blue_second_sampler(
         Frame(frame_id="fr001", time_sec=start_sec, path=str(red_path)),
         Frame(frame_id="fr002", time_sec=start_sec + 5.0, path=str(blue_path)),
     )
+
+
+def _late_table_sampler(
+    video_path: str,
+    start_sec: float,
+    end_sec: float,
+    n_frames: int,
+    out_dir: Path,
+) -> tuple[Frame, ...]:
+    del video_path, end_sec, n_frames
+    out_dir.mkdir(parents=True, exist_ok=True)
+    early_path = out_dir / f"early_{int(start_sec):03d}.jpg"
+    late_path = out_dir / f"late_{int(start_sec):03d}.jpg"
+    Image.new("RGB", (32, 18), color=(240, 20, 20)).save(early_path)
+    Image.new("RGB", (32, 18), color=(20, 40, 230)).save(late_path)
+    return (
+        Frame(frame_id="fr001", time_sec=start_sec + 5.0, path=str(early_path)),
+        Frame(frame_id="fr002", time_sec=start_sec + 95.0, path=str(late_path)),
+    )
+
+
+class FakeXLEInvestigatorModel(KeywordColorModel):
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def investigate_xle_window(self, question: str, *, candidate: object, subwindow: object, frame_refs: Sequence[object]) -> dict[str, object]:
+        del candidate
+        payload = {
+            "question": question,
+            "start_sec": getattr(subwindow, "source_start_sec"),
+            "end_sec": getattr(subwindow, "source_end_sec"),
+            "frame_times": [getattr(frame, "source_time_sec") for frame in frame_refs],
+        }
+        self.calls.append(payload)
+        if any(float(time_sec) >= 90.0 for time_sec in payload["frame_times"]):
+            return {
+                "claim": "User put a blue cup on the table.",
+                "answer": "blue cup",
+                "evidence": "A late frame shows a blue cup on the table.",
+                "confidence": 0.92,
+            }
+        return {"claim": "", "answer": "", "evidence": "No table placement is visible.", "confidence": 0.05}
 
 
 def test_xlebench_manifest_adapter_maps_source_and_virtual_time(tmp_path: Path) -> None:
@@ -427,3 +470,46 @@ def test_xle_retrieval_reports_minimal_hierarchical_debug(tmp_path: Path) -> Non
     assert report["per_level_recall"]["segment@5"] == 1.0
     assert report["per_level_recall"]["beat@5"] == 1.0
     assert report["per_level_recall"]["frame@5"] == 1.0
+
+
+def test_xle_investigator_splits_long_candidate_and_verifies_late_claim(tmp_path: Path) -> None:
+    root = tmp_path / "xle"
+    root.mkdir()
+    (root / "cases.json").write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "case-table",
+                    "question": "What did I put on the table?",
+                    "video_uid": "seg_a",
+                    "videos": [{"video_uid": "seg_a", "duration_sec": 120.0, "video_path": "seg_a.mp4"}],
+                    "query_range": {"start_sec": 0.0, "end_sec": 120.0},
+                    "gt_interval": {"start_sec": 90.0, "end_sec": 105.0},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
+    model = FakeXLEInvestigatorModel()
+    index = LifeLogColdIndexBuilder(
+        manifest,
+        LifeLogIndexConfig(max_range_sec=120.0, max_beat_sec=120.0),
+        model=model,
+        range_detector=lambda _path, duration: ((0.0, duration),),
+        keyframe_sampler=_late_table_sampler,
+    ).build(tmp_path / "run")
+
+    result = LifeLogInvestigator(index, model=model, max_steps=3, inspect_top_n=1, max_window_sec=30.0).answer(manifest.cases[0])
+
+    assert result.plan.task_type == "object"
+    assert len(model.calls) == 4
+    assert [call["start_sec"] for call in model.calls] == [0.0, 30.0, 60.0, 90.0]
+    assert result.answer == "blue cup"
+    assert result.selected_interval is not None
+    assert result.selected_interval.source_start_sec == 90.0
+    assert result.selected_interval.source_end_sec == 120.0
+    assert result.verified_claim is not None
+    assert result.verified_claim.status == "supported"
+    assert result.trace[0]["type"] == "plan"
+    assert any(step["type"] == "inspect_window" for step in result.trace)

@@ -13,16 +13,21 @@ import requests
 import yaml
 from PIL import Image, ImageDraw
 
-from vcah.xlebench import LifeLogColdIndex, LifeLogRetriever, load_xlebench_manifest
+from vcah.xlebench import LifeLogColdIndex, LifeLogInvestigator, LifeLogRetriever, load_xlebench_manifest, write_investigation_report
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate X-LeBench candidate selection with an OpenAI-compatible VLM.")
+    parser = argparse.ArgumentParser(description="Evaluate X-LeBench candidate selection or investigation with an OpenAI-compatible VLM.")
     parser.add_argument("--cases-dir", required=True)
     parser.add_argument("--index-dir", required=True)
     parser.add_argument("--config", required=True)
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--mode", choices=("selector", "investigator"), default="selector")
     parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--inspect-top-n", type=int, default=3)
+    parser.add_argument("--max-steps", type=int, default=3)
+    parser.add_argument("--max-window-sec", type=float, default=30.0)
+    parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--frames-per-candidate", type=int, default=1)
     parser.add_argument("--max-image-edge", type=int, default=512)
     args = parser.parse_args()
@@ -39,9 +44,12 @@ def main() -> None:
     config = _load_config(Path(args.config))
     manifest = load_xlebench_manifest(cases_dir)
     index = LifeLogColdIndex.load(index_dir)
+    api = _OpenAICompatibleVLM(config, max_image_edge=args.max_image_edge, frames_per_window=args.frames_per_candidate)
+    if args.mode == "investigator":
+        _run_investigator_mode(manifest, index, api, args, out_dir, started=time.time())
+        return
     retriever = LifeLogRetriever(index)
 
-    api = _OpenAICompatibleVLM(config)
     records: list[dict[str, Any]] = []
     started = time.time()
     for case in manifest.cases:
@@ -149,12 +157,15 @@ def main() -> None:
 
 
 class _OpenAICompatibleVLM:
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], *, max_image_edge: int = 512, frames_per_window: int = 1) -> None:
         planner = config.get("planner_api") or config
         self.base = str(planner["base"]).rstrip("/")
         self.model = str(planner["model"])
         self.api_key = str(planner["api_key"])
         self.timeout = float(planner.get("timeout", 300))
+        self.max_image_edge = int(max_image_edge)
+        self.frames_per_window = max(1, int(frames_per_window))
+        self.interactions: list[dict[str, Any]] = []
         for key, value in (planner.get("proxy_env") or {}).items():
             os.environ[str(key)] = str(value)
 
@@ -179,12 +190,124 @@ class _OpenAICompatibleVLM:
         payload = response.json()
         return str(payload["choices"][0]["message"]["content"])
 
+    def investigate_xle_window(self, question: str, *, candidate: Any, subwindow: Any, frame_refs: list[Any] | tuple[Any, ...]) -> dict[str, Any]:
+        selected_frames = tuple(frame_refs)[: self.frames_per_window]
+        image_paths = [frame.path for frame in selected_frames]
+        prompt = _build_investigator_prompt(question, candidate, subwindow, selected_frames)
+        if not image_paths:
+            return {"claim": "", "answer": "", "evidence": "", "confidence": 0.0}
+        raw_response = self.chat(prompt, image_paths=image_paths, max_image_edge=self.max_image_edge)
+        parsed = _parse_json_response(raw_response)
+        if not isinstance(parsed, dict):
+            parsed = {"evidence": str(parsed)}
+        self.interactions.append(
+            {
+                "question": question,
+                "candidate_id": subwindow.candidate_id,
+                "window": {
+                    "video_uid": subwindow.video_uid,
+                    "source_start_sec": subwindow.source_start_sec,
+                    "source_end_sec": subwindow.source_end_sec,
+                    "virtual_start_sec": subwindow.virtual_start_sec,
+                    "virtual_end_sec": subwindow.virtual_end_sec,
+                },
+                "frame_paths": image_paths,
+                "prompt_text": prompt,
+                "raw_response_text": raw_response,
+                "parsed_response": parsed,
+            }
+        )
+        return {
+            "claim": str(parsed.get("claim") or parsed.get("evidence") or "").strip(),
+            "answer": str(parsed.get("answer") or "").strip(),
+            "evidence": str(parsed.get("evidence") or "").strip(),
+            "confidence": float(parsed.get("confidence") or 0.0),
+        }
+
 
 def _load_config(path: Path) -> dict[str, Any]:
     payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"Config must be a mapping: {path}")
     return payload
+
+
+def _run_investigator_mode(manifest: Any, index: LifeLogColdIndex, api: _OpenAICompatibleVLM, args: argparse.Namespace, out_dir: Path, *, started: float) -> None:
+    trace_dir = out_dir / "traces"
+    interaction_dir = out_dir / "model_interactions"
+    sheet_dir = out_dir / "contact_sheets"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    interaction_dir.mkdir(parents=True, exist_ok=True)
+    sheet_dir.mkdir(parents=True, exist_ok=True)
+    investigator = LifeLogInvestigator(
+        index,
+        model=api,  # type: ignore[arg-type]
+        max_steps=args.max_steps,
+        inspect_top_n=args.inspect_top_n,
+        retrieve_top_k=args.top_k,
+        max_window_sec=args.max_window_sec,
+        min_confidence=args.min_confidence,
+    )
+    records = []
+    for case in manifest.cases:
+        interaction_start = len(api.interactions)
+        try:
+            result = investigator.answer(case)
+            selected = result.selected_interval
+            correct = bool(selected and any(_window_overlap_ratio(selected, interval) > 0.0 for interval in case.gt_intervals))
+            max_overlap = max((_window_overlap_ratio(selected, interval) for interval in case.gt_intervals), default=0.0) if selected else 0.0
+            error = None
+            write_investigation_report(result, trace_dir / f"{_safe_id(case.case_id)}.json")
+            image_paths = [frame.path for item in result.evidence for frame in item.frame_refs]
+            _write_contact_sheet(image_paths, sheet_dir / f"{_safe_id(case.case_id)}.jpg")
+            summary = {
+                "case_id": case.case_id,
+                "answer": result.answer,
+                "selected_interval": _window_payload(result.selected_interval),
+                "verified_claim": result.verified_claim.claim_id if result.verified_claim else None,
+                "correct": correct,
+                "max_gt_overlap_ratio": max_overlap,
+                "error": error,
+            }
+        except Exception as exc:  # noqa: BLE001 - traces need compact failure fingerprints.
+            summary = {
+                "case_id": case.case_id,
+                "answer": "",
+                "selected_interval": None,
+                "verified_claim": None,
+                "correct": False,
+                "max_gt_overlap_ratio": 0.0,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        interactions = api.interactions[interaction_start:]
+        (interaction_dir / f"{_safe_id(case.case_id)}.json").write_text(
+            json.dumps(interactions, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        records.append(summary)
+    attempted = sum(1 for item in records if not item.get("error"))
+    correct = sum(1 for item in records if item.get("correct"))
+    metrics = {
+        "mode": "investigator",
+        "case_count": len(records),
+        "attempted": attempted,
+        "failed": len(records) - attempted,
+        "correct": correct,
+        "accuracy": correct / max(1, len(records)),
+        "accuracy_definition": "selected investigator interval overlaps any GT interval by >0 seconds",
+        "model": api.model,
+        "api_base": api.base,
+        "top_k": args.top_k,
+        "inspect_top_n": args.inspect_top_n,
+        "max_steps": args.max_steps,
+        "max_window_sec": args.max_window_sec,
+        "frames_per_window": args.frames_per_candidate,
+        "started_at_unix": started,
+        "finished_at_unix": time.time(),
+        "cases": records,
+    }
+    (out_dir / "metrics.json").write_text(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    print(json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 def _candidate_payload(candidate: Any, candidate_id: int, frames_per_candidate: int) -> dict[str, Any]:
@@ -244,6 +367,32 @@ def _build_prompt(case_id: str, question: str, candidates: list[dict[str, Any]])
     )
 
 
+def _build_investigator_prompt(question: str, candidate: Any, subwindow: Any, frame_refs: tuple[Any, ...]) -> str:
+    compact = {
+        "candidate_id": subwindow.candidate_id,
+        "video_uid": subwindow.video_uid,
+        "candidate_source_sec": [round(candidate.source_start_sec, 2), round(candidate.source_end_sec, 2)],
+        "subwindow_source_sec": [round(subwindow.source_start_sec, 2), round(subwindow.source_end_sec, 2)],
+        "subwindow_virtual_sec": [round(subwindow.virtual_start_sec, 2), round(subwindow.virtual_end_sec, 2)],
+        "frames": [
+            {
+                "source_time_sec": round(frame.source_time_sec, 2),
+                "virtual_time_sec": round(frame.virtual_time_sec, 2),
+            }
+            for frame in frame_refs
+        ],
+    }
+    return (
+        "You are the investigator in an X-LeBench long-video QA loop.\n"
+        "Inspect only this subwindow and its attached frames. Form one evidence-backed claim if the frames answer "
+        "or materially constrain the question. If the frames are not useful, return an empty claim and low confidence.\n\n"
+        f"question: {question}\n"
+        f"subwindow_json: {json.dumps(compact, ensure_ascii=False)}\n\n"
+        "Return only valid JSON with this schema: "
+        '{"claim": string, "answer": string, "evidence": string, "confidence": number}'
+    )
+
+
 def _image_data_url(path: Path, max_edge: int) -> str:
     with Image.open(path) as image:
         image = image.convert("RGB")
@@ -292,6 +441,29 @@ def _overlap_ratio(candidate: dict[str, Any], interval: Any) -> float:
         - max(float(candidate["source_start_sec"]), interval.source_start_sec),
     )
     return intersection / max(1e-9, interval.source_end_sec - interval.source_start_sec)
+
+
+def _window_overlap_ratio(window: Any, interval: Any) -> float:
+    if window is None or window.video_uid != interval.video_uid:
+        return 0.0
+    intersection = max(
+        0.0,
+        min(float(window.source_end_sec), interval.source_end_sec)
+        - max(float(window.source_start_sec), interval.source_start_sec),
+    )
+    return intersection / max(1e-9, interval.source_end_sec - interval.source_start_sec)
+
+
+def _window_payload(window: Any) -> dict[str, Any] | None:
+    if window is None:
+        return None
+    return {
+        "video_uid": window.video_uid,
+        "source_start_sec": window.source_start_sec,
+        "source_end_sec": window.source_end_sec,
+        "virtual_start_sec": window.virtual_start_sec,
+        "virtual_end_sec": window.virtual_end_sec,
+    }
 
 
 def _write_contact_sheet(image_paths: list[str], path: Path) -> None:
