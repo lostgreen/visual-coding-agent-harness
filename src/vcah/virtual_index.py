@@ -23,6 +23,7 @@ class VirtualBeat:
     start_sec: float
     end_sec: float
     thumbnail_grid_path: str
+    thumbnail_grid_paths: tuple[str, ...]
     frame_refs: tuple[VirtualFrameRef, ...]
     asr_cues: tuple[Mapping[str, Any], ...]
     source_lineage: tuple[Mapping[str, Any], ...]
@@ -41,7 +42,7 @@ def build_virtual_beat_index(
     frame_refs: Sequence[VirtualFrameRef],
     *,
     model: ModelClient | None = None,
-    beat_sec: float = 18.0,
+    beat_sec: float = 60.0,
 ) -> VirtualBeatIndexResult:
     model = model or ModelClient()
     beat_width = max(1.0, float(beat_sec))
@@ -58,9 +59,9 @@ def build_virtual_beat_index(
                 # Keep empty timeline regions indexable; use nearest existing frame as visual placeholder.
                 nearest = min(frames, key=lambda frame: abs(frame.virtual_time_sec - ((start + end) / 2.0)))
                 beat_frames = (nearest,)
-            thumb = build_beat_thumbnail_grid(
+            thumbs = build_beat_thumbnail_grids(
                 beat_frames,
-                workspace.root_dir / "beat_thumbnails" / f"bt{number:05d}_grid.jpg",
+                workspace.root_dir / "beat_thumbnails" / f"bt{number:05d}",
             )
             beat_cues = tuple(cue for cue in asr_cues if _cue_overlaps(cue, start, end))
             virtual_beats.append(
@@ -68,7 +69,8 @@ def build_virtual_beat_index(
                     beat_id=f"bt{number:05d}",
                     start_sec=round(start, 3),
                     end_sec=round(end, 3),
-                    thumbnail_grid_path=str(thumb),
+                    thumbnail_grid_path=str(thumbs[0]),
+                    thumbnail_grid_paths=tuple(str(path) for path in thumbs),
                     frame_refs=beat_frames,
                     asr_cues=beat_cues,
                     source_lineage=_source_lineage(workspace, start, end),
@@ -128,6 +130,43 @@ def build_beat_thumbnail_grid(frame_refs: Sequence[VirtualFrameRef], out_path: P
         else:
             cell = Image.new("RGB", cell_size, color=(42, 42, 42))
         canvas.paste(cell, ((idx % 3) * cell_size[0], (idx // 3) * cell_size[1]))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(out_path, format="JPEG", quality=88)
+    return out_path
+
+
+def build_beat_thumbnail_grids(frame_refs: Sequence[VirtualFrameRef], out_prefix: Path, *, max_frames: int = 16) -> tuple[Path, ...]:
+    selected = _select_grid_frames(tuple(frame_refs), max_frames=max_frames)
+    if not selected:
+        selected_groups: tuple[tuple[VirtualFrameRef, ...], ...] = ((), (), (), ())
+    else:
+        groups = []
+        for index in range(4):
+            start = index * 4
+            group = selected[start : start + 4]
+            groups.append(group)
+        selected_groups = tuple(groups)
+    paths = []
+    for index, group in enumerate(selected_groups):
+        path = out_prefix.parent / f"{out_prefix.name}_q{index}.jpg"
+        _render_2x2_grid(group, path)
+        paths.append(path)
+    return tuple(paths)
+
+
+def _render_2x2_grid(frame_refs: Sequence[VirtualFrameRef], out_path: Path) -> Path:
+    cell_size = (160, 90)
+    canvas = Image.new("RGB", (cell_size[0] * 2, cell_size[1] * 2), color=(18, 18, 18))
+    for idx in range(4):
+        if idx < len(frame_refs) and Path(frame_refs[idx].path).exists():
+            with Image.open(frame_refs[idx].path) as image:
+                image = image.convert("RGB")
+                image.thumbnail(cell_size)
+                cell = Image.new("RGB", cell_size, color=(12, 12, 12))
+                cell.paste(image, ((cell_size[0] - image.width) // 2, (cell_size[1] - image.height) // 2))
+        else:
+            cell = Image.new("RGB", cell_size, color=(42, 42, 42))
+        canvas.paste(cell, ((idx % 2) * cell_size[0], (idx // 2) * cell_size[1]))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_path, format="JPEG", quality=88)
     return out_path
@@ -201,10 +240,7 @@ def build_workspace_overview(
         "segment_overviews": overviews,
         "available_tools": [
             "open_segment",
-            "open_beat_page",
-            "inspect_window_auto",
-            "search_asr_optional",
-            "search_visual_optional",
+            "inspect_window",
         ],
     }
 
@@ -270,6 +306,7 @@ def _virtual_beat_payload(beat: VirtualBeat) -> dict[str, Any]:
         "beat_id": beat.beat_id,
         "virtual_time_range": [beat.start_sec, beat.end_sec],
         "thumbnail_grid_path": beat.thumbnail_grid_path,
+        "thumbnail_grid_paths": list(beat.thumbnail_grid_paths),
         "frame_ids": [frame.frame_id for frame in beat.frame_refs],
         "source_lineage": [dict(item) for item in beat.source_lineage],
         "asr_cues": [dict(item) for item in beat.asr_cues],

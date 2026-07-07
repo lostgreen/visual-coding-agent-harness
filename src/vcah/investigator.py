@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from vcah.types import Frame
 from vcah.virtual_index import load_virtual_beats
 from vcah.virtual_video import (
     FrameSampler,
     VirtualFrameRef,
     VirtualVideoWorkspace,
-    materialize_highfps_window,
+    materialize_window_frames,
     virtual_to_source_windows,
 )
 
@@ -55,6 +53,8 @@ class InvestigationReport:
 
 
 class VirtualVideoInvestigator:
+    tool_names = ("open_segment", "inspect_window")
+
     def __init__(
         self,
         workspace: VirtualVideoWorkspace,
@@ -66,108 +66,115 @@ class VirtualVideoInvestigator:
         self.workspace = workspace
         self.sampler = sampler
         self.highfps = float(highfps)
-        self.highfps_max_frames = int(highfps_max_frames)
+        self.highfps_max_frames = min(64, int(highfps_max_frames))
 
     def run_batch(self, tasks: Sequence[Any]) -> tuple[InvestigationReport, ...]:
-        return tuple(self.inspect_window_auto(task) for task in tasks)
-
-    def open_beat_grid(self, beat_ids: Sequence[str]) -> tuple[str, ...]:
-        path = self.workspace.root_dir / "beat_index.json"
-        if not path.exists():
-            return ()
-        beats = load_virtual_beats(path)
-        wanted = {str(beat_id) for beat_id in beat_ids}
-        return tuple(str(beat["thumbnail_grid_path"]) for beat in beats if str(beat.get("beat_id")) in wanted)
+        return tuple(self._investigate_task(task) for task in tasks)
 
     def open_segment(self, segment_id: str) -> Mapping[str, Any]:
         segment = self.workspace.manifest.segment(str(segment_id))
         beats = _beats_for_segment(self.workspace, segment.segment_id)
+        asr_cues = _asr_cues_in_window(self.workspace, segment.virtual_start_sec, segment.virtual_end_sec)
         return {
             "segment_id": segment.segment_id,
             "virtual_time_range": [segment.virtual_start_sec, segment.virtual_end_sec],
             "duration_sec": segment.duration_sec,
-            "beat_count": len(beats),
-            "beat_ids": [str(beat.get("beat_id")) for beat in beats],
-        }
-
-    def open_beat_page(self, segment_id: str, *, page: int = 1, page_size: int = 12) -> Mapping[str, Any]:
-        beats = _beats_for_segment(self.workspace, str(segment_id))
-        size = max(1, int(page_size))
-        page_number = max(1, int(page))
-        start = (page_number - 1) * size
-        selected = beats[start : start + size]
-        return {
-            "segment_id": str(segment_id),
-            "page": page_number,
-            "page_size": size,
-            "total_beats": len(beats),
+            "asr_timeline_summary": " ".join(cue["text"] for cue in asr_cues)[:500],
+            "asr_cues": asr_cues,
+            "source_lineage": _source_lineage(self.workspace, segment.virtual_start_sec, segment.virtual_end_sec),
             "beats": [
                 {
                     "beat_id": str(beat.get("beat_id")),
                     "virtual_time_range": list(beat.get("virtual_time_range", ())),
-                    "thumbnail_grid_path": str(beat.get("thumbnail_grid_path", "")),
+                    "asr_excerpt": _beat_asr_excerpt(beat),
+                    "thumbnail_grid_paths": list(beat.get("thumbnail_grid_paths") or [beat.get("thumbnail_grid_path", "")]),
                 }
-                for beat in selected
+                for beat in beats
             ],
         }
 
-    def inspect_window_lowfps(self, start_sec: float, end_sec: float, *, max_frames: int = 12) -> tuple[VirtualFrameRef, ...]:
-        frames = tuple(
-            frame
-            for frame in self.workspace.read_frame_manifest()
-            if start_sec <= frame.virtual_time_sec <= end_sec and frame.fps_level == "low"
-        )
-        return frames[: max(0, int(max_frames))]
-
-    def inspect_window_highfps(self, task: Any) -> tuple[VirtualFrameRef, ...]:
-        start_sec, end_sec = _task_time_range(task)
-        return materialize_highfps_window(
+    def inspect_window(
+        self,
+        start_sec: float,
+        end_sec: float,
+        *,
+        fps: float = 0.5,
+        max_frames: int = 64,
+        query_id: str = "manual",
+    ) -> Mapping[str, Any]:
+        capped = min(64, max(1, int(max_frames)))
+        frames = materialize_window_frames(
             self.workspace,
-            start_sec,
-            end_sec,
-            query_id=str(getattr(task, "query_id")),
-            fps=self.highfps,
-            max_frames=self.highfps_max_frames,
+            float(start_sec),
+            float(end_sec),
+            query_id=str(query_id),
+            fps=float(fps),
+            max_frames=capped,
             sampler=self.sampler,
         )
+        return {
+            "virtual_time_range": [float(start_sec), float(end_sec)],
+            "sampling": {
+                "fps": float(fps),
+                "max_frames": capped,
+                "actual_frames": len(frames),
+                "sampling": "uniform",
+            },
+            "frames": [_frame_payload(frame) for frame in frames],
+            "asr_cues": _asr_cues_in_window(self.workspace, float(start_sec), float(end_sec)),
+            "source_lineage": _source_lineage(self.workspace, float(start_sec), float(end_sec)),
+        }
 
-    def inspect_window_auto(self, task: Any) -> InvestigationReport:
-        start_sec, end_sec = _task_time_range(task)
-        low = self.inspect_window_lowfps(start_sec, end_sec)
-        needs_high = _needs_highfps(task)
-        high: tuple[VirtualFrameRef, ...] = ()
-        if needs_high:
-            high = self.inspect_window_highfps(task)
-        frames = high or low
-        level = "highfps" if high else "lowfps"
+    def _investigate_task(self, task: Any) -> InvestigationReport:
+        segment_id = str(getattr(task, "segment_id", "") or "")
+        tool_steps = 0
+        segment_packet: Mapping[str, Any] | None = None
+        if segment_id:
+            segment_packet = self.open_segment(segment_id)
+            tool_steps += 1
+        if getattr(task, "time_range", None) is None and segment_packet is not None:
+            start_sec, end_sec = tuple(segment_packet["virtual_time_range"])  # type: ignore[assignment]
+            start_sec = float(start_sec)
+            end_sec = float(end_sec)
+        else:
+            start_sec, end_sec = _task_time_range(task)
+        fps = self.highfps if _needs_highfps(task) else 0.5
+        window = self.inspect_window(
+            start_sec,
+            end_sec,
+            fps=fps,
+            max_frames=self.highfps_max_frames,
+            query_id=str(getattr(task, "query_id")),
+        )
+        tool_steps += 1
+        frame_paths = tuple(str(frame["path"]) for frame in window["frames"])
         evidence = InvestigationEvidence(
             evidence_id=f"ev_{getattr(task, 'query_id')}_001",
-            summary=_summary_for_task(task, level=level, frames=frames),
+            summary=_summary_for_task(task, window=window),
             modality="visual",
-            sampling={
-                "level": level,
-                "fps": self.highfps if high else 0.0,
-                "frame_count": len(frames),
-            },
+            sampling=dict(window["sampling"]),
             virtual_time_range=(float(start_sec), float(end_sec)),
-            source_lineage=_source_lineage(self.workspace, start_sec, end_sec),
-            supporting_frames=tuple(frame.path for frame in frames),
-            confidence=0.7 if frames else 0.0,
+            source_lineage=tuple(dict(item) for item in window["source_lineage"]),
+            supporting_frames=frame_paths,
+            confidence=0.7 if frame_paths else 0.0,
         )
         return InvestigationReport(
             query_id=str(getattr(task, "query_id")),
-            status="satisfied" if frames else "empty",
-            evidence=(evidence,) if frames else (),
+            status="satisfied" if frame_paths else "empty",
+            evidence=(evidence,) if frame_paths else (),
             cost={
-                "lowfps_frames": len(low),
-                "highfps_frames": len(high),
-                "vlm_calls": 1 if frames else 0,
+                "tool_steps": tool_steps,
+                "frames": len(frame_paths),
+                "vlm_calls": 1 if frame_paths else 0,
             },
         )
 
 
 def _task_time_range(task: Any) -> tuple[float, float]:
-    start, end = getattr(task, "time_range")
+    time_range = getattr(task, "time_range", None)
+    if time_range is None:
+        raise ValueError("InvestigationTask requires either time_range or segment_id")
+    start, end = time_range
     return float(start), float(end)
 
 
@@ -183,6 +190,40 @@ def _beats_for_segment(workspace: VirtualVideoWorkspace, segment_id: str) -> tup
     return tuple(rows)
 
 
+def _asr_cues_in_window(workspace: VirtualVideoWorkspace, start_sec: float, end_sec: float) -> list[dict[str, Any]]:
+    rows = []
+    for cue in workspace.read_asr_virtual_cues():
+        start = float(cue.get("start_sec", cue.get("start", 0.0)) or 0.0)
+        end = float(cue.get("end_sec", cue.get("end", start)) or start)
+        if min(end, end_sec) <= max(start, start_sec):
+            continue
+        row = {
+            "start_sec": start,
+            "end_sec": end,
+            "text": str(cue.get("text", "") or ""),
+        }
+        for key in ("segment_id", "source_video_id", "source_start_sec", "source_end_sec", "source_start", "source_end"):
+            if key in cue:
+                row[key] = cue[key]
+        rows.append(row)
+    return rows
+
+
+def _beat_asr_excerpt(beat: Mapping[str, Any]) -> str:
+    return " ".join(str(cue.get("text", "")).strip() for cue in beat.get("asr_cues", ()) or ())[:240]
+
+
+def _frame_payload(frame: VirtualFrameRef) -> dict[str, Any]:
+    return {
+        "path": frame.path,
+        "virtual_time_sec": frame.virtual_time_sec,
+        "source_video_id": frame.source_video_id,
+        "source_path": frame.source_path,
+        "source_time_sec": frame.source_time_sec,
+        "segment_id": frame.segment_id,
+    }
+
+
 def _needs_highfps(task: Any) -> bool:
     text = " ".join(
         [
@@ -194,12 +235,14 @@ def _needs_highfps(task: Any) -> bool:
     return any(keyword in text for keyword in HIGHFPS_KEYWORDS)
 
 
-def _summary_for_task(task: Any, *, level: str, frames: Sequence[VirtualFrameRef]) -> str:
+def _summary_for_task(task: Any, *, window: Mapping[str, Any]) -> str:
+    frames = tuple(window.get("frames", ()) or ())
     if not frames:
         return ""
+    times = [float(frame["virtual_time_sec"]) for frame in frames]
     return (
-        f"{level} frames for {getattr(task, 'query_id')} cover "
-        f"{frames[0].virtual_time_sec:.1f}-{frames[-1].virtual_time_sec:.1f}s while pursuing: "
+        f"inspect_window at {window['sampling']['fps']} fps for {getattr(task, 'query_id')} covers "
+        f"{min(times):.1f}-{max(times):.1f}s while pursuing: "
         f"{getattr(task, 'goal', '')}"
     )
 
@@ -210,8 +253,8 @@ def _source_lineage(workspace: VirtualVideoWorkspace, start_sec: float, end_sec:
             "segment_id": window.segment_id,
             "source_video_id": window.source_video_id,
             "source_path": window.source_path,
-            "source_time_range": (window.source_start_sec, window.source_end_sec),
-            "virtual_time_range": (window.virtual_start_sec, window.virtual_end_sec),
+            "source_time_range": [window.source_start_sec, window.source_end_sec],
+            "virtual_time_range": [window.virtual_start_sec, window.virtual_end_sec],
         }
         for window in virtual_to_source_windows(workspace.manifest, start_sec, end_sec)
     )

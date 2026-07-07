@@ -15,8 +15,8 @@ from vcah.virtual_video import (
     VirtualVideoSegment,
     VirtualVideoWorkspace,
     load_srt_as_virtual_cues,
-    materialize_highfps_window,
     materialize_lowfps_frame_cache,
+    materialize_window_frames,
     virtual_to_source_windows,
 )
 
@@ -98,25 +98,27 @@ def test_virtual_timeline_maps_cross_segment_windows_and_srt_cues(tmp_path: Path
     )
 
 
-def test_lowfps_and_highfps_manifests_keep_separate_lineage(tmp_path: Path) -> None:
+def test_lowfps_cache_and_window_sampling_manifests_keep_separate_lineage(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
 
     low_frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_fake_sampler)
-    high_frames = materialize_highfps_window(workspace, 5.0, 6.0, query_id="q1", fps=2.0, sampler=_fake_sampler)
+    cached_frames = materialize_window_frames(workspace, 5.0, 6.0, query_id="q1", fps=1.0, sampler=_fake_sampler)
+    sampled_frames = materialize_window_frames(workspace, 5.0, 6.0, query_id="q2", fps=2.0, sampler=_fake_sampler)
 
     low_manifest = workspace.root_dir / "frame_manifest.jsonl"
-    high_manifest = workspace.root_dir / "observations" / "highfps_frame_manifest.jsonl"
+    window_manifest = workspace.root_dir / "observations" / "window_frame_manifest.jsonl"
     low_rows = [json.loads(line) for line in low_manifest.read_text(encoding="utf-8").splitlines()]
-    high_rows = [json.loads(line) for line in high_manifest.read_text(encoding="utf-8").splitlines()]
+    window_rows = [json.loads(line) for line in window_manifest.read_text(encoding="utf-8").splitlines()]
 
-    assert low_frames and high_frames
+    assert low_frames and cached_frames and sampled_frames
+    assert all(frame.fps_level == "low" for frame in cached_frames)
     assert {row["fps_level"] for row in low_rows} == {"low"}
-    assert {row["fps_level"] for row in high_rows} == {"high"}
+    assert {row["fps_level"] for row in window_rows} == {"window"}
     assert all("observations" not in row["path"] for row in low_rows)
-    assert all(row["query_id"] == "q1" for row in high_rows)
-    assert high_rows[0]["virtual_time_sec"] == 5.0
-    assert high_rows[0]["source_video_id"] == "target"
-    assert high_rows[0]["source_time_sec"] == 101.0
+    assert all(row["query_id"] == "q2" for row in window_rows)
+    assert window_rows[0]["virtual_time_sec"] == 5.0
+    assert window_rows[0]["source_video_id"] == "target"
+    assert window_rows[0]["source_time_sec"] == 101.0
 
 
 def test_virtual_beat_index_uses_thumbnail_as_cold_keyframe_and_virtual_times(tmp_path: Path) -> None:
@@ -130,11 +132,13 @@ def test_virtual_beat_index_uses_thumbnail_as_cold_keyframe_and_virtual_times(tm
     assert result.cold_index.search_visual("blue", k=1)[0].beat_id == "bt00003"
     assert result.cold_index.beats[0].start_sec == 0.0
     assert result.cold_index.beats[0].frame_times[0] == 0.0
-    assert result.cold_index.beats[0].keyframe_path.endswith("_grid.jpg")
+    assert result.cold_index.beats[0].keyframe_path.endswith("_q0.jpg")
     assert Path(result.cold_index.beats[0].keyframe_path).exists()
     assert result.beat_index_path.exists()
     beat_rows = json.loads(result.beat_index_path.read_text(encoding="utf-8"))["beats"]
     assert beat_rows[2]["source_lineage"][0]["source_video_id"] == "target"
+    assert len(beat_rows[2]["thumbnail_grid_paths"]) == 4
+    assert all(Path(path).exists() for path in beat_rows[2]["thumbnail_grid_paths"])
 
 
 def test_workspace_overview_caps_initial_segment_thumbnails_at_40(tmp_path: Path) -> None:
@@ -173,3 +177,4 @@ def test_workspace_overview_caps_initial_segment_thumbnails_at_40(tmp_path: Path
     assert overview["segment_overviews"][0]["kind"] == "page"
     assert len(overview["segment_overviews"][0]["segment_ids"]) > 1
     assert Path(overview["segment_overviews"][0]["overview_thumbnail_grid_path"]).exists()
+    assert overview["available_tools"] == ["open_segment", "inspect_window"]

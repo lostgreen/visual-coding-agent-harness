@@ -7,8 +7,6 @@ import re
 from typing import Any, Mapping, Sequence
 
 from vcah.investigator import InvestigationEvidence, InvestigationReport, VirtualVideoInvestigator
-from vcah.index import ColdIndex
-from vcah.model import ModelClient
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace
 
@@ -17,14 +15,17 @@ from vcah.virtual_video import VirtualVideoWorkspace
 class InvestigationTask:
     query_id: str
     goal: str
-    time_range: tuple[float, float]
+    segment_id: str = ""
+    time_range: tuple[float, float] | None = None
     modality_hint: tuple[str, ...] = ()
     expected_evidence: str = ""
     priority: float = 0.0
 
     def __post_init__(self) -> None:
-        start, end = self.time_range
-        object.__setattr__(self, "time_range", (float(start), float(end)))
+        if self.time_range is not None:
+            start, end = self.time_range
+            object.__setattr__(self, "time_range", (float(start), float(end)))
+        object.__setattr__(self, "segment_id", str(self.segment_id or ""))
         object.__setattr__(self, "modality_hint", tuple(str(item) for item in self.modality_hint))
 
 
@@ -67,16 +68,17 @@ class HeuristicReasoner:
         overview = dict(kwargs.get("workspace_overview", {}) or {})
         rows = tuple(overview.get("segment_overviews", ()) or ())
         if rows:
-            start, end = tuple(rows[0].get("virtual_time_range", (0.0, 0.0)))  # type: ignore[union-attr]
+            segment_id = str(rows[0].get("segment_id", "") or "")
         else:
-            start, end = (0.0, 0.0)
+            segment_id = ""
         return ReasonerDecision(
             action="investigate",
             tasks=(
                 InvestigationTask(
                     query_id="q_round1_001",
                     goal=str(kwargs.get("question", "")),
-                    time_range=(start, end),
+                    segment_id=segment_id,
+                    time_range=None,
                     modality_hint=("visual", "ocr"),
                     expected_evidence=str(kwargs.get("question", "")),
                     priority=1.0,
@@ -94,14 +96,12 @@ class VirtualVideoMultiRoundDriver:
         max_rounds: int = 4,
         max_investigations: int = 20,
         max_tasks_per_round: int = 4,
-        model: ModelClient | None = None,
     ) -> None:
         self.reasoner = reasoner or HeuristicReasoner()
         self.investigator = investigator
         self.max_rounds = max(1, int(max_rounds))
         self.max_investigations = max(1, int(max_investigations))
         self.max_tasks_per_round = max(1, int(max_tasks_per_round))
-        self.model = model or ModelClient()
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         investigator = self.investigator or VirtualVideoInvestigator(workspace)
@@ -178,7 +178,8 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
     return InvestigationTask(
         query_id=str(value.get("query_id", "")),
         goal=str(value.get("goal", "")),
-        time_range=tuple(value.get("time_range", (0.0, 0.0))),  # type: ignore[arg-type]
+        segment_id=str(value.get("segment_id", "") or ""),
+        time_range=None if value.get("time_range") is None else tuple(value.get("time_range", (0.0, 0.0))),  # type: ignore[arg-type]
         modality_hint=tuple(value.get("modality_hint", ())),
         expected_evidence=str(value.get("expected_evidence", "")),
         priority=float(value.get("priority", 0.0) or 0.0),
@@ -194,32 +195,6 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         answer=str(value.get("answer", "")),
         citations=tuple(value.get("citations", ())),
     )
-
-
-def search_cold_candidates(workspace: VirtualVideoWorkspace, model: ModelClient, query: str, *, k: int = 20) -> tuple[dict[str, Any], ...]:
-    cold_dir = workspace.cold_index_dir
-    if not (cold_dir / "index.json").exists():
-        return ()
-    cold = ColdIndex.load(cold_dir, model=model)
-    hits = [*cold.search_text(query)[:k], *cold.search_visual(query, k=k)]
-    rows = []
-    seen: set[str] = set()
-    for hit in hits:
-        if hit.beat_id in seen:
-            continue
-        seen.add(hit.beat_id)
-        beat = cold.get_beat(hit.beat_id)
-        rows.append(
-            {
-                "beat_id": beat.beat_id,
-                "virtual_time_range": [beat.start_sec, beat.end_sec],
-                "thumbnail_grid_path": beat.keyframe_path,
-                "asr_excerpt": beat.asr_text[:240],
-                "modality": hit.modality,
-                "score": hit.score,
-            }
-        )
-    return tuple(rows)
 
 
 def _evidence_digest(evidence: Sequence[InvestigationEvidence]) -> tuple[dict[str, Any], ...]:

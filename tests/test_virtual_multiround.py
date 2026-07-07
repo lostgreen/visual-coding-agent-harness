@@ -61,7 +61,8 @@ class ScriptedReasoner:
                     InvestigationTask(
                         query_id=f"q{i}",
                         goal="Read the number on the jersey.",
-                        time_range=(0.0, 2.0),
+                        segment_id="seg_target",
+                        time_range=None,
                         modality_hint=("visual", "ocr"),
                         expected_evidence="number written on jersey",
                     )
@@ -86,29 +87,60 @@ def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     )
     workspace = VirtualVideoWorkspace.create(tmp_path / "case-1", manifest=manifest, case=case)
     frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_sampler)
+    workspace.write_asr_virtual_cues(({"start": 0.5, "end": 1.5, "text": "number written on jersey", "segment_id": "seg_target"},))
     build_virtual_beat_index(workspace, frames, model=TinyModel(), beat_sec=3.0)
     return VirtualVideoWorkspace.load(workspace.root_dir)
 
 
-def test_investigator_auto_escalates_highfps_and_reports_lineage(tmp_path: Path) -> None:
+def test_investigator_exposes_only_open_segment_and_inspect_window_tools(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
+
+    assert investigator.tool_names == ("open_segment", "inspect_window")
+    assert not hasattr(investigator, "open_beat_page")
+    assert not hasattr(investigator, "inspect_window_auto")
+
+
+def test_open_segment_returns_navigation_packet_and_inspect_window_returns_frames_asr_lineage(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
+
+    packet = investigator.open_segment("seg_target")
+    window = investigator.inspect_window(0.0, 2.0, fps=2.0, max_frames=64, query_id="q1")
+
+    assert packet["segment_id"] == "seg_target"
+    assert packet["virtual_time_range"] == [0.0, 5.0]
+    assert packet["asr_cues"][0]["text"] == "number written on jersey"
+    assert packet["beats"][0]["thumbnail_grid_paths"]
+    assert window["virtual_time_range"] == [0.0, 2.0]
+    assert window["sampling"]["fps"] == 2.0
+    assert window["sampling"]["actual_frames"] > 0
+    assert window["frames"][0]["source_video_id"] == "target"
+    assert window["asr_cues"][0]["text"] == "number written on jersey"
+    assert window["source_lineage"][0]["source_time_range"] == [10.0, 12.0]
+    assert (workspace.root_dir / "observations" / "window_frame_manifest.jsonl").exists()
+
+
+def test_investigator_run_batch_uses_segment_task_and_reports_lineage(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
     task = InvestigationTask(
         query_id="q1",
         goal="Read the number on the jersey.",
-        time_range=(0.0, 2.0),
+        segment_id="seg_target",
+        time_range=None,
         modality_hint=("visual", "ocr"),
         expected_evidence="number written on jersey",
     )
 
-    report = investigator.inspect_window_auto(task)
+    report = investigator.run_batch((task,))[0]
 
     assert report.status == "satisfied"
     assert report.evidence
     assert report.evidence[0].evidence_id == "ev_q1_001"
-    assert report.evidence[0].sampling["level"] == "highfps"
+    assert report.evidence[0].sampling["fps"] == 2.0
     assert report.evidence[0].source_lineage[0]["source_video_id"] == "target"
-    assert (workspace.root_dir / "observations" / "highfps_frame_manifest.jsonl").exists()
+    assert (workspace.root_dir / "observations" / "window_frame_manifest.jsonl").exists()
 
 
 def test_multiround_driver_caps_tasks_and_requires_cited_visual_evidence(tmp_path: Path) -> None:
@@ -124,7 +156,7 @@ def test_multiround_driver_caps_tasks_and_requires_cited_visual_evidence(tmp_pat
     assert result.accepted_investigations == 4
     assert result.rounds == 2
     assert result.citations == ("ev_q1_001",)
-    assert result.evidence[0].source_lineage[0]["source_time_range"] == (10.0, 12.0)
+    assert result.evidence[0].source_lineage[0]["source_time_range"] == [10.0, 15.0]
 
 
 def test_reasoner_initial_context_uses_segment_overview_not_cold_candidates(tmp_path: Path) -> None:
@@ -143,3 +175,4 @@ def test_reasoner_initial_context_uses_segment_overview_not_cold_candidates(tmp_
     assert overview["thumbnail_count"] == 1
     assert overview["segment_overviews"][0]["segment_id"] == "seg_target"
     assert "target" not in overview["segment_overviews"][0]
+    assert first_call["available_tools"] == ("open_segment", "inspect_window")

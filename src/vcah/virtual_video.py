@@ -315,39 +315,95 @@ def materialize_highfps_window(
     max_frames: int = 32,
     sampler: FrameSampler | None = None,
 ) -> tuple[VirtualFrameRef, ...]:
+    return materialize_window_frames(
+        workspace,
+        start_sec,
+        end_sec,
+        query_id=query_id,
+        fps=fps,
+        max_frames=max_frames,
+        sampler=sampler,
+    )
+
+
+def materialize_window_frames(
+    workspace: VirtualVideoWorkspace,
+    start_sec: float,
+    end_sec: float,
+    *,
+    query_id: str,
+    fps: float = 0.5,
+    max_frames: int = 64,
+    sampler: FrameSampler | None = None,
+) -> tuple[VirtualFrameRef, ...]:
+    requested_fps = float(fps)
+    if requested_fps not in {0.5, 1.0, 2.0}:
+        raise ValueError("inspect_window fps must be one of 0.5, 1.0, or 2.0")
+    cap = max(1, min(64, int(max_frames)))
+    cached = tuple(
+        frame
+        for frame in workspace.read_frame_manifest()
+        if float(start_sec) <= frame.virtual_time_sec <= float(end_sec) and frame.fps_level == "low"
+    )
+    cache_fps = cached[0].sampling_fps if cached else 0.0
+    if cached and abs(cache_fps - requested_fps) < 1e-6:
+        return _select_frame_refs(cached, cap)
+
     sampler = sampler or sample_frames
     observations = workspace.root_dir / "observations"
     rows: list[VirtualFrameRef] = []
-    frame_index = 1
-    for window in virtual_to_source_windows(workspace.manifest, start_sec, end_sec):
-        duration = max(0.0, window.virtual_end_sec - window.virtual_start_sec)
-        count = min(max(1, int(duration * float(fps))), max(1, int(max_frames)))
-        step = 1.0 / max(0.001, float(fps))
-        for local_index in range(count):
-            virtual_time = round(window.virtual_start_sec + local_index * step, 3)
-            if virtual_time >= window.virtual_end_sec:
-                virtual_time = round(window.virtual_end_sec - 0.001, 3)
-            source_time = round(window.source_start_sec + (virtual_time - window.virtual_start_sec), 3)
-            out_dir = observations / str(query_id) / window.segment_id
-            frame = tuple(sampler(window.source_path, source_time, source_time, 1, out_dir))[0]
-            rows.append(
-                VirtualFrameRef(
-                    frame_id=f"hi_{query_id}_{frame_index:06d}",
-                    path=str(frame.path),
-                    virtual_time_sec=virtual_time,
-                    segment_id=window.segment_id,
-                    source_video_id=window.source_video_id,
-                    source_path=window.source_path,
-                    source_time_sec=source_time,
-                    fps_level="high",
-                    query_id=str(query_id),
-                    sampling_fps=float(fps),
-                )
+    for frame_index, virtual_time in enumerate(_uniform_times(float(start_sec), float(end_sec), requested_fps, cap), start=1):
+        window = _source_window_for_time(workspace.manifest, virtual_time)
+        if window is None:
+            continue
+        source_time = round(window.source_start_sec + (virtual_time - window.virtual_start_sec), 3)
+        out_dir = observations / str(query_id) / window.segment_id
+        frame = tuple(sampler(window.source_path, source_time, source_time, 1, out_dir))[0]
+        rows.append(
+            VirtualFrameRef(
+                frame_id=f"win_{query_id}_{frame_index:06d}",
+                path=str(frame.path),
+                virtual_time_sec=virtual_time,
+                segment_id=window.segment_id,
+                source_video_id=window.source_video_id,
+                source_path=window.source_path,
+                source_time_sec=source_time,
+                fps_level="window",
+                query_id=str(query_id),
+                sampling_fps=requested_fps,
             )
-            frame_index += 1
-    manifest_path = observations / "highfps_frame_manifest.jsonl"
+        )
+    manifest_path = observations / "window_frame_manifest.jsonl"
     _append_jsonl(manifest_path, (asdict(row) for row in rows))
     return tuple(rows)
+
+
+def _uniform_times(start_sec: float, end_sec: float, fps: float, max_frames: int) -> tuple[float, ...]:
+    duration = max(0.0, end_sec - start_sec)
+    count = min(max(1, int(duration * fps)), max(1, int(max_frames)))
+    step = 1.0 / max(0.001, fps)
+    times = []
+    for index in range(count):
+        time_sec = round(start_sec + index * step, 3)
+        if time_sec >= end_sec:
+            time_sec = round(end_sec - 0.001, 3)
+        times.append(time_sec)
+    return tuple(times)
+
+
+def _source_window_for_time(manifest: VirtualVideoManifest, virtual_time_sec: float) -> SourceWindow | None:
+    windows = virtual_to_source_windows(manifest, virtual_time_sec, virtual_time_sec + 0.001)
+    return windows[0] if windows else None
+
+
+def _select_frame_refs(frames: tuple[VirtualFrameRef, ...], max_frames: int) -> tuple[VirtualFrameRef, ...]:
+    limit = max(1, int(max_frames))
+    if len(frames) <= limit:
+        return frames
+    if limit == 1:
+        return (frames[len(frames) // 2],)
+    indexes = [round(i * (len(frames) - 1) / (limit - 1)) for i in range(limit)]
+    return tuple(frames[int(index)] for index in indexes)
 
 
 def _segment(value: VirtualVideoSegment | Mapping[str, Any]) -> VirtualVideoSegment:
