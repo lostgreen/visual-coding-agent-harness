@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from vcah.types import Frame
-from vcah.virtual_index import build_virtual_beat_index
+from vcah.virtual_index import build_virtual_beat_index, build_workspace_overview
 from vcah.virtual_video import (
     VirtualVideoCase,
     VirtualVideoManifest,
@@ -135,3 +135,41 @@ def test_virtual_beat_index_uses_thumbnail_as_cold_keyframe_and_virtual_times(tm
     assert result.beat_index_path.exists()
     beat_rows = json.loads(result.beat_index_path.read_text(encoding="utf-8"))["beats"]
     assert beat_rows[2]["source_lineage"][0]["source_video_id"] == "target"
+
+
+def test_workspace_overview_caps_initial_segment_thumbnails_at_40(tmp_path: Path) -> None:
+    segments = []
+    virtual_start = 0.0
+    for index in range(45):
+        segments.append(
+            VirtualVideoSegment(
+                segment_id=f"seg_{index:04d}",
+                source_video_id=f"vid_{index:04d}",
+                source_path=f"video_{index:04d}.mp4",
+                source_start_sec=0.0,
+                source_end_sec=2.0,
+                virtual_start_sec=virtual_start,
+                virtual_end_sec=virtual_start + 2.0,
+            )
+        )
+        virtual_start += 2.0
+    manifest = VirtualVideoManifest(workspace_id="many", segments=tuple(segments))
+    case = VirtualVideoCase(
+        case_id="many",
+        question="Which segment contains the relevant visual detail?",
+        options={"A": "one", "B": "two"},
+        gold="A",
+        target_segment_id="seg_0000",
+        target_virtual_interval=(0.0, 1.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "many", manifest=manifest, case=case)
+    frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_fake_sampler)
+
+    overview = build_workspace_overview(workspace, frames, thumbnail_budget=40)
+
+    assert overview["workspace_duration_sec"] == 90.0
+    assert len(overview["segment_overviews"]) <= 40
+    assert overview["thumbnail_count"] <= 40
+    assert overview["segment_overviews"][0]["kind"] == "page"
+    assert len(overview["segment_overviews"][0]["segment_ids"]) > 1
+    assert Path(overview["segment_overviews"][0]["overview_thumbnail_grid_path"]).exists()

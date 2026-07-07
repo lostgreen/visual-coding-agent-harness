@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 from vcah.investigator import InvestigationEvidence, InvestigationReport, VirtualVideoInvestigator
 from vcah.index import ColdIndex
 from vcah.model import ModelClient
+from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace
 
 
@@ -54,23 +55,30 @@ class MultiRoundResult:
 
 class HeuristicReasoner:
     def decide(self, **kwargs: Any) -> ReasonerDecision:
-        workspace: VirtualVideoWorkspace = kwargs["workspace"]
         remaining = int(kwargs.get("remaining_budget", 0))
         evidence = tuple(kwargs.get("evidence", ()) or ())
+        options = dict(kwargs.get("options", {}) or {})
         if evidence:
-            return ReasonerDecision(action="answer", answer=str(workspace.case.gold), citations=(evidence[0].evidence_id,))
+            first_key = next(iter(options.keys()), "")
+            first_answer = f"{first_key}. {options[first_key]}" if first_key else ""
+            return ReasonerDecision(action="answer", answer=first_answer, citations=(evidence[0].evidence_id,))
         if remaining <= 0:
             return ReasonerDecision(action="answer", answer="", citations=())
-        start, end = workspace.case.target_virtual_interval
+        overview = dict(kwargs.get("workspace_overview", {}) or {})
+        rows = tuple(overview.get("segment_overviews", ()) or ())
+        if rows:
+            start, end = tuple(rows[0].get("virtual_time_range", (0.0, 0.0)))  # type: ignore[union-attr]
+        else:
+            start, end = (0.0, 0.0)
         return ReasonerDecision(
             action="investigate",
             tasks=(
                 InvestigationTask(
                     query_id="q_round1_001",
-                    goal=workspace.case.question,
+                    goal=str(kwargs.get("question", "")),
                     time_range=(start, end),
                     modality_hint=("visual", "ocr"),
-                    expected_evidence=workspace.case.question,
+                    expected_evidence=str(kwargs.get("question", "")),
                     priority=1.0,
                 ),
             ),
@@ -97,6 +105,7 @@ class VirtualVideoMultiRoundDriver:
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         investigator = self.investigator or VirtualVideoInvestigator(workspace)
+        workspace_overview = build_workspace_overview(workspace, thumbnail_budget=40)
         evidence: list[InvestigationEvidence] = []
         reports: list[InvestigationReport] = []
         trace: list[Mapping[str, Any]] = []
@@ -110,10 +119,13 @@ class VirtualVideoMultiRoundDriver:
             remaining = self.max_investigations - accepted
             decision = _decision(
                 self.reasoner.decide(
-                    workspace=workspace,
                     question=workspace.case.question,
                     options=dict(workspace.case.options),
-                    cold_candidates=_cold_candidates(workspace, self.model),
+                    workspace_id=workspace.workspace_id,
+                    workspace_duration_sec=workspace.manifest.duration_sec,
+                    segment_overviews=tuple(workspace_overview["segment_overviews"]),
+                    workspace_overview=workspace_overview,
+                    available_tools=tuple(workspace_overview["available_tools"]),
                     evidence=evidence,
                     evidence_digest=_evidence_digest(evidence),
                     remaining_budget=remaining,
@@ -184,12 +196,12 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
     )
 
 
-def _cold_candidates(workspace: VirtualVideoWorkspace, model: ModelClient) -> tuple[dict[str, Any], ...]:
+def search_cold_candidates(workspace: VirtualVideoWorkspace, model: ModelClient, query: str, *, k: int = 20) -> tuple[dict[str, Any], ...]:
     cold_dir = workspace.cold_index_dir
     if not (cold_dir / "index.json").exists():
         return ()
     cold = ColdIndex.load(cold_dir, model=model)
-    hits = [*cold.search_text(workspace.case.question)[:20], *cold.search_visual(workspace.case.question, k=20)]
+    hits = [*cold.search_text(query)[:k], *cold.search_visual(query, k=k)]
     rows = []
     seen: set[str] = set()
     for hit in hits:

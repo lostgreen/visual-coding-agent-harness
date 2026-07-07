@@ -79,6 +79,38 @@ class VirtualVideoInvestigator:
         wanted = {str(beat_id) for beat_id in beat_ids}
         return tuple(str(beat["thumbnail_grid_path"]) for beat in beats if str(beat.get("beat_id")) in wanted)
 
+    def open_segment(self, segment_id: str) -> Mapping[str, Any]:
+        segment = self.workspace.manifest.segment(str(segment_id))
+        beats = _beats_for_segment(self.workspace, segment.segment_id)
+        return {
+            "segment_id": segment.segment_id,
+            "virtual_time_range": [segment.virtual_start_sec, segment.virtual_end_sec],
+            "duration_sec": segment.duration_sec,
+            "beat_count": len(beats),
+            "beat_ids": [str(beat.get("beat_id")) for beat in beats],
+        }
+
+    def open_beat_page(self, segment_id: str, *, page: int = 1, page_size: int = 12) -> Mapping[str, Any]:
+        beats = _beats_for_segment(self.workspace, str(segment_id))
+        size = max(1, int(page_size))
+        page_number = max(1, int(page))
+        start = (page_number - 1) * size
+        selected = beats[start : start + size]
+        return {
+            "segment_id": str(segment_id),
+            "page": page_number,
+            "page_size": size,
+            "total_beats": len(beats),
+            "beats": [
+                {
+                    "beat_id": str(beat.get("beat_id")),
+                    "virtual_time_range": list(beat.get("virtual_time_range", ())),
+                    "thumbnail_grid_path": str(beat.get("thumbnail_grid_path", "")),
+                }
+                for beat in selected
+            ],
+        }
+
     def inspect_window_lowfps(self, start_sec: float, end_sec: float, *, max_frames: int = 12) -> tuple[VirtualFrameRef, ...]:
         frames = tuple(
             frame
@@ -137,6 +169,18 @@ class VirtualVideoInvestigator:
 def _task_time_range(task: Any) -> tuple[float, float]:
     start, end = getattr(task, "time_range")
     return float(start), float(end)
+
+
+def _beats_for_segment(workspace: VirtualVideoWorkspace, segment_id: str) -> tuple[Mapping[str, Any], ...]:
+    path = workspace.root_dir / "beat_index.json"
+    if not path.exists():
+        return ()
+    rows = []
+    for beat in load_virtual_beats(path):
+        lineage = tuple(beat.get("source_lineage", ()) or ())
+        if any(str(item.get("segment_id")) == segment_id for item in lineage):
+            rows.append(beat)
+    return tuple(rows)
 
 
 def _needs_highfps(task: Any) -> bool:

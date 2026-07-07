@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import math
 from pathlib import Path
 from statistics import median
 from typing import Any, Mapping, Sequence
@@ -132,6 +133,82 @@ def build_beat_thumbnail_grid(frame_refs: Sequence[VirtualFrameRef], out_path: P
     return out_path
 
 
+def build_segment_overview_grid(frame_refs: Sequence[VirtualFrameRef], out_path: Path, *, max_frames: int = 16) -> Path:
+    selected = _select_grid_frames(tuple(frame_refs), max_frames=max_frames)
+    cell_size = (160, 90)
+    canvas = Image.new("RGB", (cell_size[0] * 4, cell_size[1] * 4), color=(18, 18, 18))
+    for idx in range(16):
+        if idx < len(selected) and Path(selected[idx].path).exists():
+            with Image.open(selected[idx].path) as image:
+                image = image.convert("RGB")
+                image.thumbnail(cell_size)
+                cell = Image.new("RGB", cell_size, color=(12, 12, 12))
+                cell.paste(image, ((cell_size[0] - image.width) // 2, (cell_size[1] - image.height) // 2))
+        else:
+            cell = Image.new("RGB", cell_size, color=(42, 42, 42))
+        canvas.paste(cell, ((idx % 4) * cell_size[0], (idx // 4) * cell_size[1]))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(out_path, format="JPEG", quality=88)
+    return out_path
+
+
+def build_workspace_overview(
+    workspace: VirtualVideoWorkspace,
+    frame_refs: Sequence[VirtualFrameRef] | None = None,
+    *,
+    thumbnail_budget: int = 40,
+) -> dict[str, Any]:
+    budget = max(1, int(thumbnail_budget))
+    frames = tuple(sorted(frame_refs if frame_refs is not None else workspace.read_frame_manifest(), key=lambda frame: frame.virtual_time_sec))
+    segments = tuple(workspace.manifest.segments)
+    if len(segments) <= budget:
+        groups = tuple((segment,) for segment in segments)
+    else:
+        group_size = max(1, math.ceil(len(segments) / budget))
+        groups = tuple(tuple(segments[index : index + group_size]) for index in range(0, len(segments), group_size))
+
+    asr_cues = workspace.read_asr_virtual_cues()
+    overviews: list[dict[str, Any]] = []
+    for index, group in enumerate(groups, start=1):
+        start = min(float(segment.virtual_start_sec) for segment in group)
+        end = max(float(segment.virtual_end_sec) for segment in group)
+        kind = "segment" if len(group) == 1 else "page"
+        overview_id = group[0].segment_id if kind == "segment" else f"page_{index:04d}"
+        group_frames = tuple(frame for frame in frames if start <= frame.virtual_time_sec < end)
+        thumb = build_segment_overview_grid(
+            group_frames,
+            workspace.root_dir / "segment_overviews" / f"{overview_id}_overview.jpg",
+        )
+        row: dict[str, Any] = {
+            "kind": kind,
+            "overview_id": overview_id,
+            "virtual_time_range": [round(start, 3), round(end, 3)],
+            "duration_sec": round(max(0.0, end - start), 3),
+            "overview_thumbnail_grid_path": str(thumb),
+            "asr_short_summary": _asr_short_summary(asr_cues, start, end),
+            "source_hint": "hidden_or_generic",
+            "segment_ids": [segment.segment_id for segment in group],
+        }
+        if kind == "segment":
+            row["segment_id"] = group[0].segment_id
+        overviews.append(row)
+
+    return {
+        "workspace_id": workspace.workspace_id,
+        "workspace_duration_sec": workspace.manifest.duration_sec,
+        "thumbnail_budget": budget,
+        "thumbnail_count": len(overviews),
+        "segment_overviews": overviews,
+        "available_tools": [
+            "open_segment",
+            "open_beat_page",
+            "inspect_window_auto",
+            "search_asr_optional",
+            "search_visual_optional",
+        ],
+    }
+
+
 def load_virtual_beats(path: Path) -> tuple[dict[str, Any], ...]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     return tuple(dict(item) for item in payload.get("beats", ()))
@@ -203,6 +280,11 @@ def _cue_overlaps(cue: Mapping[str, Any], start_sec: float, end_sec: float) -> b
     start = float(cue.get("start_sec", cue.get("start", 0.0)) or 0.0)
     end = float(cue.get("end_sec", cue.get("end", start)) or start)
     return min(end, end_sec) > max(start, start_sec)
+
+
+def _asr_short_summary(cues: Sequence[Mapping[str, Any]], start_sec: float, end_sec: float, *, limit: int = 240) -> str:
+    text = " ".join(str(cue.get("text", "")).strip() for cue in cues if _cue_overlaps(cue, start_sec, end_sec)).strip()
+    return text[:limit]
 
 
 def _select_grid_frames(frames: tuple[VirtualFrameRef, ...], *, max_frames: int) -> tuple[VirtualFrameRef, ...]:

@@ -49,9 +49,11 @@ class TinyModel:
 class ScriptedReasoner:
     def __init__(self) -> None:
         self.calls = 0
+        self.kwargs: list[dict[str, object]] = []
 
     def decide(self, **kwargs: object) -> ReasonerDecision:
         self.calls += 1
+        self.kwargs.append(dict(kwargs))
         if self.calls == 1:
             return ReasonerDecision(
                 action="investigate",
@@ -123,3 +125,21 @@ def test_multiround_driver_caps_tasks_and_requires_cited_visual_evidence(tmp_pat
     assert result.rounds == 2
     assert result.citations == ("ev_q1_001",)
     assert result.evidence[0].source_lineage[0]["source_time_range"] == (10.0, 12.0)
+
+
+def test_reasoner_initial_context_uses_segment_overview_not_cold_candidates(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    reasoner = ScriptedReasoner()
+    investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
+    driver = VirtualVideoMultiRoundDriver(reasoner=reasoner, investigator=investigator, max_rounds=1, max_investigations=4)
+
+    driver.run(workspace)
+
+    first_call = reasoner.kwargs[0]
+    assert "workspace_overview" in first_call
+    assert "cold_candidates" not in first_call
+    overview = first_call["workspace_overview"]
+    assert isinstance(overview, dict)
+    assert overview["thumbnail_count"] == 1
+    assert overview["segment_overviews"][0]["segment_id"] == "seg_target"
+    assert "target" not in overview["segment_overviews"][0]
