@@ -1,0 +1,398 @@
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+import html
+import json
+from pathlib import Path
+import re
+from typing import Any, Callable, Mapping, Sequence
+
+from vcah.types import Frame
+from vcah.video import sample_frames
+
+
+FrameSampler = Callable[[str, float, float, int, Path], Sequence[Frame]]
+SRT_TIME_RE = re.compile(
+    r"(?P<start>\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2},\d{3})"
+)
+HTML_RE = re.compile(r"<[^>]+>")
+
+
+@dataclass(frozen=True)
+class VirtualVideoSegment:
+    segment_id: str
+    source_video_id: str
+    source_path: str
+    source_start_sec: float
+    source_end_sec: float
+    virtual_start_sec: float
+    virtual_end_sec: float
+    role: str = "content"
+
+    @property
+    def duration_sec(self) -> float:
+        return max(0.0, float(self.virtual_end_sec) - float(self.virtual_start_sec))
+
+
+@dataclass(frozen=True)
+class VirtualVideoManifest:
+    workspace_id: str
+    segments: tuple[VirtualVideoSegment, ...]
+    duration_sec: float = 0.0
+
+    def __post_init__(self) -> None:
+        segments = tuple(_segment(item) for item in self.segments)
+        object.__setattr__(self, "segments", segments)
+        duration = float(self.duration_sec or 0.0)
+        if duration <= 0.0 and segments:
+            duration = max(float(segment.virtual_end_sec) for segment in segments)
+        object.__setattr__(self, "duration_sec", round(duration, 3))
+
+    def segment(self, segment_id: str) -> VirtualVideoSegment:
+        for segment in self.segments:
+            if segment.segment_id == segment_id:
+                return segment
+        raise ValueError(f"Unknown virtual segment: {segment_id}")
+
+
+@dataclass(frozen=True)
+class VirtualVideoCase:
+    case_id: str
+    question: str
+    options: Mapping[str, str]
+    gold: str
+    target_segment_id: str
+    target_virtual_interval: tuple[float, float]
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "options", {str(k): str(v) for k, v in dict(self.options).items()})
+        start, end = self.target_virtual_interval
+        object.__setattr__(self, "target_virtual_interval", (float(start), float(end)))
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+@dataclass(frozen=True)
+class VirtualFrameRef:
+    frame_id: str
+    path: str
+    virtual_time_sec: float
+    segment_id: str
+    source_video_id: str
+    source_path: str
+    source_time_sec: float
+    fps_level: str
+    query_id: str = ""
+    sampling_fps: float = 0.0
+
+
+@dataclass(frozen=True)
+class SourceWindow:
+    segment_id: str
+    source_video_id: str
+    source_path: str
+    source_start_sec: float
+    source_end_sec: float
+    virtual_start_sec: float
+    virtual_end_sec: float
+
+
+@dataclass(frozen=True)
+class VirtualVideoWorkspace:
+    workspace_id: str
+    root_dir: Path
+    manifest: VirtualVideoManifest
+    case: VirtualVideoCase
+    frame_manifest: Path
+    asr_virtual_cues: Path
+    cold_index_dir: Path
+
+    @classmethod
+    def create(
+        cls,
+        root_dir: Path,
+        *,
+        manifest: VirtualVideoManifest,
+        case: VirtualVideoCase,
+    ) -> "VirtualVideoWorkspace":
+        root = Path(root_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        workspace = cls(
+            workspace_id=manifest.workspace_id,
+            root_dir=root,
+            manifest=manifest,
+            case=case,
+            frame_manifest=root / "frame_manifest.jsonl",
+            asr_virtual_cues=root / "asr_virtual_cues.json",
+            cold_index_dir=root / "cold_index",
+        )
+        workspace.save()
+        if not workspace.frame_manifest.exists():
+            workspace.frame_manifest.write_text("", encoding="utf-8")
+        if not workspace.asr_virtual_cues.exists():
+            workspace.asr_virtual_cues.write_text("[]\n", encoding="utf-8")
+        return workspace
+
+    @classmethod
+    def load(cls, root_dir: Path) -> "VirtualVideoWorkspace":
+        root = Path(root_dir)
+        manifest_payload = json.loads((root / "virtual_timeline.json").read_text(encoding="utf-8"))
+        case_payload = json.loads((root / "case.json").read_text(encoding="utf-8"))
+        manifest = VirtualVideoManifest(
+            workspace_id=str(manifest_payload["workspace_id"]),
+            duration_sec=float(manifest_payload.get("duration_sec", 0.0)),
+            segments=tuple(VirtualVideoSegment(**item) for item in manifest_payload.get("segments", ())),
+        )
+        case = VirtualVideoCase(
+            case_id=str(case_payload["case_id"]),
+            question=str(case_payload["question"]),
+            options=dict(case_payload.get("options", {})),
+            gold=str(case_payload.get("gold", "")),
+            target_segment_id=str(case_payload.get("target_segment_id", "")),
+            target_virtual_interval=tuple(case_payload.get("target_virtual_interval", (0.0, 0.0))),  # type: ignore[arg-type]
+            metadata=dict(case_payload.get("metadata", {})),
+        )
+        return cls(
+            workspace_id=manifest.workspace_id,
+            root_dir=root,
+            manifest=manifest,
+            case=case,
+            frame_manifest=root / "frame_manifest.jsonl",
+            asr_virtual_cues=root / "asr_virtual_cues.json",
+            cold_index_dir=root / "cold_index",
+        )
+
+    def save(self) -> None:
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        (self.root_dir / "virtual_timeline.json").write_text(
+            json.dumps(_manifest_payload(self.manifest), ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        (self.root_dir / "case.json").write_text(
+            json.dumps(_case_payload(self.case), ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def write_asr_virtual_cues(self, cues: Sequence[Mapping[str, Any]]) -> None:
+        self.asr_virtual_cues.write_text(
+            json.dumps([dict(item) for item in cues], ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def read_asr_virtual_cues(self) -> tuple[dict[str, Any], ...]:
+        if not self.asr_virtual_cues.exists():
+            return ()
+        return tuple(dict(item) for item in json.loads(self.asr_virtual_cues.read_text(encoding="utf-8") or "[]"))
+
+    def read_frame_manifest(self) -> tuple[VirtualFrameRef, ...]:
+        if not self.frame_manifest.exists():
+            return ()
+        rows = [json.loads(line) for line in self.frame_manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return tuple(VirtualFrameRef(**row) for row in rows)
+
+
+def virtual_to_source_windows(manifest: VirtualVideoManifest, start_sec: float, end_sec: float) -> tuple[SourceWindow, ...]:
+    start = float(start_sec)
+    end = float(end_sec)
+    windows: list[SourceWindow] = []
+    for segment in manifest.segments:
+        overlap_start = max(start, float(segment.virtual_start_sec))
+        overlap_end = min(end, float(segment.virtual_end_sec))
+        if overlap_end <= overlap_start:
+            continue
+        source_start = float(segment.source_start_sec) + (overlap_start - float(segment.virtual_start_sec))
+        source_end = float(segment.source_start_sec) + (overlap_end - float(segment.virtual_start_sec))
+        windows.append(
+            SourceWindow(
+                segment_id=segment.segment_id,
+                source_video_id=segment.source_video_id,
+                source_path=segment.source_path,
+                source_start_sec=round(source_start, 3),
+                source_end_sec=round(source_end, 3),
+                virtual_start_sec=round(overlap_start, 3),
+                virtual_end_sec=round(overlap_end, 3),
+            )
+        )
+    return tuple(windows)
+
+
+def load_srt_as_virtual_cues(srt_path: Path, segment: VirtualVideoSegment) -> tuple[dict[str, Any], ...]:
+    if not Path(srt_path).exists():
+        return ()
+    cues: list[dict[str, Any]] = []
+    current_start: float | None = None
+    current_end: float | None = None
+    text_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_start, current_end, text_lines
+        if current_start is None or current_end is None:
+            text_lines = []
+            return
+        text = " ".join(_clean_srt_text(line) for line in text_lines if _clean_srt_text(line)).strip()
+        if text and current_end >= segment.source_start_sec and current_start <= segment.source_end_sec:
+            clipped_start = max(float(segment.source_start_sec), current_start)
+            clipped_end = min(float(segment.source_end_sec), current_end)
+            virtual_start = float(segment.virtual_start_sec) + (clipped_start - float(segment.source_start_sec))
+            virtual_end = float(segment.virtual_start_sec) + (clipped_end - float(segment.source_start_sec))
+            cues.append(
+                {
+                    "start": round(virtual_start, 3),
+                    "end": round(virtual_end, 3),
+                    "text": text,
+                    "segment_id": segment.segment_id,
+                    "source_video_id": segment.source_video_id,
+                    "source_start": round(clipped_start, 3),
+                    "source_end": round(clipped_end, 3),
+                }
+            )
+        current_start = None
+        current_end = None
+        text_lines = []
+
+    for raw in Path(srt_path).read_text(errors="replace").splitlines():
+        line = raw.strip()
+        if not line:
+            flush()
+            continue
+        if line.isdigit():
+            continue
+        match = SRT_TIME_RE.match(line)
+        if match:
+            flush()
+            current_start = _parse_srt_time(match.group("start"))
+            current_end = _parse_srt_time(match.group("end"))
+            continue
+        text_lines.append(line)
+    flush()
+    return tuple(cues)
+
+
+def materialize_lowfps_frame_cache(
+    workspace: VirtualVideoWorkspace,
+    *,
+    fps: float = 0.5,
+    sampler: FrameSampler | None = None,
+) -> tuple[VirtualFrameRef, ...]:
+    sampler = sampler or sample_frames
+    step = 1.0 / max(0.001, float(fps))
+    rows: list[VirtualFrameRef] = []
+    frame_index = 1
+    for segment in workspace.manifest.segments:
+        duration = max(0.0, float(segment.virtual_end_sec) - float(segment.virtual_start_sec))
+        count = max(1, int(duration * float(fps))) if duration > 0 else 0
+        for offset_index in range(count):
+            virtual_time = round(float(segment.virtual_start_sec) + offset_index * step, 3)
+            if virtual_time >= float(segment.virtual_end_sec):
+                virtual_time = round(float(segment.virtual_end_sec) - 0.001, 3)
+            source_time = round(float(segment.source_start_sec) + (virtual_time - float(segment.virtual_start_sec)), 3)
+            frame = tuple(sampler(segment.source_path, source_time, source_time, 1, workspace.root_dir / "frames" / "low" / segment.segment_id))[0]
+            rows.append(
+                VirtualFrameRef(
+                    frame_id=f"lo_{frame_index:06d}",
+                    path=str(frame.path),
+                    virtual_time_sec=virtual_time,
+                    segment_id=segment.segment_id,
+                    source_video_id=segment.source_video_id,
+                    source_path=segment.source_path,
+                    source_time_sec=source_time,
+                    fps_level="low",
+                    sampling_fps=float(fps),
+                )
+            )
+            frame_index += 1
+    _write_jsonl(workspace.frame_manifest, (asdict(row) for row in rows))
+    return tuple(rows)
+
+
+def materialize_highfps_window(
+    workspace: VirtualVideoWorkspace,
+    start_sec: float,
+    end_sec: float,
+    *,
+    query_id: str,
+    fps: float = 2.0,
+    max_frames: int = 32,
+    sampler: FrameSampler | None = None,
+) -> tuple[VirtualFrameRef, ...]:
+    sampler = sampler or sample_frames
+    observations = workspace.root_dir / "observations"
+    rows: list[VirtualFrameRef] = []
+    frame_index = 1
+    for window in virtual_to_source_windows(workspace.manifest, start_sec, end_sec):
+        duration = max(0.0, window.virtual_end_sec - window.virtual_start_sec)
+        count = min(max(1, int(duration * float(fps))), max(1, int(max_frames)))
+        step = 1.0 / max(0.001, float(fps))
+        for local_index in range(count):
+            virtual_time = round(window.virtual_start_sec + local_index * step, 3)
+            if virtual_time >= window.virtual_end_sec:
+                virtual_time = round(window.virtual_end_sec - 0.001, 3)
+            source_time = round(window.source_start_sec + (virtual_time - window.virtual_start_sec), 3)
+            out_dir = observations / str(query_id) / window.segment_id
+            frame = tuple(sampler(window.source_path, source_time, source_time, 1, out_dir))[0]
+            rows.append(
+                VirtualFrameRef(
+                    frame_id=f"hi_{query_id}_{frame_index:06d}",
+                    path=str(frame.path),
+                    virtual_time_sec=virtual_time,
+                    segment_id=window.segment_id,
+                    source_video_id=window.source_video_id,
+                    source_path=window.source_path,
+                    source_time_sec=source_time,
+                    fps_level="high",
+                    query_id=str(query_id),
+                    sampling_fps=float(fps),
+                )
+            )
+            frame_index += 1
+    manifest_path = observations / "highfps_frame_manifest.jsonl"
+    _append_jsonl(manifest_path, (asdict(row) for row in rows))
+    return tuple(rows)
+
+
+def _segment(value: VirtualVideoSegment | Mapping[str, Any]) -> VirtualVideoSegment:
+    if isinstance(value, VirtualVideoSegment):
+        return value
+    return VirtualVideoSegment(**dict(value))
+
+
+def _manifest_payload(manifest: VirtualVideoManifest) -> dict[str, Any]:
+    return {
+        "workspace_id": manifest.workspace_id,
+        "duration_sec": manifest.duration_sec,
+        "segments": [asdict(segment) for segment in manifest.segments],
+    }
+
+
+def _case_payload(case: VirtualVideoCase) -> dict[str, Any]:
+    return {
+        "case_id": case.case_id,
+        "question": case.question,
+        "options": dict(case.options),
+        "gold": case.gold,
+        "target_segment_id": case.target_segment_id,
+        "target_virtual_interval": list(case.target_virtual_interval),
+        "metadata": dict(case.metadata),
+    }
+
+
+def _write_jsonl(path: Path, rows: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows), encoding="utf-8")
+
+
+def _append_jsonl(path: Path, rows: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _parse_srt_time(value: str) -> float:
+    hours, minutes, seconds_ms = value.split(":")
+    seconds, millis = seconds_ms.split(",")
+    return int(hours) * 3600.0 + int(minutes) * 60.0 + int(seconds) + int(millis) / 1000.0
+
+
+def _clean_srt_text(value: str) -> str:
+    return " ".join(HTML_RE.sub(" ", html.unescape(str(value))).split())

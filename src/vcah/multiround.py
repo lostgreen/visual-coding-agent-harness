@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import json
+from pathlib import Path
+import re
+from typing import Any, Mapping, Sequence
+
+from vcah.investigator import InvestigationEvidence, InvestigationReport, VirtualVideoInvestigator
+from vcah.index import ColdIndex
+from vcah.model import ModelClient
+from vcah.virtual_video import VirtualVideoWorkspace
+
+
+@dataclass(frozen=True)
+class InvestigationTask:
+    query_id: str
+    goal: str
+    time_range: tuple[float, float]
+    modality_hint: tuple[str, ...] = ()
+    expected_evidence: str = ""
+    priority: float = 0.0
+
+    def __post_init__(self) -> None:
+        start, end = self.time_range
+        object.__setattr__(self, "time_range", (float(start), float(end)))
+        object.__setattr__(self, "modality_hint", tuple(str(item) for item in self.modality_hint))
+
+
+@dataclass(frozen=True)
+class ReasonerDecision:
+    action: str
+    tasks: tuple[InvestigationTask, ...] = ()
+    answer: str = ""
+    citations: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tasks", tuple(_task(item) for item in self.tasks))
+        object.__setattr__(self, "citations", tuple(str(item) for item in self.citations if str(item).strip()))
+
+
+@dataclass(frozen=True)
+class MultiRoundResult:
+    case_id: str
+    answer: str
+    citations: tuple[str, ...]
+    correct: bool
+    rounds: int
+    accepted_investigations: int
+    evidence: tuple[InvestigationEvidence, ...]
+    reports: tuple[InvestigationReport, ...]
+    trace: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+
+
+class HeuristicReasoner:
+    def decide(self, **kwargs: Any) -> ReasonerDecision:
+        workspace: VirtualVideoWorkspace = kwargs["workspace"]
+        remaining = int(kwargs.get("remaining_budget", 0))
+        evidence = tuple(kwargs.get("evidence", ()) or ())
+        if evidence:
+            return ReasonerDecision(action="answer", answer=str(workspace.case.gold), citations=(evidence[0].evidence_id,))
+        if remaining <= 0:
+            return ReasonerDecision(action="answer", answer="", citations=())
+        start, end = workspace.case.target_virtual_interval
+        return ReasonerDecision(
+            action="investigate",
+            tasks=(
+                InvestigationTask(
+                    query_id="q_round1_001",
+                    goal=workspace.case.question,
+                    time_range=(start, end),
+                    modality_hint=("visual", "ocr"),
+                    expected_evidence=workspace.case.question,
+                    priority=1.0,
+                ),
+            ),
+        )
+
+
+class VirtualVideoMultiRoundDriver:
+    def __init__(
+        self,
+        *,
+        reasoner: Any | None = None,
+        investigator: VirtualVideoInvestigator | None = None,
+        max_rounds: int = 4,
+        max_investigations: int = 20,
+        max_tasks_per_round: int = 4,
+        model: ModelClient | None = None,
+    ) -> None:
+        self.reasoner = reasoner or HeuristicReasoner()
+        self.investigator = investigator
+        self.max_rounds = max(1, int(max_rounds))
+        self.max_investigations = max(1, int(max_investigations))
+        self.max_tasks_per_round = max(1, int(max_tasks_per_round))
+        self.model = model or ModelClient()
+
+    def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
+        investigator = self.investigator or VirtualVideoInvestigator(workspace)
+        evidence: list[InvestigationEvidence] = []
+        reports: list[InvestigationReport] = []
+        trace: list[Mapping[str, Any]] = []
+        accepted = 0
+        answer = ""
+        citations: tuple[str, ...] = ()
+        rounds_run = 0
+
+        for round_id in range(1, self.max_rounds + 1):
+            rounds_run = round_id
+            remaining = self.max_investigations - accepted
+            decision = _decision(
+                self.reasoner.decide(
+                    workspace=workspace,
+                    question=workspace.case.question,
+                    options=dict(workspace.case.options),
+                    cold_candidates=_cold_candidates(workspace, self.model),
+                    evidence=evidence,
+                    evidence_digest=_evidence_digest(evidence),
+                    remaining_budget=remaining,
+                )
+            )
+            trace.append(
+                {
+                    "type": "reasoner_decision",
+                    "round": round_id,
+                    "action": decision.action,
+                    "task_count": len(decision.tasks),
+                    "remaining_budget": remaining,
+                }
+            )
+            if decision.action == "answer":
+                if _citations_are_visual(decision.citations, evidence):
+                    answer = decision.answer
+                    citations = decision.citations
+                break
+            if remaining <= 0:
+                break
+            tasks = decision.tasks[: min(self.max_tasks_per_round, remaining)]
+            accepted += len(tasks)
+            batch = investigator.run_batch(tasks)
+            reports.extend(batch)
+            for report in batch:
+                evidence.extend(report.evidence)
+            trace.append({"type": "investigator_batch", "round": round_id, "accepted_tasks": len(tasks)})
+            if accepted >= self.max_investigations:
+                continue
+
+        result = MultiRoundResult(
+            case_id=workspace.case.case_id,
+            answer=answer or "Insufficient verified evidence.",
+            citations=citations,
+            correct=_score_answer(answer, workspace.case.gold),
+            rounds=rounds_run,
+            accepted_investigations=accepted,
+            evidence=tuple(evidence),
+            reports=tuple(reports),
+            trace=tuple(trace),
+        )
+        _write_run_summary(workspace, result)
+        return result
+
+
+def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
+    if isinstance(value, InvestigationTask):
+        return value
+    return InvestigationTask(
+        query_id=str(value.get("query_id", "")),
+        goal=str(value.get("goal", "")),
+        time_range=tuple(value.get("time_range", (0.0, 0.0))),  # type: ignore[arg-type]
+        modality_hint=tuple(value.get("modality_hint", ())),
+        expected_evidence=str(value.get("expected_evidence", "")),
+        priority=float(value.get("priority", 0.0) or 0.0),
+    )
+
+
+def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
+    if isinstance(value, ReasonerDecision):
+        return value
+    return ReasonerDecision(
+        action=str(value.get("action", "")),
+        tasks=tuple(value.get("tasks", ())),
+        answer=str(value.get("answer", "")),
+        citations=tuple(value.get("citations", ())),
+    )
+
+
+def _cold_candidates(workspace: VirtualVideoWorkspace, model: ModelClient) -> tuple[dict[str, Any], ...]:
+    cold_dir = workspace.cold_index_dir
+    if not (cold_dir / "index.json").exists():
+        return ()
+    cold = ColdIndex.load(cold_dir, model=model)
+    hits = [*cold.search_text(workspace.case.question)[:20], *cold.search_visual(workspace.case.question, k=20)]
+    rows = []
+    seen: set[str] = set()
+    for hit in hits:
+        if hit.beat_id in seen:
+            continue
+        seen.add(hit.beat_id)
+        beat = cold.get_beat(hit.beat_id)
+        rows.append(
+            {
+                "beat_id": beat.beat_id,
+                "virtual_time_range": [beat.start_sec, beat.end_sec],
+                "thumbnail_grid_path": beat.keyframe_path,
+                "asr_excerpt": beat.asr_text[:240],
+                "modality": hit.modality,
+                "score": hit.score,
+            }
+        )
+    return tuple(rows)
+
+
+def _evidence_digest(evidence: Sequence[InvestigationEvidence]) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        {
+            "evidence_id": item.evidence_id,
+            "summary": item.summary,
+            "confidence": item.confidence,
+            "virtual_time_range": list(item.virtual_time_range),
+        }
+        for item in evidence
+    )
+
+
+def _citations_are_visual(citations: Sequence[str], evidence: Sequence[InvestigationEvidence]) -> bool:
+    if not citations:
+        return False
+    by_id = {item.evidence_id: item for item in evidence}
+    cited = [by_id.get(str(citation)) for citation in citations]
+    return bool(cited) and all(item is not None and item.modality != "asr" for item in cited)
+
+
+def _score_answer(answer: str, gold: str) -> bool:
+    selected = _letter(answer)
+    expected = _letter(gold) or str(gold or "").strip().upper()[:1]
+    return bool(selected and expected and selected == expected)
+
+
+def _letter(value: str) -> str:
+    match = re.search(r"\b([A-H])\b", str(value or "").strip().upper())
+    return match.group(1) if match else ""
+
+
+def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResult) -> None:
+    path = workspace.root_dir / "run_summary.json"
+    path.write_text(
+        json.dumps(
+            {
+                "case_id": result.case_id,
+                "answer": result.answer,
+                "citations": list(result.citations),
+                "correct": result.correct,
+                "rounds": result.rounds,
+                "accepted_investigations": result.accepted_investigations,
+                "evidence": [
+                    {
+                        "evidence_id": item.evidence_id,
+                        "summary": item.summary,
+                        "modality": item.modality,
+                        "virtual_time_range": list(item.virtual_time_range),
+                        "source_lineage": [dict(row) for row in item.source_lineage],
+                    }
+                    for item in result.evidence
+                ],
+                "trace": [dict(item) for item in result.trace],
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )

@@ -6,55 +6,50 @@ from pathlib import Path
 
 from vcah.agent import VideoAgent
 from vcah.evals import run_videomme_case
-from vcah.xlebench import (
-    LifeLogColdIndex,
-    LifeLogColdIndexBuilder,
-    LifeLogIndexConfig,
-    LifeLogInvestigator,
-    diagnose_cold_recall,
-    load_xlebench_manifest,
-    write_diagnose_report,
-    write_investigation_report,
-)
+from vcah.multiround import VirtualVideoMultiRoundDriver
+from vcah.virtual_index import build_virtual_beat_index
+from vcah.virtual_video import VirtualVideoWorkspace, materialize_lowfps_frame_cache
+from vcah.videomme_virtual import build_videomme_smoke_workspaces
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the slim evidence-seeking video agent.")
     subparsers = parser.add_subparsers(dest="command")
-    xle_index = subparsers.add_parser(
-        "xle-index",
-        help="Build an X-LeBench lifelog cold index.",
-        description="Build an X-LeBench lifelog cold index.",
+    vv_build = subparsers.add_parser(
+        "vv-build-videomme",
+        help="Build VideoMME virtual-video smoke workspaces.",
+        description="Build three VideoMME virtual-video smoke workspaces.",
     )
-    _add_xle_manifest_args(xle_index)
-    _add_xle_index_args(xle_index, default_run_dir="runs/xle-index")
+    vv_build.add_argument("--dataset-root", required=True, help="VideoMME snapshot root containing videomme/, video/, subtitle/.")
+    vv_build.add_argument("--out-dir", required=True, help="Output directory for per-case virtual workspaces.")
+    vv_build.add_argument("--seed", type=int, default=20260707)
 
-    xle_diagnose = subparsers.add_parser(
-        "xle-diagnose",
-        help="Run X-LeBench cold-recall diagnostics from an existing index.",
-        description="Run X-LeBench cold-recall diagnostics from an existing index.",
+    vv_index = subparsers.add_parser(
+        "vv-index",
+        help="Build a virtual-video cold index.",
+        description="Materialize low-fps frames and build beat thumbnail cold index for one workspace.",
     )
-    _add_xle_manifest_args(xle_diagnose)
-    xle_diagnose.add_argument("--run-dir", default="runs/xle-index", help="Directory containing lifelog_index.json.")
-    xle_diagnose.add_argument("--top-k", type=int, nargs="+", default=[5, 20], help="Recall cutoffs.")
-    xle_diagnose.add_argument("--build", action="store_true", help="Build or resume the index before diagnosing.")
-    _add_xle_index_args(xle_diagnose, include_run_dir=False)
+    vv_index.add_argument("--workspace", required=True, help="VirtualVideoWorkspace directory.")
+    vv_index.add_argument("--low-fps", type=float, default=0.5)
+    vv_index.add_argument("--beat-sec", type=float, default=18.0)
 
-    xle_investigate = subparsers.add_parser(
-        "xle-investigate",
-        help="Run a minimal X-LeBench investigator loop from an existing index.",
-        description="Run a minimal X-LeBench investigator loop from an existing index.",
+    vv_run = subparsers.add_parser(
+        "vv-run",
+        help="Run virtual-video multi-round investigation for one workspace.",
+        description="Run Reasoner/Investigator multi-round loop for one VirtualVideoWorkspace.",
     )
-    _add_xle_manifest_args(xle_investigate)
-    xle_investigate.add_argument("--run-dir", default="runs/xle-index", help="Directory containing lifelog_index.json.")
-    xle_investigate.add_argument("--out-dir", help="Directory for investigator traces. Defaults to RUN_DIR/investigations.")
-    xle_investigate.add_argument("--case-id", help="Only run one X-LeBench case id.")
-    xle_investigate.add_argument("--top-k", type=int, default=20, help="Cold retrieval candidate count.")
-    xle_investigate.add_argument("--inspect-top-n", type=int, default=3, help="Number of cold candidates to inspect.")
-    xle_investigate.add_argument("--max-steps", type=int, default=3, help="Planner step budget recorded in traces.")
-    xle_investigate.add_argument("--max-window-sec", type=float, default=30.0, help="Split candidate windows longer than this.")
-    xle_investigate.add_argument("--max-windows-per-round", type=int, default=4, help="Maximum reasoner-selected windows per round.")
-    xle_investigate.add_argument("--max-total-investigator-calls", type=int, default=10, help="Maximum window inspections per case.")
+    vv_run.add_argument("--workspace", required=True)
+    vv_run.add_argument("--max-rounds", type=int, default=4)
+    vv_run.add_argument("--max-investigations", type=int, default=20)
+
+    vv_run_all = subparsers.add_parser(
+        "vv-run-all",
+        help="Run virtual-video multi-round investigation for all child workspaces.",
+        description="Run all child directories containing case.json and virtual_timeline.json.",
+    )
+    vv_run_all.add_argument("--workspace-root", required=True)
+    vv_run_all.add_argument("--max-rounds", type=int, default=4)
+    vv_run_all.add_argument("--max-investigations", type=int, default=20)
     parser.add_argument("--video", help="Path to a video file.")
     parser.add_argument("--question", help="Question to answer about the video.")
     parser.add_argument("--videomme-root", help="VideoMME root containing cases.json.")
@@ -64,17 +59,13 @@ def main() -> None:
     parser.add_argument("--index-mode", default="fast", help="Cold index mode label.")
     args = parser.parse_args()
 
-    if args.command == "xle-index":
-        run_dir = Path(args.run_dir)
-        manifest = _load_xle_manifest_from_args(args)
-        index = LifeLogColdIndexBuilder(manifest, _xle_index_config(args)).build(run_dir, resume=not args.no_resume)
+    if args.command == "vv-build-videomme":
+        workspaces = build_videomme_smoke_workspaces(Path(args.dataset_root), Path(args.out_dir), seed=args.seed)
         print(
             json.dumps(
                 {
-                    "run_dir": str(run_dir),
-                    "segments": len(index.segments),
-                    "beats": sum(len(segment.index.beats) for segment in index.segments),
-                    "lifelog_index": str(run_dir / "lifelog_index.json"),
+                    "workspace_count": len(workspaces),
+                    "workspaces": [str(workspace.root_dir) for workspace in workspaces],
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -83,56 +74,54 @@ def main() -> None:
         )
         return
 
-    if args.command == "xle-diagnose":
-        run_dir = Path(args.run_dir)
-        manifest = _load_xle_manifest_from_args(args)
-        if args.build:
-            index = LifeLogColdIndexBuilder(manifest, _xle_index_config(args)).build(run_dir, resume=not args.no_resume)
-        else:
-            index = LifeLogColdIndex.load(run_dir)
-        report = diagnose_cold_recall(index, manifest.cases, top_ks=args.top_k)
-        write_diagnose_report(report, run_dir / "xle_diagnose.json")
-        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    if args.command == "vv-index":
+        workspace = VirtualVideoWorkspace.load(Path(args.workspace))
+        frames = materialize_lowfps_frame_cache(workspace, fps=args.low_fps)
+        result = build_virtual_beat_index(workspace, frames, beat_sec=args.beat_sec)
+        print(
+            json.dumps(
+                {
+                    "workspace": str(workspace.root_dir),
+                    "frames": len(frames),
+                    "beats": len(result.virtual_beats),
+                    "cold_index": str(workspace.cold_index_dir),
+                    "beat_index": str(result.beat_index_path),
+                    "timeline_grid": str(result.timeline_grid_path),
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return
 
-    if args.command == "xle-investigate":
-        run_dir = Path(args.run_dir)
-        out_dir = Path(args.out_dir) if args.out_dir else run_dir / "investigations"
-        manifest = _load_xle_manifest_from_args(args)
-        index = LifeLogColdIndex.load(run_dir)
-        investigator = LifeLogInvestigator(
-            index,
-            max_steps=args.max_steps,
-            inspect_top_n=args.inspect_top_n,
-            retrieve_top_k=args.top_k,
-            max_window_sec=args.max_window_sec,
-            max_windows_per_round=args.max_windows_per_round,
-            max_total_investigator_calls=args.max_total_investigator_calls,
-        )
-        cases = [case for case in manifest.cases if not args.case_id or case.case_id == args.case_id]
-        out_dir.mkdir(parents=True, exist_ok=True)
+    if args.command == "vv-run":
+        workspace = VirtualVideoWorkspace.load(Path(args.workspace))
+        result = VirtualVideoMultiRoundDriver(max_rounds=args.max_rounds, max_investigations=args.max_investigations).run(workspace)
+        print(json.dumps(_vv_result_payload(result), ensure_ascii=False, indent=2, sort_keys=True))
+        return
+
+    if args.command == "vv-run-all":
+        root = Path(args.workspace_root)
         summaries = []
-        for case in cases:
-            result = investigator.answer(case)
-            write_investigation_report(result, out_dir / f"{_safe_filename(case.case_id or 'case')}.json")
-            summaries.append(
+        for child in sorted(path for path in root.iterdir() if path.is_dir()):
+            if not (child / "case.json").exists() or not (child / "virtual_timeline.json").exists():
+                continue
+            workspace = VirtualVideoWorkspace.load(child)
+            result = VirtualVideoMultiRoundDriver(max_rounds=args.max_rounds, max_investigations=args.max_investigations).run(workspace)
+            summaries.append(_vv_result_payload(result))
+        print(
+            json.dumps(
                 {
-                    "case_id": case.case_id,
-                    "answer": result.answer,
-                    "selected_interval": _selected_interval_payload(result.selected_interval),
-                    "correct": _investigation_hits(result.selected_interval, case.gt_intervals),
-                    "verified_claim": result.verified_claim.claim_id if result.verified_claim else None,
-                }
+                    "case_count": len(summaries),
+                    "correct": sum(1 for item in summaries if item["correct"]),
+                    "cases": summaries,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
             )
-        summary = {
-            "case_count": len(summaries),
-            "correct": sum(1 for item in summaries if item["correct"]),
-            "accuracy": sum(1 for item in summaries if item["correct"]) / max(1, len(summaries)),
-            "out_dir": str(out_dir),
-            "cases": summaries,
-        }
-        (out_dir / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        )
         return
 
     run_dir = Path(args.run_dir)
@@ -154,58 +143,14 @@ def main() -> None:
     print(json.dumps({"answer": answer.answer, "citations": list(answer.citations)}, ensure_ascii=False, indent=2, sort_keys=True))
 
 
-def _add_xle_manifest_args(command: argparse.ArgumentParser) -> None:
-    command.add_argument("xle_root", help="X-LeBench root containing cases/annotations JSON or JSONL.")
-    command.add_argument("--annotation-file", help="Explicit X-LeBench annotation JSON/JSONL path.")
-    command.add_argument("--video-template", help="Video path template, e.g. /data/{video_uid}.mp4.")
-    command.add_argument("--default-duration-sec", type=float, default=None, help="Fallback duration for records without metadata.")
-
-
-def _add_xle_index_args(command: argparse.ArgumentParser, *, default_run_dir: str = "runs/xle-index", include_run_dir: bool = True) -> None:
-    if include_run_dir:
-        command.add_argument("--run-dir", default=default_run_dir, help="Output directory.")
-    command.add_argument("--max-range-sec", type=float, default=60.0, help="Maximum cold index range length.")
-    command.add_argument("--max-beat-sec", type=float, default=60.0, help="Maximum beat length.")
-    command.add_argument("--no-resume", action="store_true", help="Rebuild segment indexes even when artifacts exist.")
-
-
-def _load_xle_manifest_from_args(args: argparse.Namespace):
-    return load_xlebench_manifest(
-        Path(args.xle_root),
-        video_template=args.video_template,
-        annotation_file=Path(args.annotation_file) if args.annotation_file else None,
-        default_duration_sec=args.default_duration_sec,
-    )
-
-
-def _xle_index_config(args: argparse.Namespace) -> LifeLogIndexConfig:
-    return LifeLogIndexConfig(
-        max_range_sec=args.max_range_sec,
-        max_beat_sec=args.max_beat_sec,
-        index_mode="xle-cold-mvp",
-    )
-
-
-def _investigation_hits(selected_interval, intervals) -> bool:
-    if selected_interval is None:
-        return False
-    return any(
-        selected_interval.video_uid == interval.video_uid
-        and min(selected_interval.source_end_sec, interval.source_end_sec)
-        > max(selected_interval.source_start_sec, interval.source_start_sec)
-        for interval in intervals
-    )
-
-
-def _selected_interval_payload(selected_interval) -> dict[str, object] | None:
-    if selected_interval is None:
-        return None
+def _vv_result_payload(result) -> dict[str, object]:
     return {
-        "video_uid": selected_interval.video_uid,
-        "source_start_sec": selected_interval.source_start_sec,
-        "source_end_sec": selected_interval.source_end_sec,
-        "virtual_start_sec": selected_interval.virtual_start_sec,
-        "virtual_end_sec": selected_interval.virtual_end_sec,
+        "case_id": result.case_id,
+        "answer": result.answer,
+        "citations": list(result.citations),
+        "correct": result.correct,
+        "rounds": result.rounds,
+        "accepted_investigations": result.accepted_investigations,
     }
 
 
