@@ -156,7 +156,7 @@ class FakeXLEReasonerSelectedModel(FakeXLEInvestigatorModel):
             "answer_hypothesis": "The relevant table placement may be late in the long candidate.",
             "investigator_request": "Inspect only the selected windows for evidence relevant to the question.",
             "inspect_windows": [
-                {"video_uid": "seg_a", "start": "00:00:30", "end": "00:01:00"},
+                {"video_uid": "seg_a", "start": "00:00:00", "end": "00:00:30"},
                 "00:01:30-00:02:00",
             ],
         }
@@ -542,7 +542,7 @@ def test_xle_investigator_uses_reasoner_selected_windows_not_exhaustive_sweep(tm
     assert len(model.selection_requests) == 1
     assert model.selection_requests[0]["candidate_count"] == 1
     assert len(model.calls) == 2
-    assert [call["start_sec"] for call in model.calls] == [30.0, 90.0]
+    assert [call["start_sec"] for call in model.calls] == [0.0, 90.0]
     assert result.answer == "blue cup"
     assert result.selected_interval is not None
     assert result.selected_interval.source_start_sec == 90.0
@@ -551,6 +551,9 @@ def test_xle_investigator_uses_reasoner_selected_windows_not_exhaustive_sweep(tm
     assert result.verified_claim.status == "supported"
     assert any(step["type"] == "reasoner_select_investigation" for step in result.trace)
     assert sum(1 for step in result.trace if step["type"] == "investigator_inspect_visual_text") == 2
+    inspect_steps = [step for step in result.trace if step["type"] == "investigator_inspect_visual_text"]
+    assert all("window_coverage_report" in step for step in inspect_steps)
+    assert all("window_lineage" in step for step in inspect_steps)
     assert result.trace[-1]["type"] == "reasoner_final_answer"
 
 

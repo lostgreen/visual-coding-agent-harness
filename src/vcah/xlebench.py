@@ -11,8 +11,10 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import numpy as np
 
 from vcah.index import ColdIndex, KeyframeSampler, RangeDetector, build_cold_index
+from vcah.memory import AgentMemory, EvidenceStore
 from vcah.model import ModelClient
-from vcah.types import Beat, Hit
+from vcah.tools import AgentTools
+from vcah.types import Beat, Hit, ToolAction, Window
 
 
 @dataclass(frozen=True)
@@ -315,6 +317,7 @@ class InvestigationEvidence:
     answer: str = ""
     confidence: float = 0.0
     frame_refs: tuple[FrameRef, ...] = ()
+    tool_payload: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -423,6 +426,8 @@ class LifeLogInvestigator:
                         "evidence_id": None,
                         "claim_id": None,
                         "status": "unknown",
+                        "window_coverage_report": inspected.tool_payload.get("window_coverage_report"),
+                        "window_lineage": inspected.tool_payload.get("window_lineage"),
                     }
                 )
                 continue
@@ -443,6 +448,8 @@ class LifeLogInvestigator:
                     "claim_id": claim.claim_id,
                     "status": claim.status,
                     "confidence": claim.confidence,
+                    "window_coverage_report": inspected.tool_payload.get("window_coverage_report"),
+                    "window_lineage": inspected.tool_payload.get("window_lineage"),
                 }
             )
             if claim.status == "supported" and claim.confidence >= self.min_confidence:
@@ -485,11 +492,7 @@ class LifeLogInvestigator:
         candidate: CandidateWindow,
         window: InvestigationWindow,
     ) -> InvestigationEvidence:
-        hook = getattr(self.model, "investigate_xle_window", None)
-        if callable(hook):
-            raw = hook(question, candidate=candidate, subwindow=window, frame_refs=window.frame_refs)
-        else:
-            raw = _default_investigate_window(self.model, question, window)
+        raw, tool_payload = self._inspect_window_with_agent_tools(question, candidate, window)
         payload = raw if isinstance(raw, Mapping) else {"evidence": str(raw or "")}
         text = str(payload.get("claim") or payload.get("evidence") or payload.get("observation") or "").strip()
         answer = str(payload.get("answer") or "").strip()
@@ -501,7 +504,73 @@ class LifeLogInvestigator:
             answer=answer,
             confidence=max(0.0, min(1.0, float(payload.get("confidence") or 0.0))),
             frame_refs=window.frame_refs,
+            tool_payload=tool_payload,
         )
+
+    def _inspect_window_with_agent_tools(
+        self,
+        question: str,
+        candidate: CandidateWindow,
+        window: InvestigationWindow,
+    ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+        segment_index = self.index.segment(window.video_uid)
+        original_model = segment_index.index.visual_index.model
+        adapter = _XLEWindowAttestationAdapter(self.model, question, candidate, window)
+        segment_index.index.visual_index.model = adapter  # type: ignore[assignment]
+        tool_root = self.index.run_dir / "xle_investigator_tools" / _investigation_evidence_id(window)
+        memory = AgentMemory.empty(tool_root / "memory.json")
+        evidence = EvidenceStore.empty(tool_root / "evidence.jsonl")
+        tools = AgentTools(segment_index.index, memory, evidence, tool_root)
+        action = ToolAction(
+            type="inspect_window",
+            windows=(Window(window.source_start_sec, window.source_end_sec, request_id=_investigation_evidence_id(window)),),
+            modalities=("frames",),
+        )
+        try:
+            result = tools.run(action)
+        finally:
+            segment_index.index.visual_index.model = original_model  # type: ignore[assignment]
+        payload = adapter.last_payload or {"evidence": result.text, "answer": "", "confidence": 0.0}
+        tool_payload = {
+            "tool": result.tool,
+            "tool_evidence_ids": list(result.evidence_ids),
+            "tool_text": result.text,
+            "window_coverage_report": result.payload.get("window_coverage_report") if isinstance(result.payload, Mapping) else None,
+            "window_lineage": result.payload.get("window_lineage") if isinstance(result.payload, Mapping) else None,
+            "actual_windows": result.payload.get("actual_windows") if isinstance(result.payload, Mapping) else None,
+        }
+        return payload, tool_payload
+
+
+class _XLEWindowAttestationAdapter:
+    def __init__(
+        self,
+        model: ModelClient,
+        question: str,
+        candidate: CandidateWindow,
+        window: InvestigationWindow,
+    ) -> None:
+        self.model = model
+        self.question = question
+        self.candidate = candidate
+        self.window = window
+        self.vision_model = str(getattr(model, "vision_model", model.__class__.__name__) or "")
+        self.last_payload: Mapping[str, Any] = {}
+
+    def attest(self, image_paths: Sequence[str], prompt: str) -> tuple[Mapping[str, str], ...]:
+        del prompt
+        selected = tuple(frame for frame in self.window.frame_refs if frame.path in set(image_paths))
+        hook = getattr(self.model, "investigate_xle_window", None)
+        if callable(hook):
+            raw = hook(self.question, candidate=self.candidate, subwindow=self.window, frame_refs=selected)
+        else:
+            raw = _default_investigate_window(self.model, self.question, self.window)
+        payload = raw if isinstance(raw, Mapping) else {"evidence": str(raw or "")}
+        self.last_payload = payload
+        text = str(payload.get("evidence") or payload.get("claim") or payload.get("observation") or "").strip()
+        if not text:
+            return ()
+        return ({"observation": text, "polarity": "positive"},)
 
 
 class LifeLogColdIndexBuilder:
