@@ -138,6 +138,42 @@ class FakeXLEInvestigatorModel(KeywordColorModel):
         return {"claim": "", "answer": "", "evidence": "No table placement is visible.", "confidence": 0.05}
 
 
+class FakeXLEReasonerSelectedModel(FakeXLEInvestigatorModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.selection_requests: list[dict[str, object]] = []
+
+    def select_xle_investigation(self, question: str, *, candidates: Sequence[object], candidate_digest: str, **kwargs: object) -> dict[str, object]:
+        self.selection_requests.append(
+            {
+                "question": question,
+                "candidate_count": len(candidates),
+                "candidate_digest": candidate_digest,
+                "max_windows": kwargs.get("max_windows"),
+            }
+        )
+        return {
+            "answer_hypothesis": "The relevant table placement may be late in the long candidate.",
+            "investigator_request": "Inspect only the selected windows for evidence relevant to the question.",
+            "inspect_windows": [
+                {"video_uid": "seg_a", "start": "00:00:30", "end": "00:01:00"},
+                "00:01:30-00:02:00",
+            ],
+        }
+
+
+class FakeXLEInvalidThenValidReasoner(FakeXLEInvestigatorModel):
+    def select_xle_investigation(self, question: str, *, candidates: Sequence[object], candidate_digest: str, **kwargs: object) -> dict[str, object]:
+        del question, candidates, candidate_digest, kwargs
+        return {
+            "investigator_request": "Inspect valid windows only.",
+            "inspect_windows": [
+                {"video_uid": "seg_a", "start": "bad-time", "end": "00:01:00"},
+                "00:01:30-00:02:00",
+            ],
+        }
+
+
 def test_xlebench_manifest_adapter_maps_source_and_virtual_time(tmp_path: Path) -> None:
     root = tmp_path / "xle"
     root.mkdir()
@@ -472,7 +508,7 @@ def test_xle_retrieval_reports_minimal_hierarchical_debug(tmp_path: Path) -> Non
     assert report["per_level_recall"]["frame@5"] == 1.0
 
 
-def test_xle_investigator_splits_long_candidate_and_verifies_late_claim(tmp_path: Path) -> None:
+def test_xle_investigator_uses_reasoner_selected_windows_not_exhaustive_sweep(tmp_path: Path) -> None:
     root = tmp_path / "xle"
     root.mkdir()
     (root / "cases.json").write_text(
@@ -491,7 +527,7 @@ def test_xle_investigator_splits_long_candidate_and_verifies_late_claim(tmp_path
         encoding="utf-8",
     )
     manifest = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
-    model = FakeXLEInvestigatorModel()
+    model = FakeXLEReasonerSelectedModel()
     index = LifeLogColdIndexBuilder(
         manifest,
         LifeLogIndexConfig(max_range_sec=120.0, max_beat_sec=120.0),
@@ -503,13 +539,54 @@ def test_xle_investigator_splits_long_candidate_and_verifies_late_claim(tmp_path
     result = LifeLogInvestigator(index, model=model, max_steps=3, inspect_top_n=1, max_window_sec=30.0).answer(manifest.cases[0])
 
     assert result.plan.task_type == "object"
-    assert len(model.calls) == 4
-    assert [call["start_sec"] for call in model.calls] == [0.0, 30.0, 60.0, 90.0]
+    assert len(model.selection_requests) == 1
+    assert model.selection_requests[0]["candidate_count"] == 1
+    assert len(model.calls) == 2
+    assert [call["start_sec"] for call in model.calls] == [30.0, 90.0]
     assert result.answer == "blue cup"
     assert result.selected_interval is not None
     assert result.selected_interval.source_start_sec == 90.0
     assert result.selected_interval.source_end_sec == 120.0
     assert result.verified_claim is not None
     assert result.verified_claim.status == "supported"
-    assert result.trace[0]["type"] == "plan"
-    assert any(step["type"] == "inspect_window" for step in result.trace)
+    assert any(step["type"] == "reasoner_select_investigation" for step in result.trace)
+    assert sum(1 for step in result.trace if step["type"] == "investigator_inspect_visual_text") == 2
+    assert result.trace[-1]["type"] == "reasoner_final_answer"
+
+
+def test_xle_investigator_records_parse_error_without_executing_invalid_window(tmp_path: Path) -> None:
+    root = tmp_path / "xle"
+    root.mkdir()
+    (root / "cases.json").write_text(
+        json.dumps(
+            [
+                {
+                    "case_id": "case-table",
+                    "question": "What did I put on the table?",
+                    "video_uid": "seg_a",
+                    "videos": [{"video_uid": "seg_a", "duration_sec": 120.0, "video_path": "seg_a.mp4"}],
+                    "query_range": {"start_sec": 0.0, "end_sec": 120.0},
+                    "gt_interval": {"start_sec": 90.0, "end_sec": 105.0},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = load_xlebench_manifest(root, video_template=str(root / "{video_uid}.mp4"))
+    model = FakeXLEInvalidThenValidReasoner()
+    index = LifeLogColdIndexBuilder(
+        manifest,
+        LifeLogIndexConfig(max_range_sec=120.0, max_beat_sec=120.0),
+        model=model,
+        range_detector=lambda _path, duration: ((0.0, duration),),
+        keyframe_sampler=_late_table_sampler,
+    ).build(tmp_path / "run")
+
+    result = LifeLogInvestigator(index, model=model, max_steps=3, inspect_top_n=1, max_window_sec=30.0).answer(manifest.cases[0])
+
+    selection_step = next(step for step in result.trace if step["type"] == "reasoner_select_investigation")
+    assert len(model.calls) == 1
+    assert model.calls[0]["start_sec"] == 90.0
+    assert selection_step["selected_window_count"] == 1
+    assert selection_step["parse_errors"]
+    assert result.answer == "blue cup"

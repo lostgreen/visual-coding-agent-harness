@@ -51,6 +51,8 @@ def test_xle_cli_exposes_split_index_and_diagnose_commands() -> None:
     assert "--load-only" not in diagnose_help
     assert "Run a minimal X-LeBench investigator loop from an existing index." in investigate_help
     assert "--inspect-top-n" in investigate_help
+    assert "--max-windows-per-round" in investigate_help
+    assert "--max-total-investigator-calls" in investigate_help
 
 
 def test_xle_gemini_eval_tool_exposes_investigator_mode() -> None:
@@ -58,6 +60,14 @@ def test_xle_gemini_eval_tool_exposes_investigator_mode() -> None:
 
     assert "--mode" in help_text
     assert "investigator" in help_text
+
+
+def test_xle_gemini_eval_vlm_exposes_reasoner_selection_hook() -> None:
+    from tools.xle_gemini_candidate_eval import _OpenAICompatibleVLM
+
+    api = _OpenAICompatibleVLM({"planner_api": {"base": "https://example.invalid/openai", "model": "test-model", "api_key": "test-key"}})
+
+    assert callable(getattr(api, "select_xle_investigation", None))
 
 
 def test_xle_diagnose_build_path_registers_index_args(monkeypatch, tmp_path: Path, capsys) -> None:

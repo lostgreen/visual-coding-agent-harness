@@ -287,6 +287,11 @@ class InvestigationPlan:
     task_type: str
     max_steps: int
     strategy: tuple[str, ...]
+    answer_hypothesis: str | None = None
+    inspect_windows: tuple["InvestigationWindow", ...] = ()
+    investigator_request: str = ""
+    stop_reason: str | None = None
+    parse_errors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -346,6 +351,8 @@ class LifeLogInvestigator:
         inspect_top_n: int = 3,
         retrieve_top_k: int = 20,
         max_window_sec: float = 30.0,
+        max_windows_per_round: int = 4,
+        max_total_investigator_calls: int = 10,
         min_confidence: float = 0.5,
     ) -> None:
         self.index = index
@@ -354,77 +361,111 @@ class LifeLogInvestigator:
         self.inspect_top_n = max(1, int(inspect_top_n))
         self.retrieve_top_k = max(1, int(retrieve_top_k))
         self.max_window_sec = max(1.0, float(max_window_sec))
+        self.max_windows_per_round = max(1, int(max_windows_per_round))
+        self.max_total_investigator_calls = max(1, int(max_total_investigator_calls))
         self.min_confidence = max(0.0, min(1.0, float(min_confidence)))
 
     def answer(self, case: XLEBenchCase) -> InvestigationResult:
-        plan = _plan_investigation(case.question, max_steps=self.max_steps)
-        trace: list[Mapping[str, Any]] = [
-            {"type": "plan", "task_type": plan.task_type, "max_steps": plan.max_steps, "strategy": list(plan.strategy)}
-        ]
         retrieval = LifeLogRetriever(self.index).retrieve(case.question, scope=case.scope, top_k=self.retrieve_top_k)
-        candidates = retrieval.candidates[: self.inspect_top_n]
-        trace.append(
-            {
-                "type": "retrieve",
-                "top_k": self.retrieve_top_k,
-                "inspect_top_n": self.inspect_top_n,
-                "candidate_count": len(retrieval.candidates),
-                "inspected_candidate_ids": list(range(1, len(candidates) + 1)),
-            }
+        candidate_context = retrieval.candidates[: self.retrieve_top_k]
+        plan = _select_investigation_plan(
+            self.model,
+            case,
+            _plan_investigation(case.question, max_steps=self.max_steps),
+            candidate_context,
+            fallback_candidates=candidate_context[: self.inspect_top_n],
+            max_windows=self.max_windows_per_round,
+            max_window_sec=self.max_window_sec,
         )
+        selected_windows = plan.inspect_windows[: self.max_total_investigator_calls]
+        inspected_candidate_ids = tuple(dict.fromkeys(window.candidate_id for window in selected_windows))
+        discarded_candidate_ids = tuple(
+            candidate_id
+            for candidate_id in range(1, len(candidate_context) + 1)
+            if candidate_id not in set(inspected_candidate_ids)
+        )
+        trace: list[Mapping[str, Any]] = [
+            {
+                "type": "retrieve_candidates",
+                "top_k": self.retrieve_top_k,
+                "candidate_count": len(retrieval.candidates),
+                "candidate_context_count": len(candidate_context),
+            },
+            {
+                "type": "reasoner_select_investigation",
+                "task_type": plan.task_type,
+                "max_steps": plan.max_steps,
+                "strategy": list(plan.strategy),
+                "answer_hypothesis": plan.answer_hypothesis,
+                "investigator_request": plan.investigator_request,
+                "selected_window_count": len(selected_windows),
+                "selected_candidate_ids": list(inspected_candidate_ids),
+                "discarded_candidate_ids": list(discarded_candidate_ids),
+                "max_total_investigator_calls": self.max_total_investigator_calls,
+                "parse_errors": list(plan.parse_errors),
+            }
+        ]
 
         evidence: list[InvestigationEvidence] = []
         claims: list[InvestigationClaim] = []
-        for candidate_id, candidate in enumerate(candidates, start=1):
-            for window in _split_candidate_window(candidate, candidate_id, max_window_sec=self.max_window_sec):
-                inspected = self._inspect_window(case.question, candidate, window)
-                if not inspected.text.strip() and not inspected.answer.strip():
-                    trace.append(
-                        {
-                            "type": "inspect_window",
-                            "candidate_id": candidate_id,
-                            "window": _investigation_window_payload(window),
-                            "evidence_id": None,
-                            "claim_id": None,
-                            "status": "unknown",
-                        }
-                    )
-                    continue
-                evidence.append(inspected)
-                claim = _verify_investigation_evidence(
-                    inspected,
-                    claim_id=f"claim_{len(claims) + 1:04d}",
-                    min_confidence=self.min_confidence,
-                )
-                claims.append(claim)
+        early_stop_reason = plan.stop_reason
+        for window in selected_windows:
+            candidate = candidate_context[window.candidate_id - 1] if 1 <= window.candidate_id <= len(candidate_context) else None
+            if candidate is None:
+                continue
+            inspected = self._inspect_window(case.question, candidate, window)
+            if not inspected.text.strip() and not inspected.answer.strip():
                 trace.append(
                     {
-                        "type": "inspect_window",
-                        "candidate_id": candidate_id,
+                        "type": "investigator_inspect_visual_text",
+                        "candidate_id": window.candidate_id,
                         "window": _investigation_window_payload(window),
-                        "frame_times": [frame.source_time_sec for frame in window.frame_refs],
-                        "evidence_id": inspected.evidence_id,
-                        "claim_id": claim.claim_id,
-                        "status": claim.status,
-                        "confidence": claim.confidence,
+                        "evidence_id": None,
+                        "claim_id": None,
+                        "status": "unknown",
                     }
                 )
+                continue
+            evidence.append(inspected)
+            claim = _verify_investigation_evidence(
+                inspected,
+                claim_id=f"claim_{len(claims) + 1:04d}",
+                min_confidence=self.min_confidence,
+            )
+            claims.append(claim)
+            trace.append(
+                {
+                    "type": "investigator_inspect_visual_text",
+                    "candidate_id": window.candidate_id,
+                    "window": _investigation_window_payload(window),
+                    "frame_times": [frame.source_time_sec for frame in window.frame_refs],
+                    "evidence_id": inspected.evidence_id,
+                    "claim_id": claim.claim_id,
+                    "status": claim.status,
+                    "confidence": claim.confidence,
+                }
+            )
+            if claim.status == "supported" and claim.confidence >= self.min_confidence:
+                early_stop_reason = "supported_claim_confidence_threshold"
+                break
 
         verified = _best_supported_claim(claims)
         selected_interval = _evidence_by_id(evidence, verified.evidence_id).window if verified else None
         answer = verified.answer if verified and verified.answer.strip() else "Insufficient verified evidence."
         trace.append(
             {
-                "type": "verify",
+                "type": "verify_claims",
                 "supported_claim_ids": [claim.claim_id for claim in claims if claim.status == "supported"],
                 "selected_claim_id": verified.claim_id if verified else None,
             }
         )
         trace.append(
             {
-                "type": "answer",
+                "type": "reasoner_final_answer",
                 "answer": answer,
                 "selected_interval": _investigation_window_payload(selected_interval) if selected_interval else None,
+                "vlm_call_count": len([step for step in trace if step.get("type") == "investigator_inspect_visual_text"]),
+                "early_stop_reason": early_stop_reason,
             }
         )
         return InvestigationResult(
@@ -711,40 +752,226 @@ def _plan_investigation(question: str, *, max_steps: int) -> InvestigationPlan:
         max_steps=max(1, int(max_steps)),
         strategy=(
             "retrieve cold candidates",
-            "split long candidate windows",
-            "inspect subwindows for claim evidence",
+            "reasoner selects targeted windows",
+            "inspect selected windows for claim evidence",
             "verify strongest supported claim",
         ),
     )
 
 
-def _split_candidate_window(
-    candidate: CandidateWindow,
-    candidate_id: int,
+def _select_investigation_plan(
+    model: ModelClient,
+    case: XLEBenchCase,
+    base_plan: InvestigationPlan,
+    candidates: Sequence[CandidateWindow],
     *,
+    fallback_candidates: Sequence[CandidateWindow],
+    max_windows: int,
+    max_window_sec: float,
+) -> InvestigationPlan:
+    raw: Any = {}
+    hook = getattr(model, "select_xle_investigation", None)
+    if callable(hook):
+        raw = hook(
+            case.question,
+            candidates=tuple(candidates),
+            candidate_digest=_candidate_digest(candidates),
+            memory_digest="",
+            evidence_digest="",
+            max_windows=max_windows,
+        )
+    windows, errors = _parse_investigation_windows(raw, candidates, max_windows=max_windows)
+    stop_reason = None
+    if not windows:
+        fallback = _default_investigation_windows(fallback_candidates, max_windows=max_windows, max_window_sec=max_window_sec)
+        windows = fallback
+        if fallback:
+            stop_reason = "fallback_selected_first_candidate_window"
+    payload = raw if isinstance(raw, Mapping) else {}
+    return InvestigationPlan(
+        task_type=base_plan.task_type,
+        max_steps=base_plan.max_steps,
+        strategy=base_plan.strategy,
+        answer_hypothesis=_optional_text(payload.get("answer_hypothesis") or payload.get("hypothesis")),
+        inspect_windows=tuple(windows[: max(0, int(max_windows))]),
+        investigator_request=str(payload.get("investigator_request") or "").strip(),
+        stop_reason=stop_reason or _optional_text(payload.get("stop_reason")),
+        parse_errors=tuple(errors),
+    )
+
+
+def _candidate_digest(candidates: Sequence[CandidateWindow]) -> str:
+    lines = []
+    for candidate_id, candidate in enumerate(candidates, start=1):
+        frame_times = ", ".join(f"{frame.source_time_sec:.1f}" for frame in candidate.frame_refs[:6])
+        lines.append(
+            f"candidate {candidate_id}: video_uid={candidate.video_uid} beat_id={candidate.beat_id} "
+            f"source={candidate.source_start_sec:.1f}-{candidate.source_end_sec:.1f}s "
+            f"virtual={candidate.virtual_start_sec:.1f}-{candidate.virtual_end_sec:.1f}s "
+            f"modalities={','.join(candidate.modalities)} frame_times=[{frame_times}]"
+        )
+    return "\n".join(lines)
+
+
+def _parse_investigation_windows(
+    raw: Any,
+    candidates: Sequence[CandidateWindow],
+    *,
+    max_windows: int,
+) -> tuple[tuple[InvestigationWindow, ...], tuple[str, ...]]:
+    raw_windows = _raw_plan_windows(raw)
+    windows: list[InvestigationWindow] = []
+    errors: list[str] = []
+    for item in raw_windows:
+        parsed = _parse_window_item(item)
+        if parsed is None:
+            errors.append(f"invalid_window:{item!r}")
+            continue
+        start_sec, end_sec, video_uid, candidate_id = parsed
+        if end_sec <= start_sec:
+            errors.append(f"invalid_window_range:{item!r}")
+            continue
+        candidate_match = _candidate_for_selected_window(
+            candidates,
+            start_sec=start_sec,
+            end_sec=end_sec,
+            video_uid=video_uid,
+            candidate_id=candidate_id,
+        )
+        if candidate_match is None:
+            errors.append(f"unmatched_window:{item!r}")
+            continue
+        resolved_id, candidate = candidate_match
+        clipped_start = max(candidate.source_start_sec, start_sec)
+        clipped_end = min(candidate.source_end_sec, end_sec)
+        if clipped_end <= clipped_start:
+            errors.append(f"non_overlapping_window:{item!r}")
+            continue
+        windows.append(_investigation_window_from_candidate(candidate, resolved_id, clipped_start, clipped_end))
+        if len(windows) >= max(0, int(max_windows)):
+            break
+    return tuple(windows), tuple(errors)
+
+
+def _raw_plan_windows(raw: Any) -> tuple[Any, ...]:
+    if isinstance(raw, Mapping):
+        value = raw.get("inspect_windows") or raw.get("windows") or raw.get("inspect_window") or ()
+    elif hasattr(raw, "windows"):
+        value = getattr(raw, "windows")
+    else:
+        value = raw
+    if isinstance(value, (str, Mapping)):
+        return (value,)
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return tuple(value)
+    return ()
+
+
+def _parse_window_item(item: Any) -> tuple[float, float, str | None, int | None] | None:
+    try:
+        if isinstance(item, Mapping):
+            start_raw = item.get("start_sec", item.get("start", item.get("begin")))
+            end_raw = item.get("end_sec", item.get("end", item.get("stop")))
+            if start_raw is None or end_raw is None:
+                return None
+            start = _parse_time_value(start_raw)
+            end = _parse_time_value(end_raw)
+            candidate_id = item.get("candidate_id")
+            return (
+                start,
+                end,
+                str(item.get("video_uid") or item.get("video_id") or "").strip() or None,
+                int(candidate_id) if candidate_id is not None and str(candidate_id).strip().isdigit() else None,
+            )
+        if isinstance(item, str):
+            match = re.match(r"\s*(.*?)\s*(?:-|–|—|\bto\b)\s*(.*?)\s*$", item)
+            if not match:
+                return None
+            return _parse_time_value(match.group(1)), _parse_time_value(match.group(2)), None, None
+        return None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_time_value(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("empty time value")
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return float(text)
+    parts = text.split(":")
+    if len(parts) not in {2, 3}:
+        raise ValueError(f"Unsupported time value: {value!r}")
+    values = [float(part) for part in parts]
+    if len(values) == 2:
+        minutes, seconds = values
+        return minutes * 60.0 + seconds
+    hours, minutes, seconds = values
+    return hours * 3600.0 + minutes * 60.0 + seconds
+
+
+def _candidate_for_selected_window(
+    candidates: Sequence[CandidateWindow],
+    *,
+    start_sec: float,
+    end_sec: float,
+    video_uid: str | None,
+    candidate_id: int | None,
+) -> tuple[int, CandidateWindow] | None:
+    indexed = tuple(enumerate(candidates, start=1))
+    if candidate_id is not None:
+        for index, candidate in indexed:
+            if index == candidate_id and _candidate_window_matches(candidate, start_sec, end_sec, video_uid):
+                return index, candidate
+        return None
+    for index, candidate in indexed:
+        if _candidate_window_matches(candidate, start_sec, end_sec, video_uid):
+            return index, candidate
+    return None
+
+
+def _candidate_window_matches(candidate: CandidateWindow, start_sec: float, end_sec: float, video_uid: str | None) -> bool:
+    if video_uid and candidate.video_uid != video_uid:
+        return False
+    return min(candidate.source_end_sec, end_sec) > max(candidate.source_start_sec, start_sec)
+
+
+def _default_investigation_windows(
+    candidates: Sequence[CandidateWindow],
+    *,
+    max_windows: int,
     max_window_sec: float,
 ) -> tuple[InvestigationWindow, ...]:
-    width = max(1.0, float(max_window_sec))
     windows = []
-    cursor = float(candidate.source_start_sec)
-    end = float(candidate.source_end_sec)
-    while cursor < end:
-        next_end = min(end, cursor + width)
-        frames = tuple(frame for frame in candidate.frame_refs if cursor <= frame.source_time_sec <= next_end)
-        windows.append(
-            InvestigationWindow(
-                candidate_id=int(candidate_id),
-                video_uid=candidate.video_uid,
-                beat_id=candidate.beat_id,
-                source_start_sec=round(cursor, 3),
-                source_end_sec=round(next_end, 3),
-                virtual_start_sec=round(candidate.virtual_start_sec + (cursor - candidate.source_start_sec), 3),
-                virtual_end_sec=round(candidate.virtual_start_sec + (next_end - candidate.source_start_sec), 3),
-                frame_refs=frames,
-            )
-        )
-        cursor = next_end
+    for candidate_id, candidate in enumerate(candidates, start=1):
+        start = candidate.source_start_sec
+        end = min(candidate.source_end_sec, start + max(1.0, float(max_window_sec)))
+        if end > start:
+            windows.append(_investigation_window_from_candidate(candidate, candidate_id, start, end))
+        if len(windows) >= max(0, int(max_windows)):
+            break
     return tuple(windows)
+
+
+def _investigation_window_from_candidate(
+    candidate: CandidateWindow,
+    candidate_id: int,
+    start_sec: float,
+    end_sec: float,
+) -> InvestigationWindow:
+    frames = tuple(frame for frame in candidate.frame_refs if start_sec <= frame.source_time_sec <= end_sec)
+    return InvestigationWindow(
+        candidate_id=int(candidate_id),
+        video_uid=candidate.video_uid,
+        beat_id=candidate.beat_id,
+        source_start_sec=round(float(start_sec), 3),
+        source_end_sec=round(float(end_sec), 3),
+        virtual_start_sec=round(candidate.virtual_start_sec + (float(start_sec) - candidate.source_start_sec), 3),
+        virtual_end_sec=round(candidate.virtual_start_sec + (float(end_sec) - candidate.source_start_sec), 3),
+        frame_refs=frames,
+    )
 
 
 def _default_investigate_window(model: ModelClient, question: str, window: InvestigationWindow) -> Mapping[str, Any]:
@@ -784,6 +1011,11 @@ def _best_supported_claim(claims: Sequence[InvestigationClaim]) -> Investigation
     if not supported:
         return None
     return sorted(supported, key=lambda claim: (-claim.confidence, claim.claim_id))[0]
+
+
+def _optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def _evidence_by_id(evidence: Sequence[InvestigationEvidence], evidence_id: str) -> InvestigationEvidence:

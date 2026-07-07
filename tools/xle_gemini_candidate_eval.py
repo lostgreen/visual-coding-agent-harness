@@ -27,6 +27,8 @@ def main() -> None:
     parser.add_argument("--inspect-top-n", type=int, default=3)
     parser.add_argument("--max-steps", type=int, default=3)
     parser.add_argument("--max-window-sec", type=float, default=30.0)
+    parser.add_argument("--max-windows-per-round", type=int, default=4)
+    parser.add_argument("--max-total-investigator-calls", type=int, default=10)
     parser.add_argument("--min-confidence", type=float, default=0.5)
     parser.add_argument("--frames-per-candidate", type=int, default=1)
     parser.add_argument("--max-image-edge", type=int, default=512)
@@ -190,6 +192,25 @@ class _OpenAICompatibleVLM:
         payload = response.json()
         return str(payload["choices"][0]["message"]["content"])
 
+    def select_xle_investigation(self, question: str, *, candidates: tuple[Any, ...], candidate_digest: str, max_windows: int, **kwargs: Any) -> dict[str, Any]:
+        del candidates, kwargs
+        prompt = _build_reasoner_selection_prompt(question, candidate_digest, max_windows=max_windows)
+        raw_response = self.chat(prompt, image_paths=[], max_image_edge=self.max_image_edge)
+        parsed = _parse_json_response(raw_response)
+        if not isinstance(parsed, dict):
+            parsed = {"inspect_windows": []}
+        self.interactions.append(
+            {
+                "type": "reasoner_select_investigation",
+                "question": question,
+                "prompt_text": prompt,
+                "raw_response_text": raw_response,
+                "parsed_response": parsed,
+            }
+        )
+        parsed.setdefault("investigator_request", "Inspect the selected windows for evidence relevant to the question.")
+        return parsed
+
     def investigate_xle_window(self, question: str, *, candidate: Any, subwindow: Any, frame_refs: list[Any] | tuple[Any, ...]) -> dict[str, Any]:
         selected_frames = tuple(frame_refs)[: self.frames_per_window]
         image_paths = [frame.path for frame in selected_frames]
@@ -246,6 +267,8 @@ def _run_investigator_mode(manifest: Any, index: LifeLogColdIndex, api: _OpenAIC
         inspect_top_n=args.inspect_top_n,
         retrieve_top_k=args.top_k,
         max_window_sec=args.max_window_sec,
+        max_windows_per_round=args.max_windows_per_round,
+        max_total_investigator_calls=args.max_total_investigator_calls,
         min_confidence=args.min_confidence,
     )
     records = []
@@ -301,6 +324,8 @@ def _run_investigator_mode(manifest: Any, index: LifeLogColdIndex, api: _OpenAIC
         "inspect_top_n": args.inspect_top_n,
         "max_steps": args.max_steps,
         "max_window_sec": args.max_window_sec,
+        "max_windows_per_round": args.max_windows_per_round,
+        "max_total_investigator_calls": args.max_total_investigator_calls,
         "frames_per_window": args.frames_per_candidate,
         "started_at_unix": started,
         "finished_at_unix": time.time(),
@@ -390,6 +415,23 @@ def _build_investigator_prompt(question: str, candidate: Any, subwindow: Any, fr
         f"subwindow_json: {json.dumps(compact, ensure_ascii=False)}\n\n"
         "Return only valid JSON with this schema: "
         '{"claim": string, "answer": string, "evidence": string, "confidence": number}'
+    )
+
+
+def _build_reasoner_selection_prompt(question: str, candidate_digest: str, *, max_windows: int) -> str:
+    return (
+        "You are the reasoner in an X-LeBench long-video QA loop.\n"
+        "You will receive cold retrieval candidates as metadata. Do not inspect every candidate. "
+        "Choose only the few source-time windows that are most worth visual/text inspection for answering the question.\n"
+        "Prefer narrow windows near promising frame times. Use source seconds from the candidate digest. "
+        "If a candidate is long, select the specific subwindow to inspect rather than the full candidate.\n\n"
+        f"question: {question}\n"
+        f"max_windows: {int(max_windows)}\n"
+        f"candidate_digest:\n{candidate_digest}\n\n"
+        "Return only valid JSON with this schema: "
+        '{"answer_hypothesis": string|null, "investigator_request": string, '
+        '"inspect_windows": [{"candidate_id": number, "start_sec": number, "end_sec": number}], '
+        '"stop_reason": string|null}'
     )
 
 

@@ -53,6 +53,8 @@ def main() -> None:
     xle_investigate.add_argument("--inspect-top-n", type=int, default=3, help="Number of cold candidates to inspect.")
     xle_investigate.add_argument("--max-steps", type=int, default=3, help="Planner step budget recorded in traces.")
     xle_investigate.add_argument("--max-window-sec", type=float, default=30.0, help="Split candidate windows longer than this.")
+    xle_investigate.add_argument("--max-windows-per-round", type=int, default=4, help="Maximum reasoner-selected windows per round.")
+    xle_investigate.add_argument("--max-total-investigator-calls", type=int, default=10, help="Maximum window inspections per case.")
     parser.add_argument("--video", help="Path to a video file.")
     parser.add_argument("--question", help="Question to answer about the video.")
     parser.add_argument("--videomme-root", help="VideoMME root containing cases.json.")
@@ -104,6 +106,8 @@ def main() -> None:
             inspect_top_n=args.inspect_top_n,
             retrieve_top_k=args.top_k,
             max_window_sec=args.max_window_sec,
+            max_windows_per_round=args.max_windows_per_round,
+            max_total_investigator_calls=args.max_total_investigator_calls,
         )
         cases = [case for case in manifest.cases if not args.case_id or case.case_id == args.case_id]
         out_dir.mkdir(parents=True, exist_ok=True)
