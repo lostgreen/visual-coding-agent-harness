@@ -57,6 +57,14 @@ def _fake_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: i
     return tuple(frames)
 
 
+def _constant_name_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
+    del video_path, end_sec, n_frames
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "frame_001.jpg"
+    Image.new("RGB", (32, 18), color=(60, 120, 180)).save(path)
+    return (Frame(frame_id="fr001", time_sec=round(float(start_sec), 3), path=str(path)),)
+
+
 def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     manifest = VirtualVideoManifest(
         workspace_id="case-1",
@@ -119,6 +127,16 @@ def test_lowfps_cache_and_window_sampling_manifests_keep_separate_lineage(tmp_pa
     assert window_rows[0]["virtual_time_sec"] == 5.0
     assert window_rows[0]["source_video_id"] == "target"
     assert window_rows[0]["source_time_sec"] == 101.0
+
+
+def test_materialized_frame_paths_are_unique_with_constant_sampler_names(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    low_frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_constant_name_sampler)
+    window_frames = materialize_window_frames(workspace, 5.0, 7.0, query_id="q_unique", fps=2.0, sampler=_constant_name_sampler)
+
+    assert len({frame.path for frame in low_frames}) == len(low_frames)
+    assert len({frame.path for frame in window_frames}) == len(window_frames)
 
 
 def test_window_sampling_uniformly_covers_full_window_when_capped(tmp_path: Path) -> None:

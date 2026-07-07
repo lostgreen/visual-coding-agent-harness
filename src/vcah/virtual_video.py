@@ -286,7 +286,8 @@ def materialize_lowfps_frame_cache(
             if virtual_time >= float(segment.virtual_end_sec):
                 virtual_time = round(float(segment.virtual_end_sec) - 0.001, 3)
             source_time = round(float(segment.source_start_sec) + (virtual_time - float(segment.virtual_start_sec)), 3)
-            frame = tuple(sampler(segment.source_path, source_time, source_time, 1, workspace.root_dir / "frames" / "low" / segment.segment_id))[0]
+            frame_dir = workspace.root_dir / "frames" / "low" / segment.segment_id / f"lo_{frame_index:06d}"
+            frame = tuple(sampler(segment.source_path, source_time, source_time, 1, frame_dir))[0]
             rows.append(
                 VirtualFrameRef(
                     frame_id=f"lo_{frame_index:06d}",
@@ -357,7 +358,7 @@ def materialize_window_frames(
         if window is None:
             continue
         source_time = round(window.source_start_sec + (virtual_time - window.virtual_start_sec), 3)
-        out_dir = observations / str(query_id) / window.segment_id
+        out_dir = observations / str(query_id) / window.segment_id / f"win_{frame_index:06d}"
         frame = tuple(sampler(window.source_path, source_time, source_time, 1, out_dir))[0]
         rows.append(
             VirtualFrameRef(
