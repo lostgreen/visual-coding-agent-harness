@@ -381,19 +381,19 @@ def materialize_window_frames(
 def _uniform_times(start_sec: float, end_sec: float, fps: float, max_frames: int) -> tuple[float, ...]:
     duration = max(0.0, end_sec - start_sec)
     count = min(max(1, int(duration * fps)), max(1, int(max_frames)))
-    step = 1.0 / max(0.001, fps)
-    times = []
-    for index in range(count):
-        time_sec = round(start_sec + index * step, 3)
-        if time_sec >= end_sec:
-            time_sec = round(end_sec - 0.001, 3)
-        times.append(time_sec)
-    return tuple(times)
+    if count == 1:
+        return (round((start_sec + end_sec) / 2.0, 3),)
+    span = end_sec - start_sec
+    return tuple(round(start_sec + index * span / (count - 1), 3) for index in range(count))
 
 
 def _source_window_for_time(manifest: VirtualVideoManifest, virtual_time_sec: float) -> SourceWindow | None:
     windows = virtual_to_source_windows(manifest, virtual_time_sec, virtual_time_sec + 0.001)
-    return windows[0] if windows else None
+    if windows:
+        return windows[0]
+    adjusted = max(0.0, virtual_time_sec - 0.001)
+    windows = virtual_to_source_windows(manifest, adjusted, virtual_time_sec)
+    return windows[-1] if windows else None
 
 
 def _select_frame_refs(frames: tuple[VirtualFrameRef, ...], max_frames: int) -> tuple[VirtualFrameRef, ...]:

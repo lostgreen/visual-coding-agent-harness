@@ -139,6 +139,8 @@ def test_investigator_run_batch_uses_segment_task_and_reports_lineage(tmp_path: 
     assert report.evidence
     assert report.evidence[0].evidence_id == "ev_q1_001"
     assert report.evidence[0].sampling["fps"] == 2.0
+    assert report.evidence[0].sampling["max_frames"] == 64
+    assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5", "inspect_window:2.0")
     assert report.evidence[0].source_lineage[0]["source_video_id"] == "target"
     assert (workspace.root_dir / "observations" / "window_frame_manifest.jsonl").exists()
 
@@ -156,7 +158,7 @@ def test_multiround_driver_caps_tasks_and_requires_cited_visual_evidence(tmp_pat
     assert result.accepted_investigations == 4
     assert result.rounds == 2
     assert result.citations == ("ev_q1_001",)
-    assert result.evidence[0].source_lineage[0]["source_time_range"] == [10.0, 15.0]
+    assert result.evidence[0].source_lineage[0]["source_time_range"] == [10.0, 13.5]
 
 
 def test_reasoner_initial_context_uses_segment_overview_not_cold_candidates(tmp_path: Path) -> None:

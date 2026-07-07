@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any, Mapping, Sequence
 
 from vcah.virtual_index import load_virtual_beats
@@ -61,7 +62,7 @@ class VirtualVideoInvestigator:
         *,
         sampler: FrameSampler | None = None,
         highfps: float = 2.0,
-        highfps_max_frames: int = 32,
+        highfps_max_frames: int = 64,
     ) -> None:
         self.workspace = workspace
         self.sampler = sampler
@@ -127,26 +128,33 @@ class VirtualVideoInvestigator:
 
     def _investigate_task(self, task: Any) -> InvestigationReport:
         segment_id = str(getattr(task, "segment_id", "") or "")
-        tool_steps = 0
+        tool_trace: list[str] = []
         segment_packet: Mapping[str, Any] | None = None
         if segment_id:
             segment_packet = self.open_segment(segment_id)
-            tool_steps += 1
+            tool_trace.append("open_segment")
         if getattr(task, "time_range", None) is None and segment_packet is not None:
-            start_sec, end_sec = tuple(segment_packet["virtual_time_range"])  # type: ignore[assignment]
-            start_sec = float(start_sec)
-            end_sec = float(end_sec)
+            start_sec, end_sec = _choose_window_from_segment_packet(task, segment_packet)
         else:
             start_sec, end_sec = _task_time_range(task)
-        fps = self.highfps if _needs_highfps(task) else 0.5
+
         window = self.inspect_window(
             start_sec,
             end_sec,
-            fps=fps,
+            fps=0.5,
             max_frames=self.highfps_max_frames,
-            query_id=str(getattr(task, "query_id")),
+            query_id=f"{getattr(task, 'query_id')}_preview",
         )
-        tool_steps += 1
+        tool_trace.append("inspect_window:0.5")
+        if _needs_highfps(task):
+            window = self.inspect_window(
+                start_sec,
+                end_sec,
+                fps=self.highfps,
+                max_frames=self.highfps_max_frames,
+                query_id=str(getattr(task, "query_id")),
+            )
+            tool_trace.append(f"inspect_window:{self.highfps:.1f}")
         frame_paths = tuple(str(frame["path"]) for frame in window["frames"])
         evidence = InvestigationEvidence(
             evidence_id=f"ev_{getattr(task, 'query_id')}_001",
@@ -163,7 +171,8 @@ class VirtualVideoInvestigator:
             status="satisfied" if frame_paths else "empty",
             evidence=(evidence,) if frame_paths else (),
             cost={
-                "tool_steps": tool_steps,
+                "tool_steps": len(tool_trace),
+                "tool_trace": tuple(tool_trace),
                 "frames": len(frame_paths),
                 "vlm_calls": 1 if frame_paths else 0,
             },
@@ -188,6 +197,34 @@ def _beats_for_segment(workspace: VirtualVideoWorkspace, segment_id: str) -> tup
         if any(str(item.get("segment_id")) == segment_id for item in lineage):
             rows.append(beat)
     return tuple(rows)
+
+
+def _choose_window_from_segment_packet(task: Any, segment_packet: Mapping[str, Any]) -> tuple[float, float]:
+    segment_start, segment_end = tuple(segment_packet.get("virtual_time_range", (0.0, 0.0)))
+    segment_start = float(segment_start)
+    segment_end = float(segment_end)
+    terms = _task_terms(task)
+    for cue in segment_packet.get("asr_cues", ()) or ():
+        text = str(cue.get("text", "") or "").casefold()
+        if terms and not any(term in text for term in terms):
+            continue
+        start = max(segment_start, float(cue.get("start_sec", segment_start)) - 2.0)
+        end = min(segment_end, float(cue.get("end_sec", segment_end)) + 2.0)
+        if end > start:
+            return round(start, 3), round(end, 3)
+    return segment_start, segment_end
+
+
+def _task_terms(task: Any) -> tuple[str, ...]:
+    text = " ".join(
+        [
+            str(getattr(task, "goal", "") or ""),
+            str(getattr(task, "expected_evidence", "") or ""),
+            " ".join(str(item) for item in getattr(task, "modality_hint", ()) or ()),
+        ]
+    ).casefold()
+    stop = {"the", "and", "for", "with", "that", "this", "visual", "verify", "read"}
+    return tuple(term for term in re.findall(r"[a-z0-9]+", text) if len(term) >= 3 and term not in stop)
 
 
 def _asr_cues_in_window(workspace: VirtualVideoWorkspace, start_sec: float, end_sec: float) -> list[dict[str, Any]]:

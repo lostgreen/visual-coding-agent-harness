@@ -121,6 +121,30 @@ def test_lowfps_cache_and_window_sampling_manifests_keep_separate_lineage(tmp_pa
     assert window_rows[0]["source_time_sec"] == 101.0
 
 
+def test_window_sampling_uniformly_covers_full_window_when_capped(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="long",
+        segments=(VirtualVideoSegment("seg_long", "long", "long.mp4", 0.0, 600.0, 0.0, 600.0),),
+    )
+    case = VirtualVideoCase(
+        case_id="long",
+        question="What happens near the end?",
+        options={"A": "start", "B": "end"},
+        gold="B",
+        target_segment_id="seg_long",
+        target_virtual_interval=(580.0, 600.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "long", manifest=manifest, case=case)
+
+    frames = materialize_window_frames(workspace, 0.0, 600.0, query_id="q_long", fps=2.0, max_frames=64, sampler=_fake_sampler)
+
+    times = [frame.virtual_time_sec for frame in frames]
+    assert len(times) == 64
+    assert times[0] == 0.0
+    assert times[-1] >= 599.0
+    assert times[32] > 300.0
+
+
 def test_virtual_beat_index_uses_thumbnail_as_cold_keyframe_and_virtual_times(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_fake_sampler)
