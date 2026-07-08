@@ -118,55 +118,42 @@ def build_virtual_beat_index(
 
 def build_beat_thumbnail_grid(frame_refs: Sequence[VirtualFrameRef], out_path: Path, *, max_frames: int = 9) -> Path:
     selected = _select_grid_frames(tuple(frame_refs), max_frames=max_frames)
-    cell_size = (160, 90)
-    canvas = Image.new("RGB", (cell_size[0] * 3, cell_size[1] * 3), color=(18, 18, 18))
-    for idx in range(9):
-        if idx < len(selected) and Path(selected[idx].path).exists():
-            with Image.open(selected[idx].path) as image:
-                image = image.convert("RGB")
-                image.thumbnail(cell_size)
-                cell = Image.new("RGB", cell_size, color=(12, 12, 12))
-                cell.paste(image, ((cell_size[0] - image.width) // 2, (cell_size[1] - image.height) // 2))
-        else:
-            cell = Image.new("RGB", cell_size, color=(42, 42, 42))
-        canvas.paste(cell, ((idx % 3) * cell_size[0], (idx // 3) * cell_size[1]))
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(out_path, format="JPEG", quality=88)
-    return out_path
+    return _render_frame_grid(selected, out_path, max_columns=3)
 
 
 def build_beat_thumbnail_grids(frame_refs: Sequence[VirtualFrameRef], out_prefix: Path, *, max_frames: int = 16) -> tuple[Path, ...]:
     selected = _select_grid_frames(tuple(frame_refs), max_frames=max_frames)
-    if not selected:
-        selected_groups: tuple[tuple[VirtualFrameRef, ...], ...] = ((), (), (), ())
-    else:
-        groups = []
-        for index in range(4):
-            start = index * 4
-            group = selected[start : start + 4]
-            groups.append(group)
-        selected_groups = tuple(groups)
+    selected_groups = tuple(tuple(selected[index : index + 4]) for index in range(0, len(selected), 4))
     paths = []
     for index, group in enumerate(selected_groups):
         path = out_prefix.parent / f"{out_prefix.name}_q{index}.jpg"
-        _render_2x2_grid(group, path)
+        _render_frame_grid(group, path, max_columns=4)
         paths.append(path)
     return tuple(paths)
 
 
-def _render_2x2_grid(frame_refs: Sequence[VirtualFrameRef], out_path: Path) -> Path:
+def _render_frame_grid(frame_refs: Sequence[VirtualFrameRef], out_path: Path, *, max_columns: int) -> Path:
+    refs = tuple(frame for frame in frame_refs if Path(frame.path).exists())
     cell_size = (160, 90)
-    canvas = Image.new("RGB", (cell_size[0] * 2, cell_size[1] * 2), color=(18, 18, 18))
-    for idx in range(4):
-        if idx < len(frame_refs) and Path(frame_refs[idx].path).exists():
-            with Image.open(frame_refs[idx].path) as image:
+    cap = max(1, int(max_columns))
+    if refs:
+        rows = tuple(tuple(refs[index : index + cap]) for index in range(0, len(refs), cap))
+        canvas_width = cell_size[0] * min(cap, len(refs))
+    else:
+        rows = ((),)
+        canvas_width = cell_size[0]
+    canvas = Image.new("RGB", (canvas_width, cell_size[1] * len(rows)), color=(18, 18, 18))
+    for row_index, row in enumerate(rows):
+        if not row:
+            continue
+        cell_width = max(1, canvas_width // len(row))
+        for col_index, frame in enumerate(row):
+            with Image.open(frame.path) as image:
                 image = image.convert("RGB")
-                image.thumbnail(cell_size)
-                cell = Image.new("RGB", cell_size, color=(12, 12, 12))
-                cell.paste(image, ((cell_size[0] - image.width) // 2, (cell_size[1] - image.height) // 2))
-        else:
-            cell = Image.new("RGB", cell_size, color=(42, 42, 42))
-        canvas.paste(cell, ((idx % 2) * cell_size[0], (idx // 2) * cell_size[1]))
+                image.thumbnail((cell_width, cell_size[1]))
+                cell = Image.new("RGB", (cell_width, cell_size[1]), color=(12, 12, 12))
+                cell.paste(image, ((cell_width - image.width) // 2, (cell_size[1] - image.height) // 2))
+            canvas.paste(cell, (col_index * cell_width, row_index * cell_size[1]))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_path, format="JPEG", quality=88)
     return out_path
@@ -174,21 +161,7 @@ def _render_2x2_grid(frame_refs: Sequence[VirtualFrameRef], out_path: Path) -> P
 
 def build_segment_overview_grid(frame_refs: Sequence[VirtualFrameRef], out_path: Path, *, max_frames: int = 16) -> Path:
     selected = _select_grid_frames(tuple(frame_refs), max_frames=max_frames)
-    cell_size = (160, 90)
-    canvas = Image.new("RGB", (cell_size[0] * 4, cell_size[1] * 4), color=(18, 18, 18))
-    for idx in range(16):
-        if idx < len(selected) and Path(selected[idx].path).exists():
-            with Image.open(selected[idx].path) as image:
-                image = image.convert("RGB")
-                image.thumbnail(cell_size)
-                cell = Image.new("RGB", cell_size, color=(12, 12, 12))
-                cell.paste(image, ((cell_size[0] - image.width) // 2, (cell_size[1] - image.height) // 2))
-        else:
-            cell = Image.new("RGB", cell_size, color=(42, 42, 42))
-        canvas.paste(cell, ((idx % 4) * cell_size[0], (idx // 4) * cell_size[1]))
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(out_path, format="JPEG", quality=88)
-    return out_path
+    return _render_frame_grid(selected, out_path, max_columns=4)
 
 
 def build_workspace_overview(

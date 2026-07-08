@@ -179,8 +179,10 @@ def test_virtual_beat_index_uses_thumbnail_as_cold_keyframe_and_virtual_times(tm
     assert result.beat_index_path.exists()
     beat_rows = json.loads(result.beat_index_path.read_text(encoding="utf-8"))["beats"]
     assert beat_rows[2]["source_lineage"][0]["source_video_id"] == "target"
-    assert len(beat_rows[2]["thumbnail_grid_paths"]) == 4
+    assert len(beat_rows[2]["thumbnail_grid_paths"]) == 1
     assert all(Path(path).exists() for path in beat_rows[2]["thumbnail_grid_paths"])
+    with Image.open(beat_rows[2]["thumbnail_grid_paths"][0]) as image:
+        assert image.size == (480, 90)
 
 
 def test_workspace_overview_caps_initial_segment_thumbnails_at_40(tmp_path: Path) -> None:
@@ -219,4 +221,7 @@ def test_workspace_overview_caps_initial_segment_thumbnails_at_40(tmp_path: Path
     assert overview["segment_overviews"][0]["kind"] == "page"
     assert len(overview["segment_overviews"][0]["segment_ids"]) > 1
     assert Path(overview["segment_overviews"][0]["overview_thumbnail_grid_path"]).exists()
+    with Image.open(overview["segment_overviews"][0]["overview_thumbnail_grid_path"]) as image:
+        assert image.size[0] <= 640
+        assert image.size[1] <= 360
     assert overview["available_tools"] == ["open_segment", "inspect_window"]
