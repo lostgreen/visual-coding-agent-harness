@@ -374,7 +374,7 @@ def _build_interleaved_chunk_segments(
     target_video = str(target["videoID"])
     chunk_width = max(30.0, float(chunk_sec))
     target_duration = _duration(dataset_root, target_video)
-    specs = _video_chunks("target", target_video, target_duration, chunk_width=chunk_width)
+    specs = list(_video_chunks("target", target_video, target_duration, chunk_width=chunk_width))
     pool = _long_video_pool(dataset_root, rows, exclude={target_video}, min_duration_sec=chunk_width)
     rng.shuffle(pool)
     total = sum(float(spec["end"]) - float(spec["start"]) for spec in specs)
