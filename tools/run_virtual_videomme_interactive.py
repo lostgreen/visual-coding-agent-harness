@@ -29,6 +29,7 @@ from vcah.virtual_video import (
 
 
 DEFAULT_CASE_IDS = ("477-2", "548-1", "371-1", "311-1", "314-3", "315-1")
+LONG_INTERLEAVED_CASE_IDS = ("606-3", "698-3", "701-3", "702-1")
 
 
 def main() -> None:
@@ -38,6 +39,14 @@ def main() -> None:
     out_root.mkdir(parents=True, exist_ok=True)
     api = OpenAICompatibleVisionClient.from_yaml(Path(args.config))
     case_ids = tuple(args.case_ids or DEFAULT_CASE_IDS)
+    if args.mode == "long":
+        case_ids = tuple(args.case_ids or LONG_INTERLEAVED_CASE_IDS)
+        if args.construction == "single_segment":
+            args.construction = "interleaved_chunks"
+        if float(args.min_duration_sec) == 18000.0:
+            args.min_duration_sec = 21600.0
+        if args.max_duration_sec is None:
+            args.max_duration_sec = 25200.0
     selected = case_ids[:1] if args.mode == "smoke" else case_ids
     summaries = []
     for case_id in selected:
@@ -47,7 +56,10 @@ def main() -> None:
             case_id=case_id,
             seed=int(args.seed),
             min_duration_sec=float(args.min_duration_sec),
+            max_duration_sec=None if args.max_duration_sec is None else float(args.max_duration_sec),
             segment_sec=float(args.segment_sec),
+            construction=str(args.construction),
+            chunk_sec=float(args.chunk_sec),
             rebuild=bool(args.rebuild),
         )
         ensure_index(workspace, low_fps=float(args.low_fps), beat_sec=float(args.beat_sec), rebuild=bool(args.rebuild_index))
@@ -81,7 +93,10 @@ def build_or_load_workspace(
     case_id: str,
     seed: int,
     min_duration_sec: float,
+    max_duration_sec: float | None,
     segment_sec: float,
+    construction: str,
+    chunk_sec: float,
     rebuild: bool,
 ) -> VirtualVideoWorkspace:
     if root_dir.exists() and (root_dir / "case.json").exists() and not rebuild:
@@ -90,17 +105,37 @@ def build_or_load_workspace(
     by_qid = {str(row["question_id"]): row for row in rows}
     target = by_qid[str(case_id)]
     rng = random.Random(seed + sum(ord(ch) for ch in str(case_id)))
-    segments = _build_segments(dataset_root, rows, target, rng=rng, min_duration_sec=min_duration_sec, segment_sec=segment_sec)
+    if construction == "interleaved_chunks":
+        segments = _build_interleaved_chunk_segments(
+            dataset_root,
+            rows,
+            target,
+            rng=rng,
+            min_duration_sec=min_duration_sec,
+            max_duration_sec=max_duration_sec,
+            chunk_sec=chunk_sec,
+        )
+    else:
+        segments = _build_segments(dataset_root, rows, target, rng=rng, min_duration_sec=min_duration_sec, segment_sec=segment_sec)
     manifest = VirtualVideoManifest(workspace_id=str(case_id), segments=tuple(segments))
-    target_segment = next(segment for segment in segments if segment.role == "target")
+    target_segments = tuple(segment for segment in segments if segment.role == "target")
+    target_segment = target_segments[0]
     case = VirtualVideoCase(
         case_id=str(case_id),
         question=str(target["question"]),
         options=_options_mapping(target["options"]),
         gold=str(target["answer"]),
         target_segment_id=target_segment.segment_id,
-        target_virtual_interval=(target_segment.virtual_start_sec, target_segment.virtual_end_sec),
-        metadata={"source_video_id": str(target["videoID"]), "min_duration_sec": min_duration_sec, "seed": seed},
+        target_virtual_interval=(target_segments[0].virtual_start_sec, target_segments[-1].virtual_end_sec),
+        metadata={
+            "source_video_id": str(target["videoID"]),
+            "min_duration_sec": min_duration_sec,
+            "max_duration_sec": max_duration_sec,
+            "seed": seed,
+            "construction": construction,
+            "target_segment_ids": [segment.segment_id for segment in target_segments],
+            "target_virtual_intervals": [[segment.virtual_start_sec, segment.virtual_end_sec] for segment in target_segments],
+        },
     )
     workspace = VirtualVideoWorkspace.create(root_dir, manifest=manifest, case=case)
     cues = []
@@ -326,6 +361,116 @@ def _build_segments(
     return tuple(segments)
 
 
+def _build_interleaved_chunk_segments(
+    dataset_root: Path,
+    rows: Sequence[Mapping[str, Any]],
+    target: Mapping[str, Any],
+    *,
+    rng: random.Random,
+    min_duration_sec: float,
+    max_duration_sec: float | None,
+    chunk_sec: float,
+) -> tuple[VirtualVideoSegment, ...]:
+    target_video = str(target["videoID"])
+    chunk_width = max(30.0, float(chunk_sec))
+    target_duration = _duration(dataset_root, target_video)
+    specs = _video_chunks("target", target_video, target_duration, chunk_width=chunk_width)
+    pool = _long_video_pool(dataset_root, rows, exclude={target_video}, min_duration_sec=chunk_width)
+    rng.shuffle(pool)
+    total = sum(float(spec["end"]) - float(spec["start"]) for spec in specs)
+    for vid, dur in pool:
+        chunks = list(_video_chunks("distractor", vid, dur, chunk_width=chunk_width))
+        rng.shuffle(chunks)
+        for spec in chunks:
+            if max_duration_sec is not None and total >= float(max_duration_sec):
+                break
+            specs.append(spec)
+            total += float(spec["end"]) - float(spec["start"])
+            if total >= float(min_duration_sec) and (max_duration_sec is None or total >= min(float(max_duration_sec), float(min_duration_sec))):
+                break
+        if total >= float(min_duration_sec):
+            break
+    if total < min_duration_sec:
+        raise RuntimeError(f"Only built {total:.1f}s, below requested {min_duration_sec:.1f}s")
+    specs = _interleave_specs(specs, rng=rng)
+    segments = []
+    cursor = 0.0
+    for idx, spec in enumerate(specs, start=1):
+        dur = float(spec["end"]) - float(spec["start"])
+        segments.append(
+            VirtualVideoSegment(
+                segment_id=f"seg_{idx:04d}",
+                source_video_id=str(spec["video_id"]),
+                source_path=str(dataset_root / "video" / f"{spec['video_id']}.mp4"),
+                source_start_sec=round(float(spec["start"]), 3),
+                source_end_sec=round(float(spec["end"]), 3),
+                virtual_start_sec=round(cursor, 3),
+                virtual_end_sec=round(cursor + dur, 3),
+                role=str(spec["role"]),
+            )
+        )
+        cursor += dur
+    return tuple(segments)
+
+
+def _video_chunks(role: str, video_id: str, duration_sec: float, *, chunk_width: float) -> tuple[dict[str, Any], ...]:
+    chunks = []
+    start = 0.0
+    while start < float(duration_sec):
+        end = min(float(duration_sec), start + chunk_width)
+        if end - start >= min(30.0, chunk_width):
+            chunks.append({"role": role, "video_id": video_id, "start": start, "end": end})
+        start = end
+    return tuple(chunks)
+
+
+def _long_video_pool(
+    dataset_root: Path,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    exclude: set[str],
+    min_duration_sec: float,
+) -> list[tuple[str, float]]:
+    pool = []
+    seen = set(exclude)
+    for row in rows:
+        vid = str(row["videoID"])
+        if vid in seen or str(row.get("duration")) != "long":
+            continue
+        path = dataset_root / "video" / f"{vid}.mp4"
+        if path.exists():
+            dur = _duration(dataset_root, vid)
+            if dur >= min_duration_sec:
+                pool.append((vid, dur))
+                seen.add(vid)
+    return pool
+
+
+def _interleave_specs(specs: Sequence[Mapping[str, Any]], *, rng: random.Random) -> list[Mapping[str, Any]]:
+    items = list(specs)
+    rng.shuffle(items)
+    for _ in range(4):
+        changed = False
+        for idx in range(1, len(items)):
+            if items[idx]["video_id"] != items[idx - 1]["video_id"]:
+                continue
+            swap = next((pos for pos in range(idx + 1, len(items)) if items[pos]["video_id"] != items[idx]["video_id"]), None)
+            if swap is not None:
+                items[idx], items[swap] = items[swap], items[idx]
+                changed = True
+        if not changed:
+            break
+    if items and items[0]["role"] == "target" and len(items) > 2:
+        swap = next((idx for idx, item in enumerate(items[1:], start=1) if item["role"] != "target"), None)
+        if swap is not None:
+            items[0], items[swap] = items[swap], items[0]
+    if items and items[-1]["role"] == "target" and len(items) > 2:
+        swap = next((len(items) - 1 - idx for idx, item in enumerate(reversed(items[:-1]), start=1) if item["role"] != "target"), None)
+        if swap is not None:
+            items[-1], items[swap] = items[swap], items[-1]
+    return items
+
+
 def _duration(dataset_root: Path, video_id: str) -> float:
     return probe_duration(str(dataset_root / "video" / f"{video_id}.mp4"))
 
@@ -417,10 +562,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out-root", default="/m2v_intern/xuboshen/zgw/VideoAgent/virtual_videomme_interactive")
     parser.add_argument("--config", required=True)
     parser.add_argument("--case-ids", nargs="*")
-    parser.add_argument("--mode", choices=("smoke", "all"), default="smoke")
+    parser.add_argument("--mode", choices=("smoke", "all", "long"), default="smoke")
     parser.add_argument("--seed", type=int, default=20260707)
     parser.add_argument("--min-duration-sec", type=float, default=18000.0)
+    parser.add_argument("--max-duration-sec", type=float)
     parser.add_argument("--segment-sec", type=float, default=600.0)
+    parser.add_argument("--construction", choices=("single_segment", "interleaved_chunks"), default="single_segment")
+    parser.add_argument("--chunk-sec", type=float, default=300.0)
     parser.add_argument("--low-fps", type=float, default=0.1)
     parser.add_argument("--beat-sec", type=float, default=60.0)
     parser.add_argument("--max-rounds", type=int, default=4)
