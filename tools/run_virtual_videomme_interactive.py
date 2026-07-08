@@ -219,10 +219,15 @@ class GeminiReasoner:
         overview = dict(kwargs["workspace_overview"])
         evidence_digest = tuple(kwargs.get("evidence_digest", ()) or ())
         if evidence_digest:
-            prompt = _answer_prompt(kwargs, evidence_digest)
-            raw = self.api.chat(prompt)
+            image_paths = [str(row.get("overview_thumbnail_grid_path")) for row in overview.get("segment_overviews", ())]
+            prompt = _followup_prompt(kwargs, evidence_digest)
+            raw = self.api.chat(prompt, image_paths=image_paths)
             parsed = _parse_json(raw)
-            self._trace("reasoner_answer", prompt, raw, parsed)
+            action = str(parsed.get("action") or "answer")
+            self._trace("reasoner_investigate" if action == "investigate" else "reasoner_answer", prompt, raw, parsed)
+            if action == "investigate":
+                tasks = parsed.get("tasks") or []
+                return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
             return ReasonerDecision(
                 action="answer",
                 answer=str(parsed.get("answer") or ""),
@@ -498,12 +503,15 @@ def _investigate_prompt(kwargs: Mapping[str, Any]) -> str:
     )
 
 
-def _answer_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mapping[str, Any]]) -> str:
+def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mapping[str, Any]]) -> str:
     return (
-        "Answer the multiple-choice question using only cited evidence. Return JSON only: "
-        "{\"answer\":\"A. ...\", \"citations\":[\"ev_...\"]}.\n"
+        "You are the Reasoner for a long virtual video QA agent. Decide whether current evidence is enough.\n"
+        "If enough, return JSON only: {\"action\":\"answer\", \"answer\":\"A. ...\", \"citations\":[\"ev_...\"]}.\n"
+        "If not enough, return JSON only: {\"action\":\"investigate\", \"tasks\":[{\"query_id\":\"r2_t1\",\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\"}]}.\n"
+        "You may request up to 4 more segments/windows. Do not answer with insufficient evidence.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
-        f"Evidence: {json.dumps(list(evidence_digest), ensure_ascii=False)}"
+        f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}\n"
+        f"Evidence so far: {json.dumps(list(evidence_digest), ensure_ascii=False)}"
     )
 
 
