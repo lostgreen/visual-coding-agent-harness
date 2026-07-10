@@ -14,8 +14,14 @@ from typing import Any, Mapping, Sequence
 import requests
 import yaml
 
-from vcah.investigator import InvestigationEvidence, InvestigationReport, VirtualVideoInvestigator
+from vcah.investigator import (
+    InvestigationReport,
+    VirtualVideoInvestigator,
+    _choose_window_from_segment_packet,
+    _needs_highfps,
+)
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
+from vcah.types import CoverageSegment, EvidenceRecord
 from vcah.video import probe_duration
 from vcah.virtual_index import build_virtual_beat_index
 from vcah.virtual_video import (
@@ -25,6 +31,7 @@ from vcah.virtual_video import (
     VirtualVideoWorkspace,
     load_srt_as_virtual_cues,
     materialize_lowfps_frame_cache,
+    select_uniform_items,
 )
 
 
@@ -242,7 +249,10 @@ class GeminiReasoner:
         return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
 
     def _trace(self, kind: str, prompt: str, raw: str, parsed: Mapping[str, Any]) -> None:
-        _append_jsonl(self.trace_path, {"type": kind, "prompt": prompt, "raw": raw, "parsed": dict(parsed), "time": time.time()})
+        _append_jsonl(
+            self.trace_path,
+            {"type": kind, "round": self.calls, "prompt": prompt, "raw": raw, "parsed": dict(parsed), "time": time.time()},
+        )
 
 
 class GeminiInvestigator(VirtualVideoInvestigator):
@@ -250,33 +260,142 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         super().__init__(workspace)
         self.api = api
         self.trace_path = trace_path
+        self._query_calls: dict[str, int] = {}
 
     def _investigate_task(self, task: Any) -> InvestigationReport:
+        query_id = str(getattr(task, "query_id", "") or "query")
+        observation_id = self._next_observation_id(query_id)
         segment_packet = self.open_segment(str(getattr(task, "segment_id", "") or self.workspace.manifest.segments[0].segment_id))
-        window = _select_window_with_model(self.api, task, segment_packet, self.trace_path)
-        low = self.inspect_window(window[0], window[1], fps=0.5, max_frames=64, query_id=f"{getattr(task, 'query_id')}_preview")
-        high = self.inspect_window(window[0], window[1], fps=2.0, max_frames=64, query_id=str(getattr(task, "query_id")))
-        prompt = _evidence_prompt(self.workspace, task, segment_packet, high)
-        frame_paths = [str(row["path"]) for row in high["frames"][:16]]
-        raw = self.api.chat(prompt, image_paths=frame_paths, max_tokens=700)
-        parsed = _parse_json(raw)
-        _append_jsonl(self.trace_path, {"type": "investigator_evidence", "query_id": getattr(task, "query_id"), "window": list(window), "raw": raw, "parsed": parsed, "time": time.time()})
-        evidence = InvestigationEvidence(
-            evidence_id=f"ev_{getattr(task, 'query_id')}_001",
-            summary=str(parsed.get("summary") or raw)[:1200],
+        requested_window = getattr(task, "time_range", None)
+        if requested_window is None:
+            window = _select_window_with_model(self.api, task, segment_packet, self.trace_path)
+        else:
+            window = float(requested_window[0]), float(requested_window[1])
+
+        required_fps = self.highfps if _needs_highfps(task) else 0.5
+        cached = self._find_reusable_evidence(task, window[0], window[1], required_fps=required_fps)
+        if cached is not None:
+            return self._reuse_report(
+                task,
+                cached,
+                tool_trace=("open_segment", "reuse_observation"),
+                vlm_calls=0 if requested_window is not None else 1,
+            )
+
+        preview_query_id = f"{observation_id}_preview"
+        low = self.inspect_window(window[0], window[1], fps=0.5, max_frames=64, query_id=preview_query_id)
+        preview_frames = select_uniform_items(tuple(low["frames"]), 16)
+        preview_paths = tuple(str(row["path"]) for row in preview_frames)
+        preview_prompt = _preview_prompt(self.workspace, task, segment_packet, low)
+        preview_raw = self.api.chat(preview_prompt, image_paths=preview_paths, max_tokens=700)
+        preview = _parse_json(preview_raw)
+        _append_jsonl(
+            self.trace_path,
+            {
+                "type": "investigator_preview",
+                "query_id": query_id,
+                "observation_id": observation_id,
+                "preview_query_id": preview_query_id,
+                "window": list(window),
+                "prompt": preview_prompt,
+                "frame_paths": list(preview_paths),
+                "raw": preview_raw,
+                "parsed": preview,
+                "time": time.time(),
+            },
+        )
+
+        selected_window = window
+        selected_packet = low
+        selected_frames = preview_frames
+        parsed = preview
+        raw = preview_raw
+        final_prompt = preview_prompt
+        detail_query_id = ""
+        tool_trace = ["open_segment", "inspect_window:0.5"]
+        vlm_calls = 1 if requested_window is not None else 2
+
+        if _needs_highfps(task) or _truthy(preview.get("need_detail")):
+            selected_window = _select_detail_window(preview, window, task, segment_packet)
+            detail_query_id = f"{observation_id}_detail"
+            selected_packet = self.inspect_window(
+                selected_window[0],
+                selected_window[1],
+                fps=self.highfps,
+                max_frames=self.highfps_max_frames,
+                query_id=detail_query_id,
+            )
+            selected_frames = select_uniform_items(tuple(selected_packet["frames"]), 16)
+            detail_paths = tuple(str(row["path"]) for row in selected_frames)
+            final_prompt = _evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
+            raw = self.api.chat(final_prompt, image_paths=detail_paths, max_tokens=700)
+            parsed = _parse_json(raw)
+            tool_trace.append(f"inspect_window:{self.highfps:.1f}")
+            vlm_calls += 1
+
+        frame_paths = tuple(str(row["path"]) for row in selected_frames)
+        _append_jsonl(
+            self.trace_path,
+            {
+                "type": "investigator_evidence",
+                "query_id": query_id,
+                "observation_id": observation_id,
+                "preview_query_id": preview_query_id,
+                "detail_query_id": detail_query_id,
+                "window": list(selected_window),
+                "prompt": final_prompt,
+                "frame_paths": list(frame_paths),
+                "raw": raw,
+                "parsed": parsed,
+                "time": time.time(),
+            },
+        )
+        confidence = _confidence(parsed.get("confidence"), default=0.6)
+        evidence = EvidenceRecord(
+            evidence_id=f"ev_{observation_id}_001",
+            beat_id="",
+            start_sec=float(selected_window[0]),
+            end_sec=float(selected_window[1]),
             modality="visual",
-            sampling=dict(high["sampling"]),
-            virtual_time_range=(float(window[0]), float(window[1])),
-            source_lineage=tuple(dict(item) for item in high["source_lineage"]),
-            supporting_frames=tuple(frame_paths),
-            confidence=float(parsed.get("confidence", 0.6) or 0.6),
+            pointer=f"virtual://{self.workspace.workspace_id}/observations/{observation_id}",
+            verbatim=str(parsed.get("summary") or raw)[:1200],
+            frame_refs=frame_paths,
+            attestation_model=str(getattr(self.api, "model", type(self.api).__name__)),
+            temporal_scope="window",
+            evidence_kind="visual_observation",
+            observation_polarity="positive" if frame_paths else "unknown",
+            sampling_coverage="sparse",
+            request_ids=(query_id,),
+            coverage_manifest=(
+                CoverageSegment(query_id, float(selected_window[0]), float(selected_window[1]), "visual", 1.0),
+            ),
+            task_id=query_id,
+            observation_id=observation_id,
+            sampling_fps=float(selected_packet["sampling"]["fps"]),
+            confidence=confidence,
+            source_lineage=tuple(dict(item) for item in selected_packet["source_lineage"]),
         )
+        if frame_paths:
+            self._remember_evidence(task, evidence)
+            self._record_visit(task, evidence, status="satisfied")
         return InvestigationReport(
-            query_id=str(getattr(task, "query_id")),
-            status="satisfied",
-            evidence=(evidence,),
-            cost={"tool_trace": ("open_segment", "inspect_window:0.5", "inspect_window:2.0"), "frames": len(frame_paths), "vlm_calls": 2},
+            query_id=query_id,
+            status="satisfied" if frame_paths else "empty",
+            evidence=(evidence,) if frame_paths else (),
+            cost={
+                "tool_trace": tuple(tool_trace),
+                "preview_frames": len(preview_paths),
+                "detail_frames": len(frame_paths) if detail_query_id else 0,
+                "frames": len(preview_paths) + (len(frame_paths) if detail_query_id else 0),
+                "vlm_calls": vlm_calls,
+                "reused": False,
+            },
         )
+
+    def _next_observation_id(self, query_id: str) -> str:
+        call_index = self._query_calls.get(query_id, 0) + 1
+        self._query_calls[query_id] = call_index
+        return f"{query_id}_c{call_index:02d}"
 
 
 def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segment_packet: Mapping[str, Any], trace_path: Path) -> tuple[float, float]:
@@ -291,13 +410,72 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
         image_paths.extend(str(path) for path in beat.get("thumbnail_grid_paths", ())[:1])
     raw = api.chat(prompt, image_paths=image_paths, max_tokens=400)
     parsed = _parse_json(raw)
-    _append_jsonl(trace_path, {"type": "investigator_select_window", "query_id": getattr(task, "query_id"), "raw": raw, "parsed": parsed, "time": time.time()})
     seg_start, seg_end = segment_packet["virtual_time_range"]
-    start = max(float(seg_start), float(parsed.get("start_sec", seg_start) or seg_start))
-    end = min(float(seg_end), float(parsed.get("end_sec", start + 60.0) or start + 60.0))
+    try:
+        start = max(float(seg_start), float(parsed["start_sec"]))
+        end = min(float(seg_end), float(parsed["end_sec"]))
+    except (KeyError, TypeError, ValueError):
+        start, end = _choose_window_from_segment_packet(task, segment_packet)
+        fallback_used = True
+    else:
+        fallback_used = end <= start
+        if fallback_used:
+            start, end = _choose_window_from_segment_packet(task, segment_packet)
+    selected = round(float(start), 3), round(float(end), 3)
+    _append_jsonl(
+        trace_path,
+        {
+            "type": "investigator_select_window",
+            "query_id": getattr(task, "query_id"),
+            "raw": raw,
+            "parsed": parsed,
+            "selected_window": list(selected),
+            "fallback_used": fallback_used,
+            "time": time.time(),
+        },
+    )
+    return selected
+
+
+def _select_detail_window(
+    preview: Mapping[str, Any],
+    preview_window: tuple[float, float],
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    *,
+    max_detail_sec: float = 60.0,
+) -> tuple[float, float]:
+    preview_start, preview_end = float(preview_window[0]), float(preview_window[1])
+    try:
+        start = max(preview_start, float(preview["detail_start_sec"]))
+        end = min(preview_end, float(preview["detail_end_sec"]))
+    except (KeyError, TypeError, ValueError):
+        start, end = _choose_window_from_segment_packet(task, segment_packet)
+        start = max(preview_start, float(start))
+        end = min(preview_end, float(end))
     if end <= start:
-        end = min(float(seg_end), start + 60.0)
+        center = (preview_start + preview_end) / 2.0
+        half = min(float(max_detail_sec), preview_end - preview_start) / 2.0
+        start, end = center - half, center + half
+    if end - start > float(max_detail_sec):
+        center = (start + end) / 2.0
+        half = float(max_detail_sec) / 2.0
+        start = max(preview_start, center - half)
+        end = min(preview_end, center + half)
     return round(start, 3), round(end, 3)
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().casefold() in {"1", "true", "yes"}
+
+
+def _confidence(value: Any, *, default: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _load_rows(dataset_root: Path) -> list[dict[str, Any]]:
@@ -515,13 +693,37 @@ def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mappin
     )
 
 
-def _evidence_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet: Mapping[str, Any], window: Mapping[str, Any]) -> str:
+def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet: Mapping[str, Any], window: Mapping[str, Any]) -> str:
     return (
-        "You are the Investigator. Inspect these sampled frames and ASR. Return JSON only: "
-        "{\"summary\":\"visual evidence summary\", \"confidence\":0.0-1.0}.\n"
-        f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
-        f"Task: {getattr(task, 'goal', '')}\nSegment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
-        f"Window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
+        "You are the Investigator. Inspect the low-fps preview frames and local ASR without choosing an answer option. "
+        "Return JSON only: {\"summary\":\"atomic observation\",\"confidence\":0.0-1.0,"
+        "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\"}.\n"
+        "Request detail only when motion, OCR, identity, or a small visual attribute remains unresolved. "
+        "Any detail window must be inside the preview window and narrower than it.\n"
+        f"Question: {workspace.case.question}\n"
+        f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
+        f"Preview window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
+    )
+
+
+def _evidence_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+    *,
+    preview: Mapping[str, Any] | None = None,
+) -> str:
+    return (
+        "You are the Investigator. Inspect the detail frames and local ASR. Report only an atomic observation, "
+        "not an answer-option judgment. Return JSON only: "
+        "{\"summary\":\"atomic visual evidence summary\", \"confidence\":0.0-1.0}.\n"
+        f"Question: {workspace.case.question}\n"
+        f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
+        f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
+        f"Detail window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
     )
 
 

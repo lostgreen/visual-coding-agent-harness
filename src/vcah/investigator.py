@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import re
 from typing import Any, Mapping, Sequence
 
+from vcah.types import CoverageSegment, EvidenceRecord
 from vcah.virtual_index import load_virtual_beats
 from vcah.virtual_video import (
     FrameSampler,
@@ -34,23 +36,18 @@ HIGHFPS_KEYWORDS = {
 
 
 @dataclass(frozen=True)
-class InvestigationEvidence:
-    evidence_id: str
-    summary: str
-    modality: str
-    sampling: Mapping[str, Any]
-    virtual_time_range: tuple[float, float]
-    source_lineage: tuple[Mapping[str, Any], ...]
-    supporting_frames: tuple[str, ...] = ()
-    confidence: float = 0.0
-
-
-@dataclass(frozen=True)
 class InvestigationReport:
     query_id: str
     status: str
-    evidence: tuple[InvestigationEvidence, ...] = ()
+    evidence: tuple[EvidenceRecord, ...] = ()
     cost: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _CachedObservation:
+    goal_fingerprint: str
+    source_lineage: tuple[Mapping[str, Any], ...]
+    evidence: EvidenceRecord
 
 
 class VirtualVideoInvestigator:
@@ -68,9 +65,91 @@ class VirtualVideoInvestigator:
         self.sampler = sampler
         self.highfps = float(highfps)
         self.highfps_max_frames = min(64, int(highfps_max_frames))
+        self.ledger_path = self.workspace.root_dir / "exploration_ledger.jsonl"
+        self._visit_count = 0
+        self._observation_cache: list[_CachedObservation] = []
 
     def run_batch(self, tasks: Sequence[Any]) -> tuple[InvestigationReport, ...]:
         return tuple(self._investigate_task(task) for task in tasks)
+
+    def reset_run_state(self) -> None:
+        self._visit_count = 0
+        self._observation_cache.clear()
+        self.ledger_path.write_text("", encoding="utf-8")
+
+    def _find_reusable_evidence(
+        self,
+        task: Any,
+        start_sec: float,
+        end_sec: float,
+        *,
+        required_fps: float,
+    ) -> EvidenceRecord | None:
+        goal = _goal_fingerprint(task)
+        lineage = _source_lineage(self.workspace, start_sec, end_sec)
+        for cached in reversed(self._observation_cache):
+            if cached.goal_fingerprint != goal:
+                continue
+            if cached.evidence.sampling_fps + 1e-6 < float(required_fps):
+                continue
+            if _lineage_iou(cached.source_lineage, lineage) >= 0.8:
+                return cached.evidence
+        return None
+
+    def _remember_evidence(self, task: Any, evidence: EvidenceRecord) -> None:
+        self._observation_cache.append(
+            _CachedObservation(
+                goal_fingerprint=_goal_fingerprint(task),
+                source_lineage=tuple(dict(item) for item in evidence.source_lineage),
+                evidence=evidence,
+            )
+        )
+
+    def _record_visit(
+        self,
+        task: Any,
+        evidence: EvidenceRecord,
+        *,
+        status: str,
+        reused_from: str = "",
+    ) -> None:
+        self._visit_count += 1
+        row = {
+            "visit_id": f"visit_{self._visit_count:04d}",
+            "query_id": str(getattr(task, "query_id", "") or ""),
+            "observation_id": evidence.observation_id,
+            "goal_fingerprint": _goal_fingerprint(task),
+            "virtual_time_range": [evidence.start_sec, evidence.end_sec],
+            "sampling_fps": evidence.sampling_fps,
+            "source_lineage": [dict(item) for item in evidence.source_lineage],
+            "evidence_ids": [evidence.evidence_id],
+            "status": status,
+            "reused_from": str(reused_from or ""),
+        }
+        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.ledger_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def _reuse_report(
+        self,
+        task: Any,
+        evidence: EvidenceRecord,
+        *,
+        tool_trace: Sequence[str],
+        vlm_calls: int = 0,
+    ) -> InvestigationReport:
+        self._record_visit(task, evidence, status="reused", reused_from=evidence.evidence_id)
+        return InvestigationReport(
+            query_id=str(getattr(task, "query_id", "") or ""),
+            status="satisfied",
+            evidence=(evidence,),
+            cost={
+                "tool_trace": tuple(tool_trace),
+                "frames": 0,
+                "vlm_calls": int(vlm_calls),
+                "reused": True,
+            },
+        )
 
     def open_segment(self, segment_id: str) -> Mapping[str, Any]:
         segment = self.workspace.manifest.segment(str(segment_id))
@@ -138,6 +217,11 @@ class VirtualVideoInvestigator:
         else:
             start_sec, end_sec = _task_time_range(task)
 
+        required_fps = self.highfps if _needs_highfps(task) else 0.5
+        cached = self._find_reusable_evidence(task, start_sec, end_sec, required_fps=required_fps)
+        if cached is not None:
+            return self._reuse_report(task, cached, tool_trace=(*tool_trace, "reuse_observation"))
+
         window = self.inspect_window(
             start_sec,
             end_sec,
@@ -156,18 +240,34 @@ class VirtualVideoInvestigator:
             )
             tool_trace.append(f"inspect_window:{self.highfps:.1f}")
         frame_paths = tuple(str(frame["path"]) for frame in window["frames"])
-        evidence = InvestigationEvidence(
+        query_id = str(getattr(task, "query_id", "") or "")
+        evidence = EvidenceRecord(
             evidence_id=f"ev_{getattr(task, 'query_id')}_001",
-            summary=_summary_for_task(task, window=window),
+            beat_id="",
+            start_sec=float(start_sec),
+            end_sec=float(end_sec),
             modality="visual",
-            sampling=dict(window["sampling"]),
-            virtual_time_range=(float(start_sec), float(end_sec)),
-            source_lineage=tuple(dict(item) for item in window["source_lineage"]),
-            supporting_frames=frame_paths,
+            pointer=f"virtual://{self.workspace.workspace_id}/observations/{query_id}",
+            verbatim=_summary_for_task(task, window=window),
+            frame_refs=frame_paths,
+            attestation_model="deterministic-window-inspector",
+            temporal_scope="window",
+            evidence_kind="visual_observation",
+            observation_polarity="positive" if frame_paths else "unknown",
+            sampling_coverage="sparse",
+            request_ids=(query_id,),
+            coverage_manifest=(CoverageSegment(query_id, float(start_sec), float(end_sec), "visual", 1.0),),
+            task_id=query_id,
+            observation_id=query_id,
+            sampling_fps=float(window["sampling"]["fps"]),
             confidence=0.7 if frame_paths else 0.0,
+            source_lineage=tuple(dict(item) for item in window["source_lineage"]),
         )
+        if frame_paths:
+            self._remember_evidence(task, evidence)
+            self._record_visit(task, evidence, status="satisfied")
         return InvestigationReport(
-            query_id=str(getattr(task, "query_id")),
+            query_id=query_id,
             status="satisfied" if frame_paths else "empty",
             evidence=(evidence,) if frame_paths else (),
             cost={
@@ -175,6 +275,7 @@ class VirtualVideoInvestigator:
                 "tool_trace": tuple(tool_trace),
                 "frames": len(frame_paths),
                 "vlm_calls": 1 if frame_paths else 0,
+                "reused": False,
             },
         )
 
@@ -204,15 +305,70 @@ def _choose_window_from_segment_packet(task: Any, segment_packet: Mapping[str, A
     segment_start = float(segment_start)
     segment_end = float(segment_end)
     terms = _task_terms(task)
+    hits: list[dict[str, Any]] = []
     for cue in segment_packet.get("asr_cues", ()) or ():
         text = str(cue.get("text", "") or "").casefold()
-        if terms and not any(term in text for term in terms):
+        matched_terms = tuple(term for term in terms if term in text)
+        if terms and not matched_terms:
             continue
-        start = max(segment_start, float(cue.get("start_sec", segment_start)) - 2.0)
-        end = min(segment_end, float(cue.get("end_sec", segment_end)) + 2.0)
+        start = max(segment_start, float(cue.get("start_sec", segment_start)))
+        end = min(segment_end, float(cue.get("end_sec", start)))
         if end > start:
-            return round(start, 3), round(end, 3)
+            hits.append({"start": start, "end": end, "terms": matched_terms})
+    if hits:
+        clusters = _cluster_asr_hits(hits)
+        best = max(
+            clusters,
+            key=lambda cluster: (
+                len({term for hit in cluster for term in hit["terms"]}),
+                len(cluster),
+                -float(cluster[0]["start"]),
+            ),
+        )
+        return _padded_window(
+            float(best[0]["start"]),
+            float(best[-1]["end"]),
+            segment_start=segment_start,
+            segment_end=segment_end,
+            padding_sec=2.0,
+        )
+
+    beats = tuple(segment_packet.get("beats", ()) or ())
+    if beats:
+        scored = []
+        for index, beat in enumerate(beats):
+            text = str(beat.get("asr_excerpt", "") or "").casefold()
+            score = len({term for term in terms if term in text})
+            scored.append((score, -abs(index - (len(beats) - 1) / 2.0), index, beat))
+        _, _, _, beat = max(scored)
+        window = tuple(beat.get("virtual_time_range", (segment_start, segment_end)))
+        if len(window) == 2 and float(window[1]) > float(window[0]):
+            return max(segment_start, float(window[0])), min(segment_end, float(window[1]))
     return segment_start, segment_end
+
+
+def _cluster_asr_hits(hits: Sequence[Mapping[str, Any]], *, max_gap_sec: float = 20.0) -> tuple[tuple[Mapping[str, Any], ...], ...]:
+    ordered = sorted(hits, key=lambda hit: (float(hit["start"]), float(hit["end"])))
+    clusters: list[list[Mapping[str, Any]]] = []
+    for hit in ordered:
+        if not clusters or float(hit["start"]) - float(clusters[-1][-1]["end"]) > float(max_gap_sec):
+            clusters.append([hit])
+        else:
+            clusters[-1].append(hit)
+    return tuple(tuple(cluster) for cluster in clusters)
+
+
+def _padded_window(
+    start_sec: float,
+    end_sec: float,
+    *,
+    segment_start: float,
+    segment_end: float,
+    padding_sec: float,
+) -> tuple[float, float]:
+    start = max(float(segment_start), float(start_sec) - float(padding_sec))
+    end = min(float(segment_end), float(end_sec) + float(padding_sec))
+    return round(start, 3), round(end, 3)
 
 
 def _task_terms(task: Any) -> tuple[str, ...]:
@@ -282,6 +438,48 @@ def _summary_for_task(task: Any, *, window: Mapping[str, Any]) -> str:
         f"{min(times):.1f}-{max(times):.1f}s while pursuing: "
         f"{getattr(task, 'goal', '')}"
     )
+
+
+def _goal_fingerprint(task: Any) -> str:
+    text = " ".join(
+        [
+            str(getattr(task, "goal", "") or ""),
+            str(getattr(task, "expected_evidence", "") or ""),
+            " ".join(sorted(str(item) for item in getattr(task, "modality_hint", ()) or ())),
+        ]
+    ).casefold()
+    return " ".join(re.findall(r"[a-z0-9]+", text))
+
+
+def _lineage_iou(first: Sequence[Mapping[str, Any]], second: Sequence[Mapping[str, Any]]) -> float:
+    first_ranges = _lineage_ranges(first)
+    second_ranges = _lineage_ranges(second)
+    keys = set(first_ranges) | set(second_ranges)
+    intersection = 0.0
+    union = 0.0
+    for key in keys:
+        left = first_ranges.get(key)
+        right = second_ranges.get(key)
+        if left is None:
+            union += max(0.0, right[1] - right[0]) if right is not None else 0.0
+            continue
+        if right is None:
+            union += max(0.0, left[1] - left[0])
+            continue
+        intersection += max(0.0, min(left[1], right[1]) - max(left[0], right[0]))
+        union += max(left[1], right[1]) - min(left[0], right[0])
+    return intersection / union if union > 0.0 else 0.0
+
+
+def _lineage_ranges(lineage: Sequence[Mapping[str, Any]]) -> dict[tuple[str, str], tuple[float, float]]:
+    ranges: dict[tuple[str, str], tuple[float, float]] = {}
+    for item in lineage:
+        values = tuple(item.get("source_time_range", ()) or ())
+        if len(values) != 2:
+            continue
+        key = (str(item.get("segment_id", "")), str(item.get("source_video_id", "")))
+        ranges[key] = float(values[0]), float(values[1])
+    return ranges
 
 
 def _source_lineage(workspace: VirtualVideoWorkspace, start_sec: float, end_sec: float) -> tuple[Mapping[str, Any], ...]:

@@ -163,6 +163,41 @@ def test_window_sampling_uniformly_covers_full_window_when_capped(tmp_path: Path
     assert times[32] > 300.0
 
 
+def test_near_equivalent_window_reuses_existing_observation_frames(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    sampled_times: list[float] = []
+
+    def counting_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
+        sampled_times.append(float(start_sec))
+        return _constant_name_sampler(video_path, start_sec, end_sec, n_frames, out_dir)
+
+    first = materialize_window_frames(
+        workspace,
+        4.0,
+        10.0,
+        query_id="q_first",
+        fps=2.0,
+        max_frames=64,
+        sampler=counting_sampler,
+    )
+    first_call_count = len(sampled_times)
+    reused = materialize_window_frames(
+        workspace,
+        4.2,
+        9.8,
+        query_id="q_nearby",
+        fps=1.0,
+        max_frames=8,
+        sampler=counting_sampler,
+    )
+
+    assert first_call_count > 0
+    assert len(sampled_times) == first_call_count
+    assert reused
+    assert {frame.path for frame in reused}.issubset({frame.path for frame in first})
+    assert {frame.query_id for frame in reused} == {"q_first"}
+
+
 def test_virtual_beat_index_uses_thumbnail_as_cold_keyframe_and_virtual_times(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_fake_sampler)

@@ -6,7 +6,9 @@ from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
-from vcah.investigator import InvestigationEvidence, InvestigationReport, VirtualVideoInvestigator
+from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
+from vcah.memory import EvidenceStore
+from vcah.types import EvidenceRecord, is_path_only_visual_evidence
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace
 
@@ -49,7 +51,7 @@ class MultiRoundResult:
     correct: bool
     rounds: int
     accepted_investigations: int
-    evidence: tuple[InvestigationEvidence, ...]
+    evidence: tuple[EvidenceRecord, ...]
     reports: tuple[InvestigationReport, ...]
     trace: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
 
@@ -105,8 +107,9 @@ class VirtualVideoMultiRoundDriver:
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         investigator = self.investigator or VirtualVideoInvestigator(workspace)
+        investigator.reset_run_state()
         workspace_overview = build_workspace_overview(workspace, thumbnail_budget=40)
-        evidence: list[InvestigationEvidence] = []
+        evidence_store = EvidenceStore.empty(workspace.root_dir / "evidence.jsonl")
         reports: list[InvestigationReport] = []
         trace: list[Mapping[str, Any]] = []
         accepted = 0
@@ -126,8 +129,8 @@ class VirtualVideoMultiRoundDriver:
                     segment_overviews=tuple(workspace_overview["segment_overviews"]),
                     workspace_overview=workspace_overview,
                     available_tools=tuple(workspace_overview["available_tools"]),
-                    evidence=evidence,
-                    evidence_digest=_evidence_digest(evidence),
+                    evidence=evidence_store.records,
+                    evidence_digest=_evidence_digest(evidence_store.records),
                     remaining_budget=remaining,
                 )
             )
@@ -141,7 +144,7 @@ class VirtualVideoMultiRoundDriver:
                 }
             )
             if decision.action == "answer":
-                if _citations_are_visual(decision.citations, evidence):
+                if _citations_are_visual(decision.citations, evidence_store.records):
                     answer = decision.answer
                     citations = decision.citations
                 break
@@ -151,8 +154,12 @@ class VirtualVideoMultiRoundDriver:
             accepted += len(tasks)
             batch = investigator.run_batch(tasks)
             reports.extend(batch)
+            known_evidence = {record.evidence_id for record in evidence_store.records}
             for report in batch:
-                evidence.extend(report.evidence)
+                for record in report.evidence:
+                    if record.evidence_id not in known_evidence:
+                        evidence_store.add(record)
+                        known_evidence.add(record.evidence_id)
             trace.append({"type": "investigator_batch", "round": round_id, "accepted_tasks": len(tasks)})
             if accepted >= self.max_investigations:
                 continue
@@ -164,7 +171,7 @@ class VirtualVideoMultiRoundDriver:
             correct=_score_answer(answer, workspace.case.gold),
             rounds=rounds_run,
             accepted_investigations=accepted,
-            evidence=tuple(evidence),
+            evidence=tuple(evidence_store.records),
             reports=tuple(reports),
             trace=tuple(trace),
         )
@@ -197,24 +204,30 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
     )
 
 
-def _evidence_digest(evidence: Sequence[InvestigationEvidence]) -> tuple[dict[str, Any], ...]:
+def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any], ...]:
     return tuple(
         {
             "evidence_id": item.evidence_id,
-            "summary": item.summary,
+            "summary": item.verbatim,
             "confidence": item.confidence,
-            "virtual_time_range": list(item.virtual_time_range),
+            "virtual_time_range": [item.start_sec, item.end_sec],
+            "modality": item.modality,
+            "evidence_kind": item.evidence_kind,
+            "source_lineage": [dict(row) for row in item.source_lineage],
         }
         for item in evidence
     )
 
 
-def _citations_are_visual(citations: Sequence[str], evidence: Sequence[InvestigationEvidence]) -> bool:
+def _citations_are_visual(citations: Sequence[str], evidence: Sequence[EvidenceRecord]) -> bool:
     if not citations:
         return False
     by_id = {item.evidence_id: item for item in evidence}
     cited = [by_id.get(str(citation)) for citation in citations]
-    return bool(cited) and all(item is not None and item.modality != "asr" for item in cited)
+    return bool(cited) and all(
+        item is not None and item.modality in {"visual", "ocr"} and not is_path_only_visual_evidence(item)
+        for item in cited
+    )
 
 
 def _score_answer(answer: str, gold: str) -> bool:
@@ -242,9 +255,16 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
                 "evidence": [
                     {
                         "evidence_id": item.evidence_id,
-                        "summary": item.summary,
+                        "summary": item.verbatim,
                         "modality": item.modality,
-                        "virtual_time_range": list(item.virtual_time_range),
+                        "evidence_kind": item.evidence_kind,
+                        "virtual_time_range": [item.start_sec, item.end_sec],
+                        "sampling_fps": item.sampling_fps,
+                        "confidence": item.confidence,
+                        "task_id": item.task_id,
+                        "observation_id": item.observation_id,
+                        "pointer": item.pointer,
+                        "frame_refs": list(item.frame_refs),
                         "source_lineage": [dict(row) for row in item.source_lineage],
                     }
                     for item in result.evidence

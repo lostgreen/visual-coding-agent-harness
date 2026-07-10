@@ -69,6 +69,8 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
     trace_rows = _read_jsonl(workspace / "interactions.jsonl")
     beat_index = _read_json(workspace / "beat_index.json")
     window_rows = _read_jsonl(workspace / "observations" / "window_frame_manifest.jsonl")
+    evidence_rows = _read_jsonl(workspace / "evidence.jsonl")
+    ledger_rows = _read_jsonl(workspace / "exploration_ledger.jsonl")
 
     segments = list(timeline.get("segments", ()))
     beats = list(beat_index.get("beats", ()))
@@ -86,12 +88,10 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
         "rounds": run_summary.get("rounds"),
         "accepted_investigations": run_summary.get("accepted_investigations"),
         "trace_lines": len(trace_rows),
+        "evidence_records": len(evidence_rows),
+        "exploration_visits": len(ledger_rows),
         "duration_sec": timeline.get("duration_sec"),
     }
-
-    reasoner_first = next((row for row in trace_rows if row.get("type") == "reasoner_investigate"), {})
-    tasks = list(((reasoner_first.get("parsed") or {}).get("tasks") or ()))
-    final_answer = next((row for row in reversed(trace_rows) if row.get("type") == "reasoner_answer"), {})
 
     body = [
         f"<section class='case' id='{_id(workspace.name)}'>",
@@ -99,44 +99,61 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
         _summary_card(case, run_summary, timeline),
         "<h3>Reasoner Initial Input: Segment Overview</h3>",
         _overview_grid(overview_images, segments),
-        _details("Reasoner Prompt", _pre(reasoner_first.get("prompt", ""))),
-        _details("Reasoner Raw Output", _pre(reasoner_first.get("raw", ""))),
-        "<h3>Reasoner Tasks</h3>",
-        _json_block((reasoner_first.get("parsed") or {}).get("tasks") or []),
     ]
 
     select_events = [row for row in trace_rows if row.get("type") == "investigator_select_window"]
+    preview_events = [row for row in trace_rows if row.get("type") == "investigator_preview"]
     evidence_events = [row for row in trace_rows if row.get("type") == "investigator_evidence"]
     select_by_query = {str(row.get("query_id")): row for row in select_events}
+    preview_by_query = {str(row.get("query_id")): row for row in preview_events}
     evidence_event_by_query = {str(row.get("query_id")): row for row in evidence_events}
 
-    for task in tasks:
-        query_id = str(task.get("query_id", ""))
-        segment_id = str(task.get("segment_id", ""))
-        body.append("<section class='task'>")
-        body.append(f"<h3>Investigator Task {_e(query_id)} · Segment {_e(segment_id)}</h3>")
-        body.append(_json_block(task))
-        body.append("<h4>Investigator Input: open_segment Beat Thumbnails</h4>")
-        body.append(_beat_grid(beats_by_segment.get(segment_id, ()), bundle))
-        select = select_by_query.get(query_id, {})
-        body.append("<h4>Investigator Window Selection</h4>")
-        body.append(_json_block(select.get("parsed") or {}))
-        body.append(_details("Window Selection Raw Output", _pre(select.get("raw", ""))))
-        body.append("<h4>inspect_window Frames</h4>")
-        body.append(_frame_group("Preview 0.5fps", frames_by_query.get(f"{query_id}_preview", ()), bundle))
-        body.append(_frame_group("Detail 2.0fps", frames_by_query.get(query_id, ()), bundle))
-        body.append("<h4>Evidence Report</h4>")
-        body.append(_json_block(evidence_by_query.get(query_id) or {}))
-        ev_event = evidence_event_by_query.get(query_id, {})
-        body.append(_details("Investigator Evidence Raw Output", _pre(ev_event.get("raw", ""))))
+    reasoner_events = [row for row in trace_rows if row.get("type") in {"reasoner_investigate", "reasoner_answer"}]
+    for event_index, reasoner_event in enumerate(reasoner_events, start=1):
+        round_id = int(reasoner_event.get("round") or event_index)
+        parsed = dict(reasoner_event.get("parsed") or {})
+        is_answer = reasoner_event.get("type") == "reasoner_answer"
+        body.append("<section class='round'>")
+        body.append(f"<h3>Reasoner Round {round_id} · {'Answer' if is_answer else 'Investigate'}</h3>")
+        body.append(_details("Reasoner Prompt", _pre(reasoner_event.get("prompt", ""))))
+        body.append(_details("Reasoner Raw Output", _pre(reasoner_event.get("raw", ""))))
+        body.append(_json_block(parsed))
+
+        for task in parsed.get("tasks", ()) or ():
+            query_id = str(task.get("query_id", ""))
+            segment_id = str(task.get("segment_id", ""))
+            body.append("<section class='task'>")
+            body.append(f"<h4>Investigator Task {_e(query_id)} · Segment {_e(segment_id)}</h4>")
+            body.append(_json_block(task))
+            body.append("<h4>Investigator Input: open_segment Beat Thumbnails</h4>")
+            body.append(_beat_grid(beats_by_segment.get(segment_id, ()), bundle))
+            select = select_by_query.get(query_id, {})
+            body.append("<h4>Investigator Window Selection</h4>")
+            body.append(_json_block(select.get("parsed") or {}))
+            body.append(_details("Window Selection Raw Output", _pre(select.get("raw", ""))))
+
+            preview_event = preview_by_query.get(query_id, {})
+            evidence_event = evidence_event_by_query.get(query_id, {})
+            observation_id = str(evidence_event.get("observation_id") or preview_event.get("observation_id") or query_id)
+            preview_query_id = str(
+                evidence_event.get("preview_query_id") or preview_event.get("preview_query_id") or f"{query_id}_preview"
+            )
+            detail_query_id = str(evidence_event.get("detail_query_id") or query_id)
+            body.append("<h4>inspect_window Frames</h4>")
+            body.append(_frame_group("Preview 0.5fps", frames_by_query.get(preview_query_id, ()), bundle))
+            if detail_query_id:
+                body.append(_frame_group("Detail frames", frames_by_query.get(detail_query_id, ()), bundle))
+            body.append(_details("Preview Observation Raw Output", _pre(preview_event.get("raw", ""))))
+            body.append("<h4>Evidence Report</h4>")
+            body.append(_json_block(evidence_by_query.get(observation_id) or evidence_by_query.get(query_id) or {}))
+            body.append(_details("Investigator Evidence Raw Output", _pre(evidence_event.get("raw", ""))))
+            body.append("</section>")
         body.append("</section>")
 
     body.extend(
         [
-            "<h3>Final Reasoner Answer</h3>",
-            _json_block(final_answer.get("parsed") or {}),
-            _details("Final Answer Prompt", _pre(final_answer.get("prompt", ""))),
-            _details("Final Answer Raw Output", _pre(final_answer.get("raw", ""))),
+            _details("Structured Evidence Store", _json_block(evidence_rows)),
+            _details("Exploration Ledger", _json_block(ledger_rows)),
             _details("Driver Run Summary", _json_block(run_summary)),
             "</section>",
         ]

@@ -135,6 +135,11 @@ class EvidenceRecord:
     parent_evidence_ids: tuple[str, ...] = ()
     request_ids: tuple[str, ...] = ()
     coverage_manifest: tuple[CoverageSegment, ...] = ()
+    task_id: str = ""
+    observation_id: str = ""
+    sampling_fps: float = 0.0
+    confidence: float = 0.0
+    source_lineage: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         modality = "visual" if self.modality == "frame" else self.modality
@@ -157,6 +162,11 @@ class EvidenceRecord:
             "coverage_manifest",
             tuple(_coverage_segment(item) for item in self.coverage_manifest),
         )
+        object.__setattr__(self, "task_id", str(self.task_id or "").strip())
+        object.__setattr__(self, "observation_id", str(self.observation_id or "").strip())
+        object.__setattr__(self, "sampling_fps", max(0.0, float(self.sampling_fps or 0.0)))
+        object.__setattr__(self, "confidence", max(0.0, min(1.0, float(self.confidence or 0.0))))
+        object.__setattr__(self, "source_lineage", tuple(dict(item) for item in self.source_lineage))
         if modality == "visual" and self.evidence_kind == "quote":
             object.__setattr__(self, "evidence_kind", "visual_observation")
         if (
@@ -780,6 +790,7 @@ def _evidence_record(value: Any) -> EvidenceRecord:
         "attestation_model",
         "beat_id",
         "claim",
+        "confidence",
         "coverage_manifest",
         "end_sec",
         "evidence_id",
@@ -788,12 +799,16 @@ def _evidence_record(value: Any) -> EvidenceRecord:
         "id",
         "modality",
         "observation_polarity",
+        "observation_id",
         "parent_evidence_ids",
         "pointer",
         "request_ids",
         "sampling_coverage",
+        "sampling_fps",
+        "source_lineage",
         "start_sec",
         "temporal_scope",
+        "task_id",
         "text",
         "verbatim",
     }
@@ -818,6 +833,11 @@ def _evidence_record(value: Any) -> EvidenceRecord:
         parent_evidence_ids=tuple(payload.get("parent_evidence_ids") or ()),
         request_ids=tuple(payload.get("request_ids") or ()),
         coverage_manifest=tuple(payload.get("coverage_manifest") or ()),
+        task_id=str(payload.get("task_id") or ""),
+        observation_id=str(payload.get("observation_id") or ""),
+        sampling_fps=float(payload.get("sampling_fps", 0.0) or 0.0),
+        confidence=float(payload.get("confidence", 0.0) or 0.0),
+        source_lineage=tuple(payload.get("source_lineage") or ()),
     )
 
 

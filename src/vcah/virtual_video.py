@@ -5,13 +5,14 @@ import html
 import json
 from pathlib import Path
 import re
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 from vcah.types import Frame
 from vcah.video import sample_frames
 
 
 FrameSampler = Callable[[str, float, float, int, Path], Sequence[Frame]]
+T = TypeVar("T")
 SRT_TIME_RE = re.compile(
     r"(?P<start>\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2},\d{3})"
 )
@@ -190,6 +191,13 @@ class VirtualVideoWorkspace:
         rows = [json.loads(line) for line in self.frame_manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
         return tuple(VirtualFrameRef(**row) for row in rows)
 
+    def read_window_frame_manifest(self) -> tuple[VirtualFrameRef, ...]:
+        path = self.root_dir / "observations" / "window_frame_manifest.jsonl"
+        if not path.exists():
+            return ()
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        return tuple(VirtualFrameRef(**row) for row in rows)
+
 
 def virtual_to_source_windows(manifest: VirtualVideoManifest, start_sec: float, end_sec: float) -> tuple[SourceWindow, ...]:
     start = float(start_sec)
@@ -350,6 +358,15 @@ def materialize_window_frames(
     if cached and abs(cache_fps - requested_fps) < 1e-6:
         return _select_frame_refs(cached, cap)
 
+    observed = _reusable_window_frames(
+        workspace,
+        float(start_sec),
+        float(end_sec),
+        requested_fps=requested_fps,
+    )
+    if observed:
+        return select_uniform_items(observed, cap)
+
     sampler = sampler or sample_frames
     observations = workspace.root_dir / "observations"
     rows: list[VirtualFrameRef] = []
@@ -398,13 +415,73 @@ def _source_window_for_time(manifest: VirtualVideoManifest, virtual_time_sec: fl
 
 
 def _select_frame_refs(frames: tuple[VirtualFrameRef, ...], max_frames: int) -> tuple[VirtualFrameRef, ...]:
-    limit = max(1, int(max_frames))
-    if len(frames) <= limit:
-        return frames
+    return select_uniform_items(frames, max_frames)
+
+
+def select_uniform_items(items: Sequence[T], max_items: int) -> tuple[T, ...]:
+    values = tuple(items)
+    limit = max(1, int(max_items))
+    if len(values) <= limit:
+        return values
     if limit == 1:
-        return (frames[len(frames) // 2],)
-    indexes = [round(i * (len(frames) - 1) / (limit - 1)) for i in range(limit)]
-    return tuple(frames[int(index)] for index in indexes)
+        return (values[len(values) // 2],)
+    indexes = [round(index * (len(values) - 1) / (limit - 1)) for index in range(limit)]
+    return tuple(values[int(index)] for index in indexes)
+
+
+def _reusable_window_frames(
+    workspace: VirtualVideoWorkspace,
+    start_sec: float,
+    end_sec: float,
+    *,
+    requested_fps: float,
+    min_source_iou: float = 0.8,
+) -> tuple[VirtualFrameRef, ...]:
+    groups: dict[str, list[VirtualFrameRef]] = {}
+    for frame in workspace.read_window_frame_manifest():
+        if frame.query_id and frame.sampling_fps + 1e-6 >= float(requested_fps):
+            groups.setdefault(frame.query_id, []).append(frame)
+    requested = virtual_to_source_windows(workspace.manifest, start_sec, end_sec)
+    candidates = []
+    for frames in groups.values():
+        ordered = tuple(sorted(frames, key=lambda frame: frame.virtual_time_sec))
+        iou = _frame_source_iou(ordered, requested)
+        if iou >= float(min_source_iou):
+            candidates.append((iou, -ordered[0].sampling_fps, ordered))
+    if not candidates:
+        return ()
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def _frame_source_iou(frames: Sequence[VirtualFrameRef], requested: Sequence[SourceWindow]) -> float:
+    existing: dict[tuple[str, str], tuple[float, float]] = {}
+    for frame in frames:
+        key = (frame.segment_id, frame.source_video_id)
+        current = existing.get(key)
+        if current is None:
+            existing[key] = (frame.source_time_sec, frame.source_time_sec)
+        else:
+            existing[key] = (min(current[0], frame.source_time_sec), max(current[1], frame.source_time_sec))
+    requested_ranges = {
+        (window.segment_id, window.source_video_id): (window.source_start_sec, window.source_end_sec)
+        for window in requested
+    }
+    keys = set(existing) | set(requested_ranges)
+    intersection = 0.0
+    union = 0.0
+    for key in keys:
+        observed = existing.get(key)
+        wanted = requested_ranges.get(key)
+        if observed is None:
+            union += max(0.0, wanted[1] - wanted[0]) if wanted is not None else 0.0
+            continue
+        if wanted is None:
+            union += max(0.0, observed[1] - observed[0])
+            continue
+        overlap = max(0.0, min(observed[1], wanted[1]) - max(observed[0], wanted[0]))
+        intersection += overlap
+        union += max(observed[1], wanted[1]) - min(observed[0], wanted[0])
+    return intersection / union if union > 0.0 else 0.0
 
 
 def _segment(value: VirtualVideoSegment | Mapping[str, Any]) -> VirtualVideoSegment:

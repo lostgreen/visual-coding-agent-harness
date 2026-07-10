@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -7,7 +8,7 @@ from PIL import Image
 
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
 from vcah.investigator import VirtualVideoInvestigator
-from vcah.types import Frame
+from vcah.types import EvidenceRecord, Frame
 from vcah.virtual_index import build_virtual_beat_index
 from vcah.virtual_video import (
     VirtualVideoCase,
@@ -69,7 +70,12 @@ class ScriptedReasoner:
                     for i in range(6)
                 ),
             )
-        return ReasonerDecision(action="answer", answer="B. 11", citations=("ev_q1_001",))
+        evidence_digest = tuple(kwargs.get("evidence_digest", ()) or ())
+        return ReasonerDecision(
+            action="answer",
+            answer="B. 11",
+            citations=(str(evidence_digest[0]["evidence_id"]),),
+        )
 
 
 def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
@@ -137,11 +143,12 @@ def test_investigator_run_batch_uses_segment_task_and_reports_lineage(tmp_path: 
 
     assert report.status == "satisfied"
     assert report.evidence
+    assert isinstance(report.evidence[0], EvidenceRecord)
     assert report.evidence[0].evidence_id == "ev_q1_001"
-    assert report.evidence[0].sampling["fps"] == 2.0
-    assert report.evidence[0].sampling["max_frames"] == 64
-    assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5", "inspect_window:2.0")
+    assert report.evidence[0].sampling_fps == 2.0
+    assert report.evidence[0].task_id == "q1"
     assert report.evidence[0].source_lineage[0]["source_video_id"] == "target"
+    assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5", "inspect_window:2.0")
     assert (workspace.root_dir / "observations" / "window_frame_manifest.jsonl").exists()
 
 
@@ -157,8 +164,14 @@ def test_multiround_driver_caps_tasks_and_requires_cited_visual_evidence(tmp_pat
     assert result.correct is True
     assert result.accepted_investigations == 4
     assert result.rounds == 2
-    assert result.citations == ("ev_q1_001",)
+    assert result.citations == ("ev_q0_001",)
     assert result.evidence[0].source_lineage[0]["source_time_range"] == [10.0, 13.5]
+    evidence_rows = [
+        json.loads(line)
+        for line in (workspace.root_dir / "evidence.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert evidence_rows[0]["evidence_id"] == "ev_q0_001"
+    assert evidence_rows[0]["source_lineage"][0]["source_video_id"] == "target"
 
 
 def test_reasoner_initial_context_uses_segment_overview_not_cold_candidates(tmp_path: Path) -> None:
