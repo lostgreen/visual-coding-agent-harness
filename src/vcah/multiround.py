@@ -37,10 +37,12 @@ class ReasonerDecision:
     tasks: tuple[InvestigationTask, ...] = ()
     answer: str = ""
     citations: tuple[str, ...] = ()
+    entity_clusters: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tasks", tuple(_task(item) for item in self.tasks))
         object.__setattr__(self, "citations", tuple(str(item) for item in self.citations if str(item).strip()))
+        object.__setattr__(self, "entity_clusters", tuple(_entity_cluster(item) for item in self.entity_clusters))
 
 
 @dataclass(frozen=True)
@@ -186,7 +188,9 @@ class VirtualVideoMultiRoundDriver:
                 gate = _answer_completion_gate(
                     workspace,
                     query_contract,
+                    decision.answer,
                     decision.citations,
+                    decision.entity_clusters,
                     evidence_store.records,
                 )
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
@@ -197,6 +201,7 @@ class VirtualVideoMultiRoundDriver:
                             workspace,
                             answer=answer,
                             citations=decision.citations,
+                            entity_clusters=decision.entity_clusters,
                             evidence=evidence_store.records,
                         )
                         evidence_store.add(aggregate)
@@ -311,7 +316,9 @@ def _source_coverage(
 def _answer_completion_gate(
     workspace: VirtualVideoWorkspace,
     contract: ClaimContract,
+    answer: str,
     citations: Sequence[str],
+    entity_clusters: Sequence[Mapping[str, Any]],
     evidence: Sequence[EvidenceRecord],
 ) -> dict[str, Any]:
     if not _citations_are_visual(citations, evidence):
@@ -348,10 +355,30 @@ def _answer_completion_gate(
             "source_video_ids": sorted(cited_sources),
             "missing_segment_ids": missing,
         }
+    if contract.quantifier == "distinct_count":
+        clusters = tuple(_entity_cluster(item) for item in entity_clusters)
+        if not clusters:
+            return {"passed": False, "reason": "entity_reconciliation_missing", "missing_segment_ids": []}
+        entity_ids = tuple(cluster["entity_id"] for cluster in clusters)
+        if any(not entity_id for entity_id in entity_ids) or len(set(entity_ids)) != len(entity_ids):
+            return {"passed": False, "reason": "entity_cluster_ids_invalid", "missing_segment_ids": []}
+        cited_ids = {str(citation) for citation in citations}
+        if any(not cluster["evidence_ids"] or not set(cluster["evidence_ids"]).issubset(cited_ids) for cluster in clusters):
+            return {"passed": False, "reason": "entity_cluster_evidence_invalid", "missing_segment_ids": []}
+        expected_count = _answer_count(answer, workspace.case.options)
+        if expected_count is not None and expected_count != len(clusters):
+            return {
+                "passed": False,
+                "reason": "entity_count_answer_mismatch",
+                "expected_count": expected_count,
+                "cluster_count": len(clusters),
+                "missing_segment_ids": [],
+            }
     return {
         "passed": True,
         "reason": "full_source_coverage_verified",
         "source_video_ids": sorted(cited_sources),
+        "entity_cluster_count": len(entity_clusters),
         "missing_segment_ids": [],
     }
 
@@ -361,6 +388,7 @@ def _derived_answer_evidence(
     *,
     answer: str,
     citations: Sequence[str],
+    entity_clusters: Sequence[Mapping[str, Any]],
     evidence: Sequence[EvidenceRecord],
 ) -> EvidenceRecord:
     by_id = {record.evidence_id: record for record in evidence}
@@ -370,6 +398,7 @@ def _derived_answer_evidence(
     coverage = tuple(segment for record in parents for segment in record.coverage_manifest)
     lineage = tuple(dict(item) for record in parents for item in record.source_lineage)
     request_ids = tuple(dict.fromkeys(request_id for record in parents for request_id in record.request_ids))
+    clusters = tuple(_entity_cluster(item) for item in entity_clusters)
     return EvidenceRecord(
         evidence_id="ev_final_aggregate",
         beat_id="",
@@ -391,7 +420,34 @@ def _derived_answer_evidence(
         observation_id="final_aggregate",
         confidence=min((record.confidence for record in parents), default=0.0),
         source_lineage=lineage,
+        entity_ids=tuple(cluster["entity_id"] for cluster in clusters),
+        operation_metadata={"algorithm": "reasoner_reconciliation", "entity_clusters": clusters},
     )
+
+
+def _answer_count(answer: str, options: Mapping[str, str]) -> int | None:
+    selected = _letter(answer)
+    text = " ".join((str(answer or ""), str(options.get(selected, "") or ""))).casefold()
+    match = re.search(r"\b(\d+)\b", text)
+    if match:
+        return int(match.group(1))
+    words = {
+        "zero": 0,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+    for word, value in words.items():
+        if re.search(rf"\b{word}\b", text):
+            return value
+    return None
 
 
 def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
@@ -408,6 +464,15 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
     )
 
 
+def _entity_cluster(value: Mapping[str, Any]) -> dict[str, Any]:
+    row = dict(value)
+    return {
+        "entity_id": str(row.get("entity_id", "") or ""),
+        "description": str(row.get("description", "") or ""),
+        "evidence_ids": tuple(str(item) for item in row.get("evidence_ids", ()) if str(item).strip()),
+    }
+
+
 def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
     if isinstance(value, ReasonerDecision):
         return value
@@ -416,6 +481,7 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         tasks=tuple(value.get("tasks", ())),
         answer=str(value.get("answer", "")),
         citations=tuple(value.get("citations", ())),
+        entity_clusters=tuple(value.get("entity_clusters", ())),
     )
 
 
@@ -429,6 +495,7 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
             "modality": item.modality,
             "evidence_kind": item.evidence_kind,
             "source_lineage": [dict(row) for row in item.source_lineage],
+            "entities": list(item.operation_metadata.get("entities", ())),
         }
         for item in evidence
     )
@@ -483,6 +550,8 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
                         "parent_evidence_ids": list(item.parent_evidence_ids),
                         "coverage_manifest": to_jsonable(item.coverage_manifest),
                         "source_lineage": [dict(row) for row in item.source_lineage],
+                        "entity_ids": list(item.entity_ids),
+                        "operation_metadata": to_jsonable(item.operation_metadata),
                     }
                     for item in result.evidence
                 ],

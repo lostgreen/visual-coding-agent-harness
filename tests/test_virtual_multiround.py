@@ -121,7 +121,41 @@ class CoverageReasoner:
             for item in evidence_digest
             if str(item.get("modality")) == "visual"
         )
-        return ReasonerDecision(action="answer", answer="B. Three", citations=citations)
+        return ReasonerDecision(
+            action="answer",
+            answer="B. Three",
+            citations=citations,
+            entity_clusters=(
+                {"entity_id": "scholar_1", "description": "bald man with glasses", "evidence_ids": ("ev_q_chunk_a_001",)},
+                {
+                    "entity_id": "scholar_2",
+                    "description": "older woman with white hair",
+                    "evidence_ids": ("ev_q_chunk_a_001", "ev_q_chunk_b_001"),
+                },
+                {"entity_id": "scholar_3", "description": "brown-haired man", "evidence_ids": ("ev_q_chunk_b_001",)},
+            ),
+        )
+
+
+class MissingEntityClustersReasoner:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def decide(self, **kwargs: object) -> ReasonerDecision:
+        self.calls += 1
+        if self.calls == 1:
+            return ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask("q_a", "Inspect first target chunk.", "seg_target_a", modality_hint=("visual",)),
+                    InvestigationTask("q_b", "Inspect second target chunk.", "seg_target_b", modality_hint=("visual",)),
+                ),
+            )
+        return ReasonerDecision(
+            action="answer",
+            answer="B. Three",
+            citations=("ev_q_a_001", "ev_q_b_001"),
+        )
 
 
 def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
@@ -300,6 +334,27 @@ def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(
     aggregate = next(item for item in result.evidence if item.evidence_id == result.citations[0])
     assert aggregate.modality == "derived"
     assert set(aggregate.parent_evidence_ids) == {"ev_q_chunk_a_001", "ev_q_chunk_b_001"}
+    assert aggregate.entity_ids == ("scholar_1", "scholar_2", "scholar_3")
+    assert len(aggregate.operation_metadata["entity_clusters"]) == 3
     gate_rows = [row for row in result.trace if row.get("type") == "completion_gate"]
     assert gate_rows[0]["passed"] is False
     assert gate_rows[0]["missing_segment_ids"] == ["seg_target_b"]
+
+
+def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    reasoner = MissingEntityClustersReasoner()
+    investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
+    driver = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=investigator,
+        max_rounds=2,
+        max_investigations=4,
+    )
+
+    result = driver.run(workspace)
+
+    assert result.answer == "Insufficient verified evidence."
+    gate = next(row for row in result.trace if row.get("type") == "completion_gate")
+    assert gate["passed"] is False
+    assert gate["reason"] == "entity_reconciliation_missing"

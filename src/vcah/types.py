@@ -140,6 +140,8 @@ class EvidenceRecord:
     sampling_fps: float = 0.0
     confidence: float = 0.0
     source_lineage: tuple[Mapping[str, Any], ...] = ()
+    entity_ids: tuple[str, ...] = ()
+    operation_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         modality = "visual" if self.modality == "frame" else self.modality
@@ -167,6 +169,8 @@ class EvidenceRecord:
         object.__setattr__(self, "sampling_fps", max(0.0, float(self.sampling_fps or 0.0)))
         object.__setattr__(self, "confidence", max(0.0, min(1.0, float(self.confidence or 0.0))))
         object.__setattr__(self, "source_lineage", tuple(dict(item) for item in self.source_lineage))
+        object.__setattr__(self, "entity_ids", tuple(str(item) for item in self.entity_ids if str(item).strip()))
+        object.__setattr__(self, "operation_metadata", dict(self.operation_metadata or {}))
         if modality == "visual" and self.evidence_kind == "quote":
             object.__setattr__(self, "evidence_kind", "visual_observation")
         if (
@@ -793,6 +797,7 @@ def _evidence_record(value: Any) -> EvidenceRecord:
         "confidence",
         "coverage_manifest",
         "end_sec",
+        "entity_ids",
         "evidence_id",
         "evidence_kind",
         "frame_refs",
@@ -800,6 +805,7 @@ def _evidence_record(value: Any) -> EvidenceRecord:
         "modality",
         "observation_polarity",
         "observation_id",
+        "operation_metadata",
         "parent_evidence_ids",
         "pointer",
         "request_ids",
@@ -838,6 +844,8 @@ def _evidence_record(value: Any) -> EvidenceRecord:
         sampling_fps=float(payload.get("sampling_fps", 0.0) or 0.0),
         confidence=float(payload.get("confidence", 0.0) or 0.0),
         source_lineage=tuple(payload.get("source_lineage") or ()),
+        entity_ids=tuple(payload.get("entity_ids") or ()),
+        operation_metadata=dict(payload.get("operation_metadata") or {}),
     )
 
 

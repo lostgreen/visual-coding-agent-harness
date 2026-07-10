@@ -184,7 +184,18 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
                 "detail_end_sec": 60.0,
                 "reason": "read the board",
             },
-            {"summary": "The board shows the number nine.", "confidence": 0.95},
+            {
+                "summary": "The board shows the number nine beside one presenter.",
+                "confidence": 0.95,
+                "entities": [
+                    {
+                        "local_id": "person_1",
+                        "description": "presenter in a dark jacket",
+                        "role": "presenter",
+                        "comments_on_topic": True,
+                    }
+                ],
+            },
         )
     )
     investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
@@ -211,6 +222,7 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
     assert report.evidence[0].sampling_fps == 2.0
     assert report.evidence[0].attestation_model
     assert report.evidence[0].source_lineage[0]["source_video_id"] == "source"
+    assert report.evidence[0].operation_metadata["entities"][0]["local_id"] == "person_1"
     assert len(report.evidence[0].frame_refs) == 16
     assert "frame_40.000.jpg" in report.evidence[0].frame_refs[0]
     assert "frame_60.000.jpg" in report.evidence[0].frame_refs[-1]

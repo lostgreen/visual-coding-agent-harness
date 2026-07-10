@@ -239,6 +239,7 @@ class GeminiReasoner:
                 action="answer",
                 answer=str(parsed.get("answer") or ""),
                 citations=tuple(parsed.get("citations") or (evidence_digest[-1]["evidence_id"],)),
+                entity_clusters=tuple(parsed.get("entity_clusters") or ()),
             )
         image_paths = [str(row.get("overview_thumbnail_grid_path")) for row in overview.get("segment_overviews", ())]
         prompt = _investigate_prompt(kwargs)
@@ -351,6 +352,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             },
         )
         confidence = _confidence(parsed.get("confidence"), default=0.6)
+        entities = _normalize_entities(parsed.get("entities"))
         evidence = EvidenceRecord(
             evidence_id=f"ev_{observation_id}_001",
             beat_id="",
@@ -374,6 +376,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             sampling_fps=float(selected_packet["sampling"]["fps"]),
             confidence=confidence,
             source_lineage=tuple(dict(item) for item in selected_packet["source_lineage"]),
+            entity_ids=tuple(f"{observation_id}:{item['local_id']}" for item in entities),
+            operation_metadata={"entities": entities},
         )
         if frame_paths:
             self._remember_evidence(task, evidence)
@@ -476,6 +480,27 @@ def _confidence(value: Any, *, default: float) -> float:
         return max(0.0, min(1.0, float(value)))
     except (TypeError, ValueError):
         return float(default)
+
+
+def _normalize_entities(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    rows = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, Mapping):
+            continue
+        description = str(item.get("description", "") or "").strip()
+        if not description:
+            continue
+        rows.append(
+            {
+                "local_id": str(item.get("local_id", "") or f"person_{index}"),
+                "description": description,
+                "role": str(item.get("role", "") or ""),
+                "comments_on_topic": _truthy(item.get("comments_on_topic")),
+            }
+        )
+    return tuple(rows)
 
 
 def _load_rows(dataset_root: Path) -> list[dict[str, Any]]:
@@ -686,11 +711,15 @@ def _investigate_prompt(kwargs: Mapping[str, Any]) -> str:
 def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mapping[str, Any]]) -> str:
     return (
         "You are the Reasoner for a long virtual video QA agent. Decide whether current evidence is enough.\n"
-        "If enough, return JSON only: {\"action\":\"answer\", \"answer\":\"A. ...\", \"citations\":[\"ev_...\"]}.\n"
+        "If enough, return JSON only: {\"action\":\"answer\", \"answer\":\"A. ...\", \"citations\":[\"ev_...\"],"
+        "\"entity_clusters\":[{\"entity_id\":\"scholar_1\",\"description\":\"canonical identity\","
+        "\"evidence_ids\":[\"ev_...\"]}]}.\n"
         "If not enough, return JSON only: {\"action\":\"investigate\", \"tasks\":[{\"query_id\":\"r2_t1\",\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\"}]}.\n"
         "You may request up to 4 more segments/windows. Do not answer with insufficient evidence.\n"
         "If completion_status.ready_for_answer is false, you MUST investigate its missing_segment_ids and must not answer. "
         "For a final full-video answer, cite every relevant visual evidence record from the adopted source.\n"
+        "For distinct-count questions, reconcile the per-evidence entities by stable appearance. Do not add local counts. "
+        "Create one entity_cluster per unique person, and make the option count equal the number of clusters.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
@@ -703,7 +732,11 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
     return (
         "You are the Investigator. Inspect the low-fps preview frames and local ASR without choosing an answer option. "
         "Return JSON only: {\"summary\":\"atomic observation\",\"confidence\":0.0-1.0,"
+        "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"stable visible attributes\","
+        "\"role\":\"scholar or other\",\"comments_on_topic\":true|false}],"
         "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\"}.\n"
+        "List each visible person separately using stable appearance attributes. Do not estimate a segment-level or video-level count. "
+        "The same person may recur in later chunks.\n"
         "Request detail only when motion, OCR, identity, or a small visual attribute remains unresolved. "
         "Any detail window must be inside the preview window and narrower than it.\n"
         f"Question: {workspace.case.question}\n"
@@ -724,7 +757,10 @@ def _evidence_prompt(
     return (
         "You are the Investigator. Inspect the detail frames and local ASR. Report only an atomic observation, "
         "not an answer-option judgment. Return JSON only: "
-        "{\"summary\":\"atomic visual evidence summary\", \"confidence\":0.0-1.0}.\n"
+        "{\"summary\":\"atomic visual evidence summary\", \"confidence\":0.0-1.0,"
+        "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"stable visible attributes\","
+        "\"role\":\"scholar or other\",\"comments_on_topic\":true|false}]}.\n"
+        "List visible people separately and do not infer a count across frames or chunks.\n"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
