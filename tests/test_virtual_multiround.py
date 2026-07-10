@@ -102,19 +102,6 @@ class CoverageReasoner:
             )
         if self.calls == 2:
             return ReasonerDecision(action="answer", answer="B. Three", citations=("ev_q_chunk_a_001",))
-        if self.calls == 3:
-            return ReasonerDecision(
-                action="investigate",
-                tasks=(
-                    InvestigationTask(
-                        query_id="q_chunk_b",
-                        goal="Check the remaining source chunk for additional scholars.",
-                        segment_id="seg_target_b",
-                        modality_hint=("visual",),
-                        expected_evidence="additional distinct scholars discussing Napoleon",
-                    ),
-                ),
-            )
         evidence_digest = tuple(kwargs.get("evidence_digest", ()) or ())
         citations = tuple(
             str(item["evidence_id"])
@@ -130,9 +117,9 @@ class CoverageReasoner:
                 {
                     "entity_id": "scholar_2",
                     "description": "older woman with white hair",
-                    "evidence_ids": ("ev_q_chunk_a_001", "ev_q_chunk_b_001"),
+                    "evidence_ids": citations,
                 },
-                {"entity_id": "scholar_3", "description": "brown-haired man", "evidence_ids": ("ev_q_chunk_b_001",)},
+                {"entity_id": "scholar_3", "description": "brown-haired man", "evidence_ids": (citations[-1],)},
             ),
         )
 
@@ -328,17 +315,20 @@ def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(
 
     assert result.answer == "B. Three"
     assert result.correct is True
-    assert reasoner.calls == 4
-    assert reasoner.completion_statuses[2]["missing_segment_ids"] == ["seg_target_b"]
+    assert reasoner.calls == 3
+    assert reasoner.completion_statuses[1]["missing_segment_ids"] == ["seg_target_b"]
+    assert reasoner.completion_statuses[2]["missing_segment_ids"] == []
     assert len(result.citations) == 1
     aggregate = next(item for item in result.evidence if item.evidence_id == result.citations[0])
     assert aggregate.modality == "derived"
-    assert set(aggregate.parent_evidence_ids) == {"ev_q_chunk_a_001", "ev_q_chunk_b_001"}
+    assert "ev_q_chunk_a_001" in aggregate.parent_evidence_ids
+    assert len(aggregate.parent_evidence_ids) == 2
     assert aggregate.entity_ids == ("scholar_1", "scholar_2", "scholar_3")
     assert len(aggregate.operation_metadata["entity_clusters"]) == 3
-    gate_rows = [row for row in result.trace if row.get("type") == "completion_gate"]
-    assert gate_rows[0]["passed"] is False
-    assert gate_rows[0]["missing_segment_ids"] == ["seg_target_b"]
+    repair = next(row for row in result.trace if row.get("type") == "repair_override")
+    assert repair["missing_segment_ids"] == ["seg_target_b"]
+    gate = next(row for row in result.trace if row.get("type") == "completion_gate")
+    assert gate["passed"] is True
 
 
 def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_path: Path) -> None:

@@ -174,6 +174,24 @@ class VirtualVideoMultiRoundDriver:
                     remaining_budget=remaining,
                 )
             )
+            missing_segments = tuple(completion_status.get("missing_segment_ids", ()) or ())
+            if missing_segments and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
+                repair_tasks = _coverage_repair_tasks(
+                    round_id,
+                    missing_segments,
+                    query_contract,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+                trace.append(
+                    {
+                        "type": "repair_override",
+                        "round": round_id,
+                        "reason": "premature_answer_before_coverage",
+                        "missing_segment_ids": list(missing_segments),
+                        "task_count": len(repair_tasks),
+                    }
+                )
+                decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
             trace.append(
                 {
                     "type": "reasoner_decision",
@@ -239,6 +257,27 @@ class VirtualVideoMultiRoundDriver:
         )
         _write_run_summary(workspace, result)
         return result
+
+
+def _coverage_repair_tasks(
+    round_id: int,
+    segment_ids: Sequence[str],
+    contract: ClaimContract,
+    *,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    modalities = tuple(contract.required_observability or ("visual",))
+    return tuple(
+        InvestigationTask(
+            query_id=f"repair_r{round_id}_{index:03d}",
+            goal=f"Inspect remaining source segment {segment_id} for evidence required by the full-video claim.",
+            segment_id=str(segment_id),
+            modality_hint=modalities,
+            expected_evidence="entity observations and topic evidence needed for full-source coverage",
+            priority=1.0,
+        )
+        for index, segment_id in enumerate(tuple(segment_ids)[: max(0, int(limit))], start=1)
+    )
 
 
 def _completion_status(
