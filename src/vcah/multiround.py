@@ -301,6 +301,7 @@ class VirtualVideoMultiRoundDriver:
                 )
             )
             missing_segments = tuple(completion_status.get("missing_segment_ids", ()) or ())
+            missing_identity_terms = tuple(completion_status.get("missing_identity_anchor_terms", ()) or ())
             if missing_segments and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
                 repair_tasks = _coverage_repair_tasks(
                     round_id,
@@ -318,6 +319,25 @@ class VirtualVideoMultiRoundDriver:
                     }
                 )
                 decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
+            elif missing_identity_terms and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
+                repair_tasks = _identity_repair_tasks(
+                    workspace,
+                    evidence_store.records,
+                    missing_identity_terms,
+                    round_id=round_id,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+                if repair_tasks:
+                    trace.append(
+                        {
+                            "type": "repair_override",
+                            "round": round_id,
+                            "reason": "identity_anchor_missing",
+                            "identity_anchor_terms": list(missing_identity_terms),
+                            "task_count": len(repair_tasks),
+                        }
+                    )
+                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
             trace.append(
                 {
                     "type": "reasoner_decision",
@@ -472,6 +492,38 @@ def _coverage_repair_tasks(
             priority=1.0,
         )
         for index, segment_id in enumerate(tuple(segment_ids)[: max(0, int(limit))], start=1)
+    )
+
+
+def _identity_repair_tasks(
+    workspace: VirtualVideoWorkspace,
+    evidence: Sequence[EvidenceRecord],
+    identity_terms: Sequence[str],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    terms = tuple(str(item).strip() for item in identity_terms if str(item).strip())
+    if not terms:
+        return ()
+    visited = {
+        str(lineage.get("segment_id", "") or "")
+        for record in evidence
+        for lineage in record.source_lineage
+        if str(lineage.get("segment_id", "") or "")
+    }
+    candidates = tuple(segment for segment in workspace.manifest.segments if segment.segment_id not in visited)
+    description = ", ".join(terms)
+    return tuple(
+        InvestigationTask(
+            query_id=f"identity_repair_r{round_id}_{index:03d}",
+            goal=f"Locate one visible entity jointly matching these identity attributes: {description}.",
+            segment_id=segment.segment_id,
+            modality_hint=("visual",),
+            expected_evidence=f"one visible entity jointly matching: {description}",
+            priority=1.0,
+        )
+        for index, segment in enumerate(candidates[: max(0, int(limit))], start=1)
     )
 
 

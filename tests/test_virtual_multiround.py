@@ -8,7 +8,7 @@ from PIL import Image
 
 import vcah.multiround as multiround
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
-from vcah.investigator import VirtualVideoInvestigator
+from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.types import CoverageSegment, EvidenceRecord, Frame
 from vcah.virtual_index import build_virtual_beat_index
 from vcah.virtual_video import (
@@ -180,6 +180,67 @@ class FinalizationReasoner:
         )
 
 
+class AlwaysEmptyReasoner:
+    def decide(self, **kwargs: object) -> ReasonerDecision:
+        del kwargs
+        return ReasonerDecision(action="answer", answer="", citations=())
+
+
+class NegativeAnchorInvestigator:
+    def __init__(self, workspace: VirtualVideoWorkspace) -> None:
+        self.workspace = workspace
+        self.tasks: list[InvestigationTask] = []
+
+    def reset_run_state(self) -> None:
+        self.tasks.clear()
+
+    def run_batch(self, tasks: Sequence[InvestigationTask]) -> tuple[InvestigationReport, ...]:
+        reports = []
+        by_id = {segment.segment_id: segment for segment in self.workspace.manifest.segments}
+        for task in tasks:
+            self.tasks.append(task)
+            segment = by_id[task.segment_id]
+            evidence = EvidenceRecord(
+                evidence_id=f"ev_{task.query_id}_001",
+                beat_id="",
+                start_sec=segment.virtual_start_sec,
+                end_sec=segment.virtual_end_sec,
+                modality="visual",
+                pointer=f"virtual://negative/{task.segment_id}",
+                verbatim="No matching person is visible in this segment.",
+                frame_refs=(f"{task.segment_id}.jpg",),
+                attestation_model="negative-anchor-test",
+                evidence_kind="visual_observation",
+                coverage_manifest=(
+                    CoverageSegment(
+                        task.query_id,
+                        segment.virtual_start_sec,
+                        segment.virtual_end_sec,
+                        "visual",
+                        1.0,
+                    ),
+                ),
+                source_lineage=(
+                    {
+                        "segment_id": segment.segment_id,
+                        "source_video_id": segment.source_video_id,
+                        "source_time_range": [segment.source_start_sec, segment.source_end_sec],
+                        "virtual_time_range": [segment.virtual_start_sec, segment.virtual_end_sec],
+                    },
+                ),
+                operation_metadata={"supports_identity_anchor": False},
+            )
+            reports.append(
+                InvestigationReport(
+                    query_id=task.query_id,
+                    status="satisfied",
+                    evidence=(evidence,),
+                    cost={},
+                )
+            )
+        return tuple(reports)
+
+
 def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     manifest = VirtualVideoManifest(
         workspace_id="case-1",
@@ -225,6 +286,35 @@ def _two_chunk_workspace(tmp_path: Path) -> VirtualVideoWorkspace:
             {"start": 10.5, "end": 11.5, "text": "another scholar discusses Napoleon", "segment_id": "seg_target_b"},
         )
     )
+    build_virtual_beat_index(workspace, frames, model=TinyModel(), beat_sec=3.0)
+    return VirtualVideoWorkspace.load(workspace.root_dir)
+
+
+def _identity_repair_workspace(tmp_path: Path) -> VirtualVideoWorkspace:
+    segments = tuple(
+        VirtualVideoSegment(
+            f"seg_{index}",
+            f"source_{index}",
+            f"source_{index}.mp4",
+            0.0,
+            5.0,
+            float(index * 5),
+            float((index + 1) * 5),
+            "content",
+        )
+        for index in range(3)
+    )
+    manifest = VirtualVideoManifest(workspace_id="identity-repair", segments=segments)
+    case = VirtualVideoCase(
+        case_id="identity-repair",
+        question="Why did the guest, who was carrying a folder and wearing glasses, leave?",
+        options={"A": "A meeting ended", "B": "An alarm sounded"},
+        gold="B",
+        target_segment_id="seg_2",
+        target_virtual_interval=(10.0, 15.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "identity-repair", manifest=manifest, case=case)
+    frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_sampler)
     build_virtual_beat_index(workspace, frames, model=TinyModel(), beat_sec=3.0)
     return VirtualVideoWorkspace.load(workspace.root_dir)
 
@@ -523,6 +613,25 @@ def test_driver_runs_answer_only_finalization_after_last_investigation_round(tmp
     assert result.correct is True
     assert reasoner.force_flags == [False, True]
     assert any(row.get("type") == "reasoner_finalization" for row in result.trace)
+
+
+def test_driver_repairs_empty_answers_with_unvisited_identity_anchor_segments(tmp_path: Path) -> None:
+    workspace = _identity_repair_workspace(tmp_path)
+    investigator = NegativeAnchorInvestigator(workspace)
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=AlwaysEmptyReasoner(),
+        investigator=investigator,
+        max_rounds=2,
+        max_investigations=2,
+        max_tasks_per_round=1,
+    ).run(workspace)
+
+    assert result.answer == "Insufficient verified evidence."
+    assert result.accepted_investigations == 2
+    assert [task.segment_id for task in investigator.tasks] == ["seg_0", "seg_1"]
+    repairs = [row for row in result.trace if row.get("type") == "repair_override"]
+    assert [row["reason"] for row in repairs] == ["identity_anchor_missing", "identity_anchor_missing"]
 
 
 def test_identity_gate_requires_anchor_and_event_evidence_in_same_cluster(tmp_path: Path) -> None:
