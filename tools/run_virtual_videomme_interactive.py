@@ -267,8 +267,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
 
     def _investigate_task(self, task: Any) -> InvestigationReport:
         query_id = str(getattr(task, "query_id", "") or "query")
-        observation_id = self._next_observation_id(query_id)
         segment_packet = self.open_segment(str(getattr(task, "segment_id", "") or self.workspace.manifest.segments[0].segment_id))
+        if str(getattr(task, "inspection_mode", "window")) == "enumerate_events":
+            return self._investigate_event_beats(task, segment_packet)
+        observation_id = self._next_observation_id(query_id)
         requested_window = getattr(task, "time_range", None)
         if requested_window is None:
             window = _select_window_with_model(self.api, task, segment_packet, self.trace_path)
@@ -412,6 +414,37 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             },
         )
 
+    def _investigate_event_beats(self, task: Any, segment_packet: Mapping[str, Any]) -> InvestigationReport:
+        windows = _event_enumeration_windows(segment_packet)
+        reports = []
+        for window in windows:
+            beat_task = InvestigationTask(
+                query_id=str(getattr(task, "query_id", "") or "query"),
+                goal=str(getattr(task, "goal", "") or ""),
+                segment_id=str(getattr(task, "segment_id", "") or ""),
+                time_range=window,
+                modality_hint=tuple(getattr(task, "modality_hint", ()) or ()),
+                expected_evidence=str(getattr(task, "expected_evidence", "") or ""),
+                inspection_mode="window",
+                priority=float(getattr(task, "priority", 0.0) or 0.0),
+            )
+            reports.append(self._investigate_task(beat_task))
+        evidence = tuple(record for report in reports for record in report.evidence)
+        return InvestigationReport(
+            query_id=str(getattr(task, "query_id", "") or ""),
+            status="satisfied" if evidence else "empty",
+            evidence=evidence,
+            cost={
+                "beat_windows": len(windows),
+                "tool_trace": tuple(step for report in reports for step in report.cost.get("tool_trace", ())),
+                "preview_frames": sum(int(report.cost.get("preview_frames", 0) or 0) for report in reports),
+                "detail_frames": sum(int(report.cost.get("detail_frames", 0) or 0) for report in reports),
+                "frames": sum(int(report.cost.get("frames", 0) or 0) for report in reports),
+                "vlm_calls": sum(int(report.cost.get("vlm_calls", 0) or 0) for report in reports),
+                "reused": bool(reports) and all(bool(report.cost.get("reused")) for report in reports),
+            },
+        )
+
     def _next_observation_id(self, query_id: str) -> str:
         call_index = self._query_calls.get(query_id, 0) + 1
         self._query_calls[query_id] = call_index
@@ -456,6 +489,27 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
         },
     )
     return selected
+
+
+def _event_enumeration_windows(
+    segment_packet: Mapping[str, Any],
+    *,
+    max_windows: int = 12,
+) -> tuple[tuple[float, float], ...]:
+    beats = tuple(segment_packet.get("beats", ()) or ())
+    if not beats:
+        start, end = segment_packet["virtual_time_range"]
+        return ((float(start), float(end)),)
+    limit = max(1, int(max_windows))
+    group_size = max(1, (len(beats) + limit - 1) // limit)
+    windows = []
+    for index in range(0, len(beats), group_size):
+        group = beats[index : index + group_size]
+        start = float(group[0]["virtual_time_range"][0])
+        end = float(group[-1]["virtual_time_range"][1])
+        if end > start:
+            windows.append((start, end))
+    return tuple(windows)
 
 
 def _select_detail_window(

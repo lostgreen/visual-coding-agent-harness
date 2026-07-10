@@ -375,6 +375,91 @@ def test_window_selector_samples_beat_thumbnails_across_the_full_segment(tmp_pat
     assert image_paths[-1].endswith("beat_23.jpg")
 
 
+def test_model_investigator_enumerates_each_beat_within_one_event_count_task(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    thumbnail = workspace.root_dir / "beat.jpg"
+    (workspace.root_dir / "beat_index.json").write_text(
+        json.dumps(
+            {
+                "beats": [
+                    {
+                        "beat_id": f"bt{index:04d}",
+                        "virtual_time_range": [float(index * 60), float((index + 1) * 60)],
+                        "thumbnail_grid_path": str(thumbnail),
+                        "thumbnail_grid_paths": [str(thumbnail)],
+                        "asr_cues": [],
+                        "source_lineage": [
+                            {
+                                "segment_id": "seg_0001",
+                                "source_video_id": "source",
+                                "source_time_range": [float(index * 60), float((index + 1) * 60)],
+                                "virtual_time_range": [float(index * 60), float((index + 1) * 60)],
+                            }
+                        ],
+                    }
+                    for index in range(3)
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    api = ScriptedVisionClient(
+        (
+            {
+                "summary": "No title card appears in the first minute.",
+                "confidence": 0.9,
+                "events": [],
+                "supports_answer_event": False,
+                "need_detail": False,
+            },
+            {
+                "summary": "A title card appears in the second minute.",
+                "confidence": 0.95,
+                "events": [
+                    {
+                        "local_id": "event_1",
+                        "description": "A title card appears.",
+                        "start_sec": 82.0,
+                        "end_sec": 84.0,
+                        "supports_question_event": True,
+                    }
+                ],
+                "supports_answer_event": True,
+                "need_detail": False,
+            },
+            {
+                "summary": "No title card appears in the final minute.",
+                "confidence": 0.9,
+                "events": [],
+                "supports_answer_event": False,
+                "need_detail": False,
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_title_cards",
+        goal="Enumerate title-card appearances.",
+        segment_id="seg_0001",
+        modality_hint=("visual",),
+        expected_evidence="timestamped title-card occurrences",
+        inspection_mode="enumerate_events",
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert len(api.calls) == 3
+    assert len(report.evidence) == 3
+    assert [(record.start_sec, record.end_sec) for record in report.evidence] == [
+        (0.0, 60.0),
+        (60.0, 120.0),
+        (120.0, 180.0),
+    ]
+    assert sum(len(record.operation_metadata["events"]) for record in report.evidence) == 1
+    assert report.cost["beat_windows"] == 3
+
+
 def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(

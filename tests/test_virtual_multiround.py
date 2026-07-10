@@ -432,6 +432,21 @@ def test_query_contract_marks_how_many_times_as_full_video_event_count() -> None
     assert contract.quantifier == "total_count"
     assert contract.observation_target == "event"
     assert contract.aggregation == "count"
+
+
+def test_total_count_contract_marks_tasks_for_event_enumeration() -> None:
+    contract = multiround.compile_query_contract("How many times does a title card appear in this video?")
+    task = InvestigationTask(
+        query_id="q_title_cards",
+        goal="Inspect one source segment for title-card appearances.",
+        segment_id="seg_0001",
+        modality_hint=("visual",),
+        expected_evidence="timestamped title-card occurrences",
+    )
+
+    compiled = multiround._task_for_contract(task, contract)
+
+    assert compiled.inspection_mode == "enumerate_events"
     assert contract.required_observability == ("visual",)
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
 import re
@@ -21,6 +21,7 @@ class InvestigationTask:
     time_range: tuple[float, float] | None = None
     modality_hint: tuple[str, ...] = ()
     expected_evidence: str = ""
+    inspection_mode: str = "window"
     priority: float = 0.0
 
     def __post_init__(self) -> None:
@@ -29,6 +30,8 @@ class InvestigationTask:
             object.__setattr__(self, "time_range", (float(start), float(end)))
         object.__setattr__(self, "segment_id", str(self.segment_id or ""))
         object.__setattr__(self, "modality_hint", tuple(str(item) for item in self.modality_hint))
+        if self.inspection_mode not in {"window", "enumerate_events"}:
+            object.__setattr__(self, "inspection_mode", "window")
 
 
 @dataclass(frozen=True)
@@ -378,7 +381,10 @@ class VirtualVideoMultiRoundDriver:
                 continue
             if remaining <= 0:
                 break
-            tasks = decision.tasks[: min(self.max_tasks_per_round, remaining)]
+            tasks = tuple(
+                _task_for_contract(task, query_contract)
+                for task in decision.tasks[: min(self.max_tasks_per_round, remaining)]
+            )
             accepted += len(tasks)
             batch = investigator.run_batch(tasks)
             reports.extend(batch)
@@ -527,6 +533,12 @@ def _identity_repair_tasks(
         )
         for index, segment in enumerate(candidates[: max(0, int(limit))], start=1)
     )
+
+
+def _task_for_contract(task: InvestigationTask, contract: ClaimContract) -> InvestigationTask:
+    if contract.quantifier == "total_count" and contract.observation_target == "event":
+        return replace(task, inspection_mode="enumerate_events")
+    return task
 
 
 def _completion_status(
@@ -950,6 +962,7 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         time_range=None if value.get("time_range") is None else tuple(value.get("time_range", (0.0, 0.0))),  # type: ignore[arg-type]
         modality_hint=tuple(value.get("modality_hint", ())),
         expected_evidence=str(value.get("expected_evidence", "")),
+        inspection_mode=str(value.get("inspection_mode", "window") or "window"),
         priority=float(value.get("priority", 0.0) or 0.0),
     )
 
