@@ -6,6 +6,7 @@ from typing import Sequence
 
 from PIL import Image
 
+import vcah.multiround as multiround
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
 from vcah.investigator import VirtualVideoInvestigator
 from vcah.types import EvidenceRecord, Frame
@@ -78,6 +79,51 @@ class ScriptedReasoner:
         )
 
 
+class CoverageReasoner:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.completion_statuses: list[dict[str, object]] = []
+
+    def decide(self, **kwargs: object) -> ReasonerDecision:
+        self.calls += 1
+        self.completion_statuses.append(dict(kwargs.get("completion_status", {}) or {}))
+        if self.calls == 1:
+            return ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="q_chunk_a",
+                        goal="Identify scholars commenting on Napoleon.",
+                        segment_id="seg_target_a",
+                        modality_hint=("visual",),
+                        expected_evidence="distinct scholars discussing Napoleon",
+                    ),
+                ),
+            )
+        if self.calls == 2:
+            return ReasonerDecision(action="answer", answer="B. Three", citations=("ev_q_chunk_a_001",))
+        if self.calls == 3:
+            return ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="q_chunk_b",
+                        goal="Check the remaining source chunk for additional scholars.",
+                        segment_id="seg_target_b",
+                        modality_hint=("visual",),
+                        expected_evidence="additional distinct scholars discussing Napoleon",
+                    ),
+                ),
+            )
+        evidence_digest = tuple(kwargs.get("evidence_digest", ()) or ())
+        citations = tuple(
+            str(item["evidence_id"])
+            for item in evidence_digest
+            if str(item.get("modality")) == "visual"
+        )
+        return ReasonerDecision(action="answer", answer="B. Three", citations=citations)
+
+
 def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     manifest = VirtualVideoManifest(
         workspace_id="case-1",
@@ -94,6 +140,35 @@ def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     workspace = VirtualVideoWorkspace.create(tmp_path / "case-1", manifest=manifest, case=case)
     frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_sampler)
     workspace.write_asr_virtual_cues(({"start": 0.5, "end": 1.5, "text": "number written on jersey", "segment_id": "seg_target"},))
+    build_virtual_beat_index(workspace, frames, model=TinyModel(), beat_sec=3.0)
+    return VirtualVideoWorkspace.load(workspace.root_dir)
+
+
+def _two_chunk_workspace(tmp_path: Path) -> VirtualVideoWorkspace:
+    manifest = VirtualVideoManifest(
+        workspace_id="full-count",
+        segments=(
+            VirtualVideoSegment("seg_target_a", "target", "target.mp4", 0.0, 5.0, 0.0, 5.0, "content"),
+            VirtualVideoSegment("seg_noise", "noise", "noise.mp4", 0.0, 5.0, 5.0, 10.0, "content"),
+            VirtualVideoSegment("seg_target_b", "target", "target.mp4", 5.0, 10.0, 10.0, 15.0, "content"),
+        ),
+    )
+    case = VirtualVideoCase(
+        case_id="full-count",
+        question="Throughout the video, how many scholars in total show up and comment on Napoleon?",
+        options={"A": "Two", "B": "Three"},
+        gold="B",
+        target_segment_id="seg_target_a",
+        target_virtual_interval=(0.0, 15.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "full-count", manifest=manifest, case=case)
+    frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=_sampler)
+    workspace.write_asr_virtual_cues(
+        (
+            {"start": 0.5, "end": 1.5, "text": "a scholar comments on Napoleon", "segment_id": "seg_target_a"},
+            {"start": 10.5, "end": 11.5, "text": "another scholar discusses Napoleon", "segment_id": "seg_target_b"},
+        )
+    )
     build_virtual_beat_index(workspace, frames, model=TinyModel(), beat_sec=3.0)
     return VirtualVideoWorkspace.load(workspace.root_dir)
 
@@ -191,3 +266,40 @@ def test_reasoner_initial_context_uses_segment_overview_not_cold_candidates(tmp_
     assert overview["segment_overviews"][0]["segment_id"] == "seg_target"
     assert "target" not in overview["segment_overviews"][0]
     assert first_call["available_tools"] == ("open_segment", "inspect_window")
+
+
+def test_query_contract_marks_throughout_count_as_full_video_deduplication() -> None:
+    contract = multiround.compile_query_contract(
+        "Throughout the video, how many scholars in total show up and comment on Napoleon?"
+    )
+
+    assert contract.required_scope == "full_video"
+    assert contract.quantifier == "distinct_count"
+    assert contract.aggregation == "deduplicate"
+    assert contract.required_observability == ("visual", "asr")
+
+
+def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    reasoner = CoverageReasoner()
+    investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
+    driver = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=investigator,
+        max_rounds=4,
+        max_investigations=8,
+    )
+
+    result = driver.run(workspace)
+
+    assert result.answer == "B. Three"
+    assert result.correct is True
+    assert reasoner.calls == 4
+    assert reasoner.completion_statuses[2]["missing_segment_ids"] == ["seg_target_b"]
+    assert len(result.citations) == 1
+    aggregate = next(item for item in result.evidence if item.evidence_id == result.citations[0])
+    assert aggregate.modality == "derived"
+    assert set(aggregate.parent_evidence_ids) == {"ev_q_chunk_a_001", "ev_q_chunk_b_001"}
+    gate_rows = [row for row in result.trace if row.get("type") == "completion_gate"]
+    assert gate_rows[0]["passed"] is False
+    assert gate_rows[0]["missing_segment_ids"] == ["seg_target_b"]

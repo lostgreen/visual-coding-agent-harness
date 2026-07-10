@@ -8,7 +8,7 @@ from typing import Any, Mapping, Sequence
 
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.memory import EvidenceStore
-from vcah.types import EvidenceRecord, is_path_only_visual_evidence
+from vcah.types import ClaimContract, EvidenceRecord, is_path_only_visual_evidence, to_jsonable
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace
 
@@ -89,6 +89,40 @@ class HeuristicReasoner:
         )
 
 
+def compile_query_contract(question: str) -> ClaimContract:
+    text = str(question or "").casefold()
+    is_count = bool(re.search(r"\bhow many\b|\bnumber of\b", text))
+    full_video = any(
+        phrase in text
+        for phrase in (
+            "throughout the video",
+            "in total",
+            "entire video",
+            "whole video",
+            "across the video",
+            "over the course of the video",
+        )
+    )
+    language_action = any(term in text for term in ("comment", "say", "speak", "discuss", "mention"))
+    if is_count:
+        return ClaimContract(
+            required_scope="full_video" if full_video else "multi_window",
+            quantifier="distinct_count",
+            observation_target="entity",
+            aggregation="deduplicate",
+            required_observability=("visual", "asr") if language_action else ("visual",),
+            observability_mode="all",
+        )
+    return ClaimContract(
+        required_scope="window",
+        quantifier="existential",
+        observation_target="attribute",
+        aggregation="none",
+        required_observability=("visual",),
+        observability_mode="all",
+    )
+
+
 class VirtualVideoMultiRoundDriver:
     def __init__(
         self,
@@ -109,6 +143,7 @@ class VirtualVideoMultiRoundDriver:
         investigator = self.investigator or VirtualVideoInvestigator(workspace)
         investigator.reset_run_state()
         workspace_overview = build_workspace_overview(workspace, thumbnail_budget=40)
+        query_contract = compile_query_contract(workspace.case.question)
         evidence_store = EvidenceStore.empty(workspace.root_dir / "evidence.jsonl")
         reports: list[InvestigationReport] = []
         trace: list[Mapping[str, Any]] = []
@@ -120,6 +155,7 @@ class VirtualVideoMultiRoundDriver:
         for round_id in range(1, self.max_rounds + 1):
             rounds_run = round_id
             remaining = self.max_investigations - accepted
+            completion_status = _completion_status(workspace, query_contract, evidence_store.records)
             decision = _decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
@@ -128,6 +164,8 @@ class VirtualVideoMultiRoundDriver:
                     workspace_duration_sec=workspace.manifest.duration_sec,
                     segment_overviews=tuple(workspace_overview["segment_overviews"]),
                     workspace_overview=workspace_overview,
+                    query_contract=to_jsonable(query_contract),
+                    completion_status=completion_status,
                     available_tools=tuple(workspace_overview["available_tools"]),
                     evidence=evidence_store.records,
                     evidence_digest=_evidence_digest(evidence_store.records),
@@ -141,13 +179,32 @@ class VirtualVideoMultiRoundDriver:
                     "action": decision.action,
                     "task_count": len(decision.tasks),
                     "remaining_budget": remaining,
+                    "completion_status": completion_status,
                 }
             )
             if decision.action == "answer":
-                if _citations_are_visual(decision.citations, evidence_store.records):
+                gate = _answer_completion_gate(
+                    workspace,
+                    query_contract,
+                    decision.citations,
+                    evidence_store.records,
+                )
+                trace.append({"type": "completion_gate", "round": round_id, **gate})
+                if gate["passed"]:
                     answer = decision.answer
-                    citations = decision.citations
-                break
+                    if query_contract.aggregation != "none":
+                        aggregate = _derived_answer_evidence(
+                            workspace,
+                            answer=answer,
+                            citations=decision.citations,
+                            evidence=evidence_store.records,
+                        )
+                        evidence_store.add(aggregate)
+                        citations = (aggregate.evidence_id,)
+                    else:
+                        citations = decision.citations
+                    break
+                continue
             if remaining <= 0:
                 break
             tasks = decision.tasks[: min(self.max_tasks_per_round, remaining)]
@@ -177,6 +234,164 @@ class VirtualVideoMultiRoundDriver:
         )
         _write_run_summary(workspace, result)
         return result
+
+
+def _completion_status(
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    evidence: Sequence[EvidenceRecord],
+) -> dict[str, Any]:
+    coverage = _source_coverage(workspace, evidence)
+    if contract.required_scope != "full_video":
+        return {
+            "ready_for_answer": bool(evidence),
+            "required_scope": contract.required_scope,
+            "missing_segment_ids": [],
+            "source_coverage": coverage,
+        }
+    if not coverage:
+        return {
+            "ready_for_answer": False,
+            "required_scope": contract.required_scope,
+            "reason": "source_not_identified",
+            "missing_segment_ids": [],
+            "source_coverage": {},
+        }
+    adopted_source = max(
+        coverage,
+        key=lambda source_id: (
+            int(coverage[source_id]["covered_count"]),
+            float(coverage[source_id]["confidence"]),
+        ),
+    )
+    missing = list(coverage[adopted_source]["missing_segment_ids"])
+    return {
+        "ready_for_answer": not missing,
+        "required_scope": contract.required_scope,
+        "adopted_source_video_id": adopted_source,
+        "missing_segment_ids": missing,
+        "source_coverage": coverage,
+    }
+
+
+def _source_coverage(
+    workspace: VirtualVideoWorkspace,
+    evidence: Sequence[EvidenceRecord],
+) -> dict[str, dict[str, Any]]:
+    required: dict[str, list[str]] = {}
+    for segment in workspace.manifest.segments:
+        required.setdefault(segment.source_video_id, []).append(segment.segment_id)
+    covered: dict[str, set[str]] = {}
+    confidence: dict[str, float] = {}
+    for record in evidence:
+        if record.modality not in {"visual", "ocr"}:
+            continue
+        for lineage in record.source_lineage:
+            source_id = str(lineage.get("source_video_id", "") or "")
+            segment_id = str(lineage.get("segment_id", "") or "")
+            if not source_id or not segment_id:
+                continue
+            covered.setdefault(source_id, set()).add(segment_id)
+            confidence[source_id] = max(confidence.get(source_id, 0.0), record.confidence)
+    result: dict[str, dict[str, Any]] = {}
+    for source_id, segment_ids in covered.items():
+        required_ids = tuple(required.get(source_id, ()))
+        missing = [segment_id for segment_id in required_ids if segment_id not in segment_ids]
+        result[source_id] = {
+            "covered_segment_ids": sorted(segment_ids),
+            "required_segment_ids": list(required_ids),
+            "missing_segment_ids": missing,
+            "covered_count": len(segment_ids),
+            "required_count": len(required_ids),
+            "confidence": confidence.get(source_id, 0.0),
+        }
+    return result
+
+
+def _answer_completion_gate(
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    citations: Sequence[str],
+    evidence: Sequence[EvidenceRecord],
+) -> dict[str, Any]:
+    if not _citations_are_visual(citations, evidence):
+        return {"passed": False, "reason": "invalid_visual_citations", "missing_segment_ids": []}
+    by_id = {record.evidence_id: record for record in evidence}
+    cited = tuple(by_id[str(citation)] for citation in citations)
+    if contract.required_scope != "full_video":
+        return {"passed": True, "reason": "verified_window_evidence", "missing_segment_ids": []}
+
+    cited_sources = {
+        str(lineage.get("source_video_id", "") or "")
+        for record in cited
+        for lineage in record.source_lineage
+        if str(lineage.get("source_video_id", "") or "")
+    }
+    cited_segments = {
+        str(lineage.get("segment_id", "") or "")
+        for record in cited
+        for lineage in record.source_lineage
+        if str(lineage.get("segment_id", "") or "")
+    }
+    required_segments = {
+        segment.segment_id
+        for segment in workspace.manifest.segments
+        if segment.source_video_id in cited_sources
+    }
+    missing = sorted(required_segments - cited_segments)
+    if not cited_sources:
+        return {"passed": False, "reason": "source_not_identified", "missing_segment_ids": []}
+    if missing:
+        return {
+            "passed": False,
+            "reason": "full_source_coverage_missing",
+            "source_video_ids": sorted(cited_sources),
+            "missing_segment_ids": missing,
+        }
+    return {
+        "passed": True,
+        "reason": "full_source_coverage_verified",
+        "source_video_ids": sorted(cited_sources),
+        "missing_segment_ids": [],
+    }
+
+
+def _derived_answer_evidence(
+    workspace: VirtualVideoWorkspace,
+    *,
+    answer: str,
+    citations: Sequence[str],
+    evidence: Sequence[EvidenceRecord],
+) -> EvidenceRecord:
+    by_id = {record.evidence_id: record for record in evidence}
+    parents = tuple(by_id[str(citation)] for citation in citations)
+    starts = [record.start_sec for record in parents if record.start_sec is not None]
+    ends = [record.end_sec for record in parents if record.end_sec is not None]
+    coverage = tuple(segment for record in parents for segment in record.coverage_manifest)
+    lineage = tuple(dict(item) for record in parents for item in record.source_lineage)
+    request_ids = tuple(dict.fromkeys(request_id for record in parents for request_id in record.request_ids))
+    return EvidenceRecord(
+        evidence_id="ev_final_aggregate",
+        beat_id="",
+        start_sec=min(starts) if starts else None,
+        end_sec=max(ends) if ends else None,
+        modality="derived",
+        pointer=f"virtual://{workspace.workspace_id}/derived/final",
+        verbatim=f"Final answer {answer!r} aggregates {len(parents)} cited observations.",
+        claim=answer,
+        attestation_model="reasoner",
+        temporal_scope="full_video",
+        evidence_kind="aggregate",
+        observation_polarity="positive",
+        sampling_coverage="sparse",
+        parent_evidence_ids=tuple(record.evidence_id for record in parents),
+        request_ids=request_ids,
+        coverage_manifest=coverage,
+        task_id="final_answer",
+        observation_id="final_aggregate",
+        confidence=min((record.confidence for record in parents), default=0.0),
+        source_lineage=lineage,
+    )
 
 
 def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
@@ -265,6 +480,8 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
                         "observation_id": item.observation_id,
                         "pointer": item.pointer,
                         "frame_refs": list(item.frame_refs),
+                        "parent_evidence_ids": list(item.parent_evidence_ids),
+                        "coverage_manifest": to_jsonable(item.coverage_manifest),
                         "source_lineage": [dict(row) for row in item.source_lineage],
                     }
                     for item in result.evidence
