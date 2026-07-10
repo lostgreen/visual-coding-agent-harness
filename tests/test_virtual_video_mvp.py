@@ -178,6 +178,7 @@ def test_window_sampling_avoids_exact_source_duration_endpoint(tmp_path: Path) -
     )
     workspace = VirtualVideoWorkspace.create(tmp_path / "endpoint", manifest=manifest, case=case)
     sampled: list[float] = []
+    attempted: list[float] = []
 
     def endpoint_strict_sampler(
         video_path: str,
@@ -187,8 +188,9 @@ def test_window_sampling_avoids_exact_source_duration_endpoint(tmp_path: Path) -
         out_dir: Path,
     ) -> tuple[Frame, ...]:
         del video_path, end_sec, n_frames
-        if start_sec >= 10.0:
-            raise RuntimeError("exact duration is not decodable")
+        attempted.append(start_sec)
+        if start_sec > 9.0:
+            raise RuntimeError("tail frames are not decodable")
         sampled.append(start_sec)
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"frame_{start_sec:.3f}.jpg"
@@ -206,8 +208,9 @@ def test_window_sampling_avoids_exact_source_duration_endpoint(tmp_path: Path) -
     )
 
     assert len(frames) == 3
-    assert sampled[-1] < 10.0
-    assert frames[-1].virtual_time_sec >= 9.0
+    assert attempted[-3:] == [9.9, 9.4, 8.9]
+    assert sampled[-1] == 8.9
+    assert frames[-1].virtual_time_sec == 8.9
 
 
 def test_near_equivalent_window_reuses_existing_observation_frames(tmp_path: Path) -> None:

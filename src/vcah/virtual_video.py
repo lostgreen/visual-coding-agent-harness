@@ -374,16 +374,24 @@ def materialize_window_frames(
         window = _source_window_for_time(workspace.manifest, virtual_time)
         if window is None:
             continue
+        segment = next(item for item in workspace.manifest.segments if item.segment_id == window.segment_id)
         source_time = window.source_start_sec + (virtual_time - window.virtual_start_sec)
-        if source_time >= window.source_end_sec:
-            source_time = max(window.source_start_sec, window.source_end_sec - 0.1)
+        if source_time > segment.source_end_sec - 0.1:
+            source_time = max(segment.source_start_sec, segment.source_end_sec - 0.1)
         source_time = round(source_time, 3)
+        out_dir = observations / str(query_id) / window.segment_id / f"win_{frame_index:06d}"
+        frame, source_time = _sample_window_frame_with_tail_backoff(
+            sampler,
+            window,
+            source_time,
+            out_dir,
+            source_start_sec=segment.source_start_sec,
+            source_end_sec=segment.source_end_sec,
+        )
         sampled_virtual_time = round(
             window.virtual_start_sec + (source_time - window.source_start_sec),
             3,
         )
-        out_dir = observations / str(query_id) / window.segment_id / f"win_{frame_index:06d}"
-        frame = tuple(sampler(window.source_path, source_time, source_time, 1, out_dir))[0]
         rows.append(
             VirtualFrameRef(
                 frame_id=f"win_{query_id}_{frame_index:06d}",
@@ -401,6 +409,31 @@ def materialize_window_frames(
     manifest_path = observations / "window_frame_manifest.jsonl"
     _append_jsonl(manifest_path, (asdict(row) for row in rows))
     return tuple(rows)
+
+
+def _sample_window_frame_with_tail_backoff(
+    sampler: FrameSampler,
+    window: SourceWindow,
+    source_time: float,
+    out_dir: Path,
+    *,
+    source_start_sec: float,
+    source_end_sec: float,
+) -> tuple[Frame, float]:
+    candidates = [float(source_time)]
+    if source_end_sec - source_time <= 2.0:
+        candidates.extend(max(source_start_sec, source_time - delta) for delta in (0.5, 1.0, 2.0))
+    last_error: RuntimeError | None = None
+    for candidate in dict.fromkeys(round(value, 3) for value in candidates):
+        try:
+            frame = tuple(sampler(window.source_path, candidate, candidate, 1, out_dir))[0]
+        except RuntimeError as exc:
+            last_error = exc
+            continue
+        return frame, candidate
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Frame sampler returned no decodable frame")
 
 
 def _uniform_times(start_sec: float, end_sec: float, fps: float, max_frames: int) -> tuple[float, ...]:
