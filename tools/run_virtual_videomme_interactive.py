@@ -509,7 +509,8 @@ def _normalize_entities(value: Any) -> tuple[dict[str, Any], ...]:
                 "local_id": str(item.get("local_id", "") or f"person_{index}"),
                 "description": description,
                 "role": str(item.get("role", "") or ""),
-                "comments_on_topic": _truthy(item.get("comments_on_topic")),
+                "question_relation": str(item.get("question_relation", "") or ""),
+                "supports_question_relation": _truthy(item.get("supports_question_relation")),
             }
         )
     return tuple(rows)
@@ -734,7 +735,7 @@ def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mappin
         "You are the Reasoner for a long virtual video QA agent. Decide whether current evidence is enough.\n"
         f"{finalization_instruction}"
         "If enough, return JSON only: {\"action\":\"answer\", \"answer\":\"A. ...\", \"citations\":[\"ev_...\"],"
-        "\"entity_clusters\":[{\"entity_id\":\"scholar_1\",\"description\":\"canonical identity\","
+        "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"canonical identity\","
         "\"evidence_ids\":[\"ev_...\"]}]}.\n"
         "If not enough, return JSON only: {\"action\":\"investigate\", \"tasks\":[{\"query_id\":\"r2_t1\",\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\"}]}.\n"
         "You may request up to 4 more segments/windows. Do not answer with insufficient evidence.\n"
@@ -759,7 +760,8 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "You are the Investigator. Inspect the low-fps preview frames and local ASR without choosing an answer option. "
         "Return JSON only: {\"summary\":\"atomic observation\",\"confidence\":0.0-1.0,"
         "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"stable visible attributes\","
-        "\"role\":\"scholar or other\",\"comments_on_topic\":true|false}],"
+        "\"role\":\"visible role or unknown\",\"question_relation\":\"directly observed relation or unknown\","
+        "\"supports_question_relation\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false,"
         "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\"}.\n"
         "List each visible person separately using stable appearance attributes. Do not estimate a segment-level or video-level count. "
@@ -788,7 +790,8 @@ def _evidence_prompt(
         "not an answer-option judgment. Return JSON only: "
         "{\"summary\":\"atomic visual evidence summary\", \"confidence\":0.0-1.0,"
         "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"stable visible attributes\","
-        "\"role\":\"scholar or other\",\"comments_on_topic\":true|false}],"
+        "\"role\":\"visible role or unknown\",\"question_relation\":\"directly observed relation or unknown\","
+        "\"supports_question_relation\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false}.\n"
         "List visible people separately and do not infer a count across frames or chunks.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "

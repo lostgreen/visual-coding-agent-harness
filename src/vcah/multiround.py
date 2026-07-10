@@ -708,8 +708,8 @@ def _evidence_search_text(record: EvidenceRecord) -> str:
 
 
 def _record_matches_identity_anchor(record: EvidenceRecord, terms: Sequence[str]) -> bool:
-    if _metadata_flag(record.operation_metadata.get("supports_identity_anchor")):
-        return True
+    if "supports_identity_anchor" in record.operation_metadata:
+        return _metadata_flag(record.operation_metadata.get("supports_identity_anchor"))
     text = _evidence_search_text(record)
     return bool(terms) and all(term in text for term in terms)
 

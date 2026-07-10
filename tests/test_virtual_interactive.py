@@ -194,7 +194,8 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
                         "local_id": "person_1",
                         "description": "presenter in a dark jacket",
                         "role": "presenter",
-                        "comments_on_topic": True,
+                        "question_relation": "stands beside the numbered board",
+                        "supports_question_relation": True,
                     }
                 ],
             },
@@ -230,6 +231,52 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
     assert len(report.evidence[0].frame_refs) == 16
     assert "frame_40.000.jpg" in report.evidence[0].frame_refs[0]
     assert "frame_60.000.jpg" in report.evidence[0].frame_refs[-1]
+
+
+def test_investigator_prompt_and_entity_schema_are_question_generic(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    task = InvestigationTask(
+        query_id="r1_t1",
+        goal="Check whether the presenter points to the diagram.",
+        segment_id="seg_0001",
+        modality_hint=("visual",),
+        expected_evidence="presenter pointing to the diagram",
+    )
+    segment_packet = {
+        "segment_id": "seg_0001",
+        "virtual_time_range": [0.0, 180.0],
+        "asr_timeline_summary": "The presenter explains a diagram.",
+        "beat_count": 3,
+        "thumbnail_grid_paths": [],
+    }
+    window = {
+        "virtual_time_range": [30.0, 60.0],
+        "sampling": {"fps": 0.5, "frame_count": 16},
+        "asr_cues": [],
+        "source_lineage": [],
+    }
+
+    preview_prompt = _interactive._preview_prompt(workspace, task, segment_packet, window)
+    detail_prompt = _interactive._evidence_prompt(workspace, task, segment_packet, window)
+    entities = _interactive._normalize_entities(
+        [
+            {
+                "local_id": "person_1",
+                "description": "presenter in a green jacket",
+                "role": "presenter",
+                "question_relation": "points to the diagram",
+                "supports_question_relation": True,
+            }
+        ]
+    )
+
+    assert "scholar" not in preview_prompt.casefold()
+    assert "comments_on_topic" not in preview_prompt
+    assert "scholar" not in detail_prompt.casefold()
+    assert "comments_on_topic" not in detail_prompt
+    assert "supports_question_relation" in preview_prompt
+    assert entities[0]["question_relation"] == "points to the diagram"
+    assert entities[0]["supports_question_relation"] is True
 
 
 def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> None:

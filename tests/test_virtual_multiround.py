@@ -410,6 +410,38 @@ def test_identity_anchor_contract_supports_active_relative_clause_paraphrase() -
     assert requirements["identity_anchor_terms"] == ["suitcase", "red", "hat"]
 
 
+def test_identity_completion_respects_explicit_negative_anchor_attestation(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    question = "What happened to the guest who carried a suitcase and wore a red hat?"
+    contract = multiround.compile_query_contract(question)
+    requirements = multiround.compile_query_requirements(question)
+    negative = EvidenceRecord(
+        evidence_id="ev_negative_anchor",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=5.0,
+        modality="visual",
+        pointer="virtual://negative-anchor",
+        verbatim="No guest carrying a suitcase or wearing a red hat is visible.",
+        frame_refs=("negative.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="visual_observation",
+        coverage_manifest=(CoverageSegment("q_negative", 0.0, 5.0, "visual", 1.0),),
+        source_lineage=(),
+        operation_metadata={"supports_identity_anchor": False},
+    )
+
+    completion = multiround._completion_status(
+        workspace,
+        contract,
+        (negative,),
+        query_requirements=requirements,
+    )
+
+    assert completion["ready_for_answer"] is False
+    assert completion["identity_anchor_evidence_ids"] == []
+
+
 def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(tmp_path: Path) -> None:
     workspace = _two_chunk_workspace(tmp_path)
     reasoner = CoverageReasoner()
