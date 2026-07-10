@@ -180,6 +180,20 @@ class FinalizationReasoner:
         )
 
 
+class UnsupportedFinalizationReasoner(FinalizationReasoner):
+    def decide(self, **kwargs: object) -> ReasonerDecision:
+        decision = super().decide(**kwargs)
+        if decision.action != "answer":
+            return decision
+        return ReasonerDecision(
+            action="answer",
+            answer=decision.answer,
+            citations=decision.citations,
+            support_status="insufficient",
+            support_reason="The observation is related but does not establish the proposed causal claim.",
+        )
+
+
 class AlwaysEmptyReasoner:
     def decide(self, **kwargs: object) -> ReasonerDecision:
         del kwargs
@@ -816,6 +830,24 @@ def test_driver_runs_answer_only_finalization_after_last_investigation_round(tmp
     assert result.correct is True
     assert reasoner.force_flags == [False, True]
     assert any(row.get("type") == "reasoner_finalization" for row in result.trace)
+
+
+def test_answer_audit_soft_fails_verification_without_erasing_best_effort_answer(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=UnsupportedFinalizationReasoner(),
+        investigator=VirtualVideoInvestigator(workspace, sampler=_sampler),
+        max_rounds=1,
+        max_investigations=2,
+    ).run(workspace)
+
+    assert result.answer == "B. 11"
+    assert result.correct is True
+    assert result.verified is False
+    assert result.verification_reason == "answer_audit_insufficient"
+    gate = next(row for row in result.trace if row.get("type") == "completion_gate")
+    assert gate["base_gate_passed"] is True
+    assert gate["audit_reason"].startswith("The observation is related")
 
 
 def test_driver_repairs_empty_answers_with_unvisited_identity_anchor_segments(tmp_path: Path) -> None:

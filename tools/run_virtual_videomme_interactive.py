@@ -266,11 +266,34 @@ class GeminiReasoner:
             if action == "investigate":
                 tasks = parsed.get("tasks") or []
                 return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
-            return ReasonerDecision(
+            candidate = ReasonerDecision(
                 action="answer",
                 answer=str(parsed.get("answer") or ""),
                 citations=tuple(parsed.get("citations") or (evidence_digest[-1]["evidence_id"],)),
                 entity_clusters=tuple(parsed.get("entity_clusters") or ()),
+            )
+            if not candidate.answer:
+                return candidate
+            audit_prompt = _answer_audit_prompt(kwargs, candidate, evidence_digest)
+            audit_raw = self.api.chat(audit_prompt, max_tokens=900)
+            audit = _parse_json(audit_raw)
+            self._trace("reasoner_answer_audit", audit_prompt, audit_raw, audit)
+            verdict = str(audit.get("verdict", "unknown") or "unknown").strip().casefold()
+            audit_tasks = tuple(audit.get("tasks") or ())[:2]
+            if (
+                verdict in {"insufficient", "contradicted"}
+                and audit_tasks
+                and int(kwargs.get("remaining_budget", 0) or 0) > 0
+                and not kwargs.get("force_finalize")
+            ):
+                return ReasonerDecision(action="investigate", tasks=audit_tasks)
+            return ReasonerDecision(
+                action="answer",
+                answer=candidate.answer,
+                citations=candidate.citations,
+                entity_clusters=candidate.entity_clusters,
+                support_status=verdict,
+                support_reason=str(audit.get("reason", "") or ""),
             )
         image_paths = [str(row.get("overview_thumbnail_grid_path")) for row in overview.get("segment_overviews", ())]
         prompt = _investigate_prompt(kwargs)
@@ -967,6 +990,45 @@ def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mappin
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}\n"
         f"Evidence so far: {json.dumps(list(evidence_digest), ensure_ascii=False)}"
+    )
+
+
+def _answer_audit_prompt(
+    kwargs: Mapping[str, Any],
+    candidate: ReasonerDecision,
+    evidence_digest: Sequence[Mapping[str, Any]],
+) -> str:
+    cited_ids = set(candidate.citations)
+    cited = [dict(row) for row in evidence_digest if str(row.get("evidence_id", "")) in cited_ids]
+    surrounding = [
+        dict(row)
+        for row in evidence_digest
+        if str(row.get("evidence_id", "")) not in cited_ids
+    ][-8:]
+    context = (cited + surrounding)[:12]
+    budget = int(kwargs.get("remaining_budget", 0) or 0)
+    task_instruction = (
+        "If evidence is insufficient or contradictory, return 1-2 targeted investigation tasks."
+        if budget > 0 and not kwargs.get("force_finalize")
+        else "No investigation budget remains; return no tasks and assess the best-effort answer honestly."
+    )
+    return (
+        "Audit a proposed answer for a long-video QA agent using only the supplied evidence. "
+        "Do not reward citation relevance alone. The exact selected option must follow from the observations at the "
+        "causal, temporal, identity, count, and attribute granularity asked by the question. "
+        "For why/how questions, distinguish an underlying motive or observed cause from a downstream benefit, an after-state, "
+        "or mere co-occurrence. For identity-linked questions, require evidence that links the same visible entity across the "
+        "anchor and answer event. Do not use answer-option plausibility as evidence. "
+        f"{task_instruction}\n"
+        "Return JSON only: {\"verdict\":\"supported|insufficient|contradicted\",\"reason\":\"...\","
+        "\"evidence_relation\":\"direct|causal_chain|consequence_only|cooccurrence_only|unclear\","
+        "\"unresolved_alternatives\":[\"A\"],\"tasks\":[{\"query_id\":\"audit_r2_t1\","
+        "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":[0.0,60.0],"
+        "\"modality_hint\":[\"visual\",\"asr\"],\"expected_evidence\":\"...\"}]}.\n"
+        f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
+        f"Proposed answer: {candidate.answer}\nCitations: {json.dumps(list(candidate.citations), ensure_ascii=False)}\n"
+        f"Evidence context: {json.dumps(context, ensure_ascii=False)}\n"
+        f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}"
     )
 
 

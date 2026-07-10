@@ -33,6 +33,7 @@ _interactive = _load_tool_module("virtual_interactive_runner", "run_virtual_vide
 AssetBundler = _viewer.AssetBundler
 _render_case = _viewer._render_case
 GeminiInvestigator = _interactive.GeminiInvestigator
+GeminiReasoner = _interactive.GeminiReasoner
 _select_window_with_model = _interactive._select_window_with_model
 _load_case_group = _interactive._load_case_group
 _event_evidence_prompt = _interactive._event_evidence_prompt
@@ -94,6 +95,61 @@ def test_event_detail_prompt_accepts_prior_adjacent_events(tmp_path: Path) -> No
 
     assert "opening title card" in prompt
     assert "Prior adjacent-window ending events" in prompt
+
+
+def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {
+                "action": "answer",
+                "answer": "D. A downstream benefit.",
+                "citations": ["ev_1"],
+                "entity_clusters": [],
+            },
+            {
+                "verdict": "insufficient",
+                "reason": "The citation states a consequence, not the motive asked by the question.",
+                "evidence_relation": "consequence_only",
+                "unresolved_alternatives": ["B"],
+                "tasks": [
+                    {
+                        "query_id": "audit_r2_t1",
+                        "goal": "Inspect the preceding conversation for the broader motive.",
+                        "segment_id": "seg_0001",
+                        "time_range": [40.0, 60.0],
+                        "modality_hint": ["visual", "asr"],
+                        "expected_evidence": "direct dialogue establishing the motive",
+                    }
+                ],
+            },
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="Why does the person perform the action?",
+        options={"B": "A broader motive", "D": "A downstream benefit"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=4,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "The money could help many people later.",
+                "virtual_time_range": [50.0, 55.0],
+                "modality": "visual",
+                "source_lineage": [{"segment_id": "seg_0001"}],
+            },
+        ),
+    )
+
+    assert decision.action == "investigate"
+    assert decision.tasks[0].query_id == "audit_r2_t1"
+    assert len(api.calls) == 2
+    assert "Do not reward citation relevance alone" in api.calls[1]["prompt"]
 
 
 class ScriptedVisionClient:

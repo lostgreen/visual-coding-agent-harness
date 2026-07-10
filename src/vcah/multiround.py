@@ -41,11 +41,15 @@ class ReasonerDecision:
     answer: str = ""
     citations: tuple[str, ...] = ()
     entity_clusters: tuple[Mapping[str, Any], ...] = ()
+    support_status: str = ""
+    support_reason: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tasks", tuple(_task(item) for item in self.tasks))
         object.__setattr__(self, "citations", tuple(str(item) for item in self.citations if str(item).strip()))
         object.__setattr__(self, "entity_clusters", tuple(_entity_cluster(item) for item in self.entity_clusters))
+        object.__setattr__(self, "support_status", str(self.support_status or "").strip().casefold())
+        object.__setattr__(self, "support_reason", str(self.support_reason or "").strip())
 
 
 @dataclass(frozen=True)
@@ -369,6 +373,7 @@ class VirtualVideoMultiRoundDriver:
                     evidence_store.records,
                     query_requirements=query_requirements,
                 )
+                gate = _apply_answer_audit(gate, decision)
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
                 if decision.answer.strip():
@@ -458,6 +463,7 @@ class VirtualVideoMultiRoundDriver:
                     evidence_store.records,
                     query_requirements=query_requirements,
                 )
+                gate = _apply_answer_audit(gate, final_decision)
                 trace.append(
                     {
                         "type": "completion_gate",
@@ -1083,7 +1089,28 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         answer=str(value.get("answer", "")),
         citations=tuple(value.get("citations", ())),
         entity_clusters=tuple(value.get("entity_clusters", ())),
+        support_status=str(value.get("support_status", "") or ""),
+        support_reason=str(value.get("support_reason", "") or ""),
     )
+
+
+def _apply_answer_audit(gate: Mapping[str, Any], decision: ReasonerDecision) -> dict[str, Any]:
+    result = dict(gate)
+    status = str(decision.support_status or "").strip().casefold()
+    if status:
+        result["answer_audit_status"] = status
+        result["audit_reason"] = decision.support_reason
+    if status not in {"insufficient", "contradicted"}:
+        return result
+    result.update(
+        {
+            "base_gate_passed": bool(gate.get("passed")),
+            "base_gate_reason": str(gate.get("reason", "") or ""),
+            "passed": False,
+            "reason": f"answer_audit_{status}",
+        }
+    )
+    return result
 
 
 def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any], ...]:
