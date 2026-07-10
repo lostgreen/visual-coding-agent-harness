@@ -149,6 +149,8 @@ def _vv_result_payload(result) -> dict[str, object]:
         "answer": result.answer,
         "citations": list(result.citations),
         "correct": result.correct,
+        "verified": result.verified,
+        "verification_reason": result.verification_reason,
         "rounds": result.rounds,
         "accepted_investigations": result.accepted_investigations,
     }

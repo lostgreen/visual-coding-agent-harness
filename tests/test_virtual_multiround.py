@@ -562,6 +562,8 @@ def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(
 
     assert result.answer == "B. Three"
     assert result.correct is True
+    assert result.verified is True
+    assert result.verification_reason == "full_source_coverage_verified"
     assert reasoner.calls == 3
     assert reasoner.completion_statuses[1]["missing_segment_ids"] == ["seg_target_b"]
     assert reasoner.completion_statuses[2]["missing_segment_ids"] == []
@@ -591,7 +593,10 @@ def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_pa
 
     result = driver.run(workspace)
 
-    assert result.answer == "Insufficient verified evidence."
+    assert result.answer == "B. Three"
+    assert result.correct is True
+    assert result.verified is False
+    assert result.verification_reason == "entity_reconciliation_missing"
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["passed"] is False
     assert gate["reason"] == "entity_reconciliation_missing"
@@ -696,6 +701,88 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
     assert len(aggregate.operation_metadata["event_occurrences"]) == 2
 
 
+def test_event_occurrences_merge_only_explicit_cross_beat_continuations() -> None:
+    lineage = (
+        {
+            "segment_id": "seg_1",
+            "source_video_id": "source",
+            "source_time_range": [180.0, 300.0],
+            "virtual_time_range": [180.0, 300.0],
+        },
+    )
+    first = EvidenceRecord(
+        evidence_id="ev_first",
+        beat_id="",
+        start_sec=180.0,
+        end_sec=240.0,
+        modality="visual",
+        pointer="virtual://first",
+        verbatim="Two different news segments appear.",
+        frame_refs=("first.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+        source_lineage=lineage,
+        operation_metadata={
+            "events": [
+                {
+                    "local_id": "event_1",
+                    "event_key": "meta-human summit",
+                    "description": "A summit news report.",
+                    "start_sec": 180.0,
+                    "end_sec": 196.0,
+                    "supports_question_event": True,
+                    "continues_from_previous": False,
+                    "continues_to_next": False,
+                },
+                {
+                    "local_id": "event_2",
+                    "event_key": "markovia royal interview",
+                    "description": "A report about the Markovian royal family begins.",
+                    "start_sec": 220.0,
+                    "end_sec": 240.0,
+                    "supports_question_event": True,
+                    "continues_from_previous": False,
+                    "continues_to_next": True,
+                },
+            ]
+        },
+    )
+    second = EvidenceRecord(
+        evidence_id="ev_second",
+        beat_id="",
+        start_sec=240.0,
+        end_sec=300.0,
+        modality="visual",
+        pointer="virtual://second",
+        verbatim="The Markovian report continues.",
+        frame_refs=("second.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+        source_lineage=lineage,
+        operation_metadata={
+            "events": [
+                {
+                    "local_id": "event_1",
+                    "event_key": "markovia royal interview",
+                    "description": "The report about the Markovian royal family continues.",
+                    "start_sec": 240.0,
+                    "end_sec": 256.0,
+                    "supports_question_event": True,
+                    "continues_from_previous": True,
+                    "continues_to_next": False,
+                }
+            ]
+        },
+    )
+
+    occurrences = multiround._event_occurrences((first, second))
+
+    assert len(occurrences) == 2
+    continued = next(row for row in occurrences if row["event_key"] == "markovia royal interview")
+    assert (continued["start_sec"], continued["end_sec"]) == (220.0, 256.0)
+    assert continued["evidence_ids"] == ["ev_first", "ev_second"]
+
+
 def test_answer_gate_rejects_empty_answer_even_with_visual_citation(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     reasoner = EmptyAnswerReasoner()
@@ -708,6 +795,8 @@ def test_answer_gate_rejects_empty_answer_even_with_visual_citation(tmp_path: Pa
     ).run(workspace)
 
     assert result.answer == "Insufficient verified evidence."
+    assert result.verified is False
+    assert result.verification_reason == "answer_missing"
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["reason"] == "answer_missing"
 

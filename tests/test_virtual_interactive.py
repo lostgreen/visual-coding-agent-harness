@@ -312,10 +312,13 @@ def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> No
     assert events == (
         {
             "local_id": "event_1",
+            "event_key": "",
             "description": "The presenter points to the diagram.",
             "start_sec": 35.0,
             "end_sec": 36.0,
             "supports_question_event": True,
+            "continues_from_previous": False,
+            "continues_to_next": False,
         },
     )
 
@@ -450,6 +453,8 @@ def test_model_investigator_enumerates_each_beat_within_one_event_count_task(tmp
     report = investigator.run_batch((task,))[0]
 
     assert len(api.calls) == 3
+    assert '"entities"' not in api.calls[0]["prompt"]
+    assert api.calls[0]["max_tokens"] >= 1000
     assert len(report.evidence) == 3
     assert [(record.start_sec, record.end_sec) for record in report.evidence] == [
         (0.0, 60.0),

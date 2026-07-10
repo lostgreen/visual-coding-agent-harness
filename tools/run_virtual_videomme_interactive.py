@@ -77,6 +77,8 @@ def main() -> None:
                 "answer": result.answer,
                 "citations": list(result.citations),
                 "correct": result.correct,
+                "verified": result.verified,
+                "verification_reason": result.verification_reason,
                 "rounds": result.rounds,
                 "accepted_investigations": result.accepted_investigations,
                 "workspace": str(workspace.root_dir),
@@ -291,8 +293,17 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         low = self.inspect_window(window[0], window[1], fps=0.5, max_frames=64, query_id=preview_query_id)
         preview_frames = select_uniform_items(tuple(low["frames"]), 16)
         preview_paths = tuple(str(row["path"]) for row in preview_frames)
-        preview_prompt = _preview_prompt(self.workspace, task, segment_packet, low)
-        preview_raw = self.api.chat(preview_prompt, image_paths=preview_paths, max_tokens=700)
+        event_window = str(getattr(task, "inspection_mode", "window")) == "event_window"
+        preview_prompt = (
+            _event_preview_prompt(self.workspace, task, segment_packet, low)
+            if event_window
+            else _preview_prompt(self.workspace, task, segment_packet, low)
+        )
+        preview_raw = self.api.chat(
+            preview_prompt,
+            image_paths=preview_paths,
+            max_tokens=1000 if event_window else 700,
+        )
         preview = _parse_json(preview_raw)
         _append_jsonl(
             self.trace_path,
@@ -332,8 +343,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             )
             selected_frames = select_uniform_items(tuple(selected_packet["frames"]), 16)
             detail_paths = tuple(str(row["path"]) for row in selected_frames)
-            final_prompt = _evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
-            raw = self.api.chat(final_prompt, image_paths=detail_paths, max_tokens=700)
+            final_prompt = (
+                _event_evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
+                if event_window
+                else _evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
+            )
+            raw = self.api.chat(final_prompt, image_paths=detail_paths, max_tokens=1000 if event_window else 700)
             parsed = _parse_json(raw)
             tool_trace.append(f"inspect_window:{self.highfps:.1f}")
             vlm_calls += 1
@@ -425,7 +440,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 time_range=window,
                 modality_hint=tuple(getattr(task, "modality_hint", ()) or ()),
                 expected_evidence=str(getattr(task, "expected_evidence", "") or ""),
-                inspection_mode="window",
+                inspection_mode="event_window",
                 priority=float(getattr(task, "priority", 0.0) or 0.0),
             )
             reports.append(self._investigate_task(beat_task))
@@ -600,10 +615,13 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
         rows.append(
             {
                 "local_id": str(item.get("local_id", "") or f"event_{index}"),
+                "event_key": " ".join(str(item.get("event_key", "") or "").strip().casefold().split()),
                 "description": description,
                 "start_sec": round(start, 3),
                 "end_sec": round(end, 3),
                 "supports_question_event": True,
+                "continues_from_previous": _truthy(item.get("continues_from_previous")),
+                "continues_to_next": _truthy(item.get("continues_to_next")),
             }
         )
     return tuple(rows)
@@ -908,6 +926,31 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
     )
 
 
+def _event_preview_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+) -> str:
+    return (
+        "You are the Investigator. Enumerate atomic question-relevant event occurrences in this low-fps window. "
+        "Return concise JSON only: {\"summary\":\"brief window observation\",\"confidence\":0.0-1.0,"
+        "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable topic/title signature\","
+        "\"description\":\"one occurrence\",\"start_sec\":float,\"end_sec\":float,"
+        "\"supports_question_event\":true|false,\"continues_from_previous\":true|false,"
+        "\"continues_to_next\":true|false}],"
+        "\"supports_answer_event\":true|false,\"need_detail\":true|false,"
+        "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\"}.\n"
+        "List every distinct supported occurrence, use virtual timestamps inside this window, and return an empty events list when none. "
+        "Use the same event_key on adjacent windows only when they show the same continuing occurrence. "
+        "Do not list people or infer a video-level count. Request a narrower detail window only when an occurrence boundary is unclear.\n"
+        f"Question: {workspace.case.question}\n"
+        f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
+        f"Window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
+    )
+
+
 def _evidence_prompt(
     workspace: VirtualVideoWorkspace,
     task: Any,
@@ -931,6 +974,32 @@ def _evidence_prompt(
         "Use virtual timestamps from the window metadata, one row per occurrence, and return an empty events list when none is supported.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
         "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
+        f"Question: {workspace.case.question}\n"
+        f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
+        f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
+        f"Detail window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
+    )
+
+
+def _event_evidence_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+    *,
+    preview: Mapping[str, Any] | None = None,
+) -> str:
+    return (
+        "You are the Investigator. Verify atomic question-relevant event occurrences in this detail window. "
+        "Return concise JSON only: {\"summary\":\"brief verified observation\",\"confidence\":0.0-1.0,"
+        "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable topic/title signature\","
+        "\"description\":\"one occurrence\",\"start_sec\":float,\"end_sec\":float,"
+        "\"supports_question_event\":true|false,\"continues_from_previous\":true|false,"
+        "\"continues_to_next\":true|false}],"
+        "\"supports_answer_event\":true|false}.\n"
+        "List every distinct supported occurrence with virtual timestamps. Use the same event_key on adjacent windows only "
+        "for the same continuing occurrence. Do not list people or infer a video-level count.\n"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"

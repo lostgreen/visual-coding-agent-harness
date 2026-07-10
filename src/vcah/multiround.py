@@ -30,7 +30,7 @@ class InvestigationTask:
             object.__setattr__(self, "time_range", (float(start), float(end)))
         object.__setattr__(self, "segment_id", str(self.segment_id or ""))
         object.__setattr__(self, "modality_hint", tuple(str(item) for item in self.modality_hint))
-        if self.inspection_mode not in {"window", "enumerate_events"}:
+        if self.inspection_mode not in {"window", "enumerate_events", "event_window"}:
             object.__setattr__(self, "inspection_mode", "window")
 
 
@@ -54,6 +54,8 @@ class MultiRoundResult:
     answer: str
     citations: tuple[str, ...]
     correct: bool
+    verified: bool
+    verification_reason: str
     rounds: int
     accepted_investigations: int
     evidence: tuple[EvidenceRecord, ...]
@@ -274,6 +276,12 @@ class VirtualVideoMultiRoundDriver:
         accepted = 0
         answer = ""
         citations: tuple[str, ...] = ()
+        verified = False
+        verification_reason = ""
+        best_answer = ""
+        best_citations: tuple[str, ...] = ()
+        best_verification_reason = ""
+        last_gate_reason = "answer_missing"
         rounds_run = 0
 
         for round_id in range(1, self.max_rounds + 1):
@@ -362,8 +370,15 @@ class VirtualVideoMultiRoundDriver:
                     query_requirements=query_requirements,
                 )
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
+                last_gate_reason = str(gate.get("reason", "") or "verification_failed")
+                if decision.answer.strip():
+                    best_answer = decision.answer
+                    best_citations = decision.citations
+                    best_verification_reason = last_gate_reason
                 if gate["passed"]:
                     answer = decision.answer
+                    verified = True
+                    verification_reason = last_gate_reason
                     if query_contract.aggregation != "none":
                         aggregate = _derived_answer_evidence(
                             workspace,
@@ -451,8 +466,15 @@ class VirtualVideoMultiRoundDriver:
                         **gate,
                     }
                 )
+                last_gate_reason = str(gate.get("reason", "") or "verification_failed")
+                if final_decision.answer.strip():
+                    best_answer = final_decision.answer
+                    best_citations = final_decision.citations
+                    best_verification_reason = last_gate_reason
                 if gate["passed"]:
                     answer = final_decision.answer
+                    verified = True
+                    verification_reason = last_gate_reason
                     if query_contract.aggregation != "none":
                         aggregate = _derived_answer_evidence(
                             workspace,
@@ -467,11 +489,33 @@ class VirtualVideoMultiRoundDriver:
                     else:
                         citations = final_decision.citations
 
+        if verified:
+            final_answer = answer
+            final_citations = citations
+        elif best_answer:
+            final_answer = best_answer
+            final_citations = best_citations
+            verification_reason = best_verification_reason or last_gate_reason
+        else:
+            final_answer = "Insufficient verified evidence."
+            final_citations = ()
+            verification_reason = last_gate_reason or "answer_missing"
+        trace.append(
+            {
+                "type": "answer_outcome",
+                "answer": final_answer,
+                "verified": verified,
+                "verification_reason": verification_reason,
+                "best_effort": bool(final_answer and not verified and best_answer),
+            }
+        )
         result = MultiRoundResult(
             case_id=workspace.case.case_id,
-            answer=answer or "Insufficient verified evidence.",
-            citations=citations,
-            correct=_score_answer(answer, workspace.case.gold),
+            answer=final_answer,
+            citations=final_citations,
+            correct=_score_answer(final_answer, workspace.case.gold),
+            verified=verified,
+            verification_reason=verification_reason,
             rounds=rounds_run,
             accepted_investigations=accepted,
             evidence=tuple(evidence_store.records),
@@ -536,7 +580,11 @@ def _identity_repair_tasks(
 
 
 def _task_for_contract(task: InvestigationTask, contract: ClaimContract) -> InvestigationTask:
-    if contract.quantifier == "total_count" and contract.observation_target == "event":
+    if (
+        task.inspection_mode == "window"
+        and contract.quantifier == "total_count"
+        and contract.observation_target == "event"
+    ):
         return replace(task, inspection_mode="enumerate_events")
     return task
 
@@ -811,26 +859,48 @@ def _event_occurrences(records: Sequence[EvidenceRecord]) -> tuple[dict[str, Any
             if end < start:
                 start, end = end, start
             source_id = _event_source_id(record, start, end)
+            event_key = _normalize_event_key(value.get("event_key"))
+            continues_from_previous = _metadata_flag(value.get("continues_from_previous"))
+            continues_to_next = _metadata_flag(value.get("continues_to_next"))
             duplicate = next(
                 (
                     item
                     for item in occurrences
                     if item["source_video_id"] == source_id
-                    and _event_intervals_equivalent(start, end, item["start_sec"], item["end_sec"])
+                    and (
+                        _event_intervals_equivalent(start, end, item["start_sec"], item["end_sec"])
+                        or _events_are_explicit_continuations(
+                            start,
+                            end,
+                            event_key=event_key,
+                            continues_from_previous=continues_from_previous,
+                            continues_to_next=continues_to_next,
+                            existing=item,
+                        )
+                    )
                 ),
                 None,
             )
             if duplicate is not None:
                 duplicate["evidence_ids"].append(record.evidence_id)
+                duplicate["start_sec"] = min(float(duplicate["start_sec"]), start)
+                duplicate["end_sec"] = max(float(duplicate["end_sec"]), end)
+                duplicate["continues_from_previous"] = bool(
+                    duplicate.get("continues_from_previous") or continues_from_previous
+                )
+                duplicate["continues_to_next"] = bool(duplicate.get("continues_to_next") or continues_to_next)
                 continue
             occurrences.append(
                 {
                     "event_id": f"{record.evidence_id}:{value.get('local_id') or f'event_{index}'}",
+                    "event_key": event_key,
                     "description": str(value.get("description", "") or ""),
                     "start_sec": start,
                     "end_sec": end,
                     "source_video_id": source_id,
                     "evidence_ids": [record.evidence_id],
+                    "continues_from_previous": continues_from_previous,
+                    "continues_to_next": continues_to_next,
                 }
             )
     return tuple(occurrences)
@@ -855,6 +925,34 @@ def _event_intervals_equivalent(start_a: float, end_a: float, start_b: float, en
     center_a = (start_a + end_a) / 2.0
     center_b = (start_b + end_b) / 2.0
     return abs(center_a - center_b) <= 1.0
+
+
+def _events_are_explicit_continuations(
+    start: float,
+    end: float,
+    *,
+    event_key: str,
+    continues_from_previous: bool,
+    continues_to_next: bool,
+    existing: Mapping[str, Any],
+) -> bool:
+    if not event_key or event_key != str(existing.get("event_key", "") or ""):
+        return False
+    follows_existing = (
+        continues_from_previous
+        and _metadata_flag(existing.get("continues_to_next"))
+        and abs(float(start) - float(existing["end_sec"])) <= 2.0
+    )
+    precedes_existing = (
+        continues_to_next
+        and _metadata_flag(existing.get("continues_from_previous"))
+        and abs(float(end) - float(existing["start_sec"])) <= 2.0
+    )
+    return follows_existing or precedes_existing
+
+
+def _normalize_event_key(value: Any) -> str:
+    return " ".join(str(value or "").strip().casefold().split())
 
 
 def _metadata_flag(value: Any) -> bool:
@@ -1036,6 +1134,8 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
                 "answer": result.answer,
                 "citations": list(result.citations),
                 "correct": result.correct,
+                "verified": result.verified,
+                "verification_reason": result.verification_reason,
                 "rounds": result.rounds,
                 "accepted_investigations": result.accepted_investigations,
                 "evidence": [
