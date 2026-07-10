@@ -320,19 +320,28 @@ def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> No
     )
 
 
-def test_source_only_construction_keeps_the_complete_question_video(monkeypatch: Any, tmp_path: Path) -> None:
-    monkeypatch.setattr(_interactive, "_duration", lambda dataset_root, video_id: 1842.5)
+def test_source_only_construction_chunks_the_complete_question_video(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setattr(_interactive, "_duration", lambda dataset_root, video_id: 650.0)
 
-    segments = _interactive._build_source_only_segment(tmp_path, {"videoID": "source-video"})
+    segments = _interactive._build_source_only_segments(
+        tmp_path,
+        {"videoID": "source-video"},
+        chunk_sec=300.0,
+    )
 
-    assert len(segments) == 1
-    segment = segments[0]
-    assert segment.source_video_id == "source-video"
-    assert segment.source_start_sec == 0.0
-    assert segment.source_end_sec == 1842.5
-    assert segment.virtual_start_sec == 0.0
-    assert segment.virtual_end_sec == 1842.5
-    assert segment.role == "target"
+    assert len(segments) == 3
+    assert [(segment.source_start_sec, segment.source_end_sec) for segment in segments] == [
+        (0.0, 300.0),
+        (300.0, 600.0),
+        (600.0, 650.0),
+    ]
+    assert [(segment.virtual_start_sec, segment.virtual_end_sec) for segment in segments] == [
+        (0.0, 300.0),
+        (300.0, 600.0),
+        (600.0, 650.0),
+    ]
+    assert {segment.source_video_id for segment in segments} == {"source-video"}
+    assert {segment.role for segment in segments} == {"target"}
 
 
 def test_window_selector_samples_beat_thumbnails_across_the_full_segment(tmp_path: Path) -> None:

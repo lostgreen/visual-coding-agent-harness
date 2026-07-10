@@ -113,7 +113,7 @@ def build_or_load_workspace(
     target = by_qid[str(case_id)]
     rng = random.Random(seed + sum(ord(ch) for ch in str(case_id)))
     if construction == "source_only":
-        segments = _build_source_only_segment(dataset_root, target)
+        segments = _build_source_only_segments(dataset_root, target, chunk_sec=chunk_sec)
     elif construction == "interleaved_chunks":
         segments = _build_interleaved_chunk_segments(
             dataset_root,
@@ -621,24 +621,35 @@ def _build_segments(
     return tuple(segments)
 
 
-def _build_source_only_segment(
+def _build_source_only_segments(
     dataset_root: Path,
     target: Mapping[str, Any],
+    *,
+    chunk_sec: float,
 ) -> tuple[VirtualVideoSegment, ...]:
     video_id = str(target["videoID"])
     duration = float(_duration(dataset_root, video_id))
-    return (
-        VirtualVideoSegment(
-            segment_id="seg_0001",
-            source_video_id=video_id,
-            source_path=str(dataset_root / "video" / f"{video_id}.mp4"),
-            source_start_sec=0.0,
-            source_end_sec=duration,
-            virtual_start_sec=0.0,
-            virtual_end_sec=duration,
-            role="target",
-        ),
-    )
+    chunk = max(1.0, float(chunk_sec))
+    segments = []
+    start = 0.0
+    index = 1
+    while start < duration:
+        end = min(duration, start + chunk)
+        segments.append(
+            VirtualVideoSegment(
+                segment_id=f"seg_{index:04d}",
+                source_video_id=video_id,
+                source_path=str(dataset_root / "video" / f"{video_id}.mp4"),
+                source_start_sec=round(start, 3),
+                source_end_sec=round(end, 3),
+                virtual_start_sec=round(start, 3),
+                virtual_end_sec=round(end, 3),
+                role="target",
+            )
+        )
+        start = end
+        index += 1
+    return tuple(segments)
 
 
 def _build_interleaved_chunk_segments(
