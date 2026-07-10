@@ -711,8 +711,14 @@ def _investigate_prompt(kwargs: Mapping[str, Any]) -> str:
 
 
 def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mapping[str, Any]]) -> str:
+    finalization_instruction = (
+        "No investigation budget remains. Return action=answer using the best grounded evidence now; do not return tasks.\n"
+        if kwargs.get("force_finalize")
+        else ""
+    )
     return (
         "You are the Reasoner for a long virtual video QA agent. Decide whether current evidence is enough.\n"
+        f"{finalization_instruction}"
         "If enough, return JSON only: {\"action\":\"answer\", \"answer\":\"A. ...\", \"citations\":[\"ev_...\"],"
         "\"entity_clusters\":[{\"entity_id\":\"scholar_1\",\"description\":\"canonical identity\","
         "\"evidence_ids\":[\"ev_...\"]}]}.\n"

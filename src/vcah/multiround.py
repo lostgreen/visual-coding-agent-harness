@@ -95,17 +95,11 @@ def compile_query_contract(question: str) -> ClaimContract:
     text = str(question or "").casefold()
     is_count = bool(re.search(r"\bhow many\b|\bnumber of\b", text))
     is_occurrence_count = bool(re.search(r"\bhow many times\b|\bnumber of times\b", text))
-    full_video = any(
-        phrase in text
-        for phrase in (
-            "throughout the video",
-            "in total",
-            "entire video",
-            "whole video",
-            "across the video",
-            "over the course of the video",
-            "in this video",
-        )
+    full_video = "in total" in text or bool(
+        re.search(r"\b(?:throughout|across)\b.*\b(?:video|film|recording)\b", text)
+        or re.search(r"\b(?:entire|whole)\s+(?:video|film|recording)\b", text)
+        or re.search(r"\bin\s+(?:this|the)\s+(?:video|film|recording)\b", text)
+        or re.search(r"\bover the course of\s+(?:this|the)\s+(?:video|film|recording)\b", text)
     )
     language_action = any(term in text for term in ("comment", "say", "speak", "discuss", "mention"))
     if is_count:
@@ -129,10 +123,12 @@ def compile_query_contract(question: str) -> ClaimContract:
 
 def compile_source_time_hint(question: str) -> tuple[float, float] | None:
     text = str(question or "").casefold()
-    match = re.search(
+    patterns = (
         r"\b(\d+)(?:st|nd|rd|th)?\s*(?:to|through|-)\s*(\d+)(?:st|nd|rd|th)?\s+minute",
-        text,
+        r"\bfrom\s+minute\s+(\d+)\s+(?:to|through|-)\s+minute\s+(\d+)",
+        r"\bbetween\s+minutes?\s+(\d+)\s+and\s+(\d+)",
     )
+    match = next((candidate for pattern in patterns if (candidate := re.search(pattern, text))), None)
     if not match:
         return None
     start_minute = int(match.group(1))
@@ -290,6 +286,67 @@ class VirtualVideoMultiRoundDriver:
             trace.append({"type": "investigator_batch", "round": round_id, "accepted_tasks": len(tasks)})
             if accepted >= self.max_investigations:
                 continue
+
+        if not answer and evidence_store.records:
+            completion_status = _completion_status(workspace, query_contract, evidence_store.records)
+            final_decision = _decision(
+                self.reasoner.decide(
+                    question=workspace.case.question,
+                    options=dict(workspace.case.options),
+                    workspace_id=workspace.workspace_id,
+                    workspace_duration_sec=workspace.manifest.duration_sec,
+                    segment_overviews=tuple(workspace_overview["segment_overviews"]),
+                    workspace_overview=workspace_overview,
+                    query_contract=to_jsonable(query_contract),
+                    completion_status=completion_status,
+                    temporal_navigation=temporal_navigation,
+                    available_tools=tuple(workspace_overview["available_tools"]),
+                    evidence=evidence_store.records,
+                    evidence_digest=_evidence_digest(evidence_store.records),
+                    remaining_budget=0,
+                    force_finalize=True,
+                )
+            )
+            trace.append(
+                {
+                    "type": "reasoner_finalization",
+                    "round": self.max_rounds + 1,
+                    "action": final_decision.action,
+                    "citation_count": len(final_decision.citations),
+                    "completion_status": completion_status,
+                }
+            )
+            if final_decision.action == "answer":
+                gate = _answer_completion_gate(
+                    workspace,
+                    query_contract,
+                    final_decision.answer,
+                    final_decision.citations,
+                    final_decision.entity_clusters,
+                    evidence_store.records,
+                )
+                trace.append(
+                    {
+                        "type": "completion_gate",
+                        "round": self.max_rounds + 1,
+                        "finalization": True,
+                        **gate,
+                    }
+                )
+                if gate["passed"]:
+                    answer = final_decision.answer
+                    if query_contract.aggregation != "none":
+                        aggregate = _derived_answer_evidence(
+                            workspace,
+                            answer=answer,
+                            citations=final_decision.citations,
+                            entity_clusters=final_decision.entity_clusters,
+                            evidence=evidence_store.records,
+                        )
+                        evidence_store.add(aggregate)
+                        citations = (aggregate.evidence_id,)
+                    else:
+                        citations = final_decision.citations
 
         result = MultiRoundResult(
             case_id=workspace.case.case_id,

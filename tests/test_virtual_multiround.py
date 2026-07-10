@@ -159,6 +159,27 @@ class EmptyAnswerReasoner:
         return ReasonerDecision(action="answer", answer="", citations=("ev_q1_001",))
 
 
+class FinalizationReasoner:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.force_flags: list[bool] = []
+
+    def decide(self, **kwargs: object) -> ReasonerDecision:
+        self.calls += 1
+        self.force_flags.append(bool(kwargs.get("force_finalize")))
+        if self.calls == 1:
+            return ReasonerDecision(
+                action="investigate",
+                tasks=(InvestigationTask("q1", "Inspect the relevant scene.", "seg_target"),),
+            )
+        evidence_digest = tuple(kwargs.get("evidence_digest", ()) or ())
+        return ReasonerDecision(
+            action="answer",
+            answer="B. 11",
+            citations=(str(evidence_digest[-1]["evidence_id"]),),
+        )
+
+
 def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     manifest = VirtualVideoManifest(
         workspace_id="case-1",
@@ -324,6 +345,19 @@ def test_query_contract_marks_how_many_times_as_full_video_event_count() -> None
     assert contract.required_observability == ("visual",)
 
 
+def test_query_contract_generalizes_across_full_recording_paraphrases() -> None:
+    entity_contract = multiround.compile_query_contract(
+        "Across the entire recording, what is the number of different experts who speak about the subject?"
+    )
+    event_contract = multiround.compile_query_contract("How many times does the title card appear in the film?")
+
+    assert entity_contract.required_scope == "full_video"
+    assert entity_contract.quantifier == "distinct_count"
+    assert entity_contract.required_observability == ("visual", "asr")
+    assert event_contract.required_scope == "full_video"
+    assert event_contract.quantifier == "total_count"
+
+
 def test_source_time_hint_maps_39th_to_43rd_minute_to_candidate_segments(tmp_path: Path) -> None:
     manifest = VirtualVideoManifest(
         workspace_id="source-time",
@@ -350,6 +384,11 @@ def test_source_time_hint_maps_39th_to_43rd_minute_to_candidate_segments(tmp_pat
     assert [item["segment_id"] for item in navigation["candidate_segments"]] == ["seg_a", "seg_b"]
     assert navigation["candidate_segments"][0]["virtual_time_range"] == [240.0, 300.0]
     assert navigation["candidate_segments"][1]["virtual_time_range"] == [300.0, 480.0]
+
+
+def test_source_time_hint_supports_non_ordinal_paraphrases() -> None:
+    assert multiround.compile_source_time_hint("From minute 12 to minute 15, what happened?") == (720.0, 900.0)
+    assert multiround.compile_source_time_hint("Between minutes 7 and 9, who entered?") == (420.0, 540.0)
 
 
 def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(tmp_path: Path) -> None:
@@ -416,3 +455,20 @@ def test_answer_gate_rejects_empty_answer_even_with_visual_citation(tmp_path: Pa
     assert result.answer == "Insufficient verified evidence."
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["reason"] == "answer_missing"
+
+
+def test_driver_runs_answer_only_finalization_after_last_investigation_round(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    reasoner = FinalizationReasoner()
+    investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=investigator,
+        max_rounds=1,
+        max_investigations=2,
+    ).run(workspace)
+
+    assert result.answer == "B. 11"
+    assert result.correct is True
+    assert reasoner.force_flags == [False, True]
+    assert any(row.get("type") == "reasoner_finalization" for row in result.trace)
