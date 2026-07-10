@@ -127,6 +127,49 @@ def compile_query_contract(question: str) -> ClaimContract:
     )
 
 
+def compile_source_time_hint(question: str) -> tuple[float, float] | None:
+    text = str(question or "").casefold()
+    match = re.search(
+        r"\b(\d+)(?:st|nd|rd|th)?\s*(?:to|through|-)\s*(\d+)(?:st|nd|rd|th)?\s+minute",
+        text,
+    )
+    if not match:
+        return None
+    start_minute = int(match.group(1))
+    end_minute = int(match.group(2))
+    if end_minute <= start_minute:
+        return None
+    return float(start_minute * 60), float(end_minute * 60)
+
+
+def source_time_navigation(
+    workspace: VirtualVideoWorkspace,
+    source_time_hint: tuple[float, float] | None,
+) -> dict[str, Any]:
+    if source_time_hint is None:
+        return {"source_time_range": None, "candidate_segments": []}
+    source_start, source_end = source_time_hint
+    candidates = []
+    for segment in workspace.manifest.segments:
+        overlap_start = max(float(source_start), segment.source_start_sec)
+        overlap_end = min(float(source_end), segment.source_end_sec)
+        if overlap_end <= overlap_start:
+            continue
+        virtual_start = segment.virtual_start_sec + (overlap_start - segment.source_start_sec)
+        virtual_end = segment.virtual_start_sec + (overlap_end - segment.source_start_sec)
+        candidates.append(
+            {
+                "segment_id": segment.segment_id,
+                "source_time_range": [round(overlap_start, 3), round(overlap_end, 3)],
+                "virtual_time_range": [round(virtual_start, 3), round(virtual_end, 3)],
+            }
+        )
+    return {
+        "source_time_range": [float(source_start), float(source_end)],
+        "candidate_segments": candidates,
+    }
+
+
 class VirtualVideoMultiRoundDriver:
     def __init__(
         self,
@@ -148,6 +191,7 @@ class VirtualVideoMultiRoundDriver:
         investigator.reset_run_state()
         workspace_overview = build_workspace_overview(workspace, thumbnail_budget=40)
         query_contract = compile_query_contract(workspace.case.question)
+        temporal_navigation = source_time_navigation(workspace, compile_source_time_hint(workspace.case.question))
         evidence_store = EvidenceStore.empty(workspace.root_dir / "evidence.jsonl")
         reports: list[InvestigationReport] = []
         trace: list[Mapping[str, Any]] = []
@@ -170,6 +214,7 @@ class VirtualVideoMultiRoundDriver:
                     workspace_overview=workspace_overview,
                     query_contract=to_jsonable(query_contract),
                     completion_status=completion_status,
+                    temporal_navigation=temporal_navigation,
                     available_tools=tuple(workspace_overview["available_tools"]),
                     evidence=evidence_store.records,
                     evidence_digest=_evidence_digest(evidence_store.records),
@@ -362,6 +407,8 @@ def _answer_completion_gate(
     entity_clusters: Sequence[Mapping[str, Any]],
     evidence: Sequence[EvidenceRecord],
 ) -> dict[str, Any]:
+    if not str(answer or "").strip():
+        return {"passed": False, "reason": "answer_missing", "missing_segment_ids": []}
     if not _citations_are_visual(citations, evidence):
         return {"passed": False, "reason": "invalid_visual_citations", "missing_segment_ids": []}
     by_id = {record.evidence_id: record for record in evidence}

@@ -145,6 +145,20 @@ class MissingEntityClustersReasoner:
         )
 
 
+class EmptyAnswerReasoner:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def decide(self, **kwargs: object) -> ReasonerDecision:
+        self.calls += 1
+        if self.calls == 1:
+            return ReasonerDecision(
+                action="investigate",
+                tasks=(InvestigationTask("q1", "Inspect the relevant scene.", "seg_target"),),
+            )
+        return ReasonerDecision(action="answer", answer="", citations=("ev_q1_001",))
+
+
 def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     manifest = VirtualVideoManifest(
         workspace_id="case-1",
@@ -310,6 +324,34 @@ def test_query_contract_marks_how_many_times_as_full_video_event_count() -> None
     assert contract.required_observability == ("visual",)
 
 
+def test_source_time_hint_maps_39th_to_43rd_minute_to_candidate_segments(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="source-time",
+        segments=(
+            VirtualVideoSegment("seg_a", "source_a", "a.mp4", 2100.0, 2400.0, 0.0, 300.0),
+            VirtualVideoSegment("seg_b", "source_a", "a.mp4", 2400.0, 2700.0, 300.0, 600.0),
+            VirtualVideoSegment("seg_c", "source_b", "b.mp4", 0.0, 300.0, 600.0, 900.0),
+        ),
+    )
+    case = VirtualVideoCase(
+        case_id="source-time",
+        question="During the 39th to 43rd minute of the film, why does Mike give Nathan a check?",
+        options={"A": "one", "B": "two"},
+        gold="B",
+        target_segment_id="seg_a",
+        target_virtual_interval=(0.0, 600.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "source-time", manifest=manifest, case=case)
+
+    hint = multiround.compile_source_time_hint(case.question)
+    navigation = multiround.source_time_navigation(workspace, hint)
+
+    assert hint == (2340.0, 2580.0)
+    assert [item["segment_id"] for item in navigation["candidate_segments"]] == ["seg_a", "seg_b"]
+    assert navigation["candidate_segments"][0]["virtual_time_range"] == [240.0, 300.0]
+    assert navigation["candidate_segments"][1]["virtual_time_range"] == [300.0, 480.0]
+
+
 def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(tmp_path: Path) -> None:
     workspace = _two_chunk_workspace(tmp_path)
     reasoner = CoverageReasoner()
@@ -358,3 +400,19 @@ def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_pa
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["passed"] is False
     assert gate["reason"] == "entity_reconciliation_missing"
+
+
+def test_answer_gate_rejects_empty_answer_even_with_visual_citation(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    reasoner = EmptyAnswerReasoner()
+    investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=investigator,
+        max_rounds=2,
+        max_investigations=2,
+    ).run(workspace)
+
+    assert result.answer == "Insufficient verified evidence."
+    gate = next(row for row in result.trace if row.get("type") == "completion_gate")
+    assert gate["reason"] == "answer_missing"
