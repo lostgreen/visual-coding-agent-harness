@@ -163,6 +163,53 @@ def test_window_sampling_uniformly_covers_full_window_when_capped(tmp_path: Path
     assert times[32] > 300.0
 
 
+def test_window_sampling_avoids_exact_source_duration_endpoint(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="endpoint",
+        segments=(VirtualVideoSegment("seg_end", "source", "source.mp4", 0.0, 10.0, 0.0, 10.0),),
+    )
+    case = VirtualVideoCase(
+        case_id="endpoint",
+        question="What happens at the end?",
+        options={"A": "nothing", "B": "an event"},
+        gold="B",
+        target_segment_id="seg_end",
+        target_virtual_interval=(9.0, 10.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "endpoint", manifest=manifest, case=case)
+    sampled: list[float] = []
+
+    def endpoint_strict_sampler(
+        video_path: str,
+        start_sec: float,
+        end_sec: float,
+        n_frames: int,
+        out_dir: Path,
+    ) -> tuple[Frame, ...]:
+        del video_path, end_sec, n_frames
+        if start_sec >= 10.0:
+            raise RuntimeError("exact duration is not decodable")
+        sampled.append(start_sec)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"frame_{start_sec:.3f}.jpg"
+        Image.new("RGB", (16, 9), color=(0, 0, 0)).save(path)
+        return (Frame(path.stem, start_sec, str(path)),)
+
+    frames = materialize_window_frames(
+        workspace,
+        0.0,
+        10.0,
+        query_id="q_endpoint",
+        fps=2.0,
+        max_frames=3,
+        sampler=endpoint_strict_sampler,
+    )
+
+    assert len(frames) == 3
+    assert sampled[-1] < 10.0
+    assert frames[-1].virtual_time_sec >= 9.0
+
+
 def test_near_equivalent_window_reuses_existing_observation_frames(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     sampled_times: list[float] = []

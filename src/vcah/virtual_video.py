@@ -374,14 +374,21 @@ def materialize_window_frames(
         window = _source_window_for_time(workspace.manifest, virtual_time)
         if window is None:
             continue
-        source_time = round(window.source_start_sec + (virtual_time - window.virtual_start_sec), 3)
+        source_time = window.source_start_sec + (virtual_time - window.virtual_start_sec)
+        if source_time >= window.source_end_sec:
+            source_time = max(window.source_start_sec, window.source_end_sec - 0.1)
+        source_time = round(source_time, 3)
+        sampled_virtual_time = round(
+            window.virtual_start_sec + (source_time - window.source_start_sec),
+            3,
+        )
         out_dir = observations / str(query_id) / window.segment_id / f"win_{frame_index:06d}"
         frame = tuple(sampler(window.source_path, source_time, source_time, 1, out_dir))[0]
         rows.append(
             VirtualFrameRef(
                 frame_id=f"win_{query_id}_{frame_index:06d}",
                 path=str(frame.path),
-                virtual_time_sec=virtual_time,
+                virtual_time_sec=sampled_virtual_time,
                 segment_id=window.segment_id,
                 source_video_id=window.source_video_id,
                 source_path=window.source_path,
