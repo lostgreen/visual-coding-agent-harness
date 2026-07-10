@@ -187,6 +187,8 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
             {
                 "summary": "The board shows the number nine beside one presenter.",
                 "confidence": 0.95,
+                "supports_identity_anchor": False,
+                "supports_answer_event": True,
                 "entities": [
                     {
                         "local_id": "person_1",
@@ -222,6 +224,8 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
     assert report.evidence[0].sampling_fps == 2.0
     assert report.evidence[0].attestation_model
     assert report.evidence[0].source_lineage[0]["source_video_id"] == "source"
+    assert report.evidence[0].evidence_kind == "event_observation"
+    assert report.evidence[0].operation_metadata["supports_answer_event"] is True
     assert report.evidence[0].operation_metadata["entities"][0]["local_id"] == "person_1"
     assert len(report.evidence[0].frame_refs) == 16
     assert "frame_40.000.jpg" in report.evidence[0].frame_refs[0]

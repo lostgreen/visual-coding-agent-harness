@@ -9,7 +9,7 @@ from PIL import Image
 import vcah.multiround as multiround
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
 from vcah.investigator import VirtualVideoInvestigator
-from vcah.types import EvidenceRecord, Frame
+from vcah.types import CoverageSegment, EvidenceRecord, Frame
 from vcah.virtual_index import build_virtual_beat_index
 from vcah.virtual_video import (
     VirtualVideoCase,
@@ -391,6 +391,25 @@ def test_source_time_hint_supports_non_ordinal_paraphrases() -> None:
     assert multiround.compile_source_time_hint("Between minutes 7 and 9, who entered?") == (420.0, 540.0)
 
 
+def test_identity_anchor_contract_extracts_generic_visible_attributes() -> None:
+    question = "How was the woman, who was carrying a folder and wearing glasses, injured later?"
+    contract = multiround.compile_query_contract(question)
+    requirements = multiround.compile_query_requirements(question)
+
+    assert contract.required_scope == "multi_window"
+    assert contract.observation_target == "entity"
+    assert contract.aggregation == "compare"
+    assert requirements["identity_anchor_terms"] == ["folder", "glasses"]
+
+
+def test_identity_anchor_contract_supports_active_relative_clause_paraphrase() -> None:
+    question = "What happened to the guest who carried a suitcase and wore a red hat?"
+
+    requirements = multiround.compile_query_requirements(question)
+
+    assert requirements["identity_anchor_terms"] == ["suitcase", "red", "hat"]
+
+
 def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(tmp_path: Path) -> None:
     workspace = _two_chunk_workspace(tmp_path)
     reasoner = CoverageReasoner()
@@ -472,3 +491,184 @@ def test_driver_runs_answer_only_finalization_after_last_investigation_round(tmp
     assert result.correct is True
     assert reasoner.force_flags == [False, True]
     assert any(row.get("type") == "reasoner_finalization" for row in result.trace)
+
+
+def test_identity_gate_requires_anchor_and_event_evidence_in_same_cluster(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    question = "How did the man, who was wearing a bandage and holding an envelope, sustain his injury?"
+    contract = multiround.compile_query_contract(question)
+    requirements = multiround.compile_query_requirements(question)
+    lineage = (
+        {
+            "segment_id": "seg_target",
+            "source_video_id": "target",
+            "source_time_range": [10.0, 15.0],
+            "virtual_time_range": [0.0, 5.0],
+        },
+    )
+    anchor = EvidenceRecord(
+        evidence_id="ev_anchor",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://anchor",
+        verbatim="A man wearing a bandage is holding an envelope.",
+        frame_refs=("anchor.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="entity_observation",
+        coverage_manifest=(CoverageSegment("q_anchor", 0.0, 2.0, "visual", 1.0),),
+        source_lineage=lineage,
+    )
+    cause = EvidenceRecord(
+        evidence_id="ev_cause",
+        beat_id="",
+        start_sec=2.0,
+        end_sec=5.0,
+        modality="visual",
+        pointer="virtual://cause",
+        verbatim="The same man has his arm pulled down by a dog.",
+        frame_refs=("cause.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+        coverage_manifest=(CoverageSegment("q_cause", 2.0, 5.0, "visual", 1.0),),
+        source_lineage=lineage,
+    )
+
+    missing_anchor = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "D. A dog pulled his arm",
+        ("ev_cause",),
+        ({"entity_id": "person_1", "description": "injured man", "evidence_ids": ("ev_cause",)},),
+        (anchor, cause),
+        query_requirements=requirements,
+    )
+    linked = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "D. A dog pulled his arm",
+        ("ev_anchor", "ev_cause"),
+        (
+            {
+                "entity_id": "person_1",
+                "description": "man with bandage and envelope",
+                "evidence_ids": ("ev_anchor", "ev_cause"),
+            },
+        ),
+        (anchor, cause),
+        query_requirements=requirements,
+    )
+
+    assert missing_anchor["reason"] == "identity_anchor_not_linked"
+    assert linked["passed"] is True
+
+
+def test_identity_gate_accepts_one_joint_anchor_event_observation(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    question = "Why did the woman, who was carrying a folder and wearing glasses, fall?"
+    contract = multiround.compile_query_contract(question)
+    requirements = multiround.compile_query_requirements(question)
+    joint = EvidenceRecord(
+        evidence_id="ev_joint",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=5.0,
+        modality="visual",
+        pointer="virtual://joint",
+        verbatim="The woman carrying a folder and wearing glasses slips on a wet floor.",
+        frame_refs=("joint.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+        coverage_manifest=(CoverageSegment("q_joint", 0.0, 5.0, "visual", 1.0),),
+        source_lineage=(
+            {
+                "segment_id": "seg_target",
+                "source_video_id": "target",
+                "source_time_range": [10.0, 15.0],
+                "virtual_time_range": [0.0, 5.0],
+            },
+        ),
+    )
+
+    gate = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "A. She slipped on a wet floor",
+        ("ev_joint",),
+        ({"entity_id": "person_1", "description": "woman with folder and glasses", "evidence_ids": ("ev_joint",)},),
+        (joint,),
+        query_requirements=requirements,
+    )
+
+    assert gate["passed"] is True
+
+
+def test_identity_gate_rejects_anchor_only_cluster_without_event_observation(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    question = "Why did the woman, who was carrying a folder and wearing glasses, fall?"
+    contract = multiround.compile_query_contract(question)
+    requirements = multiround.compile_query_requirements(question)
+    lineage = (
+        {
+            "segment_id": "seg_target",
+            "source_video_id": "target",
+            "source_time_range": [10.0, 15.0],
+            "virtual_time_range": [0.0, 5.0],
+        },
+    )
+    folder = EvidenceRecord(
+        evidence_id="ev_folder",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://folder",
+        verbatim="A woman is carrying a folder.",
+        frame_refs=("folder.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="entity_observation",
+        coverage_manifest=(CoverageSegment("q_folder", 0.0, 2.0, "visual", 1.0),),
+        source_lineage=lineage,
+    )
+    glasses = EvidenceRecord(
+        evidence_id="ev_glasses",
+        beat_id="",
+        start_sec=2.0,
+        end_sec=4.0,
+        modality="visual",
+        pointer="virtual://glasses",
+        verbatim="The same woman is wearing glasses.",
+        frame_refs=("glasses.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="entity_observation",
+        coverage_manifest=(CoverageSegment("q_glasses", 2.0, 4.0, "visual", 1.0),),
+        source_lineage=lineage,
+    )
+
+    gate = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "A. She slipped on a wet floor",
+        ("ev_folder", "ev_glasses"),
+        (
+            {
+                "entity_id": "person_1",
+                "description": "woman with folder and glasses",
+                "evidence_ids": ("ev_folder", "ev_glasses"),
+            },
+        ),
+        (folder, glasses),
+        query_requirements=requirements,
+    )
+    completion = multiround._completion_status(
+        workspace,
+        contract,
+        (folder, glasses),
+        query_requirements=requirements,
+    )
+
+    assert gate["passed"] is False
+    assert gate["reason"] == "identity_anchor_not_linked"
+    assert completion["ready_for_answer"] is False
+    assert completion["identity_anchor_evidence_ids"] == []

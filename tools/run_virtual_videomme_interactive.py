@@ -353,6 +353,14 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         )
         confidence = _confidence(parsed.get("confidence"), default=0.6)
         entities = _normalize_entities(parsed.get("entities"))
+        supports_identity_anchor = _truthy(parsed.get("supports_identity_anchor"))
+        supports_answer_event = _truthy(parsed.get("supports_answer_event"))
+        if supports_answer_event:
+            evidence_kind = "event_observation"
+        elif supports_identity_anchor or entities:
+            evidence_kind = "entity_observation"
+        else:
+            evidence_kind = "visual_observation"
         evidence = EvidenceRecord(
             evidence_id=f"ev_{observation_id}_001",
             beat_id="",
@@ -364,7 +372,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             frame_refs=frame_paths,
             attestation_model=str(getattr(self.api, "model", type(self.api).__name__)),
             temporal_scope="window",
-            evidence_kind="visual_observation",
+            evidence_kind=evidence_kind,
             observation_polarity="positive" if frame_paths else "unknown",
             sampling_coverage="sparse",
             request_ids=(query_id,),
@@ -377,7 +385,11 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             confidence=confidence,
             source_lineage=tuple(dict(item) for item in selected_packet["source_lineage"]),
             entity_ids=tuple(f"{observation_id}:{item['local_id']}" for item in entities),
-            operation_metadata={"entities": entities},
+            operation_metadata={
+                "entities": entities,
+                "supports_identity_anchor": supports_identity_anchor,
+                "supports_answer_event": supports_answer_event,
+            },
         )
         if frame_paths:
             self._remember_evidence(task, evidence)
@@ -703,8 +715,10 @@ def _investigate_prompt(kwargs: Mapping[str, Any]) -> str:
         "{\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\",\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\"}]}.\n"
         "For full-video count questions, evidence from one chunk is only a source hypothesis, not complete proof.\n"
         "For source-relative minute questions, prioritize the supplied temporal_navigation candidate segments.\n"
+        "For identity-anchor questions, first locate evidence matching every identity_anchor_term before investigating the later event.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
+        f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}"
     )
@@ -728,8 +742,11 @@ def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mappin
         "For a final full-video answer, cite every relevant visual evidence record from the adopted source.\n"
         "For distinct-count questions, reconcile the per-evidence entities by stable appearance. Do not add local counts. "
         "Create one entity_cluster per unique person, and make the option count equal the number of clusters.\n"
+        "For identity-anchor questions, do not answer while missing_identity_anchor_terms is non-empty. "
+        "The final entity cluster must cite both anchor evidence and the later event evidence for the same person.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
+        f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}\n"
@@ -743,9 +760,12 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "Return JSON only: {\"summary\":\"atomic observation\",\"confidence\":0.0-1.0,"
         "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"stable visible attributes\","
         "\"role\":\"scholar or other\",\"comments_on_topic\":true|false}],"
+        "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false,"
         "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\"}.\n"
         "List each visible person separately using stable appearance attributes. Do not estimate a segment-level or video-level count. "
         "The same person may recur in later chunks.\n"
+        "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
+        "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
         "Request detail only when motion, OCR, identity, or a small visual attribute remains unresolved. "
         "Any detail window must be inside the preview window and narrower than it.\n"
         f"Question: {workspace.case.question}\n"
@@ -768,8 +788,11 @@ def _evidence_prompt(
         "not an answer-option judgment. Return JSON only: "
         "{\"summary\":\"atomic visual evidence summary\", \"confidence\":0.0-1.0,"
         "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"stable visible attributes\","
-        "\"role\":\"scholar or other\",\"comments_on_topic\":true|false}]}.\n"
+        "\"role\":\"scholar or other\",\"comments_on_topic\":true|false}],"
+        "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false}.\n"
         "List visible people separately and do not infer a count across frames or chunks.\n"
+        "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
+        "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"

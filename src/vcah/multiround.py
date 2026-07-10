@@ -102,6 +102,7 @@ def compile_query_contract(question: str) -> ClaimContract:
         or re.search(r"\bover the course of\s+(?:this|the)\s+(?:video|film|recording)\b", text)
     )
     language_action = any(term in text for term in ("comment", "say", "speak", "discuss", "mention"))
+    identity_anchor_terms = _identity_anchor_terms(question)
     if is_count:
         return ClaimContract(
             required_scope="full_video" if full_video else "multi_window",
@@ -111,6 +112,15 @@ def compile_query_contract(question: str) -> ClaimContract:
             required_observability=("visual", "asr") if language_action else ("visual",),
             observability_mode="all",
         )
+    if identity_anchor_terms:
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="none",
+            observation_target="entity",
+            aggregation="compare",
+            required_observability=("visual",),
+            observability_mode="all",
+        )
     return ClaimContract(
         required_scope="window",
         quantifier="existential",
@@ -118,6 +128,72 @@ def compile_query_contract(question: str) -> ClaimContract:
         aggregation="none",
         required_observability=("visual",),
         observability_mode="all",
+    )
+
+
+def compile_query_requirements(question: str) -> dict[str, Any]:
+    terms = _identity_anchor_terms(question)
+    return {
+        "requires_identity_link": bool(terms),
+        "identity_anchor_terms": list(terms),
+    }
+
+
+def _identity_anchor_terms(question: str) -> tuple[str, ...]:
+    text = str(question or "").casefold()
+    match = re.search(r"\bwho\s+([^,?]+)", text)
+    if not match:
+        return ()
+    clause = match.group(1)
+    tokens = tuple(re.findall(r"[a-z0-9]+", clause))
+    attribute_markers = {
+        "wearing",
+        "wears",
+        "wore",
+        "holding",
+        "holds",
+        "held",
+        "carrying",
+        "carries",
+        "carried",
+        "having",
+        "dressed",
+        "with",
+    }
+    if not attribute_markers.intersection(tokens):
+        return ()
+    stop = {
+        "with",
+        "was",
+        "is",
+        "had",
+        "been",
+        "wearing",
+        "wears",
+        "wore",
+        "holding",
+        "holds",
+        "held",
+        "carrying",
+        "carries",
+        "carried",
+        "having",
+        "dressed",
+        "in",
+        "and",
+        "the",
+        "this",
+        "that",
+        "his",
+        "her",
+        "their",
+        "a",
+        "an",
+    }
+    return tuple(
+        token
+        for token in tokens
+        if len(token) >= 3 and token not in stop
     )
 
 
@@ -187,6 +263,7 @@ class VirtualVideoMultiRoundDriver:
         investigator.reset_run_state()
         workspace_overview = build_workspace_overview(workspace, thumbnail_budget=40)
         query_contract = compile_query_contract(workspace.case.question)
+        query_requirements = compile_query_requirements(workspace.case.question)
         temporal_navigation = source_time_navigation(workspace, compile_source_time_hint(workspace.case.question))
         evidence_store = EvidenceStore.empty(workspace.root_dir / "evidence.jsonl")
         reports: list[InvestigationReport] = []
@@ -199,7 +276,12 @@ class VirtualVideoMultiRoundDriver:
         for round_id in range(1, self.max_rounds + 1):
             rounds_run = round_id
             remaining = self.max_investigations - accepted
-            completion_status = _completion_status(workspace, query_contract, evidence_store.records)
+            completion_status = _completion_status(
+                workspace,
+                query_contract,
+                evidence_store.records,
+                query_requirements=query_requirements,
+            )
             decision = _decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
@@ -209,6 +291,7 @@ class VirtualVideoMultiRoundDriver:
                     segment_overviews=tuple(workspace_overview["segment_overviews"]),
                     workspace_overview=workspace_overview,
                     query_contract=to_jsonable(query_contract),
+                    query_requirements=query_requirements,
                     completion_status=completion_status,
                     temporal_navigation=temporal_navigation,
                     available_tools=tuple(workspace_overview["available_tools"]),
@@ -253,6 +336,7 @@ class VirtualVideoMultiRoundDriver:
                     decision.citations,
                     decision.entity_clusters,
                     evidence_store.records,
+                    query_requirements=query_requirements,
                 )
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
                 if gate["passed"]:
@@ -288,7 +372,12 @@ class VirtualVideoMultiRoundDriver:
                 continue
 
         if not answer and evidence_store.records:
-            completion_status = _completion_status(workspace, query_contract, evidence_store.records)
+            completion_status = _completion_status(
+                workspace,
+                query_contract,
+                evidence_store.records,
+                query_requirements=query_requirements,
+            )
             final_decision = _decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
@@ -298,6 +387,7 @@ class VirtualVideoMultiRoundDriver:
                     segment_overviews=tuple(workspace_overview["segment_overviews"]),
                     workspace_overview=workspace_overview,
                     query_contract=to_jsonable(query_contract),
+                    query_requirements=query_requirements,
                     completion_status=completion_status,
                     temporal_navigation=temporal_navigation,
                     available_tools=tuple(workspace_overview["available_tools"]),
@@ -324,6 +414,7 @@ class VirtualVideoMultiRoundDriver:
                     final_decision.citations,
                     final_decision.entity_clusters,
                     evidence_store.records,
+                    query_requirements=query_requirements,
                 )
                 trace.append(
                     {
@@ -388,23 +479,33 @@ def _completion_status(
     workspace: VirtualVideoWorkspace,
     contract: ClaimContract,
     evidence: Sequence[EvidenceRecord],
+    *,
+    query_requirements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     coverage = _source_coverage(workspace, evidence)
     if contract.required_scope != "full_video":
-        return {
-            "ready_for_answer": bool(evidence),
-            "required_scope": contract.required_scope,
-            "missing_segment_ids": [],
-            "source_coverage": coverage,
-        }
+        return _apply_identity_completion(
+            {
+                "ready_for_answer": bool(evidence),
+                "required_scope": contract.required_scope,
+                "missing_segment_ids": [],
+                "source_coverage": coverage,
+            },
+            evidence,
+            query_requirements,
+        )
     if not coverage:
-        return {
-            "ready_for_answer": False,
-            "required_scope": contract.required_scope,
-            "reason": "source_not_identified",
-            "missing_segment_ids": [],
-            "source_coverage": {},
-        }
+        return _apply_identity_completion(
+            {
+                "ready_for_answer": False,
+                "required_scope": contract.required_scope,
+                "reason": "source_not_identified",
+                "missing_segment_ids": [],
+                "source_coverage": {},
+            },
+            evidence,
+            query_requirements,
+        )
     adopted_source = max(
         coverage,
         key=lambda source_id: (
@@ -413,13 +514,44 @@ def _completion_status(
         ),
     )
     missing = list(coverage[adopted_source]["missing_segment_ids"])
-    return {
-        "ready_for_answer": not missing,
-        "required_scope": contract.required_scope,
-        "adopted_source_video_id": adopted_source,
-        "missing_segment_ids": missing,
-        "source_coverage": coverage,
-    }
+    return _apply_identity_completion(
+        {
+            "ready_for_answer": not missing,
+            "required_scope": contract.required_scope,
+            "adopted_source_video_id": adopted_source,
+            "missing_segment_ids": missing,
+            "source_coverage": coverage,
+        },
+        evidence,
+        query_requirements,
+    )
+
+
+def _apply_identity_completion(
+    status: Mapping[str, Any],
+    evidence: Sequence[EvidenceRecord],
+    query_requirements: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    result = dict(status)
+    terms = tuple(str(item) for item in (query_requirements or {}).get("identity_anchor_terms", ()) if str(item))
+    if not terms:
+        return result
+    anchor_ids = [
+        record.evidence_id
+        for record in evidence
+        if _record_matches_identity_anchor(record, terms)
+    ]
+    missing_terms = [] if anchor_ids else list(terms)
+    result.update(
+        {
+            "identity_anchor_terms": list(terms),
+            "identity_anchor_evidence_ids": anchor_ids,
+            "missing_identity_anchor_terms": missing_terms,
+            "identity_anchor_joint_match": bool(anchor_ids),
+        }
+    )
+    result["ready_for_answer"] = bool(result.get("ready_for_answer")) and not missing_terms
+    return result
 
 
 def _source_coverage(
@@ -463,6 +595,8 @@ def _answer_completion_gate(
     citations: Sequence[str],
     entity_clusters: Sequence[Mapping[str, Any]],
     evidence: Sequence[EvidenceRecord],
+    *,
+    query_requirements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not str(answer or "").strip():
         return {"passed": False, "reason": "answer_missing", "missing_segment_ids": []}
@@ -470,6 +604,13 @@ def _answer_completion_gate(
         return {"passed": False, "reason": "invalid_visual_citations", "missing_segment_ids": []}
     by_id = {record.evidence_id: record for record in evidence}
     cited = tuple(by_id[str(citation)] for citation in citations)
+    identity_gate = _identity_link_gate(
+        entity_clusters,
+        cited,
+        query_requirements=query_requirements,
+    )
+    if identity_gate is not None:
+        return identity_gate
     if contract.required_scope != "full_video":
         return {"passed": True, "reason": "verified_window_evidence", "missing_segment_ids": []}
 
@@ -526,6 +667,63 @@ def _answer_completion_gate(
         "entity_cluster_count": len(entity_clusters),
         "missing_segment_ids": [],
     }
+
+
+def _identity_link_gate(
+    entity_clusters: Sequence[Mapping[str, Any]],
+    cited: Sequence[EvidenceRecord],
+    *,
+    query_requirements: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    terms = tuple(str(item) for item in (query_requirements or {}).get("identity_anchor_terms", ()) if str(item))
+    if not terms:
+        return None
+    by_id = {record.evidence_id: record for record in cited}
+    for cluster in (_entity_cluster(item) for item in entity_clusters):
+        cluster_records = tuple(by_id[evidence_id] for evidence_id in cluster["evidence_ids"] if evidence_id in by_id)
+        if not cluster_records:
+            continue
+        combined = " ".join(_evidence_search_text(record) for record in cluster_records)
+        has_anchor = any(_record_matches_identity_anchor(record, terms) for record in cluster_records) or all(
+            term in combined for term in terms
+        )
+        has_answer_event = any(_record_supports_answer_event(record) for record in cluster_records)
+        if has_anchor and has_answer_event:
+            return None
+    return {
+        "passed": False,
+        "reason": "identity_anchor_not_linked",
+        "identity_anchor_terms": list(terms),
+        "missing_segment_ids": [],
+    }
+
+
+def _evidence_search_text(record: EvidenceRecord) -> str:
+    entity_text = " ".join(
+        str(item.get("description", "") or "")
+        for item in record.operation_metadata.get("entities", ())
+        if isinstance(item, Mapping)
+    )
+    return f"{record.verbatim} {entity_text}".casefold()
+
+
+def _record_matches_identity_anchor(record: EvidenceRecord, terms: Sequence[str]) -> bool:
+    if _metadata_flag(record.operation_metadata.get("supports_identity_anchor")):
+        return True
+    text = _evidence_search_text(record)
+    return bool(terms) and all(term in text for term in terms)
+
+
+def _record_supports_answer_event(record: EvidenceRecord) -> bool:
+    return record.evidence_kind == "event_observation" or _metadata_flag(
+        record.operation_metadata.get("supports_answer_event")
+    )
+
+
+def _metadata_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().casefold() in {"1", "true", "yes"}
 
 
 def _derived_answer_evidence(
