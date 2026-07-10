@@ -300,6 +300,16 @@ def test_query_contract_marks_throughout_count_as_full_video_deduplication() -> 
     assert contract.required_observability == ("visual", "asr")
 
 
+def test_query_contract_marks_how_many_times_as_full_video_event_count() -> None:
+    contract = multiround.compile_query_contract("How many times do news segments appear in this video?")
+
+    assert contract.required_scope == "full_video"
+    assert contract.quantifier == "total_count"
+    assert contract.observation_target == "event"
+    assert contract.aggregation == "count"
+    assert contract.required_observability == ("visual",)
+
+
 def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(tmp_path: Path) -> None:
     workspace = _two_chunk_workspace(tmp_path)
     reasoner = CoverageReasoner()

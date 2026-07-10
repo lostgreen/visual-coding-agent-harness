@@ -94,6 +94,7 @@ class HeuristicReasoner:
 def compile_query_contract(question: str) -> ClaimContract:
     text = str(question or "").casefold()
     is_count = bool(re.search(r"\bhow many\b|\bnumber of\b", text))
+    is_occurrence_count = bool(re.search(r"\bhow many times\b|\bnumber of times\b", text))
     full_video = any(
         phrase in text
         for phrase in (
@@ -103,15 +104,16 @@ def compile_query_contract(question: str) -> ClaimContract:
             "whole video",
             "across the video",
             "over the course of the video",
+            "in this video",
         )
     )
     language_action = any(term in text for term in ("comment", "say", "speak", "discuss", "mention"))
     if is_count:
         return ClaimContract(
             required_scope="full_video" if full_video else "multi_window",
-            quantifier="distinct_count",
-            observation_target="entity",
-            aggregation="deduplicate",
+            quantifier="total_count" if is_occurrence_count else "distinct_count",
+            observation_target="event" if is_occurrence_count else "entity",
+            aggregation="count" if is_occurrence_count else "deduplicate",
             required_observability=("visual", "asr") if language_action else ("visual",),
             observability_mode="all",
         )
