@@ -267,7 +267,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         self.trace_path = trace_path
         self._query_calls: dict[str, int] = {}
 
-    def _investigate_task(self, task: Any) -> InvestigationReport:
+    def _investigate_task(
+        self,
+        task: Any,
+        *,
+        prior_events: Sequence[Mapping[str, Any]] = (),
+    ) -> InvestigationReport:
         query_id = str(getattr(task, "query_id", "") or "query")
         segment_packet = self.open_segment(str(getattr(task, "segment_id", "") or self.workspace.manifest.segments[0].segment_id))
         if str(getattr(task, "inspection_mode", "window")) == "enumerate_events":
@@ -295,7 +300,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         preview_paths = tuple(str(row["path"]) for row in preview_frames)
         event_window = str(getattr(task, "inspection_mode", "window")) == "event_window"
         preview_prompt = (
-            _event_preview_prompt(self.workspace, task, segment_packet, low)
+            _event_preview_prompt(self.workspace, task, segment_packet, low, prior_events=prior_events)
             if event_window
             else _preview_prompt(self.workspace, task, segment_packet, low)
         )
@@ -344,7 +349,14 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             selected_frames = select_uniform_items(tuple(selected_packet["frames"]), 16)
             detail_paths = tuple(str(row["path"]) for row in selected_frames)
             final_prompt = (
-                _event_evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
+                _event_evidence_prompt(
+                    self.workspace,
+                    task,
+                    segment_packet,
+                    selected_packet,
+                    preview=preview,
+                    prior_events=prior_events,
+                )
                 if event_window
                 else _evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
             )
@@ -432,6 +444,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
     def _investigate_event_beats(self, task: Any, segment_packet: Mapping[str, Any]) -> InvestigationReport:
         windows = _event_enumeration_windows(segment_packet)
         reports = []
+        prior_events: tuple[Mapping[str, Any], ...] = ()
         for window in windows:
             beat_task = InvestigationTask(
                 query_id=str(getattr(task, "query_id", "") or "query"),
@@ -443,7 +456,9 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 inspection_mode="event_window",
                 priority=float(getattr(task, "priority", 0.0) or 0.0),
             )
-            reports.append(self._investigate_task(beat_task))
+            report = self._investigate_task(beat_task, prior_events=prior_events)
+            reports.append(report)
+            prior_events = _ending_event_context(report.evidence, window)
         evidence = tuple(record for report in reports for record in report.evidence)
         return InvestigationReport(
             query_id=str(getattr(task, "query_id", "") or ""),
@@ -525,6 +540,34 @@ def _event_enumeration_windows(
         if end > start:
             windows.append((start, end))
     return tuple(windows)
+
+
+def _ending_event_context(
+    evidence: Sequence[EvidenceRecord],
+    window: tuple[float, float],
+) -> tuple[Mapping[str, Any], ...]:
+    window_end = float(window[1])
+    rows = []
+    for record in evidence:
+        for event in record.operation_metadata.get("events", ()) or ():
+            if not isinstance(event, Mapping):
+                continue
+            try:
+                event_end = float(event.get("end_sec"))
+            except (TypeError, ValueError):
+                continue
+            if not (_truthy(event.get("continues_to_next")) or abs(event_end - window_end) <= 2.0):
+                continue
+            rows.append(
+                {
+                    "event_key": str(event.get("event_key", "") or ""),
+                    "description": str(event.get("description", "") or ""),
+                    "start_sec": event.get("start_sec"),
+                    "end_sec": event.get("end_sec"),
+                    "continues_to_next": _truthy(event.get("continues_to_next")),
+                }
+            )
+    return tuple(rows[-4:])
 
 
 def _select_detail_window(
@@ -931,6 +974,8 @@ def _event_preview_prompt(
     task: Any,
     segment_packet: Mapping[str, Any],
     window: Mapping[str, Any],
+    *,
+    prior_events: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     return (
         "You are the Investigator. Enumerate atomic question-relevant event occurrences in this low-fps window. "
@@ -942,10 +987,13 @@ def _event_preview_prompt(
         "\"supports_answer_event\":true|false,\"need_detail\":true|false,"
         "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\"}.\n"
         "List every distinct supported occurrence, use virtual timestamps inside this window, and return an empty events list when none. "
-        "Use the same event_key on adjacent windows only when they show the same continuing occurrence. "
+        "event_key must identify this occurrence by topic, title, or visible anchor; never use only the generic event class. "
+        "Compare against the prior adjacent-window events below. Reuse an exact event_key and set continues_from_previous=true "
+        "only when the same occurrence visibly continues across the boundary. "
         "Do not list people or infer a video-level count. Request a narrower detail window only when an occurrence boundary is unclear.\n"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
+        f"Prior adjacent-window ending events: {json.dumps(list(prior_events), ensure_ascii=False)[:1800]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
         f"Window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
     )
@@ -958,6 +1006,7 @@ def _evidence_prompt(
     window: Mapping[str, Any],
     *,
     preview: Mapping[str, Any] | None = None,
+    prior_events: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     return (
         "You are the Investigator. Inspect the detail frames and local ASR. Report only an atomic observation, "
@@ -998,10 +1047,13 @@ def _event_evidence_prompt(
         "\"supports_question_event\":true|false,\"continues_from_previous\":true|false,"
         "\"continues_to_next\":true|false}],"
         "\"supports_answer_event\":true|false}.\n"
-        "List every distinct supported occurrence with virtual timestamps. Use the same event_key on adjacent windows only "
-        "for the same continuing occurrence. Do not list people or infer a video-level count.\n"
+        "List every distinct supported occurrence with virtual timestamps. event_key must identify the occurrence by topic, "
+        "title, or visible anchor, not only its generic class. Compare against the prior adjacent-window events below; reuse "
+        "an exact event_key and set continues_from_previous=true only for the same continuing occurrence. "
+        "Do not list people or infer a video-level count.\n"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
+        f"Prior adjacent-window ending events: {json.dumps(list(prior_events), ensure_ascii=False)[:1800]}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
         f"Detail window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"

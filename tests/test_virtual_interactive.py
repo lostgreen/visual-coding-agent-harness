@@ -421,10 +421,13 @@ def test_model_investigator_enumerates_each_beat_within_one_event_count_task(tmp
                 "events": [
                     {
                         "local_id": "event_1",
+                        "event_key": "opening title card",
                         "description": "A title card appears.",
                         "start_sec": 82.0,
-                        "end_sec": 84.0,
+                        "end_sec": 120.0,
                         "supports_question_event": True,
+                        "continues_from_previous": False,
+                        "continues_to_next": True,
                     }
                 ],
                 "supports_answer_event": True,
@@ -455,6 +458,8 @@ def test_model_investigator_enumerates_each_beat_within_one_event_count_task(tmp
     assert len(api.calls) == 3
     assert '"entities"' not in api.calls[0]["prompt"]
     assert api.calls[0]["max_tokens"] >= 1000
+    assert "Prior adjacent-window ending events" in api.calls[2]["prompt"]
+    assert "opening title card" in api.calls[2]["prompt"]
     assert len(report.evidence) == 3
     assert [(record.start_sec, record.end_sec) for record in report.evidence] == [
         (0.0, 60.0),
