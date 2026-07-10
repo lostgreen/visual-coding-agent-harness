@@ -1,0 +1,90 @@
+{
+  "group_id": "videomme-long-diverse-v1",
+  "dataset": "VideoMME",
+  "duration_category": "long",
+  "construction": "source_only",
+  "source_duration_minutes": 392.71,
+  "purpose": "A fixed multi-capability regression group. Single cases diagnose failures but do not justify framework changes.",
+  "cases": [
+    {
+      "case_id": "606-3",
+      "capability": "distinct_entity_count",
+      "task_type": "Counting Problem",
+      "scope": "full_video",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 45.62
+    },
+    {
+      "case_id": "614-1",
+      "capability": "localized_action_recognition",
+      "task_type": "Action Recognition",
+      "scope": "explicit_time_hint",
+      "modalities": ["visual"],
+      "source_duration_minutes": 31.43
+    },
+    {
+      "case_id": "616-2",
+      "capability": "place_coverage_exclusion",
+      "task_type": "Spatial Reasoning",
+      "scope": "full_video",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 44.09
+    },
+    {
+      "case_id": "619-2",
+      "capability": "visual_attribute_perception",
+      "task_type": "Attribute Perception",
+      "scope": "event_localization",
+      "modalities": ["visual"],
+      "source_duration_minutes": 33.0
+    },
+    {
+      "case_id": "632-2",
+      "capability": "chapter_information_synopsis",
+      "task_type": "Information Synopsis",
+      "scope": "chapter_localization",
+      "modalities": ["asr", "visual"],
+      "source_duration_minutes": 30.37
+    },
+    {
+      "case_id": "698-3",
+      "capability": "atomic_event_count",
+      "task_type": "Counting Problem",
+      "scope": "full_video",
+      "modalities": ["visual"],
+      "source_duration_minutes": 50.5
+    },
+    {
+      "case_id": "701-3",
+      "capability": "localized_causal_action_reasoning",
+      "task_type": "Action Reasoning",
+      "scope": "explicit_time_hint",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 54.47
+    },
+    {
+      "case_id": "702-1",
+      "capability": "identity_linked_action_reasoning",
+      "task_type": "Action Recognition",
+      "scope": "coarse_temporal_hint",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 35.08
+    },
+    {
+      "case_id": "707-3",
+      "capability": "object_in_action_recognition",
+      "task_type": "Object Recognition",
+      "scope": "event_localization",
+      "modalities": ["visual"],
+      "source_duration_minutes": 30.6
+    },
+    {
+      "case_id": "769-1",
+      "capability": "sports_scoreboard_ocr",
+      "task_type": "OCR Problems",
+      "scope": "event_localization",
+      "modalities": ["visual", "ocr"],
+      "source_duration_minutes": 37.55
+    }
+  ]
+}

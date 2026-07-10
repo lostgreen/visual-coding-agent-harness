@@ -34,6 +34,8 @@ AssetBundler = _viewer.AssetBundler
 _render_case = _viewer._render_case
 GeminiInvestigator = _interactive.GeminiInvestigator
 _select_window_with_model = _interactive._select_window_with_model
+_load_case_group = _interactive._load_case_group
+_event_evidence_prompt = _interactive._event_evidence_prompt
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -42,6 +44,56 @@ def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, o
     path = out_dir / f"frame_{start_sec:.3f}.jpg"
     Image.new("RGB", (32, 18), color=(30, 90, 180)).save(path)
     return (Frame(frame_id=path.stem, time_sec=float(start_sec), path=str(path)),)
+
+
+def test_load_case_group_preserves_order_and_default_construction(tmp_path: Path) -> None:
+    path = tmp_path / "group.json"
+    path.write_text(
+        json.dumps(
+            {
+                "group_id": "diverse-v1",
+                "construction": "source_only",
+                "cases": [
+                    {"case_id": "606-3", "capability": "entity_count"},
+                    {"case_id": "769-1", "capability": "ocr"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    group = _load_case_group(path)
+
+    assert group["group_id"] == "diverse-v1"
+    assert group["construction"] == "source_only"
+    assert group["case_ids"] == ("606-3", "769-1")
+
+
+def test_event_detail_prompt_accepts_prior_adjacent_events(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    prompt = _event_evidence_prompt(
+        workspace,
+        InvestigationTask(query_id="q", goal="Count title cards."),
+        {"segment_id": "seg_0001", "virtual_time_range": [0.0, 120.0], "beats": []},
+        {
+            "virtual_time_range": [60.0, 120.0],
+            "sampling": {"fps": 2.0},
+            "asr_cues": [],
+            "source_lineage": [],
+        },
+        preview={"summary": "A title card may continue."},
+        prior_events=(
+            {
+                "event_key": "opening title card",
+                "description": "The title card begins in the prior beat.",
+                "end_sec": 60.0,
+                "continues_to_next": True,
+            },
+        ),
+    )
+
+    assert "opening title card" in prompt
+    assert "Prior adjacent-window ending events" in prompt
 
 
 class ScriptedVisionClient:

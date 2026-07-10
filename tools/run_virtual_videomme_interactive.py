@@ -39,15 +39,41 @@ DEFAULT_CASE_IDS = ("477-2", "548-1", "371-1", "311-1", "314-3", "315-1")
 LONG_INTERLEAVED_CASE_IDS = ("606-3", "698-3", "701-3", "702-1")
 
 
+def _load_case_group(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    cases = tuple(payload.get("cases", ()) or ())
+    case_ids = tuple(str(row.get("case_id", "") or "").strip() for row in cases if isinstance(row, Mapping))
+    if not case_ids or any(not case_id for case_id in case_ids):
+        raise ValueError(f"Case group {path} must contain non-empty cases[].case_id values")
+    if len(set(case_ids)) != len(case_ids):
+        raise ValueError(f"Case group {path} contains duplicate case ids")
+    construction = str(payload.get("construction", "source_only") or "source_only")
+    if construction not in {"source_only", "single_segment", "interleaved_chunks"}:
+        raise ValueError(f"Unsupported case-group construction: {construction}")
+    return {
+        **payload,
+        "group_id": str(payload.get("group_id", path.stem) or path.stem),
+        "construction": construction,
+        "case_ids": case_ids,
+    }
+
+
 def main() -> None:
     args = _parse_args()
     dataset_root = Path(args.dataset_root)
     out_root = Path(args.out_root)
     out_root.mkdir(parents=True, exist_ok=True)
     api = OpenAICompatibleVisionClient.from_yaml(Path(args.config))
-    case_ids = tuple(args.case_ids or DEFAULT_CASE_IDS)
+    case_group = _load_case_group(Path(args.case_group)) if args.case_group else None
+    if case_group is not None:
+        case_ids = tuple(case_group["case_ids"])
+        if args.construction == "single_segment":
+            args.construction = str(case_group["construction"])
+    else:
+        case_ids = tuple(args.case_ids or DEFAULT_CASE_IDS)
     if args.mode == "long":
-        case_ids = tuple(args.case_ids or LONG_INTERLEAVED_CASE_IDS)
+        if case_group is None:
+            case_ids = tuple(args.case_ids or LONG_INTERLEAVED_CASE_IDS)
         if args.construction == "single_segment":
             args.construction = "interleaved_chunks"
         if float(args.min_duration_sec) == 18000.0:
@@ -87,6 +113,7 @@ def main() -> None:
         )
     payload = {
         "mode": args.mode,
+        "case_group": None if case_group is None else case_group["group_id"],
         "case_count": len(summaries),
         "correct": sum(1 for item in summaries if item["correct"]),
         "cases": summaries,
@@ -1006,7 +1033,6 @@ def _evidence_prompt(
     window: Mapping[str, Any],
     *,
     preview: Mapping[str, Any] | None = None,
-    prior_events: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     return (
         "You are the Investigator. Inspect the detail frames and local ASR. Report only an atomic observation, "
@@ -1038,6 +1064,7 @@ def _event_evidence_prompt(
     window: Mapping[str, Any],
     *,
     preview: Mapping[str, Any] | None = None,
+    prior_events: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     return (
         "You are the Investigator. Verify atomic question-relevant event occurrences in this detail window. "
@@ -1104,7 +1131,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-root", default="/ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/datasets--lmms-lab--Video-MME/snapshots/ead1408f75b618502df9a1d8e0950166bf0a2a0b")
     parser.add_argument("--out-root", default="/m2v_intern/xuboshen/zgw/VideoAgent/virtual_videomme_interactive")
     parser.add_argument("--config", required=True)
-    parser.add_argument("--case-ids", nargs="*")
+    cases = parser.add_mutually_exclusive_group()
+    cases.add_argument("--case-ids", nargs="*")
+    cases.add_argument("--case-group", help="JSON manifest containing an ordered cases[] list and default construction.")
     parser.add_argument("--mode", choices=("smoke", "all", "long"), default="smoke")
     parser.add_argument("--seed", type=int, default=20260707)
     parser.add_argument("--min-duration-sec", type=float, default=18000.0)
