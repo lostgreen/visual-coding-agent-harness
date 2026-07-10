@@ -582,6 +582,76 @@ def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_pa
     assert gate["reason"] == "entity_reconciliation_missing"
 
 
+def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citations_for_answer(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    contract = multiround.compile_query_contract("How many times does a title card appear in this video?")
+    positive = EvidenceRecord(
+        evidence_id="ev_title_card",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=5.0,
+        modality="visual",
+        pointer="virtual://title-card",
+        verbatim="A title card appears.",
+        frame_refs=("title.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+        coverage_manifest=(CoverageSegment("q_a", 0.0, 5.0, "visual", 1.0),),
+        source_lineage=(
+            {
+                "segment_id": "seg_target_a",
+                "source_video_id": "target",
+                "source_time_range": [0.0, 5.0],
+                "virtual_time_range": [0.0, 5.0],
+            },
+        ),
+        operation_metadata={"supports_answer_event": True},
+    )
+    negative = EvidenceRecord(
+        evidence_id="ev_no_title_card",
+        beat_id="",
+        start_sec=10.0,
+        end_sec=15.0,
+        modality="visual",
+        pointer="virtual://no-title-card",
+        verbatim="No title card appears in this source chunk.",
+        frame_refs=("negative.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="visual_observation",
+        coverage_manifest=(CoverageSegment("q_b", 10.0, 15.0, "visual", 1.0),),
+        source_lineage=(
+            {
+                "segment_id": "seg_target_b",
+                "source_video_id": "target",
+                "source_time_range": [5.0, 10.0],
+                "virtual_time_range": [10.0, 15.0],
+            },
+        ),
+        operation_metadata={"supports_answer_event": False},
+    )
+
+    gate = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "A. Two",
+        ("ev_title_card",),
+        (),
+        (positive, negative),
+    )
+
+    assert gate["passed"] is True
+    assert gate["reason"] == "full_source_coverage_verified"
+    aggregate = multiround._derived_answer_evidence(
+        workspace,
+        answer="A. Two",
+        citations=("ev_title_card",),
+        entity_clusters=(),
+        evidence=(positive, negative),
+        coverage_source_ids=gate["source_video_ids"],
+    )
+    assert aggregate.parent_evidence_ids == ("ev_title_card", "ev_no_title_card")
+
+
 def test_answer_gate_rejects_empty_answer_even_with_visual_citation(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     reasoner = EmptyAnswerReasoner()

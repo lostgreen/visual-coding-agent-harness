@@ -368,6 +368,7 @@ class VirtualVideoMultiRoundDriver:
                             citations=decision.citations,
                             entity_clusters=decision.entity_clusters,
                             evidence=evidence_store.records,
+                            coverage_source_ids=gate.get("source_video_ids", ()),
                         )
                         evidence_store.add(aggregate)
                         citations = (aggregate.evidence_id,)
@@ -453,6 +454,7 @@ class VirtualVideoMultiRoundDriver:
                             citations=final_decision.citations,
                             entity_clusters=final_decision.entity_clusters,
                             evidence=evidence_store.records,
+                            coverage_source_ids=gate.get("source_video_ids", ()),
                         )
                         evidence_store.add(aggregate)
                         citations = (aggregate.evidence_id,)
@@ -672,20 +674,16 @@ def _answer_completion_gate(
         for lineage in record.source_lineage
         if str(lineage.get("source_video_id", "") or "")
     }
-    cited_segments = {
-        str(lineage.get("segment_id", "") or "")
-        for record in cited
-        for lineage in record.source_lineage
-        if str(lineage.get("segment_id", "") or "")
-    }
-    required_segments = {
-        segment.segment_id
-        for segment in workspace.manifest.segments
-        if segment.source_video_id in cited_sources
-    }
-    missing = sorted(required_segments - cited_segments)
     if not cited_sources:
         return {"passed": False, "reason": "source_not_identified", "missing_segment_ids": []}
+    source_coverage = _source_coverage(workspace, evidence)
+    missing = sorted(
+        {
+            segment_id
+            for source_id in cited_sources
+            for segment_id in source_coverage.get(source_id, {}).get("missing_segment_ids", ())
+        }
+    )
     if missing:
         return {
             "passed": False,
@@ -785,14 +783,31 @@ def _derived_answer_evidence(
     citations: Sequence[str],
     entity_clusters: Sequence[Mapping[str, Any]],
     evidence: Sequence[EvidenceRecord],
+    coverage_source_ids: Sequence[str] = (),
 ) -> EvidenceRecord:
     by_id = {record.evidence_id: record for record in evidence}
-    parents = tuple(by_id[str(citation)] for citation in citations)
-    starts = [record.start_sec for record in parents if record.start_sec is not None]
-    ends = [record.end_sec for record in parents if record.end_sec is not None]
-    coverage = tuple(segment for record in parents for segment in record.coverage_manifest)
-    lineage = tuple(dict(item) for record in parents for item in record.source_lineage)
-    request_ids = tuple(dict.fromkeys(request_id for record in parents for request_id in record.request_ids))
+    parents = [by_id[str(citation)] for citation in citations]
+    known_ids = {record.evidence_id for record in parents}
+    coverage_sources = {str(item) for item in coverage_source_ids if str(item)}
+    for record in evidence:
+        record_sources = {
+            str(lineage.get("source_video_id", "") or "")
+            for lineage in record.source_lineage
+            if str(lineage.get("source_video_id", "") or "")
+        }
+        if (
+            coverage_sources.intersection(record_sources)
+            and record.modality in {"visual", "ocr"}
+            and record.evidence_id not in known_ids
+        ):
+            parents.append(record)
+            known_ids.add(record.evidence_id)
+    parent_records = tuple(parents)
+    starts = [record.start_sec for record in parent_records if record.start_sec is not None]
+    ends = [record.end_sec for record in parent_records if record.end_sec is not None]
+    coverage = tuple(segment for record in parent_records for segment in record.coverage_manifest)
+    lineage = tuple(dict(item) for record in parent_records for item in record.source_lineage)
+    request_ids = tuple(dict.fromkeys(request_id for record in parent_records for request_id in record.request_ids))
     clusters = tuple(_entity_cluster(item) for item in entity_clusters)
     return EvidenceRecord(
         evidence_id="ev_final_aggregate",
@@ -801,19 +816,19 @@ def _derived_answer_evidence(
         end_sec=max(ends) if ends else None,
         modality="derived",
         pointer=f"virtual://{workspace.workspace_id}/derived/final",
-        verbatim=f"Final answer {answer!r} aggregates {len(parents)} cited observations.",
+        verbatim=f"Final answer {answer!r} aggregates {len(parent_records)} supporting observations.",
         claim=answer,
         attestation_model="reasoner",
         temporal_scope="full_video",
         evidence_kind="aggregate",
         observation_polarity="positive",
         sampling_coverage="sparse",
-        parent_evidence_ids=tuple(record.evidence_id for record in parents),
+        parent_evidence_ids=tuple(record.evidence_id for record in parent_records),
         request_ids=request_ids,
         coverage_manifest=coverage,
         task_id="final_answer",
         observation_id="final_aggregate",
-        confidence=min((record.confidence for record in parents), default=0.0),
+        confidence=min((record.confidence for record in parent_records), default=0.0),
         source_lineage=lineage,
         entity_ids=tuple(cluster["entity_id"] for cluster in clusters),
         operation_metadata={"algorithm": "reasoner_reconciliation", "entity_clusters": clusters},
