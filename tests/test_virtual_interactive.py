@@ -320,6 +320,21 @@ def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> No
     )
 
 
+def test_source_only_construction_keeps_the_complete_question_video(monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setattr(_interactive, "_duration", lambda dataset_root, video_id: 1842.5)
+
+    segments = _interactive._build_source_only_segment(tmp_path, {"videoID": "source-video"})
+
+    assert len(segments) == 1
+    segment = segments[0]
+    assert segment.source_video_id == "source-video"
+    assert segment.source_start_sec == 0.0
+    assert segment.source_end_sec == 1842.5
+    assert segment.virtual_start_sec == 0.0
+    assert segment.virtual_end_sec == 1842.5
+    assert segment.role == "target"
+
+
 def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(

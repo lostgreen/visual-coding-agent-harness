@@ -112,7 +112,9 @@ def build_or_load_workspace(
     by_qid = {str(row["question_id"]): row for row in rows}
     target = by_qid[str(case_id)]
     rng = random.Random(seed + sum(ord(ch) for ch in str(case_id)))
-    if construction == "interleaved_chunks":
+    if construction == "source_only":
+        segments = _build_source_only_segment(dataset_root, target)
+    elif construction == "interleaved_chunks":
         segments = _build_interleaved_chunk_segments(
             dataset_root,
             rows,
@@ -618,6 +620,26 @@ def _build_segments(
     return tuple(segments)
 
 
+def _build_source_only_segment(
+    dataset_root: Path,
+    target: Mapping[str, Any],
+) -> tuple[VirtualVideoSegment, ...]:
+    video_id = str(target["videoID"])
+    duration = float(_duration(dataset_root, video_id))
+    return (
+        VirtualVideoSegment(
+            segment_id="seg_0001",
+            source_video_id=video_id,
+            source_path=str(dataset_root / "video" / f"{video_id}.mp4"),
+            source_start_sec=0.0,
+            source_end_sec=duration,
+            virtual_start_sec=0.0,
+            virtual_end_sec=duration,
+            role="target",
+        ),
+    )
+
+
 def _build_interleaved_chunk_segments(
     dataset_root: Path,
     rows: Sequence[Mapping[str, Any]],
@@ -901,7 +923,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-duration-sec", type=float, default=18000.0)
     parser.add_argument("--max-duration-sec", type=float)
     parser.add_argument("--segment-sec", type=float, default=600.0)
-    parser.add_argument("--construction", choices=("single_segment", "interleaved_chunks"), default="single_segment")
+    parser.add_argument(
+        "--construction",
+        choices=("source_only", "single_segment", "interleaved_chunks"),
+        default="single_segment",
+    )
     parser.add_argument("--chunk-sec", type=float, default=300.0)
     parser.add_argument("--low-fps", type=float, default=0.1)
     parser.add_argument("--beat-sec", type=float, default=60.0)
