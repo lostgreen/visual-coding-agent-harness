@@ -335,6 +335,37 @@ def test_source_only_construction_keeps_the_complete_question_video(monkeypatch:
     assert segment.role == "target"
 
 
+def test_window_selector_samples_beat_thumbnails_across_the_full_segment(tmp_path: Path) -> None:
+    task = InvestigationTask(
+        query_id="q_full_segment",
+        goal="Locate repeated title-card events.",
+        segment_id="seg_0001",
+        modality_hint=("visual",),
+        expected_evidence="timestamped title-card occurrences",
+    )
+    packet = {
+        "segment_id": "seg_0001",
+        "virtual_time_range": [0.0, 2400.0],
+        "asr_timeline_summary": "",
+        "beats": [
+            {
+                "beat_id": f"beat_{index:02d}",
+                "virtual_time_range": [float(index * 100), float((index + 1) * 100)],
+                "thumbnail_grid_paths": [str(tmp_path / f"beat_{index:02d}.jpg")],
+            }
+            for index in range(24)
+        ],
+    }
+    api = ScriptedVisionClient(({"start_sec": 1000.0, "end_sec": 1100.0, "reason": "candidate"},))
+
+    _select_window_with_model(api, task, packet, tmp_path / "trace.jsonl")
+
+    image_paths = api.calls[0]["image_paths"]
+    assert len(image_paths) == 12
+    assert image_paths[0].endswith("beat_00.jpg")
+    assert image_paths[-1].endswith("beat_23.jpg")
+
+
 def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(

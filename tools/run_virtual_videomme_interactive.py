@@ -426,7 +426,8 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
         f"Segment packet (text only): {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)}"
     )
     image_paths = []
-    for beat in segment_packet.get("beats", ())[:12]:
+    beats = select_uniform_items(tuple(segment_packet.get("beats", ()) or ()), 12)
+    for beat in beats:
         image_paths.extend(str(path) for path in beat.get("thumbnail_grid_paths", ())[:1])
     raw = api.chat(prompt, image_paths=image_paths, max_tokens=400)
     parsed = _parse_json(raw)
