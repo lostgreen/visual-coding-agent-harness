@@ -605,7 +605,25 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
                 "virtual_time_range": [0.0, 5.0],
             },
         ),
-        operation_metadata={"supports_answer_event": True},
+        operation_metadata={
+            "supports_answer_event": True,
+            "events": [
+                {
+                    "local_id": "event_1",
+                    "description": "The opening title card appears.",
+                    "start_sec": 1.0,
+                    "end_sec": 1.5,
+                    "supports_question_event": True,
+                },
+                {
+                    "local_id": "event_2",
+                    "description": "A second title card appears.",
+                    "start_sec": 3.0,
+                    "end_sec": 3.5,
+                    "supports_question_event": True,
+                },
+            ],
+        },
     )
     negative = EvidenceRecord(
         evidence_id="ev_no_title_card",
@@ -641,6 +659,16 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
 
     assert gate["passed"] is True
     assert gate["reason"] == "full_source_coverage_verified"
+    wrong_count = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "B. Three",
+        ("ev_title_card",),
+        (),
+        (positive, negative),
+    )
+    assert wrong_count["passed"] is False
+    assert wrong_count["reason"] == "event_count_answer_mismatch"
     aggregate = multiround._derived_answer_evidence(
         workspace,
         answer="A. Two",
@@ -650,6 +678,7 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
         coverage_source_ids=gate["source_video_ids"],
     )
     assert aggregate.parent_evidence_ids == ("ev_title_card", "ev_no_title_card")
+    assert len(aggregate.operation_metadata["event_occurrences"]) == 2
 
 
 def test_answer_gate_rejects_empty_answer_even_with_visual_citation(tmp_path: Path) -> None:

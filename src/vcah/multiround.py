@@ -710,11 +710,26 @@ def _answer_completion_gate(
                 "cluster_count": len(clusters),
                 "missing_segment_ids": [],
             }
+    event_occurrences: tuple[dict[str, Any], ...] = ()
+    if contract.quantifier == "total_count":
+        event_occurrences = _event_occurrences(cited)
+        if not event_occurrences:
+            return {"passed": False, "reason": "event_occurrences_missing", "missing_segment_ids": []}
+        expected_count = _answer_count(answer, workspace.case.options)
+        if expected_count is not None and expected_count != len(event_occurrences):
+            return {
+                "passed": False,
+                "reason": "event_count_answer_mismatch",
+                "expected_count": expected_count,
+                "event_occurrence_count": len(event_occurrences),
+                "missing_segment_ids": [],
+            }
     return {
         "passed": True,
         "reason": "full_source_coverage_verified",
         "source_video_ids": sorted(cited_sources),
         "entity_cluster_count": len(entity_clusters),
+        "event_occurrence_count": len(event_occurrences),
         "missing_segment_ids": [],
     }
 
@@ -770,6 +785,66 @@ def _record_supports_answer_event(record: EvidenceRecord) -> bool:
     )
 
 
+def _event_occurrences(records: Sequence[EvidenceRecord]) -> tuple[dict[str, Any], ...]:
+    occurrences: list[dict[str, Any]] = []
+    for record in records:
+        for index, value in enumerate(record.operation_metadata.get("events", ()) or (), start=1):
+            if not isinstance(value, Mapping) or not _metadata_flag(value.get("supports_question_event")):
+                continue
+            try:
+                start = float(value.get("start_sec"))
+                end = float(value.get("end_sec"))
+            except (TypeError, ValueError):
+                continue
+            if end < start:
+                start, end = end, start
+            source_id = _event_source_id(record, start, end)
+            duplicate = next(
+                (
+                    item
+                    for item in occurrences
+                    if item["source_video_id"] == source_id
+                    and _event_intervals_equivalent(start, end, item["start_sec"], item["end_sec"])
+                ),
+                None,
+            )
+            if duplicate is not None:
+                duplicate["evidence_ids"].append(record.evidence_id)
+                continue
+            occurrences.append(
+                {
+                    "event_id": f"{record.evidence_id}:{value.get('local_id') or f'event_{index}'}",
+                    "description": str(value.get("description", "") or ""),
+                    "start_sec": start,
+                    "end_sec": end,
+                    "source_video_id": source_id,
+                    "evidence_ids": [record.evidence_id],
+                }
+            )
+    return tuple(occurrences)
+
+
+def _event_source_id(record: EvidenceRecord, start_sec: float, end_sec: float) -> str:
+    center = (float(start_sec) + float(end_sec)) / 2.0
+    for lineage in record.source_lineage:
+        virtual_range = tuple(lineage.get("virtual_time_range", ()) or ())
+        if len(virtual_range) == 2 and float(virtual_range[0]) <= center <= float(virtual_range[1]):
+            return str(lineage.get("source_video_id", "") or "")
+    if record.source_lineage:
+        return str(record.source_lineage[0].get("source_video_id", "") or "")
+    return ""
+
+
+def _event_intervals_equivalent(start_a: float, end_a: float, start_b: float, end_b: float) -> bool:
+    overlap = max(0.0, min(end_a, end_b) - max(start_a, start_b))
+    shorter = min(max(0.0, end_a - start_a), max(0.0, end_b - start_b))
+    if shorter > 0.0 and overlap / shorter >= 0.5:
+        return True
+    center_a = (start_a + end_a) / 2.0
+    center_b = (start_b + end_b) / 2.0
+    return abs(center_a - center_b) <= 1.0
+
+
 def _metadata_flag(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -809,6 +884,7 @@ def _derived_answer_evidence(
     lineage = tuple(dict(item) for record in parent_records for item in record.source_lineage)
     request_ids = tuple(dict.fromkeys(request_id for record in parent_records for request_id in record.request_ids))
     clusters = tuple(_entity_cluster(item) for item in entity_clusters)
+    event_occurrences = _event_occurrences(parent_records)
     return EvidenceRecord(
         evidence_id="ev_final_aggregate",
         beat_id="",
@@ -831,7 +907,11 @@ def _derived_answer_evidence(
         confidence=min((record.confidence for record in parent_records), default=0.0),
         source_lineage=lineage,
         entity_ids=tuple(cluster["entity_id"] for cluster in clusters),
-        operation_metadata={"algorithm": "reasoner_reconciliation", "entity_clusters": clusters},
+        operation_metadata={
+            "algorithm": "reasoner_reconciliation",
+            "entity_clusters": clusters,
+            "event_occurrences": event_occurrences,
+        },
     )
 
 
@@ -906,6 +986,7 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
             "evidence_kind": item.evidence_kind,
             "source_lineage": [dict(row) for row in item.source_lineage],
             "entities": list(item.operation_metadata.get("entities", ())),
+            "events": list(item.operation_metadata.get("events", ())),
         }
         for item in evidence
     )

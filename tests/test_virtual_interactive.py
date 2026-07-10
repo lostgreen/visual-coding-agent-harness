@@ -275,8 +275,49 @@ def test_investigator_prompt_and_entity_schema_are_question_generic(tmp_path: Pa
     assert "scholar" not in detail_prompt.casefold()
     assert "comments_on_topic" not in detail_prompt
     assert "supports_question_relation" in preview_prompt
+    assert '"events"' in preview_prompt
+    assert '"events"' in detail_prompt
     assert entities[0]["question_relation"] == "points to the diagram"
     assert entities[0]["supports_question_relation"] is True
+
+
+def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> None:
+    events = _interactive._normalize_events(
+        [
+            {
+                "local_id": "event_1",
+                "description": "The presenter points to the diagram.",
+                "start_sec": 35.0,
+                "end_sec": 36.0,
+                "supports_question_event": True,
+            },
+            {
+                "local_id": "event_2",
+                "description": "An unrelated event outside the inspected window.",
+                "start_sec": 100.0,
+                "end_sec": 101.0,
+                "supports_question_event": True,
+            },
+            {
+                "local_id": "event_3",
+                "description": "A visible but question-irrelevant action.",
+                "start_sec": 40.0,
+                "end_sec": 41.0,
+                "supports_question_event": False,
+            },
+        ],
+        (30.0, 60.0),
+    )
+
+    assert events == (
+        {
+            "local_id": "event_1",
+            "description": "The presenter points to the diagram.",
+            "start_sec": 35.0,
+            "end_sec": 36.0,
+            "supports_question_event": True,
+        },
+    )
 
 
 def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> None:
