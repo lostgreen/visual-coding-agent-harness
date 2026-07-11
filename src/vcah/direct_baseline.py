@@ -7,7 +7,7 @@ import re
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 def uniform_midpoint_times(duration_sec: float, frame_count: int) -> tuple[float, ...]:
@@ -110,6 +110,46 @@ def materialize_uniform_frames(
     return rows
 
 
+def annotate_uniform_frames(
+    frame_rows: Sequence[Mapping[str, Any]],
+    out_dir: Path,
+    *,
+    rebuild: bool = False,
+) -> tuple[dict[str, Any], ...]:
+    rows = tuple(dict(row) for row in frame_rows)
+    output_dir = Path(out_dir)
+    manifest_path = output_dir / "frame_manifest.jsonl"
+    if not rebuild:
+        cached = _load_valid_frame_manifest(manifest_path, expected_count=len(rows))
+        if cached:
+            return cached
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    labeled_rows = []
+    for row in rows:
+        frame_index = int(row["frame_index"])
+        time_sec = float(row["time_sec"])
+        output_path = output_dir / f"frame_{frame_index:04d}.jpg"
+        with Image.open(str(row["path"])) as source:
+            image = source.convert("RGB")
+            draw = ImageDraw.Draw(image)
+            font_size = max(12, min(24, image.height // 14))
+            try:
+                font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+            except OSError:
+                font = ImageFont.load_default()
+            label = f"F{frame_index:04d}  {_format_timestamp(time_sec)}"
+            bbox = draw.textbbox((0, 0), label, font=font, stroke_width=1)
+            width = min(image.width, bbox[2] - bbox[0] + 12)
+            height = min(image.height, bbox[3] - bbox[1] + 10)
+            draw.rectangle((0, 0, width, height), fill=(0, 0, 0))
+            draw.text((6, 4), label, fill=(255, 255, 255), font=font, stroke_width=1, stroke_fill=(0, 0, 0))
+            image.save(output_path, format="JPEG", quality=92)
+        labeled_rows.append({**row, "path": str(output_path)})
+    _write_jsonl(manifest_path, labeled_rows)
+    return tuple(labeled_rows)
+
+
 def format_timestamped_asr(cues: Sequence[Mapping[str, Any]]) -> str:
     return "\n".join(
         f"[{_format_timestamp(float(cue.get('start', 0.0) or 0.0))}-{_format_timestamp(float(cue.get('end', 0.0) or 0.0))}] "
@@ -132,9 +172,11 @@ def build_direct_prompt(
     )
     return (
         "Answer this multiple-choice question from the complete uniformly sampled video frames and timestamped ASR. "
-        "The images are supplied in ascending frame-index order. Use both modalities and choose exactly one option. "
+        "The images are supplied in ascending frame-index order, and each image visibly contains its exact frame ID and timestamp. "
+        "Use both modalities, align ASR only to images with matching timestamps, and choose exactly one option. "
         "Return compact JSON only: {\"answer\":\"A\",\"rationale\":\"brief observable justification\","
         "\"evidence\":[{\"frame_index\":1,\"time_sec\":1.0,\"asr_quote\":\"optional short quote\"}]}. "
+        "Write time_sec as decimal seconds, copied from the cited frame label. "
         "The rationale must be a concise evidence summary. Do not provide hidden chain-of-thought or a step-by-step internal monologue.\n"
         f"Question: {question}\n"
         f"Options: {json.dumps(dict(options), ensure_ascii=False)}\n"
@@ -151,6 +193,7 @@ def parse_direct_response(text: str) -> dict[str, Any]:
     start, end = raw.find("{"), raw.rfind("}")
     if start >= 0 and end > start:
         raw = raw[start : end + 1]
+    raw = _repair_unquoted_timestamps(raw)
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError:
@@ -175,6 +218,35 @@ def parse_direct_response(text: str) -> dict[str, Any]:
         "rationale": str(payload.get("rationale", "") or "")[:2000],
         "evidence": evidence,
     }
+
+
+def align_direct_evidence_to_frames(
+    parsed: Mapping[str, Any],
+    frame_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    frame_times = {int(row["frame_index"]): float(row["time_sec"]) for row in frame_rows}
+    aligned = []
+    for source in parsed.get("evidence", ()) or ():
+        if not isinstance(source, Mapping):
+            continue
+        item = dict(source)
+        try:
+            frame_index = int(item.get("frame_index"))
+        except (TypeError, ValueError):
+            aligned.append(item)
+            continue
+        actual_time = frame_times.get(frame_index)
+        if actual_time is None:
+            aligned.append(item)
+            continue
+        reported_time = _coerce_time_seconds(item.get("time_sec"))
+        if reported_time is not None and abs(reported_time - actual_time) > 0.001:
+            item["reported_time_sec"] = reported_time
+            item["time_alignment_corrected"] = True
+        item["frame_index"] = frame_index
+        item["time_sec"] = actual_time
+        aligned.append(item)
+    return {**dict(parsed), "evidence": tuple(aligned)}
 
 
 def render_contact_sheets(
@@ -276,6 +348,38 @@ def _format_timestamp(value: float) -> str:
     minutes, remainder = divmod(remainder, 60_000)
     seconds, milliseconds = divmod(remainder, 1000)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+
+
+def _repair_unquoted_timestamps(text: str) -> str:
+    pattern = re.compile(r'("time_sec"\s*:\s*)(\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?)')
+
+    def replace(match: re.Match[str]) -> str:
+        value = _coerce_time_seconds(match.group(2))
+        return f"{match.group(1)}{value:.3f}" if value is not None else match.group(0)
+
+    return pattern.sub(replace, text)
+
+
+def _coerce_time_seconds(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    parts = text.split(":")
+    if len(parts) not in (2, 3):
+        return None
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError:
+        return None
+    if len(numbers) == 2:
+        return numbers[0] * 60.0 + numbers[1]
+    return numbers[0] * 3600.0 + numbers[1] * 60.0 + numbers[2]
 
 
 def _is_request_shape_error(exc: Exception) -> bool:

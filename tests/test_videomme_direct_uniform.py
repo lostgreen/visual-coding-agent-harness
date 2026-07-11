@@ -11,6 +11,8 @@ from PIL import Image
 import pytest
 
 from vcah.direct_baseline import (
+    align_direct_evidence_to_frames,
+    annotate_uniform_frames,
     build_direct_prompt,
     format_timestamped_asr,
     materialize_uniform_frames,
@@ -104,6 +106,24 @@ def test_materialize_uniform_frames_recovers_missing_tail_frame(tmp_path: Path) 
     assert rows[-1]["time_sec"] == 87.5
 
 
+def test_annotate_uniform_frames_burns_frame_id_and_timestamp(tmp_path: Path) -> None:
+    source_path = tmp_path / "frames" / "frame_0001.jpg"
+    source_path.parent.mkdir(parents=True)
+    Image.new("RGB", (320, 180), color=(255, 255, 255)).save(source_path)
+
+    rows = annotate_uniform_frames(
+        ({"frame_index": 1, "time_sec": 62.5, "path": str(source_path)},),
+        tmp_path / "labeled_frames",
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["frame_index"] == 1
+    assert rows[0]["time_sec"] == 62.5
+    assert Path(rows[0]["path"]).name == "frame_0001.jpg"
+    with Image.open(rows[0]["path"]) as image:
+        assert image.getpixel((2, 2)) == (0, 0, 0)
+
+
 def test_format_timestamped_asr_keeps_complete_source_times() -> None:
     text = format_timestamped_asr(
         (
@@ -142,6 +162,39 @@ def test_parse_direct_response_accepts_fenced_json_and_structured_answer() -> No
     assert parsed["answer"] == "B"
     assert parsed["rationale"] == "visible evidence"
     assert parsed["evidence"] == ({"frame_index": 4, "time_sec": 8.5},)
+
+
+def test_parse_direct_response_repairs_unquoted_minute_timestamp() -> None:
+    parsed = parse_direct_response(
+        '```json\n{"answer":"A","rationale":"visible",'
+        '"evidence":[{"frame_index":155,"time_sec":13:14.273}]}\n```'
+    )
+
+    assert parsed["answer"] == "A"
+    assert parsed["rationale"] == "visible"
+    assert parsed["evidence"] == ({"frame_index": 155, "time_sec": 794.273},)
+
+
+def test_align_direct_evidence_uses_manifest_time_and_keeps_model_report() -> None:
+    parsed = {
+        "answer": "A",
+        "rationale": "visible",
+        "evidence": ({"frame_index": 155, "time_sec": 936.632},),
+    }
+
+    aligned = align_direct_evidence_to_frames(
+        parsed,
+        ({"frame_index": 155, "time_sec": 576.632, "path": "frame_0155.jpg"},),
+    )
+
+    assert aligned["evidence"] == (
+        {
+            "frame_index": 155,
+            "time_sec": 576.632,
+            "reported_time_sec": 936.632,
+            "time_alignment_corrected": True,
+        },
+    )
 
 
 def test_render_contact_sheets_preserves_all_512_frames_without_padding(tmp_path: Path) -> None:

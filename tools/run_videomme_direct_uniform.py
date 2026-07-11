@@ -7,6 +7,8 @@ import time
 from typing import Any, Callable, Mapping, Sequence
 
 from vcah.direct_baseline import (
+    align_direct_evidence_to_frames,
+    annotate_uniform_frames,
     build_direct_prompt,
     format_timestamped_asr,
     materialize_uniform_frames,
@@ -64,6 +66,11 @@ def run_direct_case(
         max_image_edge=int(max_image_edge),
         rebuild=bool(rebuild),
     )
+    submitted_frame_rows = annotate_uniform_frames(
+        frame_rows,
+        case_dir / "labeled_frames",
+        rebuild=bool(rebuild),
+    )
     segment = VirtualVideoSegment(
         segment_id="direct_source",
         source_video_id=video_id,
@@ -88,11 +95,12 @@ def run_direct_case(
     parsed, raw, input_mode, submitted_paths = requester(
         api=api,
         prompt=prompt,
-        frame_paths=tuple(Path(str(item["path"])) for item in frame_rows),
+        frame_paths=tuple(Path(str(item["path"])) for item in submitted_frame_rows),
         sheet_dir=case_dir / "contact_sheets",
         force_contact_sheets=bool(force_contact_sheets),
         max_tokens=900,
     )
+    parsed = align_direct_evidence_to_frames(parsed, frame_rows)
     latency_sec = round(float(clock() - start), 3)
     gold = str(row.get("answer", "") or "")
     answer = str(parsed.get("answer", "") or "")
@@ -121,6 +129,7 @@ def run_direct_case(
             "submitted_image_count": len(submitted_paths),
             "input_mode": input_mode,
             "max_image_edge": int(max_image_edge),
+            "frame_labels_burned": True,
             "asr_cue_count": len(cues),
             "asr_chars": len(asr_text),
             "prompt_chars": len(prompt),
