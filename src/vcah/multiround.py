@@ -349,19 +349,27 @@ class VirtualVideoMultiRoundDriver:
                 )
                 decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
             elif missing_identity_terms and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
-                repair_tasks = _identity_repair_tasks(
-                    workspace,
+                repair_tasks = _navigation_repair_tasks(
                     evidence_store.records,
-                    missing_identity_terms,
                     round_id=round_id,
                     limit=min(self.max_tasks_per_round, remaining),
                 )
+                repair_reason = "unverified_navigation_hint"
+                if not repair_tasks:
+                    repair_tasks = _identity_repair_tasks(
+                        workspace,
+                        evidence_store.records,
+                        missing_identity_terms,
+                        round_id=round_id,
+                        limit=min(self.max_tasks_per_round, remaining),
+                    )
+                    repair_reason = "identity_anchor_missing"
                 if repair_tasks:
                     trace.append(
                         {
                             "type": "repair_override",
                             "round": round_id,
-                            "reason": "identity_anchor_missing",
+                            "reason": repair_reason,
                             "identity_anchor_terms": list(missing_identity_terms),
                             "task_count": len(repair_tasks),
                         }
@@ -626,6 +634,77 @@ def _identity_repair_tasks(
         )
         for index, segment in enumerate(candidates[: max(0, int(limit))], start=1)
     )
+
+
+def _navigation_repair_tasks(
+    evidence: Sequence[EvidenceRecord],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    visual = tuple(record for record in evidence if record.modality in {"visual", "ocr"})
+    grouped: dict[str, list[EvidenceRecord]] = {}
+    for record in evidence:
+        if (
+            record.evidence_kind != "navigation_hint"
+            or record.observation_polarity != "positive"
+            or record.start_sec is None
+            or record.end_sec is None
+        ):
+            continue
+        grouped.setdefault(record.task_id or record.evidence_id, []).append(record)
+
+    unresolved = []
+    for hints in grouped.values():
+        if any(_navigation_hint_is_observed(hint, visual) for hint in hints):
+            continue
+        hint = hints[0]
+        lineage = next(
+            (
+                item
+                for item in hint.source_lineage
+                if str(item.get("segment_id", "") or "")
+            ),
+            None,
+        )
+        if lineage is not None:
+            unresolved.append((hint, str(lineage["segment_id"])))
+
+    return tuple(
+        InvestigationTask(
+            query_id=f"navigation_repair_r{round_id}_{index:03d}",
+            goal="Visually verify an unresolved ASR navigation clue without assuming it proves an answer option.",
+            segment_id=segment_id,
+            time_range=(float(hint.start_sec), float(hint.end_sec)),
+            modality_hint=("visual",),
+            expected_evidence=f"direct visual evidence for or against: {hint.verbatim[:240]}",
+            priority=1.0,
+        )
+        for index, (hint, segment_id) in enumerate(unresolved[: max(0, int(limit))], start=1)
+    )
+
+
+def _navigation_hint_is_observed(hint: EvidenceRecord, visual: Sequence[EvidenceRecord]) -> bool:
+    if hint.start_sec is None or hint.end_sec is None:
+        return False
+    hint_sources = {
+        str(item.get("source_video_id", "") or "")
+        for item in hint.source_lineage
+        if str(item.get("source_video_id", "") or "")
+    }
+    for record in visual:
+        if record.start_sec is None or record.end_sec is None:
+            continue
+        record_sources = {
+            str(item.get("source_video_id", "") or "")
+            for item in record.source_lineage
+            if str(item.get("source_video_id", "") or "")
+        }
+        if hint_sources and record_sources and hint_sources.isdisjoint(record_sources):
+            continue
+        if min(float(hint.end_sec), float(record.end_sec)) > max(float(hint.start_sec), float(record.start_sec)):
+            return True
+    return False
 
 
 def _task_for_contract(task: InvestigationTask, contract: ClaimContract) -> InvestigationTask:

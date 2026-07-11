@@ -1020,6 +1020,74 @@ def test_navigation_hint_does_not_satisfy_visual_completion(tmp_path: Path) -> N
     assert status["ready_for_answer"] is False
 
 
+def test_navigation_repair_prioritizes_unverified_positive_hint() -> None:
+    verified_hint = EvidenceRecord(
+        evidence_id="ev_firework_hint",
+        beat_id="",
+        start_sec=100.0,
+        end_sec=120.0,
+        modality="asr",
+        pointer="virtual://firework",
+        verbatim="fireworks exploding",
+        evidence_kind="navigation_hint",
+        observation_polarity="positive",
+        task_id="search_firework",
+        source_lineage=(
+            {
+                "segment_id": "seg_2",
+                "source_video_id": "source",
+                "source_time_range": [100.0, 120.0],
+                "virtual_time_range": [100.0, 120.0],
+            },
+        ),
+    )
+    verified_visual = EvidenceRecord(
+        evidence_id="ev_firework_visual",
+        beat_id="",
+        start_sec=102.0,
+        end_sec=118.0,
+        modality="visual",
+        pointer="virtual://firework-visual",
+        verbatim="A firework explodes near a man.",
+        frame_refs=("firework.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+        source_lineage=verified_hint.source_lineage,
+    )
+    unverified_hint = EvidenceRecord(
+        evidence_id="ev_dog_hint",
+        beat_id="",
+        start_sec=20.0,
+        end_sec=40.0,
+        modality="asr",
+        pointer="virtual://dog",
+        verbatim="dog growls",
+        evidence_kind="navigation_hint",
+        observation_polarity="positive",
+        task_id="search_dog",
+        source_lineage=(
+            {
+                "segment_id": "seg_1",
+                "source_video_id": "source",
+                "source_time_range": [20.0, 40.0],
+                "virtual_time_range": [20.0, 40.0],
+            },
+        ),
+    )
+
+    tasks = multiround._navigation_repair_tasks(
+        (verified_hint, verified_visual, unverified_hint),
+        round_id=3,
+        limit=4,
+    )
+
+    assert len(tasks) == 1
+    assert tasks[0].segment_id == "seg_1"
+    assert tasks[0].time_range == (20.0, 40.0)
+    assert tasks[0].modality_hint == ("visual",)
+    assert "dog growls" in tasks[0].expected_evidence
+
+
 def test_answer_citations_drop_navigation_hints_when_visual_support_remains() -> None:
     hint = EvidenceRecord(
         evidence_id="ev_hint",
