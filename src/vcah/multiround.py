@@ -1823,7 +1823,9 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
             "relations": list(item.operation_metadata.get("relations", ())),
             "derivation": dict(item.operation_metadata.get("derivation", {}) or {}),
             "claim_assessment": dict(item.operation_metadata.get("claim_assessment", {}) or {}),
-            "investigation": dict(item.operation_metadata.get("investigation", {}) or {}),
+            "investigation": dict(
+                to_jsonable(item.operation_metadata.get("investigation", {}) or {})  # type: ignore[arg-type]
+            ),
             "navigation": (
                 {
                     "search_terms": list(item.operation_metadata.get("search_terms", ())),

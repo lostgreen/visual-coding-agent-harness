@@ -125,6 +125,33 @@ def test_new_coverage_does_not_count_as_goal_progress() -> None:
     assert annotated[0].coverage_progress == ("new_frontier_coverage",)
 
 
+def test_evidence_digest_serializes_structured_condition_results() -> None:
+    evidence = EvidenceRecord(
+        evidence_id="ev_condition",
+        beat_id="",
+        start_sec=1.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://condition",
+        verbatim="The target remains unreadable.",
+        frame_refs=("frame.jpg",),
+        attestation_model="test-vlm",
+        operation_metadata={
+            "investigation": {
+                "resolution": "unresolved",
+                "condition_results": (
+                    ConditionResult("gap_text_c1", "unknown", "Text remains unreadable."),
+                ),
+            }
+        },
+    )
+
+    payload = multiround._evidence_digest((evidence,))
+
+    json.dumps(payload)
+    assert payload[0]["investigation"]["condition_results"][0]["condition_id"] == "gap_text_c1"
+
+
 def test_scalar_quantity_gate_uses_boundary_aware_measurement_derivation(tmp_path: Path) -> None:
     manifest = VirtualVideoManifest(
         workspace_id="scalar",
