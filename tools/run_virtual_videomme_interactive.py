@@ -373,8 +373,8 @@ class GeminiReasoner:
             if not _should_audit_answer(kwargs):
                 return candidate
             audit_prompt = _answer_audit_prompt(kwargs, candidate, evidence_digest)
-            audit_raw = self.api.chat(audit_prompt, max_tokens=900)
-            audit = _parse_json(audit_raw)
+            audit_raw = self.api.chat(audit_prompt, max_tokens=1400)
+            audit = _parse_answer_audit(audit_raw)
             self._trace("reasoner_answer_audit", audit_prompt, audit_raw, audit)
             verdict = str(audit.get("verdict", "unknown") or "unknown").strip().casefold()
             audit_reason = str(audit.get("reason", "") or "")
@@ -922,6 +922,7 @@ def _normalize_claim_assessment(value: Mapping[str, Any], task: Any) -> dict[str
         "alternative_answers": tuple(str(item) for item in getattr(task, "alternative_answers", ()) or ()),
         "verdict": verdict,
         "relation_type": str(value.get("relation_type", "unclear") or "unclear"),
+        "candidate_role": str(value.get("candidate_role", "unclear") or "unclear"),
         "strongest_alternative": str(value.get("strongest_alternative", "") or ""),
         "reason": str(value.get("reason", "") or ""),
     }
@@ -1239,17 +1240,24 @@ def _matching_claim_assessment(
     evidence_digest: Sequence[Mapping[str, Any]],
     candidate_answer: str,
 ) -> Mapping[str, Any] | None:
-    candidate_key = re.sub(r"[^a-z0-9]+", "", str(candidate_answer or "").casefold())
+    candidate_key = _answer_candidate_key(candidate_answer)
     if not candidate_key:
         return None
     for row in reversed(tuple(evidence_digest)):
         assessment = row.get("claim_assessment")
         if not isinstance(assessment, Mapping):
             continue
-        assessed_key = re.sub(r"[^a-z0-9]+", "", str(assessment.get("candidate_answer", "") or "").casefold())
+        assessed_key = _answer_candidate_key(str(assessment.get("candidate_answer", "") or ""))
         if assessed_key == candidate_key:
             return assessment
     return None
+
+
+def _answer_candidate_key(answer: str) -> str:
+    label = re.match(r"\s*([A-H])(?:\.|\)|:|\s|$)", str(answer or "").upper())
+    if label:
+        return f"option:{label.group(1)}"
+    return re.sub(r"[^a-z0-9]+", "", str(answer or "").casefold())
 
 
 def _claim_verification_task(
@@ -1336,11 +1344,13 @@ def _answer_audit_prompt(
         "or mere co-occurrence. For identity-linked questions, require evidence that links the same visible entity across the "
         "anchor and answer event. Do not use answer-option plausibility as evidence. "
         f"{task_instruction}\n"
-        "If another option is directly supported, provide revised_answer and its citations. Do not revise based only on "
-        "plausibility or elimination. Return JSON only: {\"verdict\":\"supported|insufficient|contradicted\",\"reason\":\"...\","
+        "Identify the single strongest_alternative after comparing every option internally. If that alternative is directly "
+        "supported, provide revised_answer and its citations. Do not revise based only on plausibility or elimination. Keep the "
+        "reason under 100 words and each task goal under 40 words. Return compact JSON only: "
+        "{\"verdict\":\"supported|insufficient|contradicted\",\"reason\":\"...\","
         "\"evidence_relation\":\"direct|causal_chain|consequence_only|cooccurrence_only|unclear\","
-        "\"option_assessments\":[{\"option\":\"A\",\"support\":\"direct|indirect|contradicted|missing\","
-        "\"evidence_ids\":[\"ev_...\"],\"reason\":\"...\"}],\"unresolved_alternatives\":[\"A\"],"
+        "\"strongest_alternative\":{\"option\":\"A\",\"support\":\"direct|indirect|contradicted|missing\","
+        "\"evidence_ids\":[\"ev_...\"],\"reason\":\"...\"},"
         "\"revised_answer\":null,\"revised_citations\":[],\"revised_entity_clusters\":[],"
         "\"revised_support_status\":\"supported|insufficient\",\"tasks\":[{\"query_id\":\"audit_r2_t1\","
         "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":[0.0,60.0],"
@@ -1418,9 +1428,13 @@ def _claim_preview_prompt(
     return (
         "You are an independent claim verifier, not the Reasoner who proposed the answer. Re-observe the frames and local ASR, "
         "actively look for disconfirming evidence, and distinguish direct support from correlation, downstream consequence, "
-        "after-state, or identity mismatch. Return JSON only: {\"summary\":\"atomic verification observation\","
+        "after-state, or identity mismatch. For why/how questions, separate the decision motive or initiating cause from the "
+        "action's implementation, stated use, and downstream consequence. A stated benefit is not automatically the decision motive. "
+        "You must identify the strongest alternative from the supplied list unless every alternative is contradicted. "
+        "Return JSON only: {\"summary\":\"atomic verification observation\","
         "\"confidence\":0.0-1.0,\"claim_verdict\":\"supports|refutes|insufficient\","
         "\"relation_type\":\"direct|causal_chain|consequence_only|cooccurrence_only|identity_mismatch|unclear\","
+        "\"candidate_role\":\"decision_motive|initiating_cause|mechanism|stated_use|downstream_consequence|after_state|unclear\","
         "\"strongest_alternative\":\"B. ...|none\",\"reason\":\"...\",\"need_detail\":true|false,"
         "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null}.\n"
         "Use supports only when the exact candidate relation is directly established. The fact that candidate-related objects, "
@@ -1534,9 +1548,12 @@ def _claim_evidence_prompt(
 ) -> str:
     return (
         "You are an independent claim verifier. Use the detail frames and local ASR to verify or refute the exact candidate, "
-        "not merely whether the scene is relevant. Return JSON only: {\"summary\":\"verified atomic observation\","
+        "not merely whether the scene is relevant. For why/how questions, separate the decision motive or initiating cause from "
+        "implementation, stated use, and downstream consequence, then compare the candidate against the strongest alternative. "
+        "Return JSON only: {\"summary\":\"verified atomic observation\","
         "\"confidence\":0.0-1.0,\"claim_verdict\":\"supports|refutes|insufficient\","
         "\"relation_type\":\"direct|causal_chain|consequence_only|cooccurrence_only|identity_mismatch|unclear\","
+        "\"candidate_role\":\"decision_motive|initiating_cause|mechanism|stated_use|downstream_consequence|after_state|unclear\","
         "\"strongest_alternative\":\"B. ...|none\",\"reason\":\"...\"}.\n"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
@@ -1573,6 +1590,23 @@ def _parse_json(text: str) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _parse_answer_audit(text: str) -> dict[str, Any]:
+    parsed = _parse_json(text)
+    if parsed:
+        return parsed
+    verdict_match = re.search(
+        r'\"verdict\"\s*:\s*\"(supported|insufficient|contradicted)\"',
+        str(text or ""),
+        flags=re.IGNORECASE,
+    )
+    verdict = verdict_match.group(1).casefold() if verdict_match else "insufficient"
+    return {
+        "verdict": verdict,
+        "reason": "Answer audit output was truncated or invalid JSON; only its leading verdict could be retained.",
+        "tasks": [],
+    }
 
 
 def _image_data_url(path: Path) -> str:

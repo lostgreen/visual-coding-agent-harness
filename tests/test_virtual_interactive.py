@@ -42,6 +42,7 @@ _event_evidence_prompt = _interactive._event_evidence_prompt
 _load_existing_case_summary = _interactive._load_existing_case_summary
 _run_case_batch = _interactive._run_case_batch
 _should_audit_answer = _interactive._should_audit_answer
+_matching_claim_assessment = _interactive._matching_claim_assessment
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -232,6 +233,50 @@ def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> 
     assert decision.tasks[0].query_id == "audit_r2_t1"
     assert len(api.calls) == 2
     assert "Do not reward citation relevance alone" in api.calls[1]["prompt"]
+    assert "strongest_alternative" in api.calls[1]["prompt"]
+    assert '"option_assessments"' not in api.calls[1]["prompt"]
+    assert api.calls[1]["max_tokens"] >= 1400
+
+
+def test_gemini_reasoner_preserves_verdict_from_truncated_answer_audit(tmp_path: Path) -> None:
+    class TruncatedAuditClient:
+        def __init__(self) -> None:
+            self.responses = [
+                json.dumps({"action": "answer", "answer": "D. A downstream benefit.", "citations": ["ev_1"]}),
+                '```json\n{"verdict":"contradicted","reason":"The cited fact is only a consequence",',
+            ]
+
+        def chat(self, prompt: str, *, image_paths: Sequence[str] = (), max_tokens: int = 900) -> str:
+            del prompt, image_paths, max_tokens
+            return self.responses.pop(0)
+
+    reasoner = GeminiReasoner(TruncatedAuditClient(), trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="Why did the person perform the action?",
+        options={"B": "A broader motive", "D": "A downstream benefit"},
+        workspace_overview={"segment_overviews": []},
+        workspace_duration_sec=300.0,
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=3,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "The action has a later benefit.",
+                "virtual_time_range": [120.0, 130.0],
+                "modality": "visual",
+                "source_lineage": [{"segment_id": "seg_0002"}],
+            },
+        ),
+    )
+
+    assert decision.action == "answer"
+    assert decision.answer.startswith("D.")
+    assert decision.support_status == "contradicted"
+    assert "truncated" in decision.support_reason.casefold()
 
 
 def test_gemini_reasoner_preserves_candidate_when_forced_finalization_still_investigates(tmp_path: Path) -> None:
@@ -401,6 +446,18 @@ def test_gemini_reasoner_dispatches_independent_claim_verification_for_relation_
     assert decision.tasks[0].time_range == (0.0, 300.0)
 
 
+def test_matching_claim_assessment_treats_option_label_as_candidate_identity() -> None:
+    assessment = {
+        "candidate_answer": "D",
+        "verdict": "supports",
+        "reason": "The exact option was checked.",
+    }
+
+    matched = _matching_claim_assessment(({"claim_assessment": assessment},), "D. Full option text")
+
+    assert matched == assessment
+
+
 def test_model_investigator_records_independent_claim_assessment(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(
@@ -410,6 +467,7 @@ def test_model_investigator_records_independent_claim_assessment(tmp_path: Path)
                 "confidence": 0.9,
                 "claim_verdict": "refutes",
                 "relation_type": "consequence_only",
+                "candidate_role": "downstream_consequence",
                 "strongest_alternative": "B. A broader motive.",
                 "reason": "The cited scene does not establish the candidate as the motive.",
                 "need_detail": False,
@@ -433,9 +491,12 @@ def test_model_investigator_records_independent_claim_assessment(tmp_path: Path)
     report = investigator.run_batch((task,))[0]
 
     assert "independent claim verifier" in api.calls[0]["prompt"]
+    assert "decision motive" in api.calls[0]["prompt"]
+    assert "identify the strongest alternative" in api.calls[0]["prompt"]
     assessment = report.evidence[0].operation_metadata["claim_assessment"]
     assert assessment["verdict"] == "refutes"
     assert assessment["candidate_answer"].startswith("D.")
+    assert assessment["candidate_role"] == "downstream_consequence"
     assert assessment["strongest_alternative"].startswith("B.")
 
 
