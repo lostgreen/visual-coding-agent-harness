@@ -495,6 +495,50 @@ def test_matching_claim_assessment_treats_option_label_as_candidate_identity() -
     assert matched == assessment
 
 
+def test_forced_finalization_keeps_existing_claim_assessment_active(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "answer", "answer": "D. A downstream use.", "citations": ["ev_1"]},
+            {"verdict": "supported", "reason": "The cited sentence mentions the proposed use.", "tasks": []},
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="Why did the person perform the action?",
+        options={"B": "A decision motive", "D": "A downstream use"},
+        workspace_overview={"segment_overviews": []},
+        workspace_duration_sec=300.0,
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=0,
+        force_finalize=True,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "The action has a stated downstream use.",
+                "virtual_time_range": [120.0, 130.0],
+                "modality": "visual",
+                "source_lineage": [{"segment_id": "seg_0002"}],
+                "claim_assessment": {
+                    "candidate_answer": "D",
+                    "claim_relation": "decision_motive",
+                    "candidate_role": "stated_use",
+                    "verdict": "insufficient",
+                    "reason": "The observed use does not establish the decision motive.",
+                },
+            },
+        ),
+    )
+
+    assert decision.action == "answer"
+    assert decision.answer.startswith("D.")
+    assert decision.support_status == "insufficient"
+    assert "does not establish" in decision.support_reason
+
+
 def test_model_investigator_records_independent_claim_assessment(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(

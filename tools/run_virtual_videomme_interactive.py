@@ -459,11 +459,7 @@ class GeminiReasoner:
         evidence_digest: Sequence[Mapping[str, Any]],
         decision: ReasonerDecision,
     ) -> ReasonerDecision:
-        if (
-            not _requires_independent_claim_verification(kwargs)
-            or int(kwargs.get("remaining_budget", 0) or 0) <= 0
-            or kwargs.get("force_finalize")
-        ):
+        if not _requires_independent_claim_verification(kwargs):
             return decision
         assessment = _matching_claim_assessment(evidence_digest, decision.answer)
         if assessment:
@@ -480,6 +476,8 @@ class GeminiReasoner:
                         or "Independent claim verification did not support the answer."
                     ),
                 )
+            return decision
+        if int(kwargs.get("remaining_budget", 0) or 0) <= 0 or kwargs.get("force_finalize"):
             return decision
         task = _claim_verification_task(kwargs, decision, evidence_digest, round_id=self.calls)
         return decision if task is None else ReasonerDecision(action="investigate", tasks=(task,))
