@@ -220,6 +220,7 @@ def test_gemini_reasoner_can_request_global_lexical_asr_navigation(tmp_path: Pat
     assert "search_asr" in api.calls[0]["prompt"]
     assert "navigation only" in api.calls[0]["prompt"]
     assert "competing option" in api.calls[0]["prompt"]
+    assert "one contrastive search_asr task" in api.calls[0]["prompt"]
     assert "Do not repeat" in api.calls[0]["prompt"]
 
 
