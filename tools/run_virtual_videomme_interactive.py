@@ -1253,11 +1253,18 @@ def _reasoner_visual_context(
     budget = max(1, int(max_images))
     overview_rows = tuple(dict(row) for row in kwargs.get("workspace_overview", {}).get("segment_overviews", ()) or ())
     evidence = tuple(kwargs.get("evidence", ()) or ())
+    aggregation = str(dict(kwargs.get("query_contract") or {}).get("aggregation", "none") or "none")
+    if aggregation == "count":
+        evidence_budget = 0
+    elif aggregation == "deduplicate":
+        evidence_budget = min(16, budget)
+    else:
+        evidence_budget = min(32, budget)
     evidence_paths: list[str] = []
     evidence_manifest: list[dict[str, Any]] = []
-    if evidence:
-        selected_evidence = select_uniform_items(evidence, min(16, len(evidence)))
-        per_record = min(4, max(1, 32 // len(selected_evidence)))
+    if evidence and evidence_budget:
+        selected_evidence = select_uniform_items(evidence, min(16, len(evidence), evidence_budget))
+        per_record = 1 if aggregation == "deduplicate" else min(4, max(1, evidence_budget // len(selected_evidence)))
         for record in selected_evidence:
             refs = tuple(str(path) for path in getattr(record, "frame_refs", ()) if Path(str(path)).exists())
             selected_refs = select_uniform_items(refs, min(per_record, len(refs))) if refs else ()
@@ -1276,7 +1283,7 @@ def _reasoner_visual_context(
                     "local_image_positions": [start_position, len(evidence_paths)],
                 }
             )
-    evidence_paths = evidence_paths[: min(32, budget)]
+    evidence_paths = evidence_paths[:evidence_budget]
     overview_budget = min(8 if evidence_paths else budget, max(0, budget - len(evidence_paths)))
     valid_overviews = tuple(
         row

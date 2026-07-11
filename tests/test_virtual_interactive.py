@@ -551,6 +551,63 @@ def test_gemini_reasoner_caps_overview_and_evidence_images_at_40(tmp_path: Path)
     assert "Visual input manifest" in api.calls[0]["prompt"]
 
 
+def test_gemini_reasoner_uses_event_ledger_instead_of_sparse_replay_for_atomic_counts(tmp_path: Path) -> None:
+    overview_path = tmp_path / "overview.jpg"
+    evidence_path = tmp_path / "event.jpg"
+    Image.new("RGB", (64, 36), color=(20, 30, 40)).save(overview_path)
+    Image.new("RGB", (64, 36), color=(80, 90, 100)).save(evidence_path)
+    record = EvidenceRecord(
+        evidence_id="ev_event_1",
+        beat_id="",
+        start_sec=60.0,
+        end_sec=120.0,
+        modality="visual",
+        pointer="virtual://case/events/1",
+        verbatim="One verified news segment occurrence.",
+        frame_refs=(str(evidence_path),),
+        attestation_model="test-model",
+        temporal_scope="window",
+        evidence_kind="event_observation",
+        observation_polarity="positive",
+        sampling_coverage="sparse",
+    )
+    api = ScriptedVisionClient(
+        (
+            {"action": "answer", "answer": "C. 6", "citations": ["ev_event_1"]},
+            {"verdict": "supported", "reason": "The complete event ledger contains six occurrences.", "tasks": []},
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    reasoner.decide(
+        question="How many news segments appear in total?",
+        options={"A": "4", "B": "5", "C": "6", "D": "8"},
+        workspace_overview={
+            "segment_overviews": [{"segment_id": "seg_1", "overview_thumbnail_grid_path": str(overview_path)}]
+        },
+        query_contract={"required_scope": "full_video", "aggregation": "count"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=0,
+        evidence=(record,),
+        evidence_digest=(
+            {
+                "evidence_id": "ev_event_1",
+                "summary": record.verbatim,
+                "virtual_time_range": [60.0, 120.0],
+                "modality": "visual",
+                "events": [{"event_key": "news_1", "start_sec": 60.0, "end_sec": 120.0}],
+                "source_lineage": [],
+            },
+        ),
+    )
+
+    assert api.calls[0]["image_paths"] == (str(overview_path),)
+    assert '"kind": "evidence"' not in api.calls[0]["prompt"]
+    assert api.calls[1]["image_paths"] == (str(overview_path),)
+
+
 def test_gemini_reasoner_forces_best_effort_answer_when_no_candidate_exists(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (
