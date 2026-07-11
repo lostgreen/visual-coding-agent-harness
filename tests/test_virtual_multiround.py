@@ -455,6 +455,7 @@ def test_reasoner_initial_context_uses_segment_overview_not_cold_candidates(tmp_
     assert overview["segment_overviews"][0]["segment_id"] == "seg_target"
     assert "target" not in overview["segment_overviews"][0]
     assert first_call["available_tools"] == ("open_segment", "inspect_window")
+    assert first_call["available_navigation"] == ("search_asr",)
 
 
 def test_query_contract_marks_throughout_count_as_full_video_deduplication() -> None:
@@ -984,6 +985,39 @@ def test_driver_keeps_stronger_supported_candidate_over_later_contradicted_answe
     assert result.answer == "B. 11"
     assert result.correct is True
     assert result.verified is False
+
+
+def test_navigation_hint_does_not_satisfy_visual_completion(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    hint = EvidenceRecord(
+        evidence_id="ev_asr_hint_1",
+        beat_id="",
+        start_sec=10.0,
+        end_sec=20.0,
+        modality="asr",
+        pointer="virtual://case/asr-search/1",
+        verbatim="Literal ASR hit for the requested terms.",
+        temporal_scope="window",
+        evidence_kind="navigation_hint",
+        observation_polarity="positive",
+        sampling_coverage="exact",
+        source_lineage=(
+            {
+                "segment_id": "seg_target",
+                "source_video_id": "target",
+                "source_time_range": [10.0, 20.0],
+                "virtual_time_range": [10.0, 20.0],
+            },
+        ),
+    )
+
+    status = multiround._completion_status(
+        workspace,
+        multiround.compile_query_contract(workspace.case.question),
+        (hint,),
+    )
+
+    assert status["ready_for_answer"] is False
 
 
 def test_score_answer_maps_unlabeled_numeric_text_back_to_option() -> None:

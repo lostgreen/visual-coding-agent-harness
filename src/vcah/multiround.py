@@ -26,6 +26,7 @@ class InvestigationTask:
     claim_to_verify: str = ""
     claim_relation: str = ""
     alternative_answers: tuple[str, ...] = ()
+    search_terms: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.time_range is not None:
@@ -36,7 +37,12 @@ class InvestigationTask:
         object.__setattr__(self, "claim_to_verify", str(self.claim_to_verify or "").strip())
         object.__setattr__(self, "claim_relation", str(self.claim_relation or "").strip().casefold())
         object.__setattr__(self, "alternative_answers", tuple(str(item) for item in self.alternative_answers))
-        if self.inspection_mode not in {"window", "enumerate_events", "event_window", "verify_claim"}:
+        object.__setattr__(
+            self,
+            "search_terms",
+            tuple(dict.fromkeys(str(item).strip().casefold() for item in self.search_terms if str(item).strip())),
+        )
+        if self.inspection_mode not in {"window", "enumerate_events", "event_window", "verify_claim", "search_asr"}:
             object.__setattr__(self, "inspection_mode", "window")
 
 
@@ -317,6 +323,7 @@ class VirtualVideoMultiRoundDriver:
                     completion_status=completion_status,
                     temporal_navigation=temporal_navigation,
                     available_tools=tuple(workspace_overview["available_tools"]),
+                    available_navigation=tuple(workspace_overview.get("available_navigation", ())),
                     evidence=evidence_store.records,
                     evidence_digest=_evidence_digest(evidence_store.records),
                     remaining_budget=remaining,
@@ -447,6 +454,7 @@ class VirtualVideoMultiRoundDriver:
                     completion_status=completion_status,
                     temporal_navigation=temporal_navigation,
                     available_tools=tuple(workspace_overview["available_tools"]),
+                    available_navigation=tuple(workspace_overview.get("available_navigation", ())),
                     evidence=evidence_store.records,
                     evidence_digest=_evidence_digest(evidence_store.records),
                     remaining_budget=0,
@@ -613,16 +621,17 @@ def _completion_status(
     *,
     query_requirements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    coverage = _source_coverage(workspace, evidence)
+    answer_evidence = tuple(record for record in evidence if record.evidence_kind != "navigation_hint")
+    coverage = _source_coverage(workspace, answer_evidence)
     if contract.required_scope != "full_video":
         return _apply_identity_completion(
             {
-                "ready_for_answer": bool(evidence),
+                "ready_for_answer": bool(answer_evidence),
                 "required_scope": contract.required_scope,
                 "missing_segment_ids": [],
                 "source_coverage": coverage,
             },
-            evidence,
+            answer_evidence,
             query_requirements,
         )
     if not coverage:
@@ -634,7 +643,7 @@ def _completion_status(
                 "missing_segment_ids": [],
                 "source_coverage": {},
             },
-            evidence,
+            answer_evidence,
             query_requirements,
         )
     adopted_source = max(
@@ -653,7 +662,7 @@ def _completion_status(
             "missing_segment_ids": missing,
             "source_coverage": coverage,
         },
-        evidence,
+        answer_evidence,
         query_requirements,
     )
 
@@ -1146,6 +1155,7 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         claim_to_verify=str(value.get("claim_to_verify", "") or ""),
         claim_relation=str(value.get("claim_relation", "") or ""),
         alternative_answers=tuple(value.get("alternative_answers", ()) or ()),
+        search_terms=tuple(value.get("search_terms", ()) or ()),
     )
 
 

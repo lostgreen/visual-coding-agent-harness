@@ -181,6 +181,70 @@ def test_event_detail_prompt_accepts_prior_adjacent_events(tmp_path: Path) -> No
     assert "Prior adjacent-window ending events" in prompt
 
 
+def test_gemini_reasoner_can_request_global_lexical_asr_navigation(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {
+                "action": "investigate",
+                "tasks": [
+                    {
+                        "query_id": "search_cause",
+                        "goal": "Locate dialogue around the earlier cause.",
+                        "segment_id": "",
+                        "inspection_mode": "search_asr",
+                        "search_terms": ["dog", "father", "rent"],
+                        "modality_hint": ["asr"],
+                        "expected_evidence": "literal timestamp hits for later visual inspection",
+                    }
+                ],
+            },
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    decision = reasoner.decide(
+        question="How did the identified man sustain his injury?",
+        options={"A": "A firework", "D": "A dog dragged his arm"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "multi_window", "aggregation": "compare"},
+        query_requirements={"requires_identity_link": True},
+        completion_status={"ready_for_answer": False},
+        temporal_navigation={},
+        remaining_budget=4,
+        evidence_digest=(),
+    )
+
+    assert decision.action == "investigate"
+    assert decision.tasks[0].inspection_mode == "search_asr"
+    assert decision.tasks[0].search_terms == ("dog", "father", "rent")
+    assert "search_asr" in api.calls[0]["prompt"]
+    assert "navigation only" in api.calls[0]["prompt"]
+
+
+def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(())
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    task = InvestigationTask(
+        query_id="search_number",
+        goal="Locate the literal discussion of the number.",
+        inspection_mode="search_asr",
+        search_terms=("number", "board"),
+        modality_hint=("asr",),
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert api.calls == []
+    assert report.status == "satisfied"
+    assert report.cost["vlm_calls"] == 0
+    assert report.cost["tool_trace"] == ("search_asr",)
+    assert report.evidence
+    assert all(record.modality == "asr" for record in report.evidence)
+    assert all(record.evidence_kind == "navigation_hint" for record in report.evidence)
+    assert all(not record.frame_refs for record in report.evidence)
+
+
 def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> None:
     frame_path = tmp_path / "audit_evidence.jpg"
     Image.new("RGB", (64, 36), color=(70, 80, 90)).save(frame_path)

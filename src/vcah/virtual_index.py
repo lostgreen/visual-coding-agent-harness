@@ -215,6 +215,7 @@ def build_workspace_overview(
             "open_segment",
             "inspect_window",
         ],
+        "available_navigation": ["search_asr"],
     }
 
 

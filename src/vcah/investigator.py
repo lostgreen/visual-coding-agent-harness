@@ -205,6 +205,76 @@ class VirtualVideoInvestigator:
             "source_lineage": _source_lineage(self.workspace, float(start_sec), float(end_sec)),
         }
 
+    def search_asr(
+        self,
+        terms: Sequence[str],
+        *,
+        max_clusters: int = 8,
+        padding_sec: float = 10.0,
+    ) -> Mapping[str, Any]:
+        normalized_terms = tuple(
+            dict.fromkeys(str(term).strip().casefold() for term in terms if str(term).strip())
+        )
+        grouped_hits: dict[str, list[dict[str, Any]]] = {}
+        for cue in self.workspace.read_asr_virtual_cues():
+            text = str(cue.get("text", "") or "")
+            folded = text.casefold()
+            matched = tuple(term for term in normalized_terms if term in folded)
+            if not matched:
+                continue
+            start = float(cue.get("start_sec", cue.get("start", 0.0)) or 0.0)
+            end = float(cue.get("end_sec", cue.get("end", start)) or start)
+            segment_id = str(cue.get("segment_id", "") or "")
+            if not segment_id:
+                segment_id = next(
+                    (
+                        segment.segment_id
+                        for segment in self.workspace.manifest.segments
+                        if segment.virtual_start_sec <= start < segment.virtual_end_sec
+                    ),
+                    "",
+                )
+            if segment_id:
+                grouped_hits.setdefault(segment_id, []).append(
+                    {"start": start, "end": end, "terms": matched, "text": text}
+                )
+
+        candidates = []
+        for segment_id, hits in grouped_hits.items():
+            segment = self.workspace.manifest.segment(segment_id)
+            for cluster in _cluster_asr_hits(hits):
+                start, end = _padded_window(
+                    float(cluster[0]["start"]),
+                    float(cluster[-1]["end"]),
+                    segment_start=segment.virtual_start_sec,
+                    segment_end=segment.virtual_end_sec,
+                    padding_sec=float(padding_sec),
+                )
+                matched_terms = tuple(
+                    term for term in normalized_terms if any(term in hit["terms"] for hit in cluster)
+                )
+                candidates.append(
+                    {
+                        "segment_id": segment_id,
+                        "virtual_time_range": [start, end],
+                        "matched_terms": list(matched_terms),
+                        "excerpt": " ".join(str(hit["text"]).strip() for hit in cluster)[:800],
+                        "source_lineage": [dict(item) for item in _source_lineage(self.workspace, start, end)],
+                        "hit_count": len(cluster),
+                    }
+                )
+        candidates.sort(
+            key=lambda row: (
+                -len(row["matched_terms"]),
+                -int(row["hit_count"]),
+                float(row["virtual_time_range"][0]),
+            )
+        )
+        return {
+            "terms": list(normalized_terms),
+            "clusters": candidates[: max(1, int(max_clusters))],
+        }
+
     def _investigate_task(self, task: Any) -> InvestigationReport:
         segment_id = str(getattr(task, "segment_id", "") or "")
         tool_trace: list[str] = []

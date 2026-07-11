@@ -11,6 +11,8 @@ import pytest
 
 import vcah.video as video
 from vcah.types import Frame
+from vcah.investigator import VirtualVideoInvestigator
+from vcah.multiround import InvestigationTask
 from vcah.virtual_index import build_virtual_beat_index, build_workspace_overview
 from vcah.virtual_video import (
     VirtualVideoCase,
@@ -153,6 +155,64 @@ def test_virtual_timeline_maps_cross_segment_windows_and_srt_cues(tmp_path: Path
         {"start": 5.0, "end": 6.5, "text": "Nishida turns around", "segment_id": "seg_b", "source_video_id": "target", "source_start": 101.0, "source_end": 102.5},
         {"start": 9.0, "end": 10.0, "text": "number on the back", "segment_id": "seg_b", "source_video_id": "target", "source_start": 105.0, "source_end": 106.0},
     )
+
+
+def test_global_asr_search_clusters_literal_hits_with_virtual_lineage(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    workspace.write_asr_virtual_cues(
+        (
+            {
+                "start_sec": 0.5,
+                "end_sec": 1.0,
+                "text": "Your father still owes the rent.",
+                "segment_id": "seg_a",
+                "source_video_id": "distractor",
+                "source_start_sec": 10.5,
+                "source_end_sec": 11.0,
+            },
+            {
+                "start_sec": 1.5,
+                "end_sec": 2.0,
+                "text": "The dog growls nearby.",
+                "segment_id": "seg_a",
+                "source_video_id": "distractor",
+                "source_start_sec": 11.5,
+                "source_end_sec": 12.0,
+            },
+            {
+                "start_sec": 8.0,
+                "end_sec": 8.5,
+                "text": "An unrelated dog barks much later.",
+                "segment_id": "seg_b",
+                "source_video_id": "target",
+                "source_start_sec": 104.0,
+                "source_end_sec": 104.5,
+            },
+        )
+    )
+    investigator = VirtualVideoInvestigator(workspace)
+
+    result = investigator.search_asr(("dog", "father", "rent"), max_clusters=4)
+
+    assert result["terms"] == ["dog", "father", "rent"]
+    assert len(result["clusters"]) == 2
+    first = result["clusters"][0]
+    assert first["segment_id"] == "seg_a"
+    assert first["matched_terms"] == ["dog", "father", "rent"]
+    assert first["virtual_time_range"] == [0.0, 4.0]
+    assert first["source_lineage"][0]["source_video_id"] == "distractor"
+
+
+def test_investigation_task_accepts_explicit_asr_search_terms() -> None:
+    task = InvestigationTask(
+        query_id="search_1",
+        goal="Locate the earlier cause scene.",
+        inspection_mode="search_asr",
+        search_terms=("dog", "father", "rent"),
+    )
+
+    assert task.inspection_mode == "search_asr"
+    assert task.search_terms == ("dog", "father", "rent")
 
 
 def test_lowfps_cache_and_window_sampling_manifests_keep_separate_lineage(tmp_path: Path) -> None:
@@ -359,3 +419,4 @@ def test_workspace_overview_caps_initial_segment_thumbnails_at_40(tmp_path: Path
         assert image.size[0] <= 640
         assert image.size[1] <= 360
     assert overview["available_tools"] == ["open_segment", "inspect_window"]
+    assert overview["available_navigation"] == ["search_asr"]

@@ -20,6 +20,7 @@ from vcah.investigator import (
     VirtualVideoInvestigator,
     _choose_window_from_segment_packet,
     _needs_highfps,
+    _task_terms,
 )
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
 from vcah.types import CoverageSegment, EvidenceRecord
@@ -573,6 +574,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         *,
         prior_events: Sequence[Mapping[str, Any]] = (),
     ) -> InvestigationReport:
+        if str(getattr(task, "inspection_mode", "window")) == "search_asr":
+            return self._search_asr_task(task)
         query_id = str(getattr(task, "query_id", "") or "query")
         segment_packet = self.open_segment(str(getattr(task, "segment_id", "") or self.workspace.manifest.segments[0].segment_id))
         if str(getattr(task, "inspection_mode", "window")) == "enumerate_events":
@@ -755,6 +758,65 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "frames": len(preview_paths) + (len(frame_paths) if detail_query_id else 0),
                 "vlm_calls": vlm_calls,
                 "reused": False,
+            },
+        )
+
+    def _search_asr_task(self, task: Any) -> InvestigationReport:
+        query_id = str(getattr(task, "query_id", "") or "search_asr")
+        terms = tuple(getattr(task, "search_terms", ()) or ()) or _task_terms(task)
+        packet = self.search_asr(terms, max_clusters=8)
+        evidence = []
+        for index, cluster in enumerate(packet["clusters"], start=1):
+            start_sec, end_sec = cluster["virtual_time_range"]
+            record = EvidenceRecord(
+                evidence_id=f"ev_{query_id}_asr_{index:03d}",
+                beat_id="",
+                start_sec=float(start_sec),
+                end_sec=float(end_sec),
+                modality="asr",
+                pointer=f"virtual://{self.workspace.workspace_id}/asr-search/{query_id}/{index}",
+                verbatim=str(cluster.get("excerpt", "") or "")[:1200],
+                attestation_model="literal-asr-search",
+                temporal_scope="window",
+                evidence_kind="navigation_hint",
+                observation_polarity="positive",
+                sampling_coverage="exact",
+                request_ids=(query_id,),
+                coverage_manifest=(
+                    CoverageSegment(query_id, float(start_sec), float(end_sec), "asr", 1.0),
+                ),
+                task_id=query_id,
+                observation_id=f"{query_id}_asr_{index:03d}",
+                confidence=min(1.0, 0.5 + 0.1 * len(cluster.get("matched_terms", ()))),
+                source_lineage=tuple(dict(item) for item in cluster.get("source_lineage", ())),
+                operation_metadata={
+                    "navigation_only": True,
+                    "matched_terms": list(cluster.get("matched_terms", ())),
+                    "hit_count": int(cluster.get("hit_count", 0) or 0),
+                },
+            )
+            evidence.append(record)
+            self._record_visit(task, record, status="navigation_hint")
+        _append_jsonl(
+            self.trace_path,
+            {
+                "type": "investigator_asr_search",
+                "query_id": query_id,
+                "search_terms": list(packet["terms"]),
+                "clusters": list(packet["clusters"]),
+                "time": time.time(),
+            },
+        )
+        return InvestigationReport(
+            query_id=query_id,
+            status="satisfied" if evidence else "empty",
+            evidence=tuple(evidence),
+            cost={
+                "tool_trace": ("search_asr",),
+                "frames": 0,
+                "vlm_calls": 0,
+                "reused": False,
+                "hit_clusters": len(evidence),
             },
         )
 
@@ -1334,8 +1396,13 @@ def _investigate_prompt(
 ) -> str:
     return (
         "You are the Reasoner for a long virtual video QA agent. You only see segment overview images.\n"
-        "Pick up to 4 segments to investigate. Return JSON only: "
-        "{\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\",\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\"}]}.\n"
+        "Pick up to 4 investigation tasks. Return JSON only: "
+        "{\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\",\"goal\":\"...\","
+        "\"segment_id\":\"seg_0001\",\"time_range\":null,\"inspection_mode\":\"window|search_asr\","
+        "\"search_terms\":[],\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\"}]}.\n"
+        "search_asr is optional literal grep over raw timestamped ASR. Use 1-5 distinctive exact terms from the question or options "
+        "when the overview cannot locate a dialogue/fact. Its hits are navigation only: after a hit, inspect that segment/time window "
+        "visually before answering, and never cite an ASR search hint as final visual evidence.\n"
         "For full-video count questions, evidence from one chunk is only a source hypothesis, not complete proof.\n"
         "For total event-count questions, dispatch segment tasks that enumerate atomic event occurrences with timestamps.\n"
         "For source-relative minute questions, prioritize the supplied temporal_navigation candidate segments.\n"
@@ -1366,8 +1433,13 @@ def _followup_prompt(
         "If enough, return JSON only: {\"action\":\"answer\", \"answer\":\"A. ...\", \"citations\":[\"ev_...\"],"
         "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"canonical identity\","
         "\"evidence_ids\":[\"ev_...\"]}]}.\n"
-        "If not enough, return JSON only: {\"action\":\"investigate\", \"tasks\":[{\"query_id\":\"r2_t1\",\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\"}]}.\n"
+        "If not enough, return JSON only: {\"action\":\"investigate\", \"tasks\":[{\"query_id\":\"r2_t1\","
+        "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,"
+        "\"inspection_mode\":\"window|search_asr\",\"search_terms\":[],\"modality_hint\":[\"visual\"],"
+        "\"expected_evidence\":\"...\"}]}.\n"
         "You may request up to 4 more segments/windows. Do not answer with insufficient evidence.\n"
+        "Evidence with evidence_kind=navigation_hint comes from literal ASR grep and is navigation only. Dispatch a visual window "
+        "inspection at its segment/time range before using that clue in an answer.\n"
         "If completion_status.ready_for_answer is false, you MUST investigate its missing_segment_ids and must not answer. "
         "For a final full-video answer, cite every relevant visual evidence record from the adopted source.\n"
         "For distinct-count questions, reconcile the per-evidence entities by stable appearance. Do not add local counts. "
