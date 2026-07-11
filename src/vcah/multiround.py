@@ -700,7 +700,7 @@ def _navigation_repair_tasks(
             segment_id=segment_id,
             time_range=(float(hint.start_sec), float(hint.end_sec)),
             modality_hint=("visual",),
-            expected_evidence=f"direct visual evidence for or against: {hint.verbatim[:240]}",
+            expected_evidence=f"complete temporal context and direct visual evidence for or against: {hint.verbatim[:240]}",
             priority=1.0,
         )
         for index, (hint, segment_id) in enumerate(unresolved[: max(0, int(limit))], start=1)

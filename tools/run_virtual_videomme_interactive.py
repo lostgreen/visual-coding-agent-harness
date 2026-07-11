@@ -1002,7 +1002,43 @@ def _select_detail_window(
         half = float(max_detail_sec) / 2.0
         start = max(preview_start, center - half)
         end = min(preview_end, center + half)
+    minimum = _minimum_detail_duration(task, preview_end - preview_start)
+    if end - start < minimum:
+        center = (start + end) / 2.0
+        start = max(preview_start, center - minimum / 2.0)
+        end = min(preview_end, start + minimum)
+        if end - start < minimum:
+            start = max(preview_start, end - minimum)
     return round(start, 3), round(end, 3)
+
+
+def _minimum_detail_duration(task: Any, preview_duration: float) -> float:
+    text = " ".join(
+        [
+            str(getattr(task, "goal", "") or ""),
+            str(getattr(task, "expected_evidence", "") or ""),
+            str(getattr(task, "claim_relation", "") or ""),
+            " ".join(str(item) for item in getattr(task, "modality_hint", ()) or ()),
+        ]
+    ).casefold()
+    requires_context = any(
+        marker in text
+        for marker in (
+            "temporal context",
+            "causal",
+            "cause",
+            "action",
+            "motion",
+            "sequence",
+            "before",
+            "after",
+            "injur",
+            "sustain",
+            "drag",
+            "fall",
+        )
+    )
+    return min(30.0, max(0.0, float(preview_duration))) if requires_context else 0.0
 
 
 def _truthy(value: Any) -> bool:

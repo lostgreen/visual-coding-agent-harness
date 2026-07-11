@@ -37,6 +37,7 @@ GeminiInvestigator = _interactive.GeminiInvestigator
 GeminiReasoner = _interactive.GeminiReasoner
 OpenAICompatibleVisionClient = _interactive.OpenAICompatibleVisionClient
 _select_window_with_model = _interactive._select_window_with_model
+_select_detail_window = _interactive._select_detail_window
 _load_case_group = _interactive._load_case_group
 _event_evidence_prompt = _interactive._event_evidence_prompt
 _load_existing_case_summary = _interactive._load_existing_case_summary
@@ -1199,6 +1200,29 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
     assert len(report.evidence[0].frame_refs) == 16
     assert "frame_40.000.jpg" in report.evidence[0].frame_refs[0]
     assert "frame_60.000.jpg" in report.evidence[0].frame_refs[-1]
+
+
+def test_detail_window_preserves_temporal_context_for_causal_action() -> None:
+    task = InvestigationTask(
+        query_id="navigation_repair_r2_002",
+        goal="Visually verify the unresolved clue.",
+        segment_id="seg_1",
+        time_range=(187.429, 226.382),
+        modality_hint=("visual",),
+        expected_evidence="complete temporal context for the causal action around the dog growl",
+    )
+    preview = {
+        "detail_start_sec": 213.912,
+        "detail_end_sec": 217.984,
+    }
+    segment_packet = {"virtual_time_range": [0.0, 300.0], "asr_cues": [], "beats": []}
+
+    start, end = _select_detail_window(preview, task.time_range, task, segment_packet)
+
+    assert start >= task.time_range[0]
+    assert end <= task.time_range[1]
+    assert end - start >= 30.0
+    assert start < 213.912 < 217.984 < end
 
 
 def test_investigator_prompt_and_entity_schema_are_question_generic(tmp_path: Path) -> None:
