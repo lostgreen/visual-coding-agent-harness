@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import random
 import re
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import requests
 import yaml
@@ -58,6 +59,43 @@ def _load_case_group(path: Path) -> dict[str, Any]:
     }
 
 
+def _run_case_batch(
+    case_ids: Sequence[str],
+    run_one: Callable[[str], Mapping[str, Any]],
+    *,
+    workers: int,
+) -> tuple[Mapping[str, Any], ...]:
+    ordered = tuple(str(case_id) for case_id in case_ids)
+    if not ordered:
+        return ()
+    worker_count = min(16, len(ordered), max(1, int(workers)))
+    if worker_count == 1:
+        return tuple(run_one(case_id) for case_id in ordered)
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="vv-case") as executor:
+        futures = tuple(executor.submit(run_one, case_id) for case_id in ordered)
+        return tuple(future.result() for future in futures)
+
+
+def _load_existing_case_summary(workspace_root: Path) -> dict[str, Any] | None:
+    path = Path(workspace_root) / "run_summary.json"
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        "case_id": str(payload.get("case_id", workspace_root.name) or workspace_root.name),
+        "answer": str(payload.get("answer", "") or ""),
+        "citations": list(payload.get("citations", ()) or ()),
+        "correct": bool(payload.get("correct")),
+        "verified": bool(payload.get("verified")),
+        "verification_reason": str(payload.get("verification_reason", "") or ""),
+        "rounds": int(payload.get("rounds", 0) or 0),
+        "accepted_investigations": int(payload.get("accepted_investigations", 0) or 0),
+        "workspace": str(workspace_root),
+        "trace": str(Path(workspace_root) / "interactions.jsonl"),
+        "skipped_completed": True,
+    }
+
+
 def main() -> None:
     args = _parse_args()
     dataset_root = Path(args.dataset_root)
@@ -81,11 +119,15 @@ def main() -> None:
         if args.max_duration_sec is None:
             args.max_duration_sec = 25200.0
     selected = case_ids[:1] if args.mode == "smoke" else case_ids
-    summaries = []
-    for case_id in selected:
+    def run_one(case_id: str) -> Mapping[str, Any]:
+        workspace_root = out_root / "workspaces" / case_id
+        if args.skip_completed:
+            existing = _load_existing_case_summary(workspace_root)
+            if existing is not None:
+                return existing
         workspace = build_or_load_workspace(
             dataset_root,
-            out_root / "workspaces" / case_id,
+            workspace_root,
             case_id=case_id,
             seed=int(args.seed),
             min_duration_sec=float(args.min_duration_sec),
@@ -97,20 +139,21 @@ def main() -> None:
         )
         ensure_index(workspace, low_fps=float(args.low_fps), beat_sec=float(args.beat_sec), rebuild=bool(args.rebuild_index))
         result = run_case(workspace, api=api, max_rounds=int(args.max_rounds), max_investigations=int(args.max_investigations))
-        summaries.append(
-            {
-                "case_id": result.case_id,
-                "answer": result.answer,
-                "citations": list(result.citations),
-                "correct": result.correct,
-                "verified": result.verified,
-                "verification_reason": result.verification_reason,
-                "rounds": result.rounds,
-                "accepted_investigations": result.accepted_investigations,
-                "workspace": str(workspace.root_dir),
-                "trace": str(workspace.root_dir / "interactions.jsonl"),
-            }
-        )
+        return {
+            "case_id": result.case_id,
+            "answer": result.answer,
+            "citations": list(result.citations),
+            "correct": result.correct,
+            "verified": result.verified,
+            "verification_reason": result.verification_reason,
+            "rounds": result.rounds,
+            "accepted_investigations": result.accepted_investigations,
+            "workspace": str(workspace.root_dir),
+            "trace": str(workspace.root_dir / "interactions.jsonl"),
+            "skipped_completed": False,
+        }
+
+    summaries = list(_run_case_batch(selected, run_one, workers=int(args.workers)))
     payload = {
         "mode": args.mode,
         "case_group": None if case_group is None else case_group["group_id"],
@@ -216,6 +259,10 @@ class OpenAICompatibleVisionClient:
         self.model = str(planner["model"])
         self.api_key = str(planner["api_key"])
         self.timeout = float(planner.get("timeout", 300))
+        self.max_retries = max(0, int(planner.get("max_retries", 5)))
+        self.retry_base_sec = max(0.0, float(planner.get("retry_base_sec", 1.0)))
+        self.retry_max_sec = max(self.retry_base_sec, float(planner.get("retry_max_sec", 30.0)))
+        self.retry_jitter = max(0.0, min(1.0, float(planner.get("retry_jitter", 0.2))))
         for key, value in (planner.get("proxy_env") or {}).items():
             os.environ[str(key)] = str(value)
 
@@ -229,21 +276,44 @@ class OpenAICompatibleVisionClient:
         for path in image_paths:
             if Path(path).exists():
                 content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
-        response = requests.post(
-            f"{self.base}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            json={
+        request = {
+            "headers": {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            "json": {
                 "model": self.model,
                 "messages": [{"role": "user", "content": content}],
                 "temperature": 0,
                 "max_tokens": int(max_tokens),
             },
-            timeout=self.timeout,
-        )
-        if response.status_code >= 400:
+            "timeout": self.timeout,
+        }
+        retryable_statuses = {408, 409, 429, 500, 502, 503, 504}
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.post(f"{self.base}/chat/completions", **request)
+            except requests.RequestException as exc:
+                if attempt >= self.max_retries:
+                    raise RuntimeError(f"API request failed after {attempt + 1} attempts: {type(exc).__name__}") from exc
+                time.sleep(self._retry_delay(attempt))
+                continue
+            if response.status_code < 400:
+                return str(response.json()["choices"][0]["message"]["content"])
+            if response.status_code in retryable_statuses and attempt < self.max_retries:
+                time.sleep(self._retry_delay(attempt, retry_after=response.headers.get("Retry-After")))
+                continue
             snippet = response.text[:500].replace(self.api_key, "<redacted>")
             raise RuntimeError(f"HTTP {response.status_code}: {snippet}")
-        return str(response.json()["choices"][0]["message"]["content"])
+        raise RuntimeError("API retry loop exhausted")
+
+    def _retry_delay(self, attempt: int, *, retry_after: str | None = None) -> float:
+        delay = self.retry_base_sec * (2 ** max(0, int(attempt)))
+        try:
+            delay = max(delay, float(retry_after)) if retry_after is not None else delay
+        except (TypeError, ValueError):
+            pass
+        delay = min(self.retry_max_sec, delay)
+        if self.retry_jitter:
+            delay *= random.uniform(1.0 - self.retry_jitter, 1.0 + self.retry_jitter)
+        return max(0.0, delay)
 
 
 class GeminiReasoner:
@@ -1211,6 +1281,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--beat-sec", type=float, default=60.0)
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=20)
+    parser.add_argument("--workers", type=int, default=1, help="Parallel case workers, clamped to 1-16.")
+    parser.add_argument("--skip-completed", action="store_true", help="Reuse cases with an existing run_summary.json.")
     parser.add_argument("--rebuild", action="store_true")
     parser.add_argument("--rebuild-index", action="store_true")
     return parser.parse_args()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import threading
 from typing import Any, Mapping, Sequence
 
 from PIL import Image
@@ -34,9 +35,12 @@ AssetBundler = _viewer.AssetBundler
 _render_case = _viewer._render_case
 GeminiInvestigator = _interactive.GeminiInvestigator
 GeminiReasoner = _interactive.GeminiReasoner
+OpenAICompatibleVisionClient = _interactive.OpenAICompatibleVisionClient
 _select_window_with_model = _interactive._select_window_with_model
 _load_case_group = _interactive._load_case_group
 _event_evidence_prompt = _interactive._event_evidence_prompt
+_load_existing_case_summary = _interactive._load_existing_case_summary
+_run_case_batch = _interactive._run_case_batch
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -68,6 +72,83 @@ def test_load_case_group_preserves_order_and_default_construction(tmp_path: Path
     assert group["group_id"] == "diverse-v1"
     assert group["construction"] == "source_only"
     assert group["case_ids"] == ("606-3", "769-1")
+
+
+def test_run_case_batch_executes_cases_concurrently_and_preserves_order() -> None:
+    barrier = threading.Barrier(3)
+
+    def run_one(case_id: str) -> Mapping[str, Any]:
+        barrier.wait(timeout=2.0)
+        return {"case_id": case_id}
+
+    rows = _run_case_batch(("case-c", "case-a", "case-b"), run_one, workers=3)
+
+    assert [row["case_id"] for row in rows] == ["case-c", "case-a", "case-b"]
+
+
+def test_load_existing_case_summary_marks_resumed_case(tmp_path: Path) -> None:
+    workspace = tmp_path / "case-1"
+    workspace.mkdir()
+    (workspace / "run_summary.json").write_text(
+        json.dumps(
+            {
+                "case_id": "case-1",
+                "answer": "B",
+                "citations": ["ev_1"],
+                "correct": True,
+                "verified": False,
+                "verification_reason": "answer_audit_insufficient",
+                "rounds": 4,
+                "accepted_investigations": 8,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = _load_existing_case_summary(workspace)
+
+    assert row is not None
+    assert row["case_id"] == "case-1"
+    assert row["skipped_completed"] is True
+    assert row["workspace"] == str(workspace)
+
+
+def test_vision_client_retries_transient_http_errors_with_exponential_backoff(monkeypatch) -> None:
+    class Response:
+        def __init__(self, status_code: int, content: str = "") -> None:
+            self.status_code = status_code
+            self.text = content
+            self.headers: dict[str, str] = {}
+
+        def json(self) -> Mapping[str, Any]:
+            return {"choices": [{"message": {"content": self.text}}]}
+
+    responses = iter((Response(429, "rate limited"), Response(503, "busy"), Response(200, "ok")))
+    calls = []
+
+    def post(*args: Any, **kwargs: Any) -> Response:
+        calls.append((args, kwargs))
+        return next(responses)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(_interactive.requests, "post", post)
+    monkeypatch.setattr(_interactive.time, "sleep", sleeps.append)
+    client = OpenAICompatibleVisionClient(
+        {
+            "base": "https://example.invalid/v1",
+            "model": "test-model",
+            "api_key": "secret",
+            "timeout": 10,
+            "max_retries": 3,
+            "retry_base_sec": 0.25,
+            "retry_max_sec": 2.0,
+            "retry_jitter": 0.0,
+        }
+    )
+
+    assert client.chat("hello") == "ok"
+    assert len(calls) == 3
+    assert sleeps == [0.25, 0.5]
 
 
 def test_event_detail_prompt_accepts_prior_adjacent_events(tmp_path: Path) -> None:
