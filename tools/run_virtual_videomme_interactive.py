@@ -791,6 +791,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 source_lineage=tuple(dict(item) for item in cluster.get("source_lineage", ())),
                 operation_metadata={
                     "navigation_only": True,
+                    "search_terms": list(packet["terms"]),
                     "matched_terms": list(cluster.get("matched_terms", ())),
                     "hit_count": int(cluster.get("hit_count", 0) or 0),
                 },
@@ -1432,7 +1433,8 @@ def _investigate_prompt(
         "visually before answering, and never cite an ASR search hint as final visual evidence.\n"
         "For identity or cause questions with answer options, prefer one contrastive search_asr task containing one distinctive term "
         "from every materially different competing option, up to 5 total terms. This preserves task slots and prevents committing to "
-        "the first lexical hit. Do not repeat search terms after a negative navigation hint; change terms or inspect visually.\n"
+        "the first lexical hit. Do not repeat an identical lexical search after any navigation result: inspect positive hit windows "
+        "visually, and change terms after a negative result.\n"
         "For full-video count questions, evidence from one chunk is only a source hypothesis, not complete proof.\n"
         "For total event-count questions, dispatch segment tasks that enumerate atomic event occurrences with timestamps.\n"
         "For source-relative minute questions, prioritize the supplied temporal_navigation candidate segments.\n"
@@ -1471,8 +1473,8 @@ def _followup_prompt(
         "Evidence with evidence_kind=navigation_hint comes from literal ASR grep and is navigation only. Dispatch a visual window "
         "inspection at its segment/time range before using that clue in an answer.\n"
         "For identity or cause questions, use one contrastive search_asr task with one distinctive term from every materially different "
-        "competing option, up to 5 terms, then visually inspect unresolved positive clusters before committing. Do not repeat a lexical "
-        "search whose negative navigation hint already reports zero matches; change terms or inspect a visual candidate.\n"
+        "competing option, up to 5 terms, then visually inspect unresolved positive clusters before committing. Do not repeat an "
+        "identical lexical search after any navigation result: inspect positive hit windows, and change terms after a negative result.\n"
         "If completion_status.ready_for_answer is false, you MUST investigate its missing_segment_ids and must not answer. "
         "For a final full-video answer, cite every relevant visual evidence record from the adopted source.\n"
         "For distinct-count questions, reconcile the per-evidence entities by stable appearance. Do not add local counts. "

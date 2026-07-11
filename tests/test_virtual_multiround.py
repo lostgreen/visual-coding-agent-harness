@@ -1088,6 +1088,35 @@ def test_navigation_repair_prioritizes_unverified_positive_hint() -> None:
     assert "dog growls" in tasks[0].expected_evidence
 
 
+def test_evidence_digest_exposes_navigation_search_state() -> None:
+    hint = EvidenceRecord(
+        evidence_id="ev_nav",
+        beat_id="",
+        start_sec=20.0,
+        end_sec=40.0,
+        modality="asr",
+        pointer="virtual://nav",
+        verbatim="dog growls",
+        evidence_kind="navigation_hint",
+        observation_polarity="positive",
+        operation_metadata={
+            "navigation_only": True,
+            "search_terms": ["firework", "fire", "chasing", "dog"],
+            "matched_terms": ["dog"],
+            "hit_count": 2,
+        },
+    )
+
+    digest = multiround._evidence_digest((hint,))
+
+    assert digest[0]["observation_polarity"] == "positive"
+    assert digest[0]["navigation"] == {
+        "search_terms": ["firework", "fire", "chasing", "dog"],
+        "matched_terms": ["dog"],
+        "hit_count": 2,
+    }
+
+
 def test_answer_citations_drop_navigation_hints_when_visual_support_remains() -> None:
     hint = EvidenceRecord(
         evidence_id="ev_hint",

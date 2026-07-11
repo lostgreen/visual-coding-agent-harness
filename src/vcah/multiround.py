@@ -1323,10 +1323,20 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
             "virtual_time_range": [item.start_sec, item.end_sec],
             "modality": item.modality,
             "evidence_kind": item.evidence_kind,
+            "observation_polarity": item.observation_polarity,
             "source_lineage": [dict(row) for row in item.source_lineage],
             "entities": list(item.operation_metadata.get("entities", ())),
             "events": list(item.operation_metadata.get("events", ())),
             "claim_assessment": dict(item.operation_metadata.get("claim_assessment", {}) or {}),
+            "navigation": (
+                {
+                    "search_terms": list(item.operation_metadata.get("search_terms", ())),
+                    "matched_terms": list(item.operation_metadata.get("matched_terms", ())),
+                    "hit_count": int(item.operation_metadata.get("hit_count", 0) or 0),
+                }
+                if item.evidence_kind == "navigation_hint"
+                else {}
+            ),
         }
         for item in evidence
     )

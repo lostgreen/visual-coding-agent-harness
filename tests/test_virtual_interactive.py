@@ -222,6 +222,7 @@ def test_gemini_reasoner_can_request_global_lexical_asr_navigation(tmp_path: Pat
     assert "competing option" in api.calls[0]["prompt"]
     assert "one contrastive search_asr task" in api.calls[0]["prompt"]
     assert "Do not repeat" in api.calls[0]["prompt"]
+    assert "after any navigation result" in api.calls[0]["prompt"]
 
 
 def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: Path) -> None:
@@ -246,6 +247,7 @@ def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: P
     assert all(record.modality == "asr" for record in report.evidence)
     assert all(record.evidence_kind == "navigation_hint" for record in report.evidence)
     assert all(not record.frame_refs for record in report.evidence)
+    assert all(record.operation_metadata["search_terms"] == ["number", "board"] for record in report.evidence)
 
 
 def test_model_investigator_records_empty_asr_search_as_negative_navigation(tmp_path: Path) -> None:
