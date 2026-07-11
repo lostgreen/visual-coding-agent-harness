@@ -1031,7 +1031,12 @@ def test_navigation_repair_prioritizes_unverified_positive_hint() -> None:
         verbatim="fireworks exploding",
         evidence_kind="navigation_hint",
         observation_polarity="positive",
-        task_id="search_firework",
+        task_id="contrastive_search",
+        operation_metadata={
+            "search_terms": ["firework", "fire", "chasing", "dog"],
+            "matched_terms": ["firework", "fire"],
+            "hit_count": 2,
+        },
         source_lineage=(
             {
                 "segment_id": "seg_2",
@@ -1064,7 +1069,12 @@ def test_navigation_repair_prioritizes_unverified_positive_hint() -> None:
         verbatim="dog growls",
         evidence_kind="navigation_hint",
         observation_polarity="positive",
-        task_id="search_dog",
+        task_id="contrastive_search",
+        operation_metadata={
+            "search_terms": ["firework", "fire", "chasing", "dog"],
+            "matched_terms": ["dog"],
+            "hit_count": 2,
+        },
         source_lineage=(
             {
                 "segment_id": "seg_1",
@@ -1086,6 +1096,50 @@ def test_navigation_repair_prioritizes_unverified_positive_hint() -> None:
     assert tasks[0].time_range == (20.0, 40.0)
     assert tasks[0].modality_hint == ("visual",)
     assert "dog growls" in tasks[0].expected_evidence
+
+
+def test_search_tasks_yield_to_unresolved_navigation_windows() -> None:
+    hint = EvidenceRecord(
+        evidence_id="ev_dog_hint",
+        beat_id="",
+        start_sec=20.0,
+        end_sec=40.0,
+        modality="asr",
+        pointer="virtual://dog",
+        verbatim="dog growls",
+        evidence_kind="navigation_hint",
+        observation_polarity="positive",
+        task_id="contrastive_search",
+        source_lineage=(
+            {
+                "segment_id": "seg_1",
+                "source_video_id": "source",
+                "source_time_range": [20.0, 40.0],
+                "virtual_time_range": [20.0, 40.0],
+            },
+        ),
+        operation_metadata={
+            "search_terms": ["firework", "fire", "chasing", "dog"],
+            "matched_terms": ["dog"],
+            "hit_count": 2,
+        },
+    )
+    requested = (
+        InvestigationTask("anchor", "Inspect the visual identity anchor.", "seg_7"),
+        InvestigationTask(
+            "search_again",
+            "Search for more candidate causes.",
+            inspection_mode="search_asr",
+            search_terms=("firework", "dog", "fall"),
+        ),
+    )
+
+    tasks = multiround._prefer_navigation_repairs(requested, (hint,), round_id=2, limit=4)
+
+    assert tasks[0] == requested[0]
+    assert all(task.inspection_mode != "search_asr" for task in tasks)
+    assert tasks[1].segment_id == "seg_1"
+    assert tasks[1].time_range == (20.0, 40.0)
 
 
 def test_evidence_digest_exposes_navigation_search_state() -> None:

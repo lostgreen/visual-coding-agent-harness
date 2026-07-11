@@ -437,10 +437,29 @@ class VirtualVideoMultiRoundDriver:
                 continue
             if remaining <= 0:
                 break
-            tasks = tuple(
+            requested_tasks = tuple(
                 _task_for_contract(task, query_contract)
                 for task in decision.tasks[: min(self.max_tasks_per_round, remaining)]
             )
+            tasks = _prefer_navigation_repairs(
+                requested_tasks,
+                evidence_store.records,
+                round_id=round_id,
+                limit=min(self.max_tasks_per_round, remaining),
+            )
+            if tasks != requested_tasks:
+                trace.append(
+                    {
+                        "type": "navigation_drilldown_override",
+                        "round": round_id,
+                        "requested_search_tasks": sum(
+                            task.inspection_mode == "search_asr" for task in requested_tasks
+                        ),
+                        "visual_repair_tasks": sum(
+                            task.query_id.startswith("navigation_repair_") for task in tasks
+                        ),
+                    }
+                )
             accepted += len(tasks)
             batch = investigator.run_batch(tasks)
             reports.extend(batch)
@@ -652,7 +671,11 @@ def _navigation_repair_tasks(
             or record.end_sec is None
         ):
             continue
-        grouped.setdefault(record.task_id or record.evidence_id, []).append(record)
+        matched_terms = tuple(
+            dict.fromkeys(str(item).strip().casefold() for item in record.operation_metadata.get("matched_terms", ()) if str(item).strip())
+        )
+        group_id = record.task_id or record.evidence_id
+        grouped.setdefault(f"{group_id}:{'|'.join(matched_terms)}", []).append(record)
 
     unresolved = []
     for hints in grouped.values():
@@ -682,6 +705,27 @@ def _navigation_repair_tasks(
         )
         for index, (hint, segment_id) in enumerate(unresolved[: max(0, int(limit))], start=1)
     )
+
+
+def _prefer_navigation_repairs(
+    requested: Sequence[InvestigationTask],
+    evidence: Sequence[EvidenceRecord],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    bounded = tuple(requested[: max(0, int(limit))])
+    if not any(task.inspection_mode == "search_asr" for task in bounded):
+        return bounded
+    kept = tuple(task for task in bounded if task.inspection_mode != "search_asr")
+    repairs = _navigation_repair_tasks(
+        evidence,
+        round_id=round_id,
+        limit=max(0, int(limit) - len(kept)),
+    )
+    if not repairs:
+        return bounded
+    return (*kept, *repairs)
 
 
 def _navigation_hint_is_observed(hint: EvidenceRecord, visual: Sequence[EvidenceRecord]) -> bool:
