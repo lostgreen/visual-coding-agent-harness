@@ -289,6 +289,43 @@ def test_gemini_reasoner_preserves_candidate_when_forced_finalization_still_inve
     assert len(api.calls) == 3
 
 
+def test_gemini_reasoner_forces_best_effort_answer_when_no_candidate_exists(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "investigate", "tasks": [{"query_id": "too_late", "segment_id": "seg_1"}]},
+            {"answer": "D. The dog dragged his arm.", "citations": ["ev_1"], "entity_clusters": []},
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="How did the identified man sustain his injury?",
+        options={"A": "A firework", "D": "A dog dragged his arm"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "multi_window", "aggregation": "compare"},
+        query_requirements={"requires_identity_link": True},
+        completion_status={"ready_for_answer": False},
+        temporal_navigation={},
+        remaining_budget=0,
+        force_finalize=True,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "A dog drags a man's arm during an earlier confrontation.",
+                "virtual_time_range": [100.0, 110.0],
+                "modality": "visual",
+                "source_lineage": [{"segment_id": "seg_1"}],
+            },
+        ),
+    )
+
+    assert decision.action == "answer"
+    assert decision.answer.startswith("D.")
+    assert decision.support_status == "insufficient"
+    assert len(api.calls) == 2
+    assert "must choose one best option" in api.calls[1]["prompt"]
+
+
 def test_gemini_reasoner_adopts_directly_supported_revised_answer_from_audit(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (

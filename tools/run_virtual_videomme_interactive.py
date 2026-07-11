@@ -346,6 +346,8 @@ class GeminiReasoner:
                         support_reason=self._last_audit_reason
                         or "The model requested more investigation after the budget was exhausted.",
                     )
+                if kwargs.get("force_finalize"):
+                    return self._force_best_effort(kwargs, evidence_digest)
                 tasks = parsed.get("tasks") or []
                 return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
             candidate = ReasonerDecision(
@@ -364,6 +366,8 @@ class GeminiReasoner:
                         support_status="insufficient",
                         support_reason=self._last_audit_reason or "The final model response omitted an answer.",
                     )
+                if kwargs.get("force_finalize"):
+                    return self._force_best_effort(kwargs, evidence_digest)
                 return candidate
             self._last_candidate = candidate
             if not _should_audit_answer(kwargs):
@@ -417,6 +421,27 @@ class GeminiReasoner:
         self._trace("reasoner_investigate", prompt, raw, parsed)
         tasks = parsed.get("tasks") or []
         return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
+
+    def _force_best_effort(
+        self,
+        kwargs: Mapping[str, Any],
+        evidence_digest: Sequence[Mapping[str, Any]],
+    ) -> ReasonerDecision:
+        prompt = _forced_answer_prompt(kwargs, evidence_digest)
+        raw = self.api.chat(prompt, max_tokens=600)
+        parsed = _parse_json(raw)
+        self._trace("reasoner_forced_answer", prompt, raw, parsed)
+        decision = ReasonerDecision(
+            action="answer",
+            answer=str(parsed.get("answer", "") or ""),
+            citations=tuple(parsed.get("citations") or ()),
+            entity_clusters=tuple(parsed.get("entity_clusters") or ()),
+            support_status="insufficient",
+            support_reason="Best-effort answer produced after the investigation budget was exhausted.",
+        )
+        if decision.answer:
+            self._last_candidate = decision
+        return decision
 
     def _trace(self, kind: str, prompt: str, raw: str, parsed: Mapping[str, Any]) -> None:
         _append_jsonl(
@@ -1168,6 +1193,36 @@ def _answer_audit_prompt(
         f"Proposed answer: {candidate.answer}\nCitations: {json.dumps(list(candidate.citations), ensure_ascii=False)}\n"
         f"Evidence context: {json.dumps(context, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}"
+    )
+
+
+def _forced_answer_prompt(
+    kwargs: Mapping[str, Any],
+    evidence_digest: Sequence[Mapping[str, Any]],
+) -> str:
+    rows = select_uniform_items(tuple(evidence_digest), 20)
+    dashboard = [
+        {
+            "evidence_id": row.get("evidence_id"),
+            "summary": str(row.get("summary", "") or "")[:320],
+            "virtual_time_range": row.get("virtual_time_range"),
+            "modality": row.get("modality"),
+            "evidence_kind": row.get("evidence_kind"),
+            "entities": list(row.get("entities", ()) or ())[:4],
+            "events": list(row.get("events", ()) or ())[:4],
+            "source_lineage": list(row.get("source_lineage", ()) or ())[:2],
+        }
+        for row in rows
+    ]
+    return (
+        "The investigation budget is exhausted. You must choose one best option using the evidence dashboard; "
+        "do not return investigate, abstain, or an empty answer. This is a best-effort answer and may remain unverified. "
+        "Return JSON only: {\"answer\":\"A. option text\",\"citations\":[\"ev_...\"],"
+        "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"...\","
+        "\"evidence_ids\":[\"ev_...\"]}]}.\n"
+        f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
+        f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
+        f"Evidence dashboard: {json.dumps(dashboard, ensure_ascii=False)}"
     )
 
 

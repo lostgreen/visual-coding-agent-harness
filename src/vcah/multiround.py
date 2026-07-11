@@ -519,7 +519,7 @@ class VirtualVideoMultiRoundDriver:
             case_id=workspace.case.case_id,
             answer=final_answer,
             citations=final_citations,
-            correct=_score_answer(final_answer, workspace.case.gold),
+            correct=_score_answer(final_answer, workspace.case.gold, workspace.case.options),
             verified=verified,
             verification_reason=verification_reason,
             rounds=rounds_run,
@@ -1141,10 +1141,48 @@ def _citations_are_visual(citations: Sequence[str], evidence: Sequence[EvidenceR
     )
 
 
-def _score_answer(answer: str, gold: str) -> bool:
-    selected = _letter(answer)
+def _score_answer(answer: str, gold: str, options: Mapping[str, str] | None = None) -> bool:
+    selected = _letter(answer) or _option_letter_from_answer(answer, options or {})
     expected = _letter(gold) or str(gold or "").strip().upper()[:1]
     return bool(selected and expected and selected == expected)
+
+
+def _option_letter_from_answer(answer: str, options: Mapping[str, str]) -> str:
+    normalized_answer = _answer_match_text(answer)
+    if not normalized_answer:
+        return ""
+    direct = [
+        str(label).upper()
+        for label, text in options.items()
+        if (normalized_option := _answer_match_text(text))
+        and (normalized_option in normalized_answer or normalized_answer in normalized_option)
+    ]
+    if len(direct) == 1:
+        return direct[0]
+    answer_numbers = set(re.findall(r"\d+(?:\.\d+)?", str(answer or "")))
+    numeric = []
+    for label, text in options.items():
+        option_numbers = set(re.findall(r"\d+(?:\.\d+)?", str(text or "")))
+        if option_numbers and option_numbers.issubset(answer_numbers):
+            numeric.append(str(label).upper())
+    return numeric[0] if len(numeric) == 1 else ""
+
+
+def _answer_match_text(value: str) -> str:
+    text = str(value or "").casefold()
+    replacements = {
+        "kilometres": "km",
+        "kilometers": "km",
+        "kilometre": "km",
+        "kilometer": "km",
+        "metres": "m",
+        "meters": "m",
+        "metre": "m",
+        "meter": "m",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return re.sub(r"[^a-z0-9]+", "", text)
 
 
 def _letter(value: str) -> str:

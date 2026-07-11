@@ -850,6 +850,14 @@ def test_answer_audit_soft_fails_verification_without_erasing_best_effort_answer
     assert gate["audit_reason"].startswith("The observation is related")
 
 
+def test_score_answer_maps_unlabeled_numeric_text_back_to_option() -> None:
+    assert multiround._score_answer(
+        "Based on the race progress, the athletes completed approximately 6000 meters in 25 minutes.",
+        "B",
+        {"A": "5000m.", "B": "6000m.", "C": "7000m.", "D": "8000m."},
+    )
+
+
 def test_driver_repairs_empty_answers_with_unvisited_identity_anchor_segments(tmp_path: Path) -> None:
     workspace = _identity_repair_workspace(tmp_path)
     investigator = NegativeAnchorInvestigator(workspace)
