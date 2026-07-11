@@ -73,6 +73,37 @@ def test_materialize_uniform_frames_writes_exact_manifest(tmp_path: Path) -> Non
     assert manifest_rows == list(rows)
 
 
+def test_materialize_uniform_frames_recovers_missing_tail_frame(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        calls.append(list(command))
+        if "%04d" in str(command[-1]):
+            pattern = str(command[-1])
+            for index in range(1, 4):
+                Image.new("RGB", (32, 18), color=(index * 30, 50, 90)).save(
+                    pattern.replace("%04d", f"{index:04d}")
+                )
+        else:
+            Image.new("RGB", (32, 18), color=(120, 50, 90)).save(command[-1])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    rows = materialize_uniform_frames(
+        video_path=tmp_path / "source.mp4",
+        duration_sec=100.0,
+        out_dir=tmp_path / "frames",
+        frame_count=4,
+        max_image_edge=512,
+        runner=fake_runner,
+    )
+
+    assert len(calls) == 2
+    assert calls[1][calls[1].index("-ss") + 1] == "87.500000"
+    assert Path(rows[-1]["path"]).name == "frame_0004.jpg"
+    assert rows[-1]["time_sec"] == 87.5
+
+
 def test_format_timestamped_asr_keeps_complete_source_times() -> None:
     text = format_timestamped_asr(
         (

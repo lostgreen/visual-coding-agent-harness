@@ -45,6 +45,7 @@ def materialize_uniform_frames(
     step = float(duration_sec) / int(frame_count)
     fps = int(frame_count) / float(duration_sec)
     output_pattern = output_dir / "frame_%04d.jpg"
+    scale_filter = f"scale={int(max_image_edge)}:{int(max_image_edge)}:force_original_aspect_ratio=decrease"
     command = [
         "ffmpeg",
         "-hide_banner",
@@ -56,7 +57,7 @@ def materialize_uniform_frames(
         "-i",
         str(video_path),
         "-vf",
-        f"fps={fps:.12f},scale={int(max_image_edge)}:{int(max_image_edge)}:force_original_aspect_ratio=decrease",
+        f"fps={fps:.12f},{scale_filter}",
         "-frames:v",
         str(int(frame_count)),
         "-q:v",
@@ -68,6 +69,33 @@ def materialize_uniform_frames(
         tail = (completed.stderr or completed.stdout or "").strip().splitlines()[-3:]
         raise RuntimeError(f"ffmpeg uniform sampling failed: {' | '.join(tail)}")
     frame_paths = tuple(sorted(output_dir.glob("frame_*.jpg")))
+    missing_count = int(frame_count) - len(frame_paths)
+    if 0 < missing_count <= 4:
+        for frame_index in range(len(frame_paths) + 1, int(frame_count) + 1):
+            output_path = output_dir / f"frame_{frame_index:04d}.jpg"
+            tail_command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                f"{times[frame_index - 1]:.6f}",
+                "-i",
+                str(video_path),
+                "-frames:v",
+                "1",
+                "-vf",
+                scale_filter,
+                "-q:v",
+                "3",
+                str(output_path),
+            ]
+            tail_completed = runner(tail_command, check=False, capture_output=True, text=True)
+            if tail_completed.returncode != 0:
+                tail = (tail_completed.stderr or tail_completed.stdout or "").strip().splitlines()[-3:]
+                raise RuntimeError(f"ffmpeg tail-frame sampling failed: {' | '.join(tail)}")
+        frame_paths = tuple(sorted(output_dir.glob("frame_*.jpg")))
     if len(frame_paths) != int(frame_count):
         raise RuntimeError(f"Expected {int(frame_count)} sampled frames, found {len(frame_paths)}")
     rows = tuple(
