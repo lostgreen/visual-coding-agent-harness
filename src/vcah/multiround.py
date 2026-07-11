@@ -954,6 +954,8 @@ def _answer_completion_gate(
 ) -> dict[str, Any]:
     if not str(answer or "").strip():
         return {"passed": False, "reason": "answer_missing", "missing_segment_ids": []}
+    if not (_letter(answer) or _option_letter_from_answer(answer, workspace.case.options)):
+        return {"passed": False, "reason": "invalid_option_answer", "missing_segment_ids": []}
     if not _citations_are_visual(citations, evidence):
         return {"passed": False, "reason": "invalid_visual_citations", "missing_segment_ids": []}
     by_id = {record.evidence_id: record for record in evidence}

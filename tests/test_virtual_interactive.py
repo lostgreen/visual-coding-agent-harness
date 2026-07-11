@@ -233,6 +233,81 @@ def test_gemini_reasoner_can_request_global_lexical_asr_navigation(tmp_path: Pat
     assert "after any navigation result" in api.calls[0]["prompt"]
 
 
+def test_gemini_reasoner_repairs_truncated_investigation_json(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            '{"action":"investigate","primary_gap":{"gap_id":"gap_clock","description":"read the visible clock"',
+            {
+                "action": "investigate",
+                "primary_gap": {
+                    "gap_id": "gap_clock",
+                    "description": "The displayed transition clock.",
+                    "success_conditions": ["read the clock at the transition"],
+                },
+                "tasks": [
+                    {
+                        "query_id": "r1_clock",
+                        "goal": "Inspect the scoreboard transition.",
+                        "segment_id": "seg_0001",
+                        "modality_hint": ["visual", "ocr"],
+                    }
+                ],
+            },
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    decision = reasoner.decide(
+        question="When does the visible score change?",
+        options={"A": "8:13-5:58", "B": "5:58-2:57"},
+        workspace_overview={"segment_overviews": [{"segment_id": "seg_0001"}]},
+        query_contract={},
+        query_requirements={},
+        completion_status={"ready_for_answer": False},
+        temporal_navigation={},
+        remaining_budget=4,
+        evidence_digest=(),
+    )
+
+    assert len(api.calls) == 2
+    assert decision.primary_gap is not None
+    assert decision.primary_gap.gap_id == "gap_clock"
+    assert decision.tasks[0].query_id == "r1_clock"
+
+
+def test_gemini_reasoner_repairs_non_option_answer(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "answer", "answer": "The video is unclear.", "citations": ["ev_1"]},
+            {"answer": "B. Leaves on a stretcher.", "citations": ["ev_1"]},
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    decision = reasoner.decide(
+        question="What happens next?",
+        options={"A": "Walks away", "B": "Leaves on a stretcher"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=1,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "He is carried away on a stretcher.",
+                "virtual_time_range": [10.0, 20.0],
+                "modality": "visual",
+                "source_lineage": [],
+            },
+        ),
+    )
+
+    assert len(api.calls) == 2
+    assert decision.answer.startswith("B.")
+
+
 def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(())
@@ -1021,13 +1096,14 @@ def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities
 
 
 class ScriptedVisionClient:
-    def __init__(self, responses: Sequence[Mapping[str, Any]]) -> None:
-        self.responses = [dict(item) for item in responses]
+    def __init__(self, responses: Sequence[Any]) -> None:
+        self.responses = [dict(item) if isinstance(item, Mapping) else str(item) for item in responses]
         self.calls: list[dict[str, Any]] = []
 
     def chat(self, prompt: str, *, image_paths: Sequence[str] = (), max_tokens: int = 900) -> str:
         self.calls.append({"prompt": prompt, "image_paths": tuple(image_paths), "max_tokens": max_tokens})
-        return json.dumps(self.responses.pop(0))
+        response = self.responses.pop(0)
+        return json.dumps(response) if isinstance(response, Mapping) else str(response)
 
 
 def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:

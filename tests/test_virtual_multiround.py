@@ -784,6 +784,16 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
     )
     assert wrong_count["passed"] is False
     assert wrong_count["reason"] == "event_count_answer_mismatch"
+    invalid_answer = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "The video is unclear, so no option can be selected.",
+        ("ev_title_card",),
+        (),
+        (positive, negative),
+    )
+    assert invalid_answer["passed"] is False
+    assert invalid_answer["reason"] == "invalid_option_answer"
     aggregate = multiround._derived_answer_evidence(
         workspace,
         answer="A. Two",

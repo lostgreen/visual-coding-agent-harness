@@ -332,8 +332,8 @@ class GeminiReasoner:
         if evidence_digest:
             image_paths, visual_manifest = _reasoner_visual_context(kwargs)
             prompt = _followup_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
-            raw = self.api.chat(prompt, image_paths=image_paths)
-            parsed = _parse_json(raw)
+            raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
+            parsed = self._parse_or_repair(raw, kwargs)
             action = str(parsed.get("action") or "answer")
             self._trace(
                 "reasoner_investigate" if action == "investigate" else "reasoner_answer",
@@ -392,7 +392,15 @@ class GeminiReasoner:
                         support_status="insufficient",
                         support_reason="The latest response did not select a valid option; preserving the last valid candidate.",
                     )
-                return candidate
+                candidate = self._repair_invalid_answer(kwargs, evidence_digest, candidate)
+            if not _valid_option_answer(candidate.answer, kwargs.get("options") or {}):
+                return ReasonerDecision(
+                    action="answer",
+                    answer="",
+                    citations=candidate.citations,
+                    support_status="insufficient",
+                    support_reason="The model did not select a valid answer option.",
+                )
             self._last_candidate = candidate
             if not _should_audit_answer(kwargs):
                 return candidate
@@ -460,8 +468,8 @@ class GeminiReasoner:
             return self._maybe_verify_claim(kwargs, evidence_digest, decision) if verdict == "supported" else decision
         image_paths, visual_manifest = _reasoner_visual_context(kwargs)
         prompt = _investigate_prompt(kwargs, visual_manifest=visual_manifest)
-        raw = self.api.chat(prompt, image_paths=image_paths)
-        parsed = _parse_json(raw)
+        raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
+        parsed = self._parse_or_repair(raw, kwargs)
         self._trace(
             "reasoner_investigate",
             prompt,
@@ -514,7 +522,57 @@ class GeminiReasoner:
                 support_status="insufficient",
                 support_reason="The best-effort response did not select a valid option; preserving the last valid candidate.",
             )
+        else:
+            decision = self._repair_invalid_answer(kwargs, evidence_digest, decision)
+            if decision.answer and _valid_option_answer(decision.answer, kwargs.get("options") or {}):
+                self._last_candidate = decision
         return decision
+
+    def _parse_or_repair(self, raw: str, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        parsed = _parse_json(raw)
+        if parsed:
+            return parsed
+        repair_prompt = (
+            "Rewrite the truncated long-video Reasoner response as compact valid JSON. Preserve its intended action and tasks, "
+            "but keep the gap description under 24 words, use at most 3 success conditions under 12 words each, and at most 4 tasks. "
+            "Do not add markdown or commentary. If the original tasks were truncated, reconstruct the smallest useful tasks from the "
+            "question and available segment IDs.\n"
+            f"Question: {kwargs.get('question', '')}\nOptions: {json.dumps(kwargs.get('options') or {}, ensure_ascii=False)}\n"
+            f"Workspace overview: {json.dumps(kwargs.get('workspace_overview') or {}, ensure_ascii=False)[:3500]}\n"
+            f"Truncated response: {str(raw or '')[:6000]}"
+        )
+        repaired_raw = self.api.chat(repair_prompt, max_tokens=1100)
+        repaired = _parse_json(repaired_raw)
+        self._trace("reasoner_json_repair", repair_prompt, repaired_raw, repaired)
+        return repaired
+
+    def _repair_invalid_answer(
+        self,
+        kwargs: Mapping[str, Any],
+        evidence_digest: Sequence[Mapping[str, Any]],
+        candidate: ReasonerDecision,
+    ) -> ReasonerDecision:
+        prompt = (
+            "The previous response did not select a valid multiple-choice option. Using only the supplied evidence, choose exactly "
+            "one listed option even if support is incomplete. Return compact JSON only: "
+            "{\"answer\":\"A. option text\",\"citations\":[\"ev_...\"]}.\n"
+            f"Question: {kwargs.get('question', '')}\nOptions: {json.dumps(kwargs.get('options') or {}, ensure_ascii=False)}\n"
+            f"Invalid response: {candidate.answer}\n"
+            f"Evidence: {json.dumps(list(evidence_digest)[-12:], ensure_ascii=False)}"
+        )
+        raw = self.api.chat(prompt, max_tokens=500)
+        parsed = _parse_json(raw)
+        self._trace("reasoner_option_repair", prompt, raw, parsed)
+        answer, nested_citations = _normalize_answer_payload(parsed.get("answer"), kwargs.get("options") or {})
+        repaired = ReasonerDecision(
+            action="answer",
+            answer=answer,
+            citations=tuple(parsed.get("citations") or nested_citations or candidate.citations),
+            entity_clusters=candidate.entity_clusters,
+            support_status=candidate.support_status,
+            support_reason=candidate.support_reason,
+        )
+        return repaired if _valid_option_answer(repaired.answer, kwargs.get("options") or {}) else candidate
 
     def _maybe_verify_claim(
         self,
@@ -1698,6 +1756,7 @@ def _investigate_prompt(
         "\"gap_id\":\"gap_r1\",\"success_conditions\":[\"condition 1\"],\"direction\":\"local|forward|backward|global\","
         "\"region_hint\":\"optional visible region\"}]}.\n"
         "The gap must be a neutral fact that can be observed, not an answer option or a request for more related frames. "
+        "Keep the gap description under 24 words, use at most 3 success conditions under 12 words each, and keep each task goal under 30 words. "
         "Clock-like or numeric text in answer options is visual content to read, not a virtual timestamp, unless temporal_navigation explicitly maps it.\n"
         "search_asr is optional literal grep over raw timestamped ASR. Use 1-5 distinctive exact terms from the question or options "
         "when the overview cannot locate a dialogue/fact. Its hits are navigation only: after a hit, inspect that segment/time window "
@@ -1744,6 +1803,7 @@ def _followup_prompt(
         "\"expected_evidence\":\"...\",\"gap_id\":\"gap_r2\",\"success_conditions\":[\"condition 1\"],"
         "\"direction\":\"local|forward|backward|global\",\"region_hint\":\"optional visible region\"}]}.\n"
         "You may request up to 4 more segments/windows. Do not answer with insufficient evidence.\n"
+        "Keep the gap description under 24 words, use at most 3 success conditions under 12 words each, and keep each task goal under 30 words.\n"
         "A returned frame is not proof that a gap was resolved. Use the investigation outcomes below: partial/unresolved results must change "
         "range, direction, modality, or region focus rather than repeat the same request. Clock-like or numeric option text is content to read, "
         "not a virtual timestamp, unless temporal_navigation explicitly maps it.\n"
