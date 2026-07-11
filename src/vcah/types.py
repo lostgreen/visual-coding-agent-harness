@@ -128,10 +128,19 @@ class EvidenceRecord:
     claim: str = ""
     frame_refs: tuple[str, ...] = ()
     attestation_model: str = ""
-    temporal_scope: Literal["local_frame", "window", "multi_window", "full_video"] = "window"
-    evidence_kind: Literal["quote", "visual_observation", "entity_observation", "event_observation", "aggregate", "summary"] = "quote"
+    temporal_scope: Literal["local_frame", "window", "multi_window", "full_video", "workspace"] = "window"
+    evidence_kind: Literal[
+        "quote",
+        "visual_observation",
+        "entity_observation",
+        "event_observation",
+        "claim_verification",
+        "navigation_hint",
+        "aggregate",
+        "summary",
+    ] = "quote"
     observation_polarity: Literal["positive", "negative", "unknown"] = "unknown"
-    sampling_coverage: Literal["sparse", "dense", "complete_for_manifest", "unknown"] = "unknown"
+    sampling_coverage: Literal["sparse", "dense", "exact", "complete_for_manifest", "unknown"] = "unknown"
     parent_evidence_ids: tuple[str, ...] = ()
     request_ids: tuple[str, ...] = ()
     coverage_manifest: tuple[CoverageSegment, ...] = ()

@@ -7,7 +7,7 @@ from typing import Sequence
 from PIL import Image
 
 import vcah.multiround as multiround
-from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
+from vcah.multiround import EvidenceGap, InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.types import CoverageSegment, EvidenceRecord, Frame
 from vcah.virtual_index import build_virtual_beat_index
@@ -46,6 +46,57 @@ class TinyModel:
         import numpy as np
 
         return np.ones((len(queries), 1), dtype=np.float32)
+
+
+def test_primary_gap_is_bound_to_parallel_investigation_tasks() -> None:
+    decision = ReasonerDecision(
+        action="investigate",
+        primary_gap=EvidenceGap(
+            gap_id="gap_transition",
+            description="The visible state transition boundary.",
+            success_conditions=("observe the before state", "observe the after state"),
+        ),
+        tasks=(
+            InvestigationTask("q_before", "Inspect before the transition."),
+            InvestigationTask("q_after", "Inspect after the transition."),
+        ),
+    )
+
+    bound = multiround._bind_gap_to_tasks(decision)
+
+    assert {task.gap_id for task in bound.tasks} == {"gap_transition"}
+    assert all(task.success_conditions == decision.primary_gap.success_conditions for task in bound.tasks)
+
+
+def test_repeated_partial_attempts_emit_soft_stagnation_warning() -> None:
+    evidence = EvidenceRecord(
+        evidence_id="ev_repeat",
+        beat_id="",
+        start_sec=10.0,
+        end_sec=20.0,
+        modality="visual",
+        pointer="virtual://repeat",
+        verbatim="The requested small text remains unreadable.",
+        frame_refs=("frame.jpg",),
+        attestation_model="test",
+    )
+    reports = tuple(
+        InvestigationReport(
+            query_id=f"q_{index}",
+            status="satisfied",
+            evidence=(evidence,),
+            gap_id="gap_text",
+            resolution="partial",
+            unresolved_conditions=("read the final displayed value",),
+        )
+        for index in range(2)
+    )
+
+    status = multiround._stagnation_status(reports)
+
+    assert status["stagnant"] is True
+    assert status["gap_id"] == "gap_text"
+    assert "change range" in status["required_shift"]
 
 
 class ScriptedReasoner:

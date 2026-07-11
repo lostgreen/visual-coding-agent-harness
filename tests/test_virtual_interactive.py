@@ -187,6 +187,11 @@ def test_gemini_reasoner_can_request_global_lexical_asr_navigation(tmp_path: Pat
         (
             {
                 "action": "investigate",
+                "primary_gap": {
+                    "gap_id": "gap_cause",
+                    "description": "The earlier event that caused the identified injury.",
+                    "success_conditions": ["locate a timestamped causal event"],
+                },
                 "tasks": [
                     {
                         "query_id": "search_cause",
@@ -216,6 +221,8 @@ def test_gemini_reasoner_can_request_global_lexical_asr_navigation(tmp_path: Pat
     )
 
     assert decision.action == "investigate"
+    assert decision.primary_gap is not None
+    assert decision.primary_gap.gap_id == "gap_cause"
     assert decision.tasks[0].inspection_mode == "search_asr"
     assert decision.tasks[0].search_terms == ("dog", "father", "rent")
     assert "search_asr" in api.calls[0]["prompt"]
@@ -1485,6 +1492,99 @@ def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> No
     assert len(api.calls) == 2
     assert report.evidence[0].sampling_fps == 0.5
     assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5")
+
+
+def test_model_investigator_reports_partial_gap_instead_of_frame_success(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {
+                "summary": "The board is visible, but the final value is unreadable.",
+                "confidence": 0.6,
+                "need_detail": False,
+                "resolution": "partial",
+                "resolved_conditions": ["locate the final board"],
+                "unresolved_conditions": ["read the final value and unit"],
+                "failure_reason": "text is too small",
+            },
+            {
+                "summary": "The detail frames still do not make the final value readable.",
+                "confidence": 0.6,
+                "resolution": "partial",
+                "resolved_conditions": ["locate the final board"],
+                "unresolved_conditions": ["read the final value and unit"],
+                "failure_reason": "text remains unreadable after detail inspection",
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="r1_gap",
+        goal="Read the final value and unit.",
+        segment_id="seg_0001",
+        time_range=(0.0, 30.0),
+        modality_hint=("visual",),
+        gap_id="gap_final_value",
+        success_conditions=("locate the final board", "read the final value and unit"),
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert report.status == "satisfied"
+    assert report.resolution == "partial"
+    assert report.resolved_conditions == ("locate the final board",)
+    assert report.unresolved_conditions == ("read the final value and unit",)
+    assert report.failure_reason == "text remains unreadable after detail inspection"
+    assert report.evidence[0].operation_metadata["investigation"]["resolution"] == "partial"
+
+
+def test_model_investigator_materializes_region_crops_inside_inspect_window(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {
+                "summary": "A small scoreboard is visible in the upper-left corner.",
+                "confidence": 0.7,
+                "need_detail": True,
+                "detail_start_sec": 4.0,
+                "detail_end_sec": 10.0,
+                "region_hint": "scoreboard clock and scores",
+                "region_box": [0.0, 0.0, 0.55, 0.45],
+                "resolution": "partial",
+                "unresolved_conditions": ["read the displayed clock and scores"],
+            },
+            {
+                "summary": "The enlarged region makes the displayed clock and scores readable.",
+                "confidence": 0.9,
+                "resolution": "resolved",
+                "resolved_conditions": ["read the displayed clock and scores"],
+                "unresolved_conditions": [],
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="r1_scoreboard",
+        goal="Read the displayed clock and scores.",
+        segment_id="seg_0001",
+        time_range=(0.0, 30.0),
+        modality_hint=("visual", "ocr"),
+        gap_id="gap_scoreboard",
+        success_conditions=("read the displayed clock and scores",),
+        region_hint="scoreboard",
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert len(api.calls) == 2
+    assert any("/observations/regions/" in path for path in api.calls[1]["image_paths"])
+    assert report.cost["region_frames"] > 0
+    assert report.resolution == "resolved"
+    assert "region_observed" in report.progress_flags
+    region = report.evidence[0].operation_metadata["region_observation"]
+    assert region["normalized_box"] == [0.0, 0.0, 0.55, 0.45]
 
 
 def test_repeated_query_ids_get_distinct_observation_and_frame_ids(tmp_path: Path) -> None:

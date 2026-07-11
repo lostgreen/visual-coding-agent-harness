@@ -143,6 +143,12 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
             body.append(_frame_group("Preview 0.5fps", frames_by_query.get(preview_query_id, ()), bundle))
             if detail_query_id:
                 body.append(_frame_group("Detail frames", frames_by_query.get(detail_query_id, ()), bundle))
+            region_rows = tuple(
+                {"path": path, "frame_id": Path(str(path)).stem, "fps_level": "region crop"}
+                for path in evidence_event.get("region_frame_paths", ()) or ()
+            )
+            if region_rows:
+                body.append(_frame_group("Region crops", region_rows, bundle))
             body.append(_details("Preview Observation Raw Output", _pre(preview_event.get("raw", ""))))
             body.append("<h4>Evidence Report</h4>")
             body.append(_json_block(evidence_by_query.get(observation_id) or evidence_by_query.get(query_id) or {}))

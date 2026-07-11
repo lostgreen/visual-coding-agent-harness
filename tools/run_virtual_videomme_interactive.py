@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 import requests
 import yaml
+from PIL import Image, ImageEnhance
 
 from vcah.investigator import (
     InvestigationReport,
@@ -356,7 +357,11 @@ class GeminiReasoner:
                 if kwargs.get("force_finalize"):
                     return self._force_best_effort(kwargs, evidence_digest)
                 tasks = parsed.get("tasks") or []
-                return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
+                return ReasonerDecision(
+                    action="investigate",
+                    tasks=tuple(tasks[:4]),
+                    primary_gap=parsed.get("primary_gap"),
+                )
             answer, nested_citations = _normalize_answer_payload(parsed.get("answer"), kwargs.get("options") or {})
             candidate = ReasonerDecision(
                 action="answer",
@@ -466,7 +471,11 @@ class GeminiReasoner:
             visual_manifest=visual_manifest,
         )
         tasks = parsed.get("tasks") or []
-        return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
+        return ReasonerDecision(
+            action="investigate",
+            tasks=tuple(tasks[:4]),
+            primary_gap=parsed.get("primary_gap"),
+        )
 
     def _force_best_effort(
         self,
@@ -634,6 +643,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         selected_window = window
         selected_packet = low
         selected_frames = preview_frames
+        model_image_paths = preview_paths
+        region_rows: tuple[dict[str, Any], ...] = ()
+        region_frame_paths: tuple[str, ...] = ()
+        region_box = _normalized_region_box(preview.get("region_box"))
         parsed = preview
         raw = preview_raw
         final_prompt = preview_prompt
@@ -641,7 +654,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         tool_trace = ["open_segment", "inspect_window:0.5"]
         vlm_calls = 1 if requested_window is not None else 2
 
-        if _needs_highfps(task) or _truthy(preview.get("need_detail")):
+        if _needs_highfps(task) or _truthy(preview.get("need_detail")) or region_box is not None:
             selected_window = _select_detail_window(preview, window, task, segment_packet)
             detail_query_id = f"{observation_id}_detail"
             selected_packet = self.inspect_window(
@@ -653,6 +666,27 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             )
             selected_frames = select_uniform_items(tuple(selected_packet["frames"]), 16)
             detail_paths = tuple(str(row["path"]) for row in selected_frames)
+            if region_box is not None:
+                context_frames = select_uniform_items(selected_frames, min(8, len(selected_frames)))
+                context_paths = tuple(str(row["path"]) for row in context_frames)
+                region_rows = _materialize_region_crops(
+                    self.workspace,
+                    observation_id,
+                    context_frames,
+                    region_box,
+                )
+                region_frame_paths = tuple(str(row["path"]) for row in region_rows)
+                model_image_paths = (*context_paths, *region_frame_paths)
+                selected_packet = {
+                    **selected_packet,
+                    "region_observation": {
+                        "hint": str(getattr(task, "region_hint", "") or preview.get("region_hint", "") or ""),
+                        "normalized_box": list(region_box),
+                        "crop_count": len(region_frame_paths),
+                    },
+                }
+            else:
+                model_image_paths = detail_paths
             if event_window:
                 final_prompt = _event_evidence_prompt(
                     self.workspace,
@@ -674,14 +708,14 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 final_prompt = _evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
             raw = self.api.chat(
                 final_prompt,
-                image_paths=detail_paths,
+                image_paths=model_image_paths,
                 max_tokens=1000 if event_window else 900 if claim_window else 700,
             )
             parsed = _parse_json(raw)
             tool_trace.append(f"inspect_window:{self.highfps:.1f}")
             vlm_calls += 1
 
-        frame_paths = tuple(str(row["path"]) for row in selected_frames)
+        frame_paths = tuple(model_image_paths)
         _append_jsonl(
             self.trace_path,
             {
@@ -693,6 +727,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "window": list(selected_window),
                 "prompt": final_prompt,
                 "frame_paths": list(frame_paths),
+                "region_box": list(region_box) if region_box is not None else None,
+                "region_frame_paths": list(region_frame_paths),
                 "raw": raw,
                 "parsed": parsed,
                 "time": time.time(),
@@ -704,6 +740,16 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         claim_assessment = _normalize_claim_assessment(parsed, task) if claim_window else {}
         supports_identity_anchor = _truthy(parsed.get("supports_identity_anchor"))
         supports_answer_event = bool(events) or _truthy(parsed.get("supports_answer_event"))
+        outcome = _normalize_investigation_outcome(
+            parsed,
+            task,
+            has_observation=bool(frame_paths),
+            claim_assessment=claim_assessment,
+            entities=entities,
+            events=events,
+            region_used=bool(region_frame_paths),
+            selected_window=selected_window,
+        )
         if claim_assessment:
             evidence_kind = "claim_verification"
         elif supports_answer_event:
@@ -742,6 +788,13 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "claim_assessment": claim_assessment,
                 "supports_identity_anchor": supports_identity_anchor,
                 "supports_answer_event": supports_answer_event,
+                "investigation": outcome,
+                "region_observation": {
+                    "hint": str(getattr(task, "region_hint", "") or preview.get("region_hint", "") or ""),
+                    "normalized_box": list(region_box) if region_box is not None else [],
+                    "frame_paths": list(region_frame_paths),
+                    "frames": [dict(row) for row in region_rows],
+                },
             },
         )
         if frame_paths:
@@ -756,9 +809,17 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "preview_frames": len(preview_paths),
                 "detail_frames": len(frame_paths) if detail_query_id else 0,
                 "frames": len(preview_paths) + (len(frame_paths) if detail_query_id else 0),
+                "region_frames": len(region_frame_paths),
                 "vlm_calls": vlm_calls,
                 "reused": False,
             },
+            gap_id=str(getattr(task, "gap_id", "") or ""),
+            resolution=str(outcome["resolution"]),
+            resolved_conditions=tuple(outcome["resolved_conditions"]),
+            unresolved_conditions=tuple(outcome["unresolved_conditions"]),
+            failure_reason=str(outcome["failure_reason"]),
+            progress_flags=tuple(outcome["progress_flags"]),
+            coverage_delta=(tuple(outcome["coverage_delta"]),) if outcome["coverage_delta"] else (),
         )
 
     def _search_asr_task(self, task: Any) -> InvestigationReport:
@@ -846,6 +907,15 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "reused": False,
                 "hit_clusters": len(evidence),
             },
+            gap_id=str(getattr(task, "gap_id", "") or ""),
+            resolution="resolved",
+            resolved_conditions=tuple(getattr(task, "success_conditions", ()) or ()),
+            progress_flags=("lexical_navigation_completed",),
+            coverage_delta=tuple(
+                (float(record.start_sec), float(record.end_sec))
+                for record in evidence
+                if record.start_sec is not None and record.end_sec is not None
+            ),
         )
 
     def _investigate_event_beats(self, task: Any, segment_packet: Mapping[str, Any]) -> InvestigationReport:
@@ -880,6 +950,29 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "vlm_calls": sum(int(report.cost.get("vlm_calls", 0) or 0) for report in reports),
                 "reused": bool(reports) and all(bool(report.cost.get("reused")) for report in reports),
             },
+            gap_id=str(getattr(task, "gap_id", "") or ""),
+            resolution=(
+                "resolved"
+                if evidence and all(report.resolution == "resolved" for report in reports)
+                else "partial"
+                if evidence
+                else "unresolved"
+            ),
+            resolved_conditions=tuple(
+                dict.fromkeys(condition for report in reports for condition in report.resolved_conditions)
+            ),
+            unresolved_conditions=tuple(
+                dict.fromkeys(condition for report in reports for condition in report.unresolved_conditions)
+            ),
+            failure_reason="; ".join(
+                dict.fromkeys(report.failure_reason for report in reports if report.failure_reason)
+            ),
+            progress_flags=tuple(
+                dict.fromkeys(flag for report in reports for flag in report.progress_flags)
+            ),
+            coverage_delta=tuple(
+                interval for report in reports for interval in report.coverage_delta
+            ),
         )
 
     def _next_observation_id(self, query_id: str) -> str:
@@ -891,8 +984,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
 def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segment_packet: Mapping[str, Any], trace_path: Path) -> tuple[float, float]:
     prompt = (
         "You are an Investigator. Choose the most relevant virtual-time window inside this segment.\n"
+        "Times or numbers mentioned in the question/options may be visible content such as a game clock; do not reinterpret them "
+        "as virtual timestamps unless the task explicitly supplies a virtual time_range. Follow the requested direction and avoid excluded ranges.\n"
         "Return JSON only: {\"start_sec\": float, \"end_sec\": float, \"reason\": string}.\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
+        f"Success conditions: {json.dumps(list(getattr(task, 'success_conditions', ()) or ()), ensure_ascii=False)}\n"
+        f"Direction: {getattr(task, 'direction', '')}\nExcluded ranges: {json.dumps(list(getattr(task, 'excluded_ranges', ()) or ()), ensure_ascii=False)}\n"
         f"Segment packet (text only): {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)}"
     )
     image_paths = []
@@ -1010,6 +1107,138 @@ def _select_detail_window(
         if end - start < minimum:
             start = max(preview_start, end - minimum)
     return round(start, 3), round(end, 3)
+
+
+def _normalized_region_box(value: Any) -> tuple[float, float, float, float] | None:
+    if isinstance(value, Mapping):
+        raw = (value.get("x1"), value.get("y1"), value.get("x2"), value.get("y2"))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)) and len(value) == 4:
+        raw = tuple(value)
+    else:
+        return None
+    try:
+        x1, y1, x2, y2 = (max(0.0, min(1.0, float(item))) for item in raw)
+    except (TypeError, ValueError):
+        return None
+    if x2 - x1 < 0.03 or y2 - y1 < 0.03:
+        return None
+    return x1, y1, x2, y2
+
+
+def _materialize_region_crops(
+    workspace: VirtualVideoWorkspace,
+    observation_id: str,
+    frames: Sequence[Mapping[str, Any]],
+    region_box: tuple[float, float, float, float],
+) -> tuple[dict[str, Any], ...]:
+    out_dir = workspace.root_dir / "observations" / "regions" / observation_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows = []
+    x1, y1, x2, y2 = region_box
+    for index, frame in enumerate(frames, start=1):
+        source = Path(str(frame.get("path", "") or ""))
+        if not source.exists():
+            continue
+        try:
+            with Image.open(source) as opened:
+                image = opened.convert("RGB")
+                left = max(0, min(image.width - 1, int(round(x1 * image.width))))
+                top = max(0, min(image.height - 1, int(round(y1 * image.height))))
+                right = max(left + 1, min(image.width, int(round(x2 * image.width))))
+                bottom = max(top + 1, min(image.height, int(round(y2 * image.height))))
+                crop = image.crop((left, top, right, bottom))
+                crop = ImageEnhance.Contrast(crop).enhance(1.35)
+                target_long_edge = min(1024, max(512, max(crop.size)))
+                scale = min(4.0, target_long_edge / max(1, max(crop.size)))
+                if scale > 1.01:
+                    crop = crop.resize(
+                        (max(1, int(round(crop.width * scale))), max(1, int(round(crop.height * scale)))),
+                        Image.Resampling.LANCZOS,
+                    )
+                path = out_dir / f"region_{index:03d}.jpg"
+                crop.save(path, quality=94)
+        except OSError:
+            continue
+        rows.append(
+            {
+                **dict(frame),
+                "path": str(path),
+                "parent_path": str(source),
+                "region_box": list(region_box),
+            }
+        )
+    return tuple(rows)
+
+
+def _normalize_investigation_outcome(
+    parsed: Mapping[str, Any],
+    task: Any,
+    *,
+    has_observation: bool,
+    claim_assessment: Mapping[str, Any],
+    entities: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, Any]],
+    region_used: bool,
+    selected_window: tuple[float, float],
+) -> dict[str, Any]:
+    conditions = tuple(str(item).strip() for item in getattr(task, "success_conditions", ()) or () if str(item).strip())
+    resolved = list(_string_items(parsed.get("resolved_conditions")))
+    unresolved = list(_string_items(parsed.get("unresolved_conditions")))
+    for row in parsed.get("condition_results", ()) or ():
+        if not isinstance(row, Mapping):
+            continue
+        condition = str(row.get("condition", "") or "").strip()
+        status = str(row.get("status", "") or "").strip().casefold()
+        if not condition:
+            continue
+        if status == "resolved":
+            resolved.append(condition)
+        elif status in {"partial", "unresolved"}:
+            unresolved.append(condition)
+    resolved = list(dict.fromkeys(resolved))
+    unresolved = list(dict.fromkeys(unresolved))
+    explicit = str(parsed.get("resolution", "") or "").strip().casefold()
+    if explicit in {"resolved", "partial", "unresolved"}:
+        resolution = explicit
+    elif claim_assessment and str(claim_assessment.get("verdict", "") or "") in {"supports", "refutes"}:
+        resolution = "resolved"
+    elif conditions:
+        resolution = "resolved" if resolved and not unresolved and len(resolved) >= len(conditions) else "partial" if has_observation else "unresolved"
+    else:
+        resolution = "resolved" if has_observation and bool(str(parsed.get("summary", "") or "").strip()) else "unresolved"
+    if conditions and resolution != "resolved" and not unresolved:
+        unresolved = [condition for condition in conditions if condition not in resolved]
+    failure_reason = str(parsed.get("failure_reason", "") or "").strip()
+    if resolution != "resolved" and not failure_reason:
+        failure_reason = str(parsed.get("reason", "") or "semantic success conditions remain unresolved").strip()
+    progress = list(_string_items(parsed.get("progress_flags")))
+    if has_observation:
+        progress.append("new_time_coverage")
+    if resolved:
+        progress.append("condition_resolved")
+    if entities:
+        progress.append("entity_observed")
+    if events:
+        progress.append("event_observed")
+    if region_used:
+        progress.append("region_observed")
+    return {
+        "gap_id": str(getattr(task, "gap_id", "") or ""),
+        "resolution": resolution,
+        "resolved_conditions": list(dict.fromkeys(resolved)),
+        "unresolved_conditions": list(dict.fromkeys(unresolved)),
+        "failure_reason": failure_reason,
+        "progress_flags": list(dict.fromkeys(progress)),
+        "coverage_delta": [float(selected_window[0]), float(selected_window[1])] if has_observation else [],
+    }
+
+
+def _string_items(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        value = (value,)
+    if not isinstance(value, Sequence):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
 
 
 def _minimum_detail_duration(task: Any, preview_duration: float) -> float:
@@ -1460,10 +1689,16 @@ def _investigate_prompt(
 ) -> str:
     return (
         "You are the Reasoner for a long virtual video QA agent. You only see segment overview images.\n"
-        "Pick up to 4 investigation tasks. Return JSON only: "
-        "{\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\",\"goal\":\"...\","
+        "Identify one primary observable evidence gap, then dispatch up to 4 tasks that directly test its success conditions. "
+        "One gap may use several parallel windows. Return JSON only: "
+        "{\"action\":\"investigate\",\"primary_gap\":{\"gap_id\":\"gap_r1\",\"description\":\"observable unknown\","
+        "\"success_conditions\":[\"condition 1\"],\"falsification_conditions\":[]},\"tasks\":[{\"query_id\":\"r1_t1\",\"goal\":\"...\","
         "\"segment_id\":\"seg_0001\",\"time_range\":null,\"inspection_mode\":\"window|search_asr\","
-        "\"search_terms\":[],\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\"}]}.\n"
+        "\"search_terms\":[],\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\","
+        "\"gap_id\":\"gap_r1\",\"success_conditions\":[\"condition 1\"],\"direction\":\"local|forward|backward|global\","
+        "\"region_hint\":\"optional visible region\"}]}.\n"
+        "The gap must be a neutral fact that can be observed, not an answer option or a request for more related frames. "
+        "Clock-like or numeric text in answer options is visual content to read, not a virtual timestamp, unless temporal_navigation explicitly maps it.\n"
         "search_asr is optional literal grep over raw timestamped ASR. Use 1-5 distinctive exact terms from the question or options "
         "when the overview cannot locate a dialogue/fact. Its hits are navigation only: after a hit, inspect that segment/time window "
         "visually before answering, and never cite an ASR search hint as final visual evidence.\n"
@@ -1501,11 +1736,17 @@ def _followup_prompt(
         "If enough, return JSON only: {\"action\":\"answer\", \"answer\":\"A. ...\", \"citations\":[\"ev_...\"],"
         "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"canonical identity\","
         "\"evidence_ids\":[\"ev_...\"]}]}.\n"
-        "If not enough, return JSON only: {\"action\":\"investigate\", \"tasks\":[{\"query_id\":\"r2_t1\","
+        "If not enough, identify the single primary observable evidence gap and return JSON only: "
+        "{\"action\":\"investigate\",\"primary_gap\":{\"gap_id\":\"gap_r2\",\"description\":\"observable unknown\","
+        "\"success_conditions\":[\"condition 1\"],\"falsification_conditions\":[]},\"tasks\":[{\"query_id\":\"r2_t1\","
         "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,"
         "\"inspection_mode\":\"window|search_asr\",\"search_terms\":[],\"modality_hint\":[\"visual\"],"
-        "\"expected_evidence\":\"...\"}]}.\n"
+        "\"expected_evidence\":\"...\",\"gap_id\":\"gap_r2\",\"success_conditions\":[\"condition 1\"],"
+        "\"direction\":\"local|forward|backward|global\",\"region_hint\":\"optional visible region\"}]}.\n"
         "You may request up to 4 more segments/windows. Do not answer with insufficient evidence.\n"
+        "A returned frame is not proof that a gap was resolved. Use the investigation outcomes below: partial/unresolved results must change "
+        "range, direction, modality, or region focus rather than repeat the same request. Clock-like or numeric option text is content to read, "
+        "not a virtual timestamp, unless temporal_navigation explicitly maps it.\n"
         "Evidence with evidence_kind=navigation_hint comes from literal ASR grep and is navigation only. Dispatch a visual window "
         "inspection at its segment/time range before using that clue in an answer.\n"
         "For identity or cause questions, use one contrastive search_asr task with one distinctive term from every materially different "
@@ -1529,7 +1770,10 @@ def _followup_prompt(
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}\n"
-        f"Evidence so far: {json.dumps(list(evidence_digest), ensure_ascii=False)}"
+        f"Evidence so far: {json.dumps(list(evidence_digest), ensure_ascii=False)}\n"
+        f"Investigation outcomes: {json.dumps(list(kwargs.get('investigation_outcomes') or ()), ensure_ascii=False)}\n"
+        f"Stagnation status: {json.dumps(kwargs.get('stagnation_status') or {}, ensure_ascii=False)}\n"
+        f"Latest answer-gate feedback: {json.dumps(kwargs.get('answer_gate_feedback') or {}, ensure_ascii=False)}"
         f"{_visual_manifest_prompt(visual_manifest)}"
     )
 
@@ -1779,6 +2023,16 @@ def _forced_answer_prompt(
     )
 
 
+def _resolution_prompt(task: Any) -> str:
+    conditions = tuple(getattr(task, "success_conditions", ()) or ())
+    return (
+        "Evaluate the task itself, not whether frames were returned. In the same JSON include "
+        "\"resolution\":\"resolved|partial|unresolved\", \"resolved_conditions\":[], "
+        "\"unresolved_conditions\":[], \"failure_reason\":\"\", and \"progress_flags\":[] . "
+        f"Success conditions: {json.dumps(list(conditions), ensure_ascii=False)}\n"
+    )
+
+
 def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet: Mapping[str, Any], window: Mapping[str, Any]) -> str:
     return (
         "You are the Investigator. Inspect the low-fps preview frames and local ASR without choosing an answer option. "
@@ -1789,7 +2043,9 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "\"events\":[{\"local_id\":\"event_1\",\"description\":\"one atomic occurrence relevant to the question\","
         "\"start_sec\":float,\"end_sec\":float,\"supports_question_event\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false,"
-        "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\"}.\n"
+        "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\","
+        "\"region_hint\":\"scoreboard/text/object or empty\",\"region_box\":[x1,y1,x2,y2]|null}. "
+        "Region coordinates are normalized 0-1.\n"
         "List each visible person separately using stable appearance attributes. Do not estimate a segment-level or video-level count. "
         "The same person may recur in later chunks.\n"
         "Enumerate every distinct question-relevant event occurrence visible in this inspected window. "
@@ -1798,6 +2054,7 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
         "Request detail only when motion, OCR, identity, or a small visual attribute remains unresolved. "
         "Any detail window must be inside the preview window and narrower than it.\n"
+        f"{_resolution_prompt(task)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
@@ -1825,6 +2082,7 @@ def _claim_preview_prompt(
         "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null}.\n"
         "Use supports only when the exact candidate relation is directly established. The fact that candidate-related objects, "
         "people, or words appear is not enough. Request a narrower detail window when motion or text remains unresolved.\n"
+        f"{_resolution_prompt(task)}"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
         f"Required claim relation: {getattr(task, 'claim_relation', '')}\n"
@@ -1856,6 +2114,7 @@ def _event_preview_prompt(
         "Compare against the prior adjacent-window events below. Reuse an exact event_key and set continues_from_previous=true "
         "only when the same occurrence visibly continues across the boundary. "
         "Do not list people or infer a video-level count. Request a narrower detail window only when an occurrence boundary is unclear.\n"
+        f"{_resolution_prompt(task)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Prior adjacent-window ending events: {json.dumps(list(prior_events), ensure_ascii=False)[:1800]}\n"
@@ -1887,11 +2146,12 @@ def _evidence_prompt(
         "Use virtual timestamps from the window metadata, one row per occurrence, and return an empty events list when none is supported.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
         "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
+        f"{_resolution_prompt(task)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
-        f"Detail window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
+        f"Detail window metadata: {json.dumps(_window_prompt_metadata(window), ensure_ascii=False)[:5000]}"
     )
 
 
@@ -1916,12 +2176,13 @@ def _event_evidence_prompt(
         "title, or visible anchor, not only its generic class. Compare against the prior adjacent-window events below; reuse "
         "an exact event_key and set continues_from_previous=true only for the same continuing occurrence. "
         "Do not list people or infer a video-level count.\n"
+        f"{_resolution_prompt(task)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Prior adjacent-window ending events: {json.dumps(list(prior_events), ensure_ascii=False)[:1800]}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
-        f"Detail window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
+        f"Detail window metadata: {json.dumps(_window_prompt_metadata(window), ensure_ascii=False)[:5000]}"
     )
 
 
@@ -1942,14 +2203,20 @@ def _claim_evidence_prompt(
         "\"relation_type\":\"direct|causal_chain|consequence_only|cooccurrence_only|identity_mismatch|unclear\","
         "\"candidate_role\":\"decision_motive|initiating_cause|mechanism|stated_use|downstream_consequence|after_state|unclear\","
         "\"strongest_alternative\":\"B. ...|none\",\"reason\":\"...\"}.\n"
+        f"{_resolution_prompt(task)}"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
         f"Required claim relation: {getattr(task, 'claim_relation', '')}\n"
         f"Alternative answers: {json.dumps(list(getattr(task, 'alternative_answers', ()) or ()), ensure_ascii=False)}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1800]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
-        f"Detail window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:6000]}"
+        f"Detail window metadata: {json.dumps(_window_prompt_metadata(window), ensure_ascii=False)[:6000]}"
     )
+
+
+def _window_prompt_metadata(window: Mapping[str, Any]) -> dict[str, Any]:
+    keys = ("virtual_time_range", "sampling", "asr_cues", "source_lineage", "region_observation")
+    return {key: window[key] for key in keys if key in window}
 
 
 def _compact_segment_packet(packet: Mapping[str, Any]) -> dict[str, Any]:

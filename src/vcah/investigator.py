@@ -41,6 +41,43 @@ class InvestigationReport:
     status: str
     evidence: tuple[EvidenceRecord, ...] = ()
     cost: Mapping[str, Any] = field(default_factory=dict)
+    gap_id: str = ""
+    resolution: str = ""
+    resolved_conditions: tuple[str, ...] = ()
+    unresolved_conditions: tuple[str, ...] = ()
+    failure_reason: str = ""
+    progress_flags: tuple[str, ...] = ()
+    coverage_delta: tuple[tuple[float, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "query_id", str(self.query_id or "").strip())
+        object.__setattr__(self, "status", str(self.status or "").strip().casefold())
+        object.__setattr__(self, "gap_id", str(self.gap_id or "").strip())
+        resolution = str(self.resolution or "").strip().casefold()
+        if resolution not in {"resolved", "partial", "unresolved"}:
+            resolution = "resolved" if self.status == "satisfied" and self.evidence else "unresolved"
+        object.__setattr__(self, "resolution", resolution)
+        object.__setattr__(
+            self,
+            "resolved_conditions",
+            tuple(str(item).strip() for item in self.resolved_conditions if str(item).strip()),
+        )
+        object.__setattr__(
+            self,
+            "unresolved_conditions",
+            tuple(str(item).strip() for item in self.unresolved_conditions if str(item).strip()),
+        )
+        object.__setattr__(self, "failure_reason", str(self.failure_reason or "").strip())
+        object.__setattr__(
+            self,
+            "progress_flags",
+            tuple(dict.fromkeys(str(item).strip() for item in self.progress_flags if str(item).strip())),
+        )
+        object.__setattr__(
+            self,
+            "coverage_delta",
+            tuple(_normalized_range(item) for item in self.coverage_delta if _valid_range(item)),
+        )
 
 
 @dataclass(frozen=True)
@@ -149,6 +186,11 @@ class VirtualVideoInvestigator:
                 "vlm_calls": int(vlm_calls),
                 "reused": True,
             },
+            gap_id=str(getattr(task, "gap_id", "") or ""),
+            resolution="partial" if getattr(task, "success_conditions", ()) else "resolved",
+            unresolved_conditions=tuple(getattr(task, "success_conditions", ()) or ()),
+            progress_flags=("observation_reused",),
+            coverage_delta=(),
         )
 
     def open_segment(self, segment_id: str) -> Mapping[str, Any]:
@@ -347,6 +389,18 @@ class VirtualVideoInvestigator:
                 "vlm_calls": 1 if frame_paths else 0,
                 "reused": False,
             },
+            gap_id=str(getattr(task, "gap_id", "") or ""),
+            resolution=(
+                "partial"
+                if frame_paths and tuple(getattr(task, "success_conditions", ()) or ())
+                else "resolved"
+                if frame_paths
+                else "unresolved"
+            ),
+            unresolved_conditions=tuple(getattr(task, "success_conditions", ()) or ()) if frame_paths else (),
+            failure_reason="deterministic inspector cannot attest semantic success conditions" if frame_paths and getattr(task, "success_conditions", ()) else "",
+            progress_flags=("new_time_coverage",) if frame_paths else (),
+            coverage_delta=((float(start_sec), float(end_sec)),) if frame_paths else (),
         )
 
 
@@ -447,6 +501,7 @@ def _task_terms(task: Any) -> tuple[str, ...]:
             str(getattr(task, "goal", "") or ""),
             str(getattr(task, "expected_evidence", "") or ""),
             " ".join(str(item) for item in getattr(task, "modality_hint", ()) or ()),
+            " ".join(str(item) for item in getattr(task, "success_conditions", ()) or ()),
         ]
     ).casefold()
     stop = {"the", "and", "for", "with", "that", "this", "visual", "verify", "read"}
@@ -493,6 +548,8 @@ def _needs_highfps(task: Any) -> bool:
             " ".join(str(item) for item in getattr(task, "modality_hint", ()) or ()),
             str(getattr(task, "expected_evidence", "") or ""),
             str(getattr(task, "goal", "") or ""),
+            " ".join(str(item) for item in getattr(task, "success_conditions", ()) or ()),
+            str(getattr(task, "region_hint", "") or ""),
         ]
     ).casefold()
     return any(keyword in text for keyword in HIGHFPS_KEYWORDS)
@@ -516,9 +573,23 @@ def _goal_fingerprint(task: Any) -> str:
             str(getattr(task, "goal", "") or ""),
             str(getattr(task, "expected_evidence", "") or ""),
             " ".join(sorted(str(item) for item in getattr(task, "modality_hint", ()) or ())),
+            " ".join(str(item) for item in getattr(task, "success_conditions", ()) or ()),
+            str(getattr(task, "region_hint", "") or ""),
         ]
     ).casefold()
     return " ".join(re.findall(r"[a-z0-9]+", text))
+
+
+def _valid_range(value: Sequence[float]) -> bool:
+    try:
+        return len(value) == 2 and float(value[0]) != float(value[1])
+    except (TypeError, ValueError):
+        return False
+
+
+def _normalized_range(value: Sequence[float]) -> tuple[float, float]:
+    start, end = float(value[0]), float(value[1])
+    return (start, end) if start < end else (end, start)
 
 
 def _lineage_iou(first: Sequence[Mapping[str, Any]], second: Sequence[Mapping[str, Any]]) -> float:

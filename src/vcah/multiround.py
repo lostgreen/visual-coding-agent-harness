@@ -14,6 +14,34 @@ from vcah.virtual_video import VirtualVideoWorkspace
 
 
 @dataclass(frozen=True)
+class EvidenceGap:
+    gap_id: str
+    description: str
+    success_conditions: tuple[str, ...] = ()
+    falsification_conditions: tuple[str, ...] = ()
+    importance: str = "critical"
+    status: str = "open"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "gap_id", str(self.gap_id or "").strip())
+        object.__setattr__(self, "description", str(self.description or "").strip())
+        object.__setattr__(
+            self,
+            "success_conditions",
+            tuple(str(item).strip() for item in self.success_conditions if str(item).strip()),
+        )
+        object.__setattr__(
+            self,
+            "falsification_conditions",
+            tuple(str(item).strip() for item in self.falsification_conditions if str(item).strip()),
+        )
+        importance = str(self.importance or "critical").strip().casefold()
+        object.__setattr__(self, "importance", importance if importance in {"critical", "useful", "optional"} else "critical")
+        status = str(self.status or "open").strip().casefold()
+        object.__setattr__(self, "status", status if status in {"open", "partial", "resolved", "abandoned"} else "open")
+
+
+@dataclass(frozen=True)
 class InvestigationTask:
     query_id: str
     goal: str
@@ -27,6 +55,12 @@ class InvestigationTask:
     claim_relation: str = ""
     alternative_answers: tuple[str, ...] = ()
     search_terms: tuple[str, ...] = ()
+    gap_id: str = ""
+    success_conditions: tuple[str, ...] = ()
+    direction: str = ""
+    preferred_ranges: tuple[tuple[float, float], ...] = ()
+    excluded_ranges: tuple[tuple[float, float], ...] = ()
+    region_hint: str = ""
 
     def __post_init__(self) -> None:
         if self.time_range is not None:
@@ -37,6 +71,16 @@ class InvestigationTask:
         object.__setattr__(self, "claim_to_verify", str(self.claim_to_verify or "").strip())
         object.__setattr__(self, "claim_relation", str(self.claim_relation or "").strip().casefold())
         object.__setattr__(self, "alternative_answers", tuple(str(item) for item in self.alternative_answers))
+        object.__setattr__(self, "gap_id", str(self.gap_id or "").strip())
+        object.__setattr__(
+            self,
+            "success_conditions",
+            tuple(str(item).strip() for item in self.success_conditions if str(item).strip()),
+        )
+        object.__setattr__(self, "direction", str(self.direction or "").strip().casefold())
+        object.__setattr__(self, "preferred_ranges", _time_ranges(self.preferred_ranges))
+        object.__setattr__(self, "excluded_ranges", _time_ranges(self.excluded_ranges))
+        object.__setattr__(self, "region_hint", str(self.region_hint or "").strip())
         object.__setattr__(
             self,
             "search_terms",
@@ -55,6 +99,7 @@ class ReasonerDecision:
     entity_clusters: tuple[Mapping[str, Any], ...] = ()
     support_status: str = ""
     support_reason: str = ""
+    primary_gap: EvidenceGap | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tasks", tuple(_task(item) for item in self.tasks))
@@ -62,6 +107,10 @@ class ReasonerDecision:
         object.__setattr__(self, "entity_clusters", tuple(_entity_cluster(item) for item in self.entity_clusters))
         object.__setattr__(self, "support_status", str(self.support_status or "").strip().casefold())
         object.__setattr__(self, "support_reason", str(self.support_reason or "").strip())
+        if isinstance(self.primary_gap, Mapping):
+            object.__setattr__(self, "primary_gap", _gap(self.primary_gap))
+        elif self.primary_gap is not None and not isinstance(self.primary_gap, EvidenceGap):
+            object.__setattr__(self, "primary_gap", None)
 
 
 @dataclass(frozen=True)
@@ -299,6 +348,7 @@ class VirtualVideoMultiRoundDriver:
         best_verification_reason = ""
         best_support_rank = -1
         last_gate_reason = "answer_missing"
+        gate_feedback: dict[str, Any] = {}
         rounds_run = 0
 
         for round_id in range(1, self.max_rounds + 1):
@@ -310,7 +360,8 @@ class VirtualVideoMultiRoundDriver:
                 evidence_store.records,
                 query_requirements=query_requirements,
             )
-            decision = _decision(
+            stagnation_status = _stagnation_status(reports)
+            decision = _bind_gap_to_tasks(_decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
                     options=dict(workspace.case.options),
@@ -326,9 +377,12 @@ class VirtualVideoMultiRoundDriver:
                     available_navigation=tuple(workspace_overview.get("available_navigation", ())),
                     evidence=evidence_store.records,
                     evidence_digest=_evidence_digest(evidence_store.records),
+                    investigation_outcomes=_outcome_digest(reports),
+                    stagnation_status=stagnation_status,
+                    answer_gate_feedback=gate_feedback,
                     remaining_budget=remaining,
                 )
-            )
+            ))
             missing_segments = tuple(completion_status.get("missing_segment_ids", ()) or ())
             missing_identity_terms = tuple(completion_status.get("missing_identity_anchor_terms", ()) or ())
             if missing_segments and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
@@ -383,6 +437,8 @@ class VirtualVideoMultiRoundDriver:
                     "task_count": len(decision.tasks),
                     "remaining_budget": remaining,
                     "completion_status": completion_status,
+                    "primary_gap": to_jsonable(decision.primary_gap) if decision.primary_gap else None,
+                    "stagnation_status": stagnation_status,
                 }
             )
             if decision.action == "answer":
@@ -410,6 +466,7 @@ class VirtualVideoMultiRoundDriver:
                 gate = _apply_answer_audit(gate, decision)
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
+                gate_feedback = dict(gate)
                 support_rank = _answer_support_rank(decision)
                 if decision.answer.strip() and support_rank >= best_support_rank:
                     best_answer = decision.answer
@@ -470,6 +527,13 @@ class VirtualVideoMultiRoundDriver:
                         evidence_store.add(record)
                         known_evidence.add(record.evidence_id)
             trace.append({"type": "investigator_batch", "round": round_id, "accepted_tasks": len(tasks)})
+            trace.append(
+                {
+                    "type": "investigation_outcomes",
+                    "round": round_id,
+                    "outcomes": list(_outcome_digest(batch)),
+                }
+            )
             if accepted >= self.max_investigations:
                 continue
 
@@ -480,7 +544,7 @@ class VirtualVideoMultiRoundDriver:
                 evidence_store.records,
                 query_requirements=query_requirements,
             )
-            final_decision = _decision(
+            final_decision = _bind_gap_to_tasks(_decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
                     options=dict(workspace.case.options),
@@ -496,10 +560,13 @@ class VirtualVideoMultiRoundDriver:
                     available_navigation=tuple(workspace_overview.get("available_navigation", ())),
                     evidence=evidence_store.records,
                     evidence_digest=_evidence_digest(evidence_store.records),
+                    investigation_outcomes=_outcome_digest(reports),
+                    stagnation_status=_stagnation_status(reports),
+                    answer_gate_feedback=gate_feedback,
                     remaining_budget=0,
                     force_finalize=True,
                 )
-            )
+            ))
             filtered_citations = _answer_citations(final_decision.citations, evidence_store.records)
             if filtered_citations != final_decision.citations:
                 trace.append(
@@ -1303,7 +1370,57 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         claim_relation=str(value.get("claim_relation", "") or ""),
         alternative_answers=tuple(value.get("alternative_answers", ()) or ()),
         search_terms=tuple(value.get("search_terms", ()) or ()),
+        gap_id=str(value.get("gap_id", "") or ""),
+        success_conditions=tuple(value.get("success_conditions", ()) or ()),
+        direction=str(value.get("direction", "") or ""),
+        preferred_ranges=tuple(value.get("preferred_ranges", ()) or ()),
+        excluded_ranges=tuple(value.get("excluded_ranges", ()) or ()),
+        region_hint=str(value.get("region_hint", "") or ""),
     )
+
+
+def _time_ranges(value: Sequence[Sequence[float]] | None) -> tuple[tuple[float, float], ...]:
+    rows = []
+    for item in value or ():
+        if not isinstance(item, Sequence) or isinstance(item, (str, bytes)) or len(item) != 2:
+            continue
+        try:
+            start, end = float(item[0]), float(item[1])
+        except (TypeError, ValueError):
+            continue
+        if end < start:
+            start, end = end, start
+        if end > start:
+            rows.append((start, end))
+    return tuple(rows)
+
+
+def _gap(value: EvidenceGap | Mapping[str, Any]) -> EvidenceGap:
+    if isinstance(value, EvidenceGap):
+        return value
+    return EvidenceGap(
+        gap_id=str(value.get("gap_id", "") or ""),
+        description=str(value.get("description", "") or ""),
+        success_conditions=tuple(value.get("success_conditions", ()) or ()),
+        falsification_conditions=tuple(value.get("falsification_conditions", ()) or ()),
+        importance=str(value.get("importance", "critical") or "critical"),
+        status=str(value.get("status", "open") or "open"),
+    )
+
+
+def _bind_gap_to_tasks(decision: ReasonerDecision) -> ReasonerDecision:
+    gap = decision.primary_gap
+    if decision.action != "investigate" or gap is None:
+        return decision
+    tasks = tuple(
+        replace(
+            task,
+            gap_id=task.gap_id or gap.gap_id,
+            success_conditions=task.success_conditions or gap.success_conditions,
+        )
+        for task in decision.tasks
+    )
+    return replace(decision, tasks=tasks)
 
 
 def _entity_cluster(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1326,6 +1443,7 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         entity_clusters=tuple(value.get("entity_clusters", ())),
         support_status=str(value.get("support_status", "") or ""),
         support_reason=str(value.get("support_reason", "") or ""),
+        primary_gap=_gap(value["primary_gap"]) if isinstance(value.get("primary_gap"), Mapping) else None,
     )
 
 
@@ -1372,6 +1490,7 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
             "entities": list(item.operation_metadata.get("entities", ())),
             "events": list(item.operation_metadata.get("events", ())),
             "claim_assessment": dict(item.operation_metadata.get("claim_assessment", {}) or {}),
+            "investigation": dict(item.operation_metadata.get("investigation", {}) or {}),
             "navigation": (
                 {
                     "search_terms": list(item.operation_metadata.get("search_terms", ())),
@@ -1384,6 +1503,85 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
         }
         for item in evidence
     )
+
+
+def _outcome_digest(reports: Sequence[InvestigationReport]) -> tuple[dict[str, Any], ...]:
+    rows = []
+    for report in tuple(reports)[-12:]:
+        ranges = [
+            [record.start_sec, record.end_sec]
+            for record in report.evidence
+            if record.start_sec is not None and record.end_sec is not None
+        ]
+        rows.append(
+            {
+                "query_id": report.query_id,
+                "gap_id": report.gap_id,
+                "resolution": report.resolution,
+                "resolved_conditions": list(report.resolved_conditions),
+                "unresolved_conditions": list(report.unresolved_conditions),
+                "failure_reason": report.failure_reason,
+                "progress_flags": list(report.progress_flags),
+                "coverage_delta": [list(item) for item in report.coverage_delta],
+                "observed_ranges": ranges,
+                "evidence_ids": [record.evidence_id for record in report.evidence],
+                "reused": bool(report.cost.get("reused")),
+            }
+        )
+    return tuple(rows)
+
+
+def _stagnation_status(reports: Sequence[InvestigationReport]) -> dict[str, Any]:
+    ordered = tuple(reports)
+    last_gap = ordered[-1].gap_id if ordered else ""
+    trailing = []
+    for report in reversed(ordered):
+        if report.gap_id != last_gap:
+            break
+        trailing.append(report)
+        if len(trailing) >= 3:
+            break
+    recent = tuple(trailing)
+    if len(recent) < 2:
+        return {"stagnant": False, "gap_id": "", "reason": ""}
+    gap_ids = {report.gap_id for report in recent if report.gap_id}
+    if len(gap_ids) != 1:
+        return {"stagnant": False, "gap_id": "", "reason": ""}
+    unresolved = all(report.resolution in {"partial", "unresolved"} for report in recent)
+    no_condition_progress = not any(report.resolved_conditions for report in recent)
+    repeated = sum(bool(report.cost.get("reused")) for report in recent) >= 1
+    same_range = _reports_share_range(recent)
+    stagnant = unresolved and no_condition_progress and (repeated or same_range)
+    gap_id = next(iter(gap_ids)) if stagnant else ""
+    return {
+        "stagnant": stagnant,
+        "gap_id": gap_id,
+        "reason": "equivalent_attempts_without_condition_progress" if stagnant else "",
+        "required_shift": "change range, direction, modality, or region focus" if stagnant else "",
+    }
+
+
+def _reports_share_range(reports: Sequence[InvestigationReport]) -> bool:
+    ranges = []
+    for report in reports:
+        record = next(
+            (
+                item
+                for item in report.evidence
+                if item.start_sec is not None and item.end_sec is not None
+            ),
+            None,
+        )
+        if record is None:
+            return False
+        ranges.append((float(record.start_sec), float(record.end_sec)))
+    first_start, first_end = ranges[0]
+    for start, end in ranges[1:]:
+        intersection = max(0.0, min(first_end, end) - max(first_start, start))
+        union = max(first_end, end) - min(first_start, start)
+        if union <= 0.0 or intersection / union < 0.8:
+            return False
+    return True
 
 
 def _citations_are_visual(citations: Sequence[str], evidence: Sequence[EvidenceRecord]) -> bool:
