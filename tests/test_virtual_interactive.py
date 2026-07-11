@@ -182,6 +182,23 @@ def test_event_detail_prompt_accepts_prior_adjacent_events(tmp_path: Path) -> No
 
 
 def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> None:
+    frame_path = tmp_path / "audit_evidence.jpg"
+    Image.new("RGB", (64, 36), color=(70, 80, 90)).save(frame_path)
+    evidence_record = EvidenceRecord(
+        evidence_id="ev_1",
+        beat_id="",
+        start_sec=50.0,
+        end_sec=55.0,
+        modality="visual",
+        pointer="virtual://case/observations/audit",
+        verbatim="The money could help many people later.",
+        frame_refs=(str(frame_path),),
+        attestation_model="test-model",
+        temporal_scope="window",
+        evidence_kind="visual_observation",
+        observation_polarity="positive",
+        sampling_coverage="sparse",
+    )
     api = ScriptedVisionClient(
         (
             {
@@ -219,6 +236,7 @@ def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> 
         completion_status={"ready_for_answer": True},
         temporal_navigation={},
         remaining_budget=4,
+        evidence=(evidence_record,),
         evidence_digest=(
             {
                 "evidence_id": "ev_1",
@@ -237,6 +255,8 @@ def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> 
     assert "strongest_alternative" in api.calls[1]["prompt"]
     assert '"option_assessments"' not in api.calls[1]["prompt"]
     assert api.calls[1]["max_tokens"] >= 1400
+    assert api.calls[0]["image_paths"] == (str(frame_path),)
+    assert api.calls[1]["image_paths"] == (str(frame_path),)
 
 
 def test_gemini_reasoner_preserves_verdict_from_truncated_answer_audit(tmp_path: Path) -> None:
@@ -368,6 +388,126 @@ def test_gemini_reasoner_normalizes_structured_answer_payload_and_nested_citatio
 
     assert decision.answer == "B. 9"
     assert decision.citations == ("ev_1",)
+
+
+def test_gemini_reasoner_replays_investigator_frames_with_visual_manifest(tmp_path: Path) -> None:
+    overview_path = tmp_path / "overview.jpg"
+    Image.new("RGB", (64, 36), color=(20, 40, 60)).save(overview_path)
+    frame_paths = []
+    for index in range(4):
+        path = tmp_path / f"evidence_{index}.jpg"
+        Image.new("RGB", (64, 36), color=(60 + index, 80, 100)).save(path)
+        frame_paths.append(str(path))
+    record = EvidenceRecord(
+        evidence_id="ev_visual_1",
+        beat_id="",
+        start_sec=40.0,
+        end_sec=60.0,
+        modality="visual",
+        pointer="virtual://case/observations/1",
+        verbatim="The board visibly shows 9.",
+        frame_refs=tuple(frame_paths),
+        attestation_model="test-model",
+        temporal_scope="window",
+        evidence_kind="visual_observation",
+        observation_polarity="positive",
+        sampling_coverage="sparse",
+    )
+    api = ScriptedVisionClient(({"action": "answer", "answer": "B. 9", "citations": ["ev_visual_1"]},))
+    trace_path = tmp_path / "interactions.jsonl"
+    reasoner = GeminiReasoner(api, trace_path=trace_path)
+
+    decision = reasoner.decide(
+        question="What number appears on the board?",
+        options={"A": "7", "B": "9"},
+        workspace_overview={
+            "segment_overviews": [{"segment_id": "seg_1", "overview_thumbnail_grid_path": str(overview_path)}]
+        },
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=2,
+        evidence=(record,),
+        evidence_digest=(
+            {
+                "evidence_id": "ev_visual_1",
+                "summary": record.verbatim,
+                "virtual_time_range": [40.0, 60.0],
+                "modality": "visual",
+                "source_lineage": [],
+            },
+        ),
+    )
+
+    assert decision.answer == "B. 9"
+    assert api.calls[0]["image_paths"] == (str(overview_path), *frame_paths)
+    assert "Visual input manifest" in api.calls[0]["prompt"]
+    assert "ev_visual_1" in api.calls[0]["prompt"]
+    assert "Re-check replayed evidence images" in api.calls[0]["prompt"]
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert trace["image_paths"] == [str(overview_path), *frame_paths]
+
+
+def test_gemini_reasoner_caps_overview_and_evidence_images_at_40(tmp_path: Path) -> None:
+    overview_rows = []
+    for index in range(12):
+        path = tmp_path / f"overview_{index:02d}.jpg"
+        Image.new("RGB", (32, 18), color=(index, 20, 30)).save(path)
+        overview_rows.append({"segment_id": f"seg_{index:02d}", "overview_thumbnail_grid_path": str(path)})
+    records = []
+    digest = []
+    for record_index in range(20):
+        frame_paths = []
+        for frame_index in range(4):
+            path = tmp_path / f"ev_{record_index:02d}_{frame_index}.jpg"
+            Image.new("RGB", (32, 18), color=(record_index, frame_index, 40)).save(path)
+            frame_paths.append(str(path))
+        evidence_id = f"ev_{record_index:02d}"
+        records.append(
+            EvidenceRecord(
+                evidence_id=evidence_id,
+                beat_id="",
+                start_sec=float(record_index * 10),
+                end_sec=float(record_index * 10 + 5),
+                modality="visual",
+                pointer=f"virtual://case/{evidence_id}",
+                verbatim=f"Observation {record_index}",
+                frame_refs=tuple(frame_paths),
+                attestation_model="test-model",
+                temporal_scope="window",
+                evidence_kind="visual_observation",
+                observation_polarity="positive",
+                sampling_coverage="sparse",
+            )
+        )
+        digest.append(
+            {
+                "evidence_id": evidence_id,
+                "summary": f"Observation {record_index}",
+                "virtual_time_range": [record_index * 10, record_index * 10 + 5],
+                "modality": "visual",
+                "source_lineage": [],
+            }
+        )
+    api = ScriptedVisionClient(({"action": "answer", "answer": "B. 9", "citations": ["ev_00"]},))
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    reasoner.decide(
+        question="What number appears?",
+        options={"A": "7", "B": "9"},
+        workspace_overview={"segment_overviews": overview_rows},
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=2,
+        evidence=tuple(records),
+        evidence_digest=tuple(digest),
+    )
+
+    assert len(api.calls[0]["image_paths"]) == 40
+    assert "Visual input manifest" in api.calls[0]["prompt"]
 
 
 def test_gemini_reasoner_forces_best_effort_answer_when_no_candidate_exists(tmp_path: Path) -> None:

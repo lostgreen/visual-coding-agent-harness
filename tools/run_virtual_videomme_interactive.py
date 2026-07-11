@@ -326,15 +326,21 @@ class GeminiReasoner:
 
     def decide(self, **kwargs: Any) -> ReasonerDecision:
         self.calls += 1
-        overview = dict(kwargs["workspace_overview"])
         evidence_digest = tuple(kwargs.get("evidence_digest", ()) or ())
         if evidence_digest:
-            image_paths = [str(row.get("overview_thumbnail_grid_path")) for row in overview.get("segment_overviews", ())]
-            prompt = _followup_prompt(kwargs, evidence_digest)
+            image_paths, visual_manifest = _reasoner_visual_context(kwargs)
+            prompt = _followup_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
             raw = self.api.chat(prompt, image_paths=image_paths)
             parsed = _parse_json(raw)
             action = str(parsed.get("action") or "answer")
-            self._trace("reasoner_investigate" if action == "investigate" else "reasoner_answer", prompt, raw, parsed)
+            self._trace(
+                "reasoner_investigate" if action == "investigate" else "reasoner_answer",
+                prompt,
+                raw,
+                parsed,
+                image_paths=image_paths,
+                visual_manifest=visual_manifest,
+            )
             if action == "investigate":
                 if kwargs.get("force_finalize") and self._last_candidate is not None:
                     return ReasonerDecision(
@@ -373,10 +379,22 @@ class GeminiReasoner:
             self._last_candidate = candidate
             if not _should_audit_answer(kwargs):
                 return candidate
-            audit_prompt = _answer_audit_prompt(kwargs, candidate, evidence_digest)
-            audit_raw = self.api.chat(audit_prompt, max_tokens=1400)
+            audit_prompt = _answer_audit_prompt(
+                kwargs,
+                candidate,
+                evidence_digest,
+                visual_manifest=visual_manifest,
+            )
+            audit_raw = self.api.chat(audit_prompt, image_paths=image_paths, max_tokens=1400)
             audit = _parse_answer_audit(audit_raw)
-            self._trace("reasoner_answer_audit", audit_prompt, audit_raw, audit)
+            self._trace(
+                "reasoner_answer_audit",
+                audit_prompt,
+                audit_raw,
+                audit,
+                image_paths=image_paths,
+                visual_manifest=visual_manifest,
+            )
             verdict = str(audit.get("verdict", "unknown") or "unknown").strip().casefold()
             audit_reason = str(audit.get("reason", "") or "")
             self._last_audit_reason = audit_reason
@@ -423,11 +441,18 @@ class GeminiReasoner:
                 support_reason=audit_reason,
             )
             return self._maybe_verify_claim(kwargs, evidence_digest, decision) if verdict == "supported" else decision
-        image_paths = [str(row.get("overview_thumbnail_grid_path")) for row in overview.get("segment_overviews", ())]
-        prompt = _investigate_prompt(kwargs)
+        image_paths, visual_manifest = _reasoner_visual_context(kwargs)
+        prompt = _investigate_prompt(kwargs, visual_manifest=visual_manifest)
         raw = self.api.chat(prompt, image_paths=image_paths)
         parsed = _parse_json(raw)
-        self._trace("reasoner_investigate", prompt, raw, parsed)
+        self._trace(
+            "reasoner_investigate",
+            prompt,
+            raw,
+            parsed,
+            image_paths=image_paths,
+            visual_manifest=visual_manifest,
+        )
         tasks = parsed.get("tasks") or []
         return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
 
@@ -436,10 +461,18 @@ class GeminiReasoner:
         kwargs: Mapping[str, Any],
         evidence_digest: Sequence[Mapping[str, Any]],
     ) -> ReasonerDecision:
-        prompt = _forced_answer_prompt(kwargs, evidence_digest)
-        raw = self.api.chat(prompt, max_tokens=600)
+        image_paths, visual_manifest = _reasoner_visual_context(kwargs)
+        prompt = _forced_answer_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
+        raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=600)
         parsed = _parse_json(raw)
-        self._trace("reasoner_forced_answer", prompt, raw, parsed)
+        self._trace(
+            "reasoner_forced_answer",
+            prompt,
+            raw,
+            parsed,
+            image_paths=image_paths,
+            visual_manifest=visual_manifest,
+        )
         answer, nested_citations = _normalize_answer_payload(parsed.get("answer"), kwargs.get("options") or {})
         decision = ReasonerDecision(
             action="answer",
@@ -482,10 +515,28 @@ class GeminiReasoner:
         task = _claim_verification_task(kwargs, decision, evidence_digest, round_id=self.calls)
         return decision if task is None else ReasonerDecision(action="investigate", tasks=(task,))
 
-    def _trace(self, kind: str, prompt: str, raw: str, parsed: Mapping[str, Any]) -> None:
+    def _trace(
+        self,
+        kind: str,
+        prompt: str,
+        raw: str,
+        parsed: Mapping[str, Any],
+        *,
+        image_paths: Sequence[str] = (),
+        visual_manifest: Sequence[Mapping[str, Any]] = (),
+    ) -> None:
         _append_jsonl(
             self.trace_path,
-            {"type": kind, "round": self.calls, "prompt": prompt, "raw": raw, "parsed": dict(parsed), "time": time.time()},
+            {
+                "type": kind,
+                "round": self.calls,
+                "prompt": prompt,
+                "image_paths": list(image_paths),
+                "visual_manifest": [dict(item) for item in visual_manifest],
+                "raw": raw,
+                "parsed": dict(parsed),
+                "time": time.time(),
+            },
         )
 
 
@@ -1174,7 +1225,86 @@ def _options_mapping(value: Any) -> dict[str, str]:
     return result
 
 
-def _investigate_prompt(kwargs: Mapping[str, Any]) -> str:
+def _reasoner_visual_context(
+    kwargs: Mapping[str, Any],
+    *,
+    max_images: int = 40,
+) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...]]:
+    budget = max(1, int(max_images))
+    overview_rows = tuple(dict(row) for row in kwargs.get("workspace_overview", {}).get("segment_overviews", ()) or ())
+    evidence = tuple(kwargs.get("evidence", ()) or ())
+    evidence_paths: list[str] = []
+    evidence_manifest: list[dict[str, Any]] = []
+    if evidence:
+        selected_evidence = select_uniform_items(evidence, min(16, len(evidence)))
+        per_record = min(4, max(1, 32 // len(selected_evidence)))
+        for record in selected_evidence:
+            refs = tuple(str(path) for path in getattr(record, "frame_refs", ()) if Path(str(path)).exists())
+            selected_refs = select_uniform_items(refs, min(per_record, len(refs))) if refs else ()
+            if not selected_refs:
+                continue
+            start_position = len(evidence_paths) + 1
+            evidence_paths.extend(selected_refs)
+            evidence_manifest.append(
+                {
+                    "kind": "evidence",
+                    "evidence_id": str(getattr(record, "evidence_id", "") or ""),
+                    "virtual_time_range": [
+                        float(getattr(record, "start_sec", 0.0) or 0.0),
+                        float(getattr(record, "end_sec", 0.0) or 0.0),
+                    ],
+                    "local_image_positions": [start_position, len(evidence_paths)],
+                }
+            )
+    evidence_paths = evidence_paths[: min(32, budget)]
+    overview_budget = min(8 if evidence_paths else budget, max(0, budget - len(evidence_paths)))
+    valid_overviews = tuple(
+        row
+        for row in overview_rows
+        if str(row.get("overview_thumbnail_grid_path", "") or "")
+        and Path(str(row.get("overview_thumbnail_grid_path"))).exists()
+    )
+    selected_overviews = select_uniform_items(valid_overviews, min(overview_budget, len(valid_overviews))) if valid_overviews else ()
+    overview_paths = tuple(str(row["overview_thumbnail_grid_path"]) for row in selected_overviews)
+    manifest: list[dict[str, Any]] = []
+    for index, row in enumerate(selected_overviews, start=1):
+        manifest.append(
+            {
+                "kind": "overview",
+                "segment_id": str(row.get("segment_id", "") or ""),
+                "image_positions": [index, index],
+            }
+        )
+    evidence_offset = len(overview_paths)
+    for item in evidence_manifest:
+        local_start, local_end = item.pop("local_image_positions")
+        if local_start > len(evidence_paths):
+            continue
+        manifest.append(
+            {
+                **item,
+                "image_positions": [evidence_offset + local_start, evidence_offset + min(local_end, len(evidence_paths))],
+            }
+        )
+    return (*overview_paths, *evidence_paths), tuple(manifest)
+
+
+def _visual_manifest_prompt(visual_manifest: Sequence[Mapping[str, Any]]) -> str:
+    if not visual_manifest:
+        return ""
+    return (
+        "\nRe-check replayed evidence images directly; Investigator summaries are fallible claims, not ground truth. "
+        "Visual input manifest (1-indexed supplied-image positions; overview images are coarse and evidence images are "
+        "Investigator observations): "
+        f"{json.dumps([dict(item) for item in visual_manifest], ensure_ascii=False)}"
+    )
+
+
+def _investigate_prompt(
+    kwargs: Mapping[str, Any],
+    *,
+    visual_manifest: Sequence[Mapping[str, Any]] = (),
+) -> str:
     return (
         "You are the Reasoner for a long virtual video QA agent. You only see segment overview images.\n"
         "Pick up to 4 segments to investigate. Return JSON only: "
@@ -1188,10 +1318,16 @@ def _investigate_prompt(kwargs: Mapping[str, Any]) -> str:
         f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}"
+        f"{_visual_manifest_prompt(visual_manifest)}"
     )
 
 
-def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mapping[str, Any]]) -> str:
+def _followup_prompt(
+    kwargs: Mapping[str, Any],
+    evidence_digest: Sequence[Mapping[str, Any]],
+    *,
+    visual_manifest: Sequence[Mapping[str, Any]] = (),
+) -> str:
     finalization_instruction = (
         "No investigation budget remains. Return action=answer using the best grounded evidence now; do not return tasks.\n"
         if kwargs.get("force_finalize")
@@ -1224,6 +1360,7 @@ def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mappin
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}\n"
         f"Evidence so far: {json.dumps(list(evidence_digest), ensure_ascii=False)}"
+        f"{_visual_manifest_prompt(visual_manifest)}"
     )
 
 
@@ -1376,6 +1513,8 @@ def _answer_audit_prompt(
     kwargs: Mapping[str, Any],
     candidate: ReasonerDecision,
     evidence_digest: Sequence[Mapping[str, Any]],
+    *,
+    visual_manifest: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     cited_ids = set(candidate.citations)
     cited = [dict(row) for row in evidence_digest if str(row.get("evidence_id", "")) in cited_ids]
@@ -1415,12 +1554,15 @@ def _answer_audit_prompt(
         f"Proposed answer: {candidate.answer}\nCitations: {json.dumps(list(candidate.citations), ensure_ascii=False)}\n"
         f"Evidence context: {json.dumps(context, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}"
+        f"{_visual_manifest_prompt(visual_manifest)}"
     )
 
 
 def _forced_answer_prompt(
     kwargs: Mapping[str, Any],
     evidence_digest: Sequence[Mapping[str, Any]],
+    *,
+    visual_manifest: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     rows = select_uniform_items(tuple(evidence_digest), 20)
     dashboard = [
@@ -1446,6 +1588,7 @@ def _forced_answer_prompt(
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Evidence dashboard: {json.dumps(dashboard, ensure_ascii=False)}"
+        f"{_visual_manifest_prompt(visual_manifest)}"
     )
 
 
