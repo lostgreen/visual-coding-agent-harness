@@ -291,6 +291,7 @@ class VirtualVideoMultiRoundDriver:
         best_answer = ""
         best_citations: tuple[str, ...] = ()
         best_verification_reason = ""
+        best_support_rank = -1
         last_gate_reason = "answer_missing"
         rounds_run = 0
 
@@ -382,10 +383,12 @@ class VirtualVideoMultiRoundDriver:
                 gate = _apply_answer_audit(gate, decision)
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
-                if decision.answer.strip():
+                support_rank = _answer_support_rank(decision)
+                if decision.answer.strip() and support_rank >= best_support_rank:
                     best_answer = decision.answer
                     best_citations = decision.citations
                     best_verification_reason = last_gate_reason
+                    best_support_rank = support_rank
                 if gate["passed"]:
                     answer = decision.answer
                     verified = True
@@ -479,10 +482,12 @@ class VirtualVideoMultiRoundDriver:
                     }
                 )
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
-                if final_decision.answer.strip():
+                support_rank = _answer_support_rank(final_decision)
+                if final_decision.answer.strip() and support_rank >= best_support_rank:
                     best_answer = final_decision.answer
                     best_citations = final_decision.citations
                     best_verification_reason = last_gate_reason
+                    best_support_rank = support_rank
                 if gate["passed"]:
                     answer = final_decision.answer
                     verified = True
@@ -1184,6 +1189,16 @@ def _apply_answer_audit(gate: Mapping[str, Any], decision: ReasonerDecision) -> 
         }
     )
     return result
+
+
+def _answer_support_rank(decision: ReasonerDecision) -> int:
+    return {
+        "contradicted": 0,
+        "insufficient": 1,
+        "": 2,
+        "unknown": 2,
+        "supported": 3,
+    }.get(decision.support_status, 2)
 
 
 def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any], ...]:

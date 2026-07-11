@@ -194,6 +194,35 @@ class UnsupportedFinalizationReasoner(FinalizationReasoner):
         )
 
 
+class RankedCandidateReasoner:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def decide(self, **kwargs: object) -> ReasonerDecision:
+        del kwargs
+        self.calls += 1
+        if self.calls == 1:
+            return ReasonerDecision(
+                action="investigate",
+                tasks=(InvestigationTask("q1", "Inspect the relevant scene.", "seg_target"),),
+            )
+        if self.calls == 2:
+            return ReasonerDecision(
+                action="answer",
+                answer="B. 11",
+                citations=(),
+                support_status="supported",
+                support_reason="The observed jersey directly shows 11.",
+            )
+        return ReasonerDecision(
+            action="answer",
+            answer="A. 7",
+            citations=(),
+            support_status="contradicted",
+            support_reason="The later candidate conflicts with the observation.",
+        )
+
+
 class AlwaysEmptyReasoner:
     def decide(self, **kwargs: object) -> ReasonerDecision:
         del kwargs
@@ -941,6 +970,20 @@ def test_answer_audit_soft_fails_verification_without_erasing_best_effort_answer
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["base_gate_passed"] is True
     assert gate["audit_reason"].startswith("The observation is related")
+
+
+def test_driver_keeps_stronger_supported_candidate_over_later_contradicted_answer(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=RankedCandidateReasoner(),
+        investigator=VirtualVideoInvestigator(workspace, sampler=_sampler),
+        max_rounds=3,
+        max_investigations=2,
+    ).run(workspace)
+
+    assert result.answer == "B. 11"
+    assert result.correct is True
+    assert result.verified is False
 
 
 def test_score_answer_maps_unlabeled_numeric_text_back_to_option() -> None:
