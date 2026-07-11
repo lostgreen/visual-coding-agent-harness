@@ -364,6 +364,81 @@ def test_gemini_reasoner_adopts_directly_supported_revised_answer_from_audit(tmp
     assert decision.support_status == "supported"
 
 
+def test_gemini_reasoner_dispatches_independent_claim_verification_for_relation_answers(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "answer", "answer": "D. A downstream benefit.", "citations": ["ev_1"]},
+            {"verdict": "supported", "reason": "The cited dialogue appears relevant.", "tasks": []},
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="Why did the person give away the money?",
+        options={"B": "A broader motive", "D": "A downstream benefit"},
+        workspace_overview={"segment_overviews": []},
+        workspace_duration_sec=300.0,
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=3,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "The money could help many people later.",
+                "virtual_time_range": [120.0, 130.0],
+                "modality": "visual",
+                "source_lineage": [{"segment_id": "seg_0002"}],
+            },
+        ),
+    )
+
+    assert decision.action == "investigate"
+    assert decision.tasks[0].inspection_mode == "verify_claim"
+    assert decision.tasks[0].claim_to_verify.startswith("D.")
+    assert decision.tasks[0].segment_id == "seg_0002"
+    assert decision.tasks[0].time_range == (0.0, 300.0)
+
+
+def test_model_investigator_records_independent_claim_assessment(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {
+                "summary": "The dialogue states a downstream benefit but not the broader motive.",
+                "confidence": 0.9,
+                "claim_verdict": "refutes",
+                "relation_type": "consequence_only",
+                "strongest_alternative": "B. A broader motive.",
+                "reason": "The cited scene does not establish the candidate as the motive.",
+                "need_detail": False,
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="verify_r2_candidate",
+        goal="Independently verify the proposed causal answer.",
+        segment_id="seg_0001",
+        time_range=(0.0, 60.0),
+        modality_hint=("visual", "asr"),
+        expected_evidence="direct evidence for the causal relation",
+        inspection_mode="verify_claim",
+        claim_to_verify="D. A downstream benefit.",
+        alternative_answers=("B. A broader motive.",),
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert "independent claim verifier" in api.calls[0]["prompt"]
+    assessment = report.evidence[0].operation_metadata["claim_assessment"]
+    assert assessment["verdict"] == "refutes"
+    assert assessment["candidate_answer"].startswith("D.")
+    assert assessment["strongest_alternative"].startswith("B.")
+
+
 def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities() -> None:
     assert _should_audit_answer(
         {

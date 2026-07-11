@@ -390,13 +390,17 @@ class GeminiReasoner:
                 self._last_candidate = candidate
                 revised_status = str(audit.get("revised_support_status", "insufficient") or "insufficient").casefold()
                 if revised_status == "supported":
-                    return ReasonerDecision(
-                        action="answer",
-                        answer=candidate.answer,
-                        citations=candidate.citations,
-                        entity_clusters=candidate.entity_clusters,
-                        support_status="supported",
-                        support_reason=audit_reason,
+                    return self._maybe_verify_claim(
+                        kwargs,
+                        evidence_digest,
+                        ReasonerDecision(
+                            action="answer",
+                            answer=candidate.answer,
+                            citations=candidate.citations,
+                            entity_clusters=candidate.entity_clusters,
+                            support_status="supported",
+                            support_reason=audit_reason,
+                        ),
                     )
             audit_tasks = tuple(audit.get("tasks") or ())[:2]
             if (
@@ -406,7 +410,7 @@ class GeminiReasoner:
                 and not kwargs.get("force_finalize")
             ):
                 return ReasonerDecision(action="investigate", tasks=audit_tasks)
-            return ReasonerDecision(
+            decision = ReasonerDecision(
                 action="answer",
                 answer=candidate.answer,
                 citations=candidate.citations,
@@ -414,6 +418,7 @@ class GeminiReasoner:
                 support_status=verdict,
                 support_reason=audit_reason,
             )
+            return self._maybe_verify_claim(kwargs, evidence_digest, decision) if verdict == "supported" else decision
         image_paths = [str(row.get("overview_thumbnail_grid_path")) for row in overview.get("segment_overviews", ())]
         prompt = _investigate_prompt(kwargs)
         raw = self.api.chat(prompt, image_paths=image_paths)
@@ -442,6 +447,37 @@ class GeminiReasoner:
         if decision.answer:
             self._last_candidate = decision
         return decision
+
+    def _maybe_verify_claim(
+        self,
+        kwargs: Mapping[str, Any],
+        evidence_digest: Sequence[Mapping[str, Any]],
+        decision: ReasonerDecision,
+    ) -> ReasonerDecision:
+        if (
+            not _requires_independent_claim_verification(kwargs)
+            or int(kwargs.get("remaining_budget", 0) or 0) <= 0
+            or kwargs.get("force_finalize")
+        ):
+            return decision
+        assessment = _matching_claim_assessment(evidence_digest, decision.answer)
+        if assessment:
+            verdict = str(assessment.get("verdict", "") or "").casefold()
+            if verdict in {"refutes", "insufficient"}:
+                return ReasonerDecision(
+                    action="answer",
+                    answer=decision.answer,
+                    citations=decision.citations,
+                    entity_clusters=decision.entity_clusters,
+                    support_status="insufficient",
+                    support_reason=str(
+                        assessment.get("reason", "")
+                        or "Independent claim verification did not support the answer."
+                    ),
+                )
+            return decision
+        task = _claim_verification_task(kwargs, decision, evidence_digest, round_id=self.calls)
+        return decision if task is None else ReasonerDecision(action="investigate", tasks=(task,))
 
     def _trace(self, kind: str, prompt: str, raw: str, parsed: Mapping[str, Any]) -> None:
         _append_jsonl(
@@ -489,15 +525,17 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         preview_frames = select_uniform_items(tuple(low["frames"]), 16)
         preview_paths = tuple(str(row["path"]) for row in preview_frames)
         event_window = str(getattr(task, "inspection_mode", "window")) == "event_window"
-        preview_prompt = (
-            _event_preview_prompt(self.workspace, task, segment_packet, low, prior_events=prior_events)
-            if event_window
-            else _preview_prompt(self.workspace, task, segment_packet, low)
-        )
+        claim_window = str(getattr(task, "inspection_mode", "window")) == "verify_claim"
+        if event_window:
+            preview_prompt = _event_preview_prompt(self.workspace, task, segment_packet, low, prior_events=prior_events)
+        elif claim_window:
+            preview_prompt = _claim_preview_prompt(self.workspace, task, segment_packet, low)
+        else:
+            preview_prompt = _preview_prompt(self.workspace, task, segment_packet, low)
         preview_raw = self.api.chat(
             preview_prompt,
             image_paths=preview_paths,
-            max_tokens=1000 if event_window else 700,
+            max_tokens=1000 if event_window else 900 if claim_window else 700,
         )
         preview = _parse_json(preview_raw)
         _append_jsonl(
@@ -538,8 +576,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             )
             selected_frames = select_uniform_items(tuple(selected_packet["frames"]), 16)
             detail_paths = tuple(str(row["path"]) for row in selected_frames)
-            final_prompt = (
-                _event_evidence_prompt(
+            if event_window:
+                final_prompt = _event_evidence_prompt(
                     self.workspace,
                     task,
                     segment_packet,
@@ -547,10 +585,21 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                     preview=preview,
                     prior_events=prior_events,
                 )
-                if event_window
-                else _evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
+            elif claim_window:
+                final_prompt = _claim_evidence_prompt(
+                    self.workspace,
+                    task,
+                    segment_packet,
+                    selected_packet,
+                    preview=preview,
+                )
+            else:
+                final_prompt = _evidence_prompt(self.workspace, task, segment_packet, selected_packet, preview=preview)
+            raw = self.api.chat(
+                final_prompt,
+                image_paths=detail_paths,
+                max_tokens=1000 if event_window else 900 if claim_window else 700,
             )
-            raw = self.api.chat(final_prompt, image_paths=detail_paths, max_tokens=1000 if event_window else 700)
             parsed = _parse_json(raw)
             tool_trace.append(f"inspect_window:{self.highfps:.1f}")
             vlm_calls += 1
@@ -575,9 +624,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         confidence = _confidence(parsed.get("confidence"), default=0.6)
         entities = _normalize_entities(parsed.get("entities"))
         events = _normalize_events(parsed.get("events"), selected_window)
+        claim_assessment = _normalize_claim_assessment(parsed, task) if claim_window else {}
         supports_identity_anchor = _truthy(parsed.get("supports_identity_anchor"))
         supports_answer_event = bool(events) or _truthy(parsed.get("supports_answer_event"))
-        if supports_answer_event:
+        if claim_assessment:
+            evidence_kind = "claim_verification"
+        elif supports_answer_event:
             evidence_kind = "event_observation"
         elif supports_identity_anchor or entities:
             evidence_kind = "entity_observation"
@@ -610,6 +662,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             operation_metadata={
                 "entities": entities,
                 "events": events,
+                "claim_assessment": claim_assessment,
                 "supports_identity_anchor": supports_identity_anchor,
                 "supports_answer_event": supports_answer_event,
             },
@@ -858,6 +911,20 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
             }
         )
     return tuple(rows)
+
+
+def _normalize_claim_assessment(value: Mapping[str, Any], task: Any) -> dict[str, Any]:
+    verdict = str(value.get("claim_verdict", "insufficient") or "insufficient").strip().casefold()
+    if verdict not in {"supports", "refutes", "insufficient"}:
+        verdict = "insufficient"
+    return {
+        "candidate_answer": str(getattr(task, "claim_to_verify", "") or ""),
+        "alternative_answers": tuple(str(item) for item in getattr(task, "alternative_answers", ()) or ()),
+        "verdict": verdict,
+        "relation_type": str(value.get("relation_type", "unclear") or "unclear"),
+        "strongest_alternative": str(value.get("strongest_alternative", "") or ""),
+        "reason": str(value.get("reason", "") or ""),
+    }
 
 
 def _load_rows(dataset_root: Path) -> list[dict[str, Any]]:
@@ -1123,6 +1190,8 @@ def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mappin
         "cite every evidence record containing a positive occurrence, and never infer the count from answer options or entity clusters.\n"
         "For identity-anchor questions, do not answer while missing_identity_anchor_terms is non-empty. "
         "The final entity cluster must cite both anchor evidence and the later event evidence for the same person.\n"
+        "Treat independent claim_assessment evidence as a direct check of the proposed relation. If it refutes a candidate, "
+        "revise the answer or investigate the strongest alternative; do not relabel relevance as support.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
@@ -1150,6 +1219,93 @@ def _should_audit_answer(kwargs: Mapping[str, Any]) -> bool:
         r"\b(?:view|opinion|believ\w*)\b",
     )
     return any(re.search(pattern, question) for pattern in relation_patterns)
+
+
+def _requires_independent_claim_verification(kwargs: Mapping[str, Any]) -> bool:
+    question = str(kwargs.get("question", "") or "").casefold()
+    requirements = dict(kwargs.get("query_requirements") or {})
+    if requirements.get("requires_identity_link"):
+        return True
+    relation_patterns = (
+        r"\bwhy\b",
+        r"\bhow\s+(?:did|does|was|were)\b",
+        r"\brelationship\b",
+        r"\b(?:view|opinion|believ\w*)\b",
+    )
+    return any(re.search(pattern, question) for pattern in relation_patterns)
+
+
+def _matching_claim_assessment(
+    evidence_digest: Sequence[Mapping[str, Any]],
+    candidate_answer: str,
+) -> Mapping[str, Any] | None:
+    candidate_key = re.sub(r"[^a-z0-9]+", "", str(candidate_answer or "").casefold())
+    if not candidate_key:
+        return None
+    for row in reversed(tuple(evidence_digest)):
+        assessment = row.get("claim_assessment")
+        if not isinstance(assessment, Mapping):
+            continue
+        assessed_key = re.sub(r"[^a-z0-9]+", "", str(assessment.get("candidate_answer", "") or "").casefold())
+        if assessed_key == candidate_key:
+            return assessment
+    return None
+
+
+def _claim_verification_task(
+    kwargs: Mapping[str, Any],
+    candidate: ReasonerDecision,
+    evidence_digest: Sequence[Mapping[str, Any]],
+    *,
+    round_id: int,
+) -> InvestigationTask | None:
+    cited_ids = set(candidate.citations)
+    cited = [row for row in evidence_digest if str(row.get("evidence_id", "")) in cited_ids]
+    if not cited:
+        cited = list(evidence_digest[-2:])
+    ranges = [tuple(row.get("virtual_time_range", ()) or ()) for row in cited]
+    ranges = [row for row in ranges if len(row) == 2 and row[0] is not None and row[1] is not None]
+    if not ranges:
+        return None
+    start = min(float(row[0]) for row in ranges) - 180.0
+    end = max(float(row[1]) for row in ranges) + 180.0
+    duration = max(0.0, float(kwargs.get("workspace_duration_sec", end) or end))
+    start = max(0.0, start)
+    end = min(duration, end)
+    if end - start > 360.0:
+        center = (start + end) / 2.0
+        start, end = max(0.0, center - 180.0), min(duration, center + 180.0)
+    lineage = next(
+        (
+            item
+            for row in cited
+            for item in (row.get("source_lineage", ()) or ())
+            if isinstance(item, Mapping) and str(item.get("segment_id", "") or "")
+        ),
+        {},
+    )
+    segment_id = str(lineage.get("segment_id", "") or "")
+    if not segment_id:
+        return None
+    selected = re.match(r"\s*([A-H])(?:\.|\)|:|\s|$)", candidate.answer.upper())
+    selected_label = selected.group(1) if selected else ""
+    alternatives = tuple(
+        f"{label}. {text}"
+        for label, text in dict(kwargs.get("options") or {}).items()
+        if str(label).upper() != selected_label
+    )
+    return InvestigationTask(
+        query_id=f"verify_r{int(round_id)}_candidate",
+        goal="Independently verify or refute the proposed answer using the cited scene and adjacent context.",
+        segment_id=segment_id,
+        time_range=(round(start, 3), round(end, 3)),
+        modality_hint=("visual", "asr"),
+        expected_evidence="direct evidence that distinguishes the proposed answer from the strongest alternative",
+        inspection_mode="verify_claim",
+        priority=1.0,
+        claim_to_verify=candidate.answer,
+        alternative_answers=alternatives,
+    )
 
 
 def _answer_audit_prompt(
@@ -1210,6 +1366,7 @@ def _forced_answer_prompt(
             "evidence_kind": row.get("evidence_kind"),
             "entities": list(row.get("entities", ()) or ())[:4],
             "events": list(row.get("events", ()) or ())[:4],
+            "claim_assessment": dict(row.get("claim_assessment", {}) or {}),
             "source_lineage": list(row.get("source_lineage", ()) or ())[:2],
         }
         for row in rows
@@ -1249,6 +1406,30 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
         f"Preview window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
+    )
+
+
+def _claim_preview_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+) -> str:
+    return (
+        "You are an independent claim verifier, not the Reasoner who proposed the answer. Re-observe the frames and local ASR, "
+        "actively look for disconfirming evidence, and distinguish direct support from correlation, downstream consequence, "
+        "after-state, or identity mismatch. Return JSON only: {\"summary\":\"atomic verification observation\","
+        "\"confidence\":0.0-1.0,\"claim_verdict\":\"supports|refutes|insufficient\","
+        "\"relation_type\":\"direct|causal_chain|consequence_only|cooccurrence_only|identity_mismatch|unclear\","
+        "\"strongest_alternative\":\"B. ...|none\",\"reason\":\"...\",\"need_detail\":true|false,"
+        "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null}.\n"
+        "Use supports only when the exact candidate relation is directly established. The fact that candidate-related objects, "
+        "people, or words appear is not enough. Request a narrower detail window when motion or text remains unresolved.\n"
+        f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
+        f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
+        f"Alternative answers: {json.dumps(list(getattr(task, 'alternative_answers', ()) or ()), ensure_ascii=False)}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
+        f"Window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:6000]}"
     )
 
 
@@ -1340,6 +1521,29 @@ def _event_evidence_prompt(
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
         f"Detail window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
+    )
+
+
+def _claim_evidence_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+    *,
+    preview: Mapping[str, Any] | None = None,
+) -> str:
+    return (
+        "You are an independent claim verifier. Use the detail frames and local ASR to verify or refute the exact candidate, "
+        "not merely whether the scene is relevant. Return JSON only: {\"summary\":\"verified atomic observation\","
+        "\"confidence\":0.0-1.0,\"claim_verdict\":\"supports|refutes|insufficient\","
+        "\"relation_type\":\"direct|causal_chain|consequence_only|cooccurrence_only|identity_mismatch|unclear\","
+        "\"strongest_alternative\":\"B. ...|none\",\"reason\":\"...\"}.\n"
+        f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
+        f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
+        f"Alternative answers: {json.dumps(list(getattr(task, 'alternative_answers', ()) or ()), ensure_ascii=False)}\n"
+        f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1800]}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
+        f"Detail window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:6000]}"
     )
 
 

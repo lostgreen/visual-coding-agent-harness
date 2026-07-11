@@ -23,6 +23,8 @@ class InvestigationTask:
     expected_evidence: str = ""
     inspection_mode: str = "window"
     priority: float = 0.0
+    claim_to_verify: str = ""
+    alternative_answers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.time_range is not None:
@@ -30,7 +32,9 @@ class InvestigationTask:
             object.__setattr__(self, "time_range", (float(start), float(end)))
         object.__setattr__(self, "segment_id", str(self.segment_id or ""))
         object.__setattr__(self, "modality_hint", tuple(str(item) for item in self.modality_hint))
-        if self.inspection_mode not in {"window", "enumerate_events", "event_window"}:
+        object.__setattr__(self, "claim_to_verify", str(self.claim_to_verify or "").strip())
+        object.__setattr__(self, "alternative_answers", tuple(str(item) for item in self.alternative_answers))
+        if self.inspection_mode not in {"window", "enumerate_events", "event_window", "verify_claim"}:
             object.__setattr__(self, "inspection_mode", "window")
 
 
@@ -1068,6 +1072,8 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         expected_evidence=str(value.get("expected_evidence", "")),
         inspection_mode=str(value.get("inspection_mode", "window") or "window"),
         priority=float(value.get("priority", 0.0) or 0.0),
+        claim_to_verify=str(value.get("claim_to_verify", "") or ""),
+        alternative_answers=tuple(value.get("alternative_answers", ()) or ()),
     )
 
 
@@ -1125,6 +1131,7 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
             "source_lineage": [dict(row) for row in item.source_lineage],
             "entities": list(item.operation_metadata.get("entities", ())),
             "events": list(item.operation_metadata.get("events", ())),
+            "claim_assessment": dict(item.operation_metadata.get("claim_assessment", {}) or {}),
         }
         for item in evidence
     )
