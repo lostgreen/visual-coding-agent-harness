@@ -275,11 +275,10 @@ def test_gemini_reasoner_repairs_truncated_investigation_json(tmp_path: Path) ->
     assert decision.tasks[0].query_id == "r1_clock"
 
 
-def test_gemini_reasoner_repairs_non_option_answer(tmp_path: Path) -> None:
+def test_gemini_reasoner_does_not_spend_an_extra_call_guessing_invalid_option(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (
             {"action": "answer", "answer": "The video is unclear.", "citations": ["ev_1"]},
-            {"answer": "B. Leaves on a stretcher.", "citations": ["ev_1"]},
         )
     )
     reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl")
@@ -304,8 +303,45 @@ def test_gemini_reasoner_repairs_non_option_answer(tmp_path: Path) -> None:
         ),
     )
 
+    assert len(api.calls) == 1
+    assert decision.answer == ""
+    assert decision.support_status == "insufficient"
+
+
+def test_gemini_reasoner_uses_explicit_forced_choice_only_at_finalization(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "answer", "answer": "The video is unclear.", "citations": ["ev_1"]},
+            {"answer": "B. Leaves on a stretcher.", "citations": ["ev_1"]},
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    decision = reasoner.decide(
+        question="What happens next?",
+        options={"A": "Walks away", "B": "Leaves on a stretcher"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=0,
+        force_finalize=True,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "He is carried away on a stretcher.",
+                "virtual_time_range": [10.0, 20.0],
+                "modality": "visual",
+                "source_lineage": [],
+            },
+        ),
+    )
+
     assert len(api.calls) == 2
+    assert "investigation budget is exhausted" in api.calls[1]["prompt"]
     assert decision.answer.startswith("B.")
+    assert decision.support_status == "insufficient"
 
 
 def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: Path) -> None:
@@ -1064,6 +1100,30 @@ def test_followup_prompt_requires_reasoner_to_act_on_claim_role_mismatch() -> No
     assert "investigate the missing relation" in prompt
 
 
+def test_followup_prompt_requires_explicit_scalar_measurement_derivation() -> None:
+    prompt = _followup_prompt(
+        {
+            "question": "How many calories had he consumed by the time he met his teammate?",
+            "options": {"A": "500 calories", "B": "700 calories"},
+            "workspace_overview": {"segment_overviews": []},
+            "query_contract": {
+                "quantifier": "scalar_quantity",
+                "aggregation": "accumulate",
+                "measurement_unit": "calorie",
+                "boundary_hint": "by the time he met his teammate",
+            },
+            "query_requirements": {},
+            "completion_status": {"ready_for_answer": True},
+            "temporal_navigation": {},
+        },
+        (),
+    )
+
+    assert "scalar_quantity" in prompt
+    assert "delta or cumulative" in prompt
+    assert "boundary" in prompt
+
+
 def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities() -> None:
     assert _should_audit_answer(
         {
@@ -1578,17 +1638,39 @@ def test_model_investigator_reports_partial_gap_instead_of_frame_success(tmp_pat
                 "summary": "The board is visible, but the final value is unreadable.",
                 "confidence": 0.6,
                 "need_detail": False,
-                "resolution": "partial",
-                "resolved_conditions": ["locate the final board"],
-                "unresolved_conditions": ["read the final value and unit"],
+                "resolution": "resolved",
+                "target_presence": {"target": "final board", "status": "present", "confidence": 0.8},
+                "condition_results": [
+                    {
+                        "condition_id": "gap_final_value_c1",
+                        "status": "satisfied",
+                        "observation": "The final board is visible.",
+                    },
+                    {
+                        "condition_id": "gap_final_value_c2",
+                        "status": "unknown",
+                        "observation": "The value remains unreadable.",
+                    },
+                ],
                 "failure_reason": "text is too small",
             },
             {
                 "summary": "The detail frames still do not make the final value readable.",
                 "confidence": 0.6,
-                "resolution": "partial",
-                "resolved_conditions": ["locate the final board"],
-                "unresolved_conditions": ["read the final value and unit"],
+                "resolution": "resolved",
+                "target_presence": {"target": "final board", "status": "present", "confidence": 0.9},
+                "condition_results": [
+                    {
+                        "condition_id": "gap_final_value_c1",
+                        "status": "satisfied",
+                        "observation": "The final board is visible.",
+                    },
+                    {
+                        "condition_id": "gap_final_value_c2",
+                        "status": "unknown",
+                        "observation": "No value or unit can be read.",
+                    },
+                ],
                 "failure_reason": "text remains unreadable after detail inspection",
             },
         )
@@ -1613,6 +1695,8 @@ def test_model_investigator_reports_partial_gap_instead_of_frame_success(tmp_pat
     assert report.unresolved_conditions == ("read the final value and unit",)
     assert report.failure_reason == "text remains unreadable after detail inspection"
     assert report.evidence[0].operation_metadata["investigation"]["resolution"] == "partial"
+    assert report.condition_results[0].condition_id == "gap_final_value_c1"
+    assert report.goal_progress == ("condition_satisfied:gap_final_value_c1",)
 
 
 def test_model_investigator_materializes_region_crops_inside_inspect_window(tmp_path: Path) -> None:
@@ -1634,8 +1718,19 @@ def test_model_investigator_materializes_region_crops_inside_inspect_window(tmp_
                 "summary": "The enlarged region makes the displayed clock and scores readable.",
                 "confidence": 0.9,
                 "resolution": "resolved",
-                "resolved_conditions": ["read the displayed clock and scores"],
-                "unresolved_conditions": [],
+                "target_presence": {"target": "scoreboard", "status": "present", "confidence": 0.95},
+                "measurements": [
+                    {"value": 8.13, "unit": "game_clock", "raw_text": "8:13"},
+                    {"value": 10, "unit": "point", "subject_id": "home"},
+                    {"value": 10, "unit": "point", "subject_id": "guest"},
+                ],
+                "condition_results": [
+                    {
+                        "condition_id": "gap_scoreboard_c1",
+                        "status": "satisfied",
+                        "observation": "The scoreboard reads 8:13 and 10-10.",
+                    }
+                ],
             },
         )
     )
@@ -1656,11 +1751,18 @@ def test_model_investigator_materializes_region_crops_inside_inspect_window(tmp_
 
     assert len(api.calls) == 2
     assert any("/observations/regions/" in path for path in api.calls[1]["image_paths"])
+    assert "gap_scoreboard_c1" in api.calls[1]["prompt"]
+    assert "target_presence" in api.calls[1]["prompt"]
+    assert "measurements" in api.calls[1]["prompt"]
+    assert "ordered_image_groups" in api.calls[1]["prompt"]
     assert report.cost["region_frames"] > 0
     assert report.resolution == "resolved"
     assert "region_observed" in report.progress_flags
     region = report.evidence[0].operation_metadata["region_observation"]
     assert region["normalized_box"] == [0.0, 0.0, 0.55, 0.45]
+    assert {row["region_kind"] for row in region["frames"]} == {"model_box", "coarse_tile"}
+    assert report.evidence[0].operation_metadata["target_presence"]["status"] == "present"
+    assert len(report.evidence[0].operation_metadata["measurements"]) == 3
 
 
 def test_repeated_query_ids_get_distinct_observation_and_frame_ids(tmp_path: Path) -> None:

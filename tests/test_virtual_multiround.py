@@ -7,6 +7,7 @@ from typing import Sequence
 from PIL import Image
 
 import vcah.multiround as multiround
+from vcah.evidence_primitives import ConditionResult
 from vcah.multiround import EvidenceGap, InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.types import CoverageSegment, EvidenceRecord, Frame
@@ -66,6 +67,150 @@ def test_primary_gap_is_bound_to_parallel_investigation_tasks() -> None:
 
     assert {task.gap_id for task in bound.tasks} == {"gap_transition"}
     assert all(task.success_conditions == decision.primary_gap.success_conditions for task in bound.tasks)
+    assert all(task.conditions == decision.primary_gap.conditions for task in bound.tasks)
+
+
+def test_query_compiler_distinguishes_scalar_quantity_from_entity_count() -> None:
+    scalar = multiround.compile_query_contract(
+        "How many calories had he consumed by the time he met his teammate?"
+    )
+    distance = multiround.compile_query_contract("How many light-years wide is the observable universe?")
+    option_unit_distance = multiround.compile_query_contract(
+        "What total diameter does the video state?",
+        {"A": "About 100 trillion lightyears", "C": "Over 25 trillion lightyears"},
+    )
+    distance_with_duration = multiround.compile_query_contract(
+        "How many meters did they complete in 25 minutes?"
+    )
+    entities = multiround.compile_query_contract(
+        "Throughout the video, how many scholars comment on Napoleon?"
+    )
+    events = multiround.compile_query_contract("How many times does the title card appear?")
+    timed_events = multiround.compile_query_contract(
+        "How many times does the title card appear in the first 5 minutes?"
+    )
+    timed_entities = multiround.compile_query_contract(
+        "How many people appear in the first 5 minutes?"
+    )
+
+    assert scalar.quantifier == "scalar_quantity"
+    assert scalar.aggregation == "accumulate"
+    assert scalar.measurement_unit == "calorie"
+    assert scalar.boundary_hint == "by the time he met his teammate"
+    assert distance.quantifier == "scalar_quantity"
+    assert distance.measurement_unit == "light_year"
+    assert option_unit_distance.quantifier == "scalar_quantity"
+    assert option_unit_distance.measurement_unit == "light_year"
+    assert distance_with_duration.measurement_unit == "meter"
+    assert entities.quantifier == "distinct_count"
+    assert events.quantifier == "total_count"
+    assert timed_events.quantifier == "total_count"
+    assert timed_entities.quantifier == "distinct_count"
+
+
+def test_new_coverage_does_not_count_as_goal_progress() -> None:
+    condition = ConditionResult("gap_clock_c1", "unknown", "The scoreboard is too small.")
+    report = InvestigationReport(
+        query_id="q_clock",
+        status="satisfied",
+        gap_id="gap_clock",
+        resolution="unresolved",
+        condition_results=(condition,),
+        coverage_delta=((10.0, 20.0),),
+    )
+
+    annotated = multiround._annotate_batch_progress((report,), ())
+
+    assert annotated[0].goal_progress == ()
+    assert annotated[0].coverage_progress == ("new_frontier_coverage",)
+
+
+def test_scalar_quantity_gate_uses_boundary_aware_measurement_derivation(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="scalar",
+        segments=(VirtualVideoSegment("seg_1", "source", "source.mp4", 0.0, 60.0, 0.0, 60.0, "content"),),
+    )
+    case = VirtualVideoCase(
+        case_id="scalar",
+        question="How many calories had he consumed by the time he met his teammate?",
+        options={"A": "500 calories", "B": "700 calories"},
+        gold="B",
+        target_segment_id="seg_1",
+        target_virtual_interval=(0.0, 60.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "scalar", manifest=manifest, case=case)
+    evidence = tuple(
+        EvidenceRecord(
+            evidence_id=f"ev_measure_{index}",
+            beat_id="",
+            start_sec=float(index * 10),
+            end_sec=float(index * 10 + 5),
+            modality="visual",
+            pointer=f"virtual://measure/{index}",
+            verbatim=summary,
+            frame_refs=(f"frame_{index}.jpg",),
+            attestation_model="test-vlm",
+            coverage_manifest=(CoverageSegment(f"q_{index}", float(index * 10), float(index * 10 + 5), "visual", 1.0),),
+            operation_metadata={
+                "measurements": [
+                    {
+                        "value": value,
+                        "unit": "calorie",
+                        "measurement_semantics": "delta",
+                        "subject_id": subject,
+                        "source_time_sec": float(index * 10),
+                        "boundary_relation": boundary,
+                    }
+                ]
+            },
+        )
+        for index, (value, subject, boundary, summary) in enumerate(
+            (
+                (300, "meal_1", "before", "The first consumed item is shown."),
+                (400, "meal_2", "at", "A second consumed item is shown at the meeting boundary."),
+                (100, "meal_3", "after", "Another item appears only after the meeting."),
+            ),
+            start=1,
+        )
+    )
+    contract = multiround.compile_query_contract(case.question)
+    digest = multiround._evidence_digest(evidence[:1])
+    assert digest[0]["measurements"][0]["value"] == 300
+
+    gate = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "B. 700 calories",
+        tuple(record.evidence_id for record in evidence),
+        (),
+        evidence,
+    )
+
+    assert gate["passed"] is True
+    assert gate["reason"] == "scalar_quantity_grounded"
+    assert gate["derivation"]["operator"] == "sum_delta"
+    assert gate["derivation"]["result"] == 700
+    assert gate["derivation"]["evidence_ids"] == ["ev_measure_1", "ev_measure_2"]
+    wrong = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "A. 500 calories",
+        tuple(record.evidence_id for record in evidence),
+        (),
+        evidence,
+    )
+    assert wrong["passed"] is False
+    assert wrong["reason"] == "scalar_quantity_answer_mismatch"
+
+    aggregate = multiround._derived_answer_evidence(
+        workspace,
+        answer="B. 700 calories",
+        citations=tuple(record.evidence_id for record in evidence[:2]),
+        entity_clusters=(),
+        evidence=evidence,
+        derivation=gate["derivation"],
+    )
+    assert aggregate.operation_metadata["derivation"]["result"] == 700
 
 
 def test_repeated_partial_attempts_emit_soft_stagnation_warning() -> None:
@@ -658,6 +803,12 @@ def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(
     assert result.answer == "B. Three"
     assert result.correct is True
     assert result.verified is True
+    assert result.grounded_answer == "B. Three"
+    assert result.forced_answer == "B. Three"
+    assert result.selected_option == "B"
+    assert result.answer_mode == "grounded"
+    assert result.grounding_status == "verified"
+    assert result.retrieval_status == "sufficient"
     assert result.verification_reason == "full_source_coverage_verified"
     assert reasoner.calls == 3
     assert reasoner.completion_statuses[1]["missing_segment_ids"] == ["seg_target_b"]
@@ -691,6 +842,11 @@ def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_pa
     assert result.answer == "B. Three"
     assert result.correct is True
     assert result.verified is False
+    assert result.grounded_answer == ""
+    assert result.forced_answer == "B. Three"
+    assert result.selected_option == "B"
+    assert result.answer_mode == "forced_choice"
+    assert result.grounding_status == "insufficient"
     assert result.verification_reason == "entity_reconciliation_missing"
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["passed"] is False
@@ -997,6 +1153,35 @@ def test_answer_gate_accepts_interval_when_both_boundary_times_are_cited(tmp_pat
 
     assert gate["passed"] is True
     assert gate["reason"] == "verified_window_evidence"
+
+    mislocalized = EvidenceRecord(
+        evidence_id="ev_mislocalized",
+        beat_id="",
+        start_sec=500.0,
+        end_sec=700.0,
+        modality="visual",
+        pointer="virtual://mislocalized",
+        verbatim="The summary claims the clock boundaries are 8:13 and 5:58.",
+        frame_refs=("wrong_crop.jpg",),
+        attestation_model="test-vlm",
+        operation_metadata={
+            "target_presence": {"target": "scoreboard", "status": "absent", "confidence": 0.95},
+            "measurements": [
+                {"value": 8.13, "unit": "game_clock", "raw_text": "8:13"},
+                {"value": 5.58, "unit": "game_clock", "raw_text": "5:58"},
+            ],
+        },
+    )
+    blocked = multiround._answer_completion_gate(
+        workspace,
+        multiround.compile_query_contract(case.question),
+        "C. 8:13 - 5:58",
+        ("ev_mislocalized",),
+        (),
+        (mislocalized,),
+    )
+    assert blocked["passed"] is False
+    assert blocked["reason"] == "quantitative_target_not_present"
 
 
 def test_driver_runs_answer_only_finalization_after_last_investigation_round(tmp_path: Path) -> None:
@@ -1377,6 +1562,10 @@ def test_driver_repairs_empty_answers_with_unvisited_identity_anchor_segments(tm
     ).run(workspace)
 
     assert result.answer == "Insufficient verified evidence."
+    assert result.grounded_answer == ""
+    assert result.forced_answer == ""
+    assert result.selected_option == ""
+    assert result.answer_mode == "insufficient"
     assert result.accepted_investigations == 2
     assert [task.segment_id for task in investigator.tasks] == ["seg_0", "seg_1"]
     repairs = [row for row in result.trace if row.get("type") == "repair_override"]

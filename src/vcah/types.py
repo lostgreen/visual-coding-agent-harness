@@ -100,11 +100,22 @@ class CoverageSegment:
 @dataclass(frozen=True)
 class ClaimContract:
     required_scope: Literal["local", "window", "multi_window", "full_video"] = "window"
-    quantifier: Literal["none", "existential", "universal", "distinct_count", "total_count", "order", "comparison"] = "none"
+    quantifier: Literal[
+        "none",
+        "existential",
+        "universal",
+        "distinct_count",
+        "total_count",
+        "scalar_quantity",
+        "order",
+        "comparison",
+    ] = "none"
     observation_target: Literal["text", "entity", "object", "event", "action", "relation", "attribute"] = "text"
-    aggregation: Literal["none", "deduplicate", "count", "order", "compare", "summarize"] = "none"
+    aggregation: Literal["none", "deduplicate", "count", "accumulate", "order", "compare", "summarize"] = "none"
     required_observability: tuple[Literal["asr", "ocr", "visual"], ...] = ()
     observability_mode: Literal["all", "any"] = "all"
+    measurement_unit: str = ""
+    boundary_hint: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -114,6 +125,8 @@ class ClaimContract:
         )
         if self.observability_mode not in {"all", "any"}:
             object.__setattr__(self, "observability_mode", "all")
+        object.__setattr__(self, "measurement_unit", str(self.measurement_unit or "").strip().casefold())
+        object.__setattr__(self, "boundary_hint", str(self.boundary_hint or "").strip())
 
 
 @dataclass(frozen=True)
@@ -792,6 +805,8 @@ def _claim_contract(value: Any) -> ClaimContract:
         aggregation=str(payload.get("aggregation") or "none"),  # type: ignore[arg-type]
         required_observability=tuple(observability),  # type: ignore[arg-type]
         observability_mode=str(payload.get("observability_mode") or "all"),  # type: ignore[arg-type]
+        measurement_unit=str(payload.get("measurement_unit") or ""),
+        boundary_hint=str(payload.get("boundary_hint") or ""),
     )
 
 

@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
+from vcah.evidence_primitives import ConditionResult
 from vcah.types import CoverageSegment, EvidenceRecord
 from vcah.virtual_index import load_virtual_beats
 from vcah.virtual_video import (
@@ -48,6 +49,9 @@ class InvestigationReport:
     failure_reason: str = ""
     progress_flags: tuple[str, ...] = ()
     coverage_delta: tuple[tuple[float, float], ...] = ()
+    condition_results: tuple[ConditionResult, ...] = ()
+    goal_progress: tuple[str, ...] = ()
+    coverage_progress: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "query_id", str(self.query_id or "").strip())
@@ -77,6 +81,21 @@ class InvestigationReport:
             self,
             "coverage_delta",
             tuple(_normalized_range(item) for item in self.coverage_delta if _valid_range(item)),
+        )
+        object.__setattr__(
+            self,
+            "condition_results",
+            tuple(_condition_result(item) for item in self.condition_results),
+        )
+        object.__setattr__(
+            self,
+            "goal_progress",
+            tuple(dict.fromkeys(str(item).strip() for item in self.goal_progress if str(item).strip())),
+        )
+        object.__setattr__(
+            self,
+            "coverage_progress",
+            tuple(dict.fromkeys(str(item).strip() for item in self.coverage_progress if str(item).strip())),
         )
 
 
@@ -176,6 +195,11 @@ class VirtualVideoInvestigator:
         vlm_calls: int = 0,
     ) -> InvestigationReport:
         self._record_visit(task, evidence, status="reused", reused_from=evidence.evidence_id)
+        conditions = tuple(getattr(task, "conditions", ()) or ())
+        condition_results = tuple(
+            ConditionResult(item.condition_id, "unknown", "Cached observation requires a new semantic assessment.")
+            for item in conditions
+        )
         return InvestigationReport(
             query_id=str(getattr(task, "query_id", "") or ""),
             status="satisfied",
@@ -191,6 +215,7 @@ class VirtualVideoInvestigator:
             unresolved_conditions=tuple(getattr(task, "success_conditions", ()) or ()),
             progress_flags=("observation_reused",),
             coverage_delta=(),
+            condition_results=condition_results,
         )
 
     def open_segment(self, segment_id: str) -> Mapping[str, Any]:
@@ -378,6 +403,14 @@ class VirtualVideoInvestigator:
         if frame_paths:
             self._remember_evidence(task, evidence)
             self._record_visit(task, evidence, status="satisfied")
+        condition_results = tuple(
+            ConditionResult(
+                item.condition_id,
+                "unknown",
+                "Deterministic frame sampling cannot attest semantic success.",
+            )
+            for item in tuple(getattr(task, "conditions", ()) or ())
+        )
         return InvestigationReport(
             query_id=query_id,
             status="satisfied" if frame_paths else "empty",
@@ -399,8 +432,9 @@ class VirtualVideoInvestigator:
             ),
             unresolved_conditions=tuple(getattr(task, "success_conditions", ()) or ()) if frame_paths else (),
             failure_reason="deterministic inspector cannot attest semantic success conditions" if frame_paths and getattr(task, "success_conditions", ()) else "",
-            progress_flags=("new_time_coverage",) if frame_paths else (),
+            progress_flags=(),
             coverage_delta=((float(start_sec), float(end_sec)),) if frame_paths else (),
+            condition_results=condition_results,
         )
 
 
@@ -590,6 +624,17 @@ def _valid_range(value: Sequence[float]) -> bool:
 def _normalized_range(value: Sequence[float]) -> tuple[float, float]:
     start, end = float(value[0]), float(value[1])
     return (start, end) if start < end else (end, start)
+
+
+def _condition_result(value: ConditionResult | Mapping[str, Any]) -> ConditionResult:
+    if isinstance(value, ConditionResult):
+        return value
+    return ConditionResult(
+        condition_id=str(value.get("condition_id", "") or ""),
+        status=str(value.get("status", "unknown") or "unknown"),
+        observation=str(value.get("observation", "") or ""),
+        evidence_ids=tuple(value.get("evidence_ids", ()) or ()),
+    )
 
 
 def _lineage_iou(first: Sequence[Mapping[str, Any]], second: Sequence[Mapping[str, Any]]) -> float:

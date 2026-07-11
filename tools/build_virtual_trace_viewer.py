@@ -84,6 +84,9 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
         "question": case.get("question", ""),
         "gold": case.get("gold", ""),
         "answer": run_summary.get("answer", ""),
+        "answer_mode": run_summary.get("answer_mode", ""),
+        "grounding_status": run_summary.get("grounding_status", ""),
+        "retrieval_status": run_summary.get("retrieval_status", ""),
         "correct": run_summary.get("correct"),
         "rounds": run_summary.get("rounds"),
         "accepted_investigations": run_summary.get("accepted_investigations"),
@@ -174,6 +177,9 @@ def _summary_card(case: Mapping[str, Any], run_summary: Mapping[str, Any], timel
         "<div class='summary'>"
         f"<div><b>Gold</b>: {_e(case.get('gold', ''))}</div>"
         f"<div><b>Answer</b>: {_e(run_summary.get('answer', ''))}</div>"
+        f"<div><b>Answer mode</b>: {_e(run_summary.get('answer_mode', 'legacy'))}</div>"
+        f"<div><b>Grounding</b>: {_e(run_summary.get('grounding_status', ''))}</div>"
+        f"<div><b>Retrieval</b>: {_e(run_summary.get('retrieval_status', ''))}</div>"
         f"<div><b>Correct</b>: {_e(run_summary.get('correct', ''))}</div>"
         f"<div><b>Rounds</b>: {_e(run_summary.get('rounds', ''))}</div>"
         f"<div><b>Accepted investigations</b>: {_e(run_summary.get('accepted_investigations', ''))}</div>"

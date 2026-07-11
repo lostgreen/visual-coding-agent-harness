@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import json
-from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
+from vcah.evidence_primitives import GapCondition, MeasurementFact, canonical_unit, make_gap_conditions
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.memory import EvidenceStore
 from vcah.types import ClaimContract, EvidenceRecord, is_path_only_visual_evidence, to_jsonable
@@ -19,6 +19,7 @@ class EvidenceGap:
     description: str
     success_conditions: tuple[str, ...] = ()
     falsification_conditions: tuple[str, ...] = ()
+    conditions: tuple[GapCondition, ...] = ()
     importance: str = "critical"
     status: str = "open"
 
@@ -35,6 +36,10 @@ class EvidenceGap:
             "falsification_conditions",
             tuple(str(item).strip() for item in self.falsification_conditions if str(item).strip()),
         )
+        conditions = tuple(_gap_condition(item) for item in self.conditions)
+        if not conditions:
+            conditions = make_gap_conditions(self.gap_id, self.success_conditions)
+        object.__setattr__(self, "conditions", conditions)
         importance = str(self.importance or "critical").strip().casefold()
         object.__setattr__(self, "importance", importance if importance in {"critical", "useful", "optional"} else "critical")
         status = str(self.status or "open").strip().casefold()
@@ -61,6 +66,7 @@ class InvestigationTask:
     preferred_ranges: tuple[tuple[float, float], ...] = ()
     excluded_ranges: tuple[tuple[float, float], ...] = ()
     region_hint: str = ""
+    conditions: tuple[GapCondition, ...] = ()
 
     def __post_init__(self) -> None:
         if self.time_range is not None:
@@ -81,6 +87,10 @@ class InvestigationTask:
         object.__setattr__(self, "preferred_ranges", _time_ranges(self.preferred_ranges))
         object.__setattr__(self, "excluded_ranges", _time_ranges(self.excluded_ranges))
         object.__setattr__(self, "region_hint", str(self.region_hint or "").strip())
+        conditions = tuple(_gap_condition(item) for item in self.conditions)
+        if not conditions and self.success_conditions:
+            conditions = make_gap_conditions(self.gap_id or self.query_id, self.success_conditions)
+        object.__setattr__(self, "conditions", conditions)
         object.__setattr__(
             self,
             "search_terms",
@@ -126,6 +136,12 @@ class MultiRoundResult:
     evidence: tuple[EvidenceRecord, ...]
     reports: tuple[InvestigationReport, ...]
     trace: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    grounded_answer: str = ""
+    forced_answer: str = ""
+    selected_option: str = ""
+    answer_mode: str = "insufficient"
+    grounding_status: str = "insufficient"
+    retrieval_status: str = "failed"
 
 
 class HeuristicReasoner:
@@ -161,10 +177,17 @@ class HeuristicReasoner:
         )
 
 
-def compile_query_contract(question: str) -> ClaimContract:
+def compile_query_contract(
+    question: str,
+    options: Mapping[str, str] | None = None,
+) -> ClaimContract:
     text = str(question or "").casefold()
     is_count = bool(re.search(r"\bhow many\b|\bnumber of\b", text))
     is_occurrence_count = bool(re.search(r"\bhow many times\b|\bnumber of times\b", text))
+    measurement_text = " ".join((text, *(str(item).casefold() for item in (options or {}).values())))
+    asked_measurement_unit = _asked_measurement_unit(text)
+    measurement_unit = asked_measurement_unit or _measurement_unit(measurement_text)
+    boundary_hint = _boundary_hint(question)
     full_video = "in total" in text or bool(
         re.search(r"\b(?:throughout|across)\b.*\b(?:video|film|recording)\b", text)
         or re.search(r"\b(?:entire|whole)\s+(?:video|film|recording)\b", text)
@@ -173,6 +196,20 @@ def compile_query_contract(question: str) -> ClaimContract:
     )
     language_action = any(term in text for term in ("comment", "say", "speak", "discuss", "mention"))
     identity_anchor_terms = _identity_anchor_terms(question)
+    if measurement_unit and not is_occurrence_count and (
+        bool(asked_measurement_unit) or "how much" in text or "what total" in text
+    ):
+        cumulative = bool(boundary_hint) or any(term in text for term in ("total", "consumed", "accumulated", "altogether"))
+        return ClaimContract(
+            required_scope="multi_window" if cumulative else "window",
+            quantifier="scalar_quantity",
+            observation_target="attribute",
+            aggregation="accumulate" if cumulative else "compare",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+            measurement_unit=measurement_unit,
+            boundary_hint=boundary_hint,
+        )
     if is_count:
         return ClaimContract(
             required_scope="full_video" if full_video else "multi_window",
@@ -199,6 +236,51 @@ def compile_query_contract(question: str) -> ClaimContract:
         required_observability=("visual",),
         observability_mode="all",
     )
+
+
+def _measurement_unit(text: str) -> str:
+    patterns = (
+        (r"\bcal(?:orie)?s?\b", "calorie"),
+        (r"\b(?:usd|dollars?|pounds?|euros?)\b", "dollar"),
+        (r"\bminutes?\b", "minute"),
+        (r"\b(?:meters?|metres?)\b", "meter"),
+        (r"\b(?:kilometers?|kilometres?)\b", "kilometer"),
+        (r"\bkilograms?\b|\bkg\b", "kilogram"),
+        (r"\b(?:light[ -]?years?|ly)\b", "light_year"),
+        (r"\byears?\b", "year"),
+        (r"\bpoints?\b", "point"),
+    )
+    normalized = str(text or "").casefold()
+    anchor = re.search(r"\b(?:how many|how much|what total)\b", normalized)
+    candidates = []
+    for order, (pattern, unit) in enumerate(patterns):
+        for match in re.finditer(pattern, normalized):
+            if anchor is None:
+                distance = match.start()
+            elif match.start() >= anchor.end():
+                distance = match.start() - anchor.end()
+            else:
+                distance = len(normalized) + anchor.start() - match.start()
+            candidates.append((distance, match.start(), order, canonical_unit(unit)))
+    return min(candidates)[-1] if candidates else ""
+
+
+def _asked_measurement_unit(text: str) -> str:
+    anchor = re.search(r"\b(?:how many|number of)\b", str(text or "").casefold())
+    if anchor is None:
+        return ""
+    tokens = re.findall(r"[a-z]+(?:-[a-z]+)?", str(text or "").casefold()[anchor.end() :])[:3]
+    return _measurement_unit(" ".join(tokens)) if tokens else ""
+
+
+def _boundary_hint(question: str) -> str:
+    text = " ".join(str(question or "").split())
+    match = re.search(
+        r"\b(?:before|when|until|by the time|at the time)\b\s+([^?.,;]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return match.group(0).strip() if match else ""
 
 
 def compile_query_requirements(question: str) -> dict[str, Any]:
@@ -332,7 +414,7 @@ class VirtualVideoMultiRoundDriver:
         investigator = self.investigator or VirtualVideoInvestigator(workspace)
         investigator.reset_run_state()
         workspace_overview = build_workspace_overview(workspace, thumbnail_budget=40)
-        query_contract = compile_query_contract(workspace.case.question)
+        query_contract = compile_query_contract(workspace.case.question, workspace.case.options)
         query_requirements = compile_query_requirements(workspace.case.question)
         temporal_navigation = source_time_navigation(workspace, compile_source_time_hint(workspace.case.question))
         evidence_store = EvidenceStore.empty(workspace.root_dir / "evidence.jsonl")
@@ -485,6 +567,7 @@ class VirtualVideoMultiRoundDriver:
                             entity_clusters=decision.entity_clusters,
                             evidence=evidence_store.records,
                             coverage_source_ids=gate.get("source_video_ids", ()),
+                            derivation=gate.get("derivation"),
                         )
                         evidence_store.add(aggregate)
                         citations = (aggregate.evidence_id,)
@@ -518,7 +601,7 @@ class VirtualVideoMultiRoundDriver:
                     }
                 )
             accepted += len(tasks)
-            batch = investigator.run_batch(tasks)
+            batch = _annotate_batch_progress(investigator.run_batch(tasks), reports)
             reports.extend(batch)
             known_evidence = {record.evidence_id for record in evidence_store.records}
             for report in batch:
@@ -626,6 +709,7 @@ class VirtualVideoMultiRoundDriver:
                             entity_clusters=final_decision.entity_clusters,
                             evidence=evidence_store.records,
                             coverage_source_ids=gate.get("source_video_ids", ()),
+                            derivation=gate.get("derivation"),
                         )
                         evidence_store.add(aggregate)
                         citations = (aggregate.evidence_id,)
@@ -635,18 +719,38 @@ class VirtualVideoMultiRoundDriver:
         if verified:
             final_answer = answer
             final_citations = citations
+            grounded_answer = answer
+            forced_answer = answer
+            answer_mode = "grounded"
+            grounding_status = "verified"
         elif best_answer:
             final_answer = best_answer
             final_citations = best_citations
             verification_reason = best_verification_reason or last_gate_reason
+            grounded_answer = ""
+            forced_answer = best_answer
+            answer_mode = "forced_choice"
+            grounding_status = "insufficient"
         else:
             final_answer = "Insufficient verified evidence."
             final_citations = ()
             verification_reason = last_gate_reason or "answer_missing"
+            grounded_answer = ""
+            forced_answer = ""
+            answer_mode = "insufficient"
+            grounding_status = "insufficient"
+        selected_option = _letter(final_answer) or _option_letter_from_answer(final_answer, workspace.case.options)
+        retrieval_status = _retrieval_status(reports, verified=verified)
         trace.append(
             {
                 "type": "answer_outcome",
                 "answer": final_answer,
+                "grounded_answer": grounded_answer,
+                "forced_answer": forced_answer,
+                "selected_option": selected_option,
+                "answer_mode": answer_mode,
+                "grounding_status": grounding_status,
+                "retrieval_status": retrieval_status,
                 "verified": verified,
                 "verification_reason": verification_reason,
                 "best_effort": bool(final_answer and not verified and best_answer),
@@ -664,6 +768,12 @@ class VirtualVideoMultiRoundDriver:
             evidence=tuple(evidence_store.records),
             reports=tuple(reports),
             trace=tuple(trace),
+            grounded_answer=grounded_answer,
+            forced_answer=forced_answer,
+            selected_option=selected_option,
+            answer_mode=answer_mode,
+            grounding_status=grounding_status,
+            retrieval_status=retrieval_status,
         )
         _write_run_summary(workspace, result)
         return result
@@ -1049,19 +1159,59 @@ def _quantitative_answer_gate(
         return None
     selected = _letter(answer) or _option_letter_from_answer(answer, workspace.case.options)
     option_text = str(workspace.case.options.get(selected, "") or answer)
+    if contract.quantifier == "scalar_quantity":
+        return _scalar_quantity_gate(contract, option_text, cited)
     atoms = _quantitative_atoms(option_text)
     if not atoms:
         return None
-    evidence_text = " ".join(
-        [record.verbatim for record in cited]
-        + [
-            str(event.get("description", "") or "")
-            for record in cited
-            for event in record.operation_metadata.get("events", ())
-            if isinstance(event, Mapping)
-        ]
-        + [json.dumps(record.operation_metadata.get("derivation"), ensure_ascii=False) for record in cited if record.operation_metadata.get("derivation")]
-    ).casefold()
+    primitive_records = tuple(
+        record
+        for record in cited
+        if "target_presence" in record.operation_metadata or "measurements" in record.operation_metadata
+    )
+    if primitive_records:
+        present_records = tuple(
+            record
+            for record in primitive_records
+            if str(
+                dict(record.operation_metadata.get("target_presence", {}) or {}).get("status", "")
+            ).casefold()
+            == "present"
+        )
+        if not present_records:
+            return {
+                "passed": False,
+                "reason": "quantitative_target_not_present",
+                "missing_numeric_atoms": list(atoms),
+                "missing_segment_ids": [],
+            }
+        evidence_text = " ".join(
+            " ".join(
+                (
+                    str(row.get("raw_text", "") or ""),
+                    str(row.get("value", "") or ""),
+                    str(row.get("unit", "") or ""),
+                )
+            )
+            for record in present_records
+            for row in record.operation_metadata.get("measurements", ()) or ()
+            if isinstance(row, Mapping)
+        ).casefold()
+    else:
+        evidence_text = " ".join(
+            [record.verbatim for record in cited]
+            + [
+                str(event.get("description", "") or "")
+                for record in cited
+                for event in record.operation_metadata.get("events", ())
+                if isinstance(event, Mapping)
+            ]
+            + [
+                json.dumps(record.operation_metadata.get("derivation"), ensure_ascii=False)
+                for record in cited
+                if record.operation_metadata.get("derivation")
+            ]
+        ).casefold()
     evidence_times = set(re.findall(r"\b\d{1,2}:\d{2}\b", evidence_text))
     evidence_numbers = {
         token.replace(",", "")
@@ -1080,6 +1230,166 @@ def _quantitative_answer_gate(
         "missing_numeric_atoms": missing,
         "missing_segment_ids": [],
     }
+
+
+def _scalar_quantity_gate(
+    contract: ClaimContract,
+    option_text: str,
+    cited: Sequence[EvidenceRecord],
+) -> dict[str, Any]:
+    target = _quantity_value(option_text)
+    if target is None:
+        return {"passed": False, "reason": "scalar_option_value_missing", "missing_segment_ids": []}
+    unit = canonical_unit(contract.measurement_unit)
+    facts = tuple(
+        fact
+        for fact in _measurement_facts(cited)
+        if fact.unit == unit and (not contract.boundary_hint or fact.boundary_relation in {"before", "at"})
+    )
+    if not facts:
+        return {
+            "passed": False,
+            "reason": "scalar_measurement_evidence_missing",
+            "measurement_unit": unit,
+            "missing_segment_ids": [],
+        }
+
+    cumulative = tuple(fact for fact in facts if fact.semantics == "cumulative")
+    if cumulative:
+        fact = max(
+            cumulative,
+            key=lambda item: (
+                item.boundary_relation == "at",
+                item.source_time_sec if item.source_time_sec is not None else float("-inf"),
+            ),
+        )
+        observed = fact.value
+        derivation = {
+            "operator": "read_cumulative",
+            "operands": [fact.value],
+            "result": observed,
+            "unit": unit,
+            "boundary_hint": contract.boundary_hint,
+            "evidence_ids": list(fact.evidence_ids),
+        }
+    else:
+        deltas = _deduplicated_delta_measurements(facts)
+        if not deltas:
+            return {
+                "passed": False,
+                "reason": "scalar_measurement_semantics_missing",
+                "measurement_unit": unit,
+                "missing_segment_ids": [],
+            }
+        observed = sum(fact.value for fact in deltas)
+        derivation = {
+            "operator": "sum_delta",
+            "operands": [fact.value for fact in deltas],
+            "result": observed,
+            "unit": unit,
+            "boundary_hint": contract.boundary_hint,
+            "evidence_ids": list(
+                dict.fromkeys(evidence_id for fact in deltas for evidence_id in fact.evidence_ids)
+            ),
+        }
+    relation = _quantity_relation(option_text)
+    if _quantity_entails(observed, target, relation):
+        return {
+            "passed": True,
+            "reason": "scalar_quantity_grounded",
+            "derivation": derivation,
+            "expected_value": target,
+            "expected_relation": relation,
+            "missing_segment_ids": [],
+        }
+    return {
+        "passed": False,
+        "reason": "scalar_quantity_answer_mismatch",
+        "derivation": derivation,
+        "expected_value": target,
+        "expected_relation": relation,
+        "observed_value": observed,
+        "missing_segment_ids": [],
+    }
+
+
+def _measurement_facts(cited: Sequence[EvidenceRecord]) -> tuple[MeasurementFact, ...]:
+    facts = []
+    for record in cited:
+        for row in record.operation_metadata.get("measurements", ()) or ():
+            if not isinstance(row, Mapping):
+                continue
+            try:
+                facts.append(
+                    MeasurementFact(
+                        value=float(row.get("value")),
+                        unit=str(row.get("unit", "") or ""),
+                        relation=str(row.get("relation", "exact") or "exact"),
+                        semantics=str(row.get("measurement_semantics", row.get("semantics", "unknown")) or "unknown"),
+                        subject_id=str(row.get("subject_id", "") or ""),
+                        source_time_sec=row.get("source_time_sec"),
+                        boundary_relation=str(row.get("boundary_relation", "unknown") or "unknown"),
+                        raw_text=str(row.get("raw_text", "") or ""),
+                        evidence_ids=tuple(row.get("evidence_ids", ()) or ()) or (record.evidence_id,),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+    return tuple(facts)
+
+
+def _deduplicated_delta_measurements(facts: Sequence[MeasurementFact]) -> tuple[MeasurementFact, ...]:
+    result = []
+    seen = set()
+    for fact in facts:
+        if fact.semantics != "delta" or fact.relation not in {"exact", "approx"}:
+            continue
+        key = (
+            fact.subject_id or "|".join(fact.evidence_ids),
+            fact.source_time_sec,
+            fact.value,
+            fact.unit,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(fact)
+    return tuple(result)
+
+
+def _quantity_value(text: str) -> float | None:
+    match = re.search(
+        r"(?<!:)\b(\d+(?:,\d{3})*(?:\.\d+)?)\s*(thousand|million|billion|trillion)?\b",
+        str(text or "").casefold(),
+    )
+    if not match:
+        return None
+    scale = {
+        "": 1.0,
+        "thousand": 1e3,
+        "million": 1e6,
+        "billion": 1e9,
+        "trillion": 1e12,
+    }[str(match.group(2) or "")]
+    return float(match.group(1).replace(",", "")) * scale
+
+
+def _quantity_relation(text: str) -> str:
+    normalized = str(text or "").casefold()
+    if any(term in normalized for term in ("more than", "greater than", "over ", "above ")):
+        return "greater_than"
+    if any(term in normalized for term in ("less than", "under ", "below ")):
+        return "less_than"
+    return "exact"
+
+
+def _quantity_entails(observed: float, expected: float, relation: str) -> bool:
+    if relation == "greater_than":
+        return observed > expected
+    if relation == "less_than":
+        return observed < expected
+    tolerance = max(1e-6, abs(expected) * 0.01)
+    return abs(observed - expected) <= tolerance
 
 
 def _quantitative_atoms(option_text: str) -> tuple[str, ...]:
@@ -1275,6 +1585,7 @@ def _derived_answer_evidence(
     entity_clusters: Sequence[Mapping[str, Any]],
     evidence: Sequence[EvidenceRecord],
     coverage_source_ids: Sequence[str] = (),
+    derivation: Mapping[str, Any] | None = None,
 ) -> EvidenceRecord:
     by_id = {record.evidence_id: record for record in evidence}
     parents = [by_id[str(citation)] for citation in citations]
@@ -1327,6 +1638,7 @@ def _derived_answer_evidence(
             "algorithm": "reasoner_reconciliation",
             "entity_clusters": clusters,
             "event_occurrences": event_occurrences,
+            "derivation": dict(derivation or {}),
         },
     )
 
@@ -1378,6 +1690,7 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         preferred_ranges=tuple(value.get("preferred_ranges", ()) or ()),
         excluded_ranges=tuple(value.get("excluded_ranges", ()) or ()),
         region_hint=str(value.get("region_hint", "") or ""),
+        conditions=tuple(value.get("conditions", ()) or ()),
     )
 
 
@@ -1405,9 +1718,22 @@ def _gap(value: EvidenceGap | Mapping[str, Any]) -> EvidenceGap:
         description=str(value.get("description", "") or ""),
         success_conditions=tuple(value.get("success_conditions", ()) or ()),
         falsification_conditions=tuple(value.get("falsification_conditions", ()) or ()),
+        conditions=tuple(value.get("conditions", ()) or ()),
         importance=str(value.get("importance", "critical") or "critical"),
         status=str(value.get("status", "open") or "open"),
     )
+
+
+def _gap_condition(value: GapCondition | Mapping[str, Any] | str) -> GapCondition:
+    if isinstance(value, GapCondition):
+        return value
+    if isinstance(value, Mapping):
+        return GapCondition(
+            condition_id=str(value.get("condition_id", "") or ""),
+            description=str(value.get("description", value.get("condition", "")) or ""),
+            critical=bool(value.get("critical", True)),
+        )
+    return GapCondition("", str(value or ""))
 
 
 def _bind_gap_to_tasks(decision: ReasonerDecision) -> ReasonerDecision:
@@ -1419,6 +1745,7 @@ def _bind_gap_to_tasks(decision: ReasonerDecision) -> ReasonerDecision:
             task,
             gap_id=task.gap_id or gap.gap_id,
             success_conditions=task.success_conditions or gap.success_conditions,
+            conditions=task.conditions or gap.conditions,
         )
         for task in decision.tasks
     )
@@ -1491,6 +1818,10 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
             "source_lineage": [dict(row) for row in item.source_lineage],
             "entities": list(item.operation_metadata.get("entities", ())),
             "events": list(item.operation_metadata.get("events", ())),
+            "target_presence": dict(item.operation_metadata.get("target_presence", {}) or {}),
+            "measurements": list(item.operation_metadata.get("measurements", ())),
+            "relations": list(item.operation_metadata.get("relations", ())),
+            "derivation": dict(item.operation_metadata.get("derivation", {}) or {}),
             "claim_assessment": dict(item.operation_metadata.get("claim_assessment", {}) or {}),
             "investigation": dict(item.operation_metadata.get("investigation", {}) or {}),
             "navigation": (
@@ -1524,6 +1855,9 @@ def _outcome_digest(reports: Sequence[InvestigationReport]) -> tuple[dict[str, A
                 "unresolved_conditions": list(report.unresolved_conditions),
                 "failure_reason": report.failure_reason,
                 "progress_flags": list(report.progress_flags),
+                "goal_progress": list(report.goal_progress),
+                "coverage_progress": list(report.coverage_progress),
+                "condition_results": to_jsonable(report.condition_results),
                 "coverage_delta": [list(item) for item in report.coverage_delta],
                 "observed_ranges": ranges,
                 "evidence_ids": [record.evidence_id for record in report.evidence],
@@ -1531,6 +1865,62 @@ def _outcome_digest(reports: Sequence[InvestigationReport]) -> tuple[dict[str, A
             }
         )
     return tuple(rows)
+
+
+def _annotate_batch_progress(
+    batch: Sequence[InvestigationReport],
+    previous: Sequence[InvestigationReport],
+) -> tuple[InvestigationReport, ...]:
+    covered: dict[str, list[tuple[float, float]]] = {}
+    for report in previous:
+        covered.setdefault(report.gap_id, []).extend(report.coverage_delta)
+    result = []
+    for report in batch:
+        intervals = tuple(report.coverage_delta)
+        prior = covered.setdefault(report.gap_id, [])
+        adds_frontier = any(_uncovered_duration(interval, prior) >= 0.5 for interval in intervals)
+        goal_progress = tuple(report.goal_progress) or tuple(
+            dict.fromkeys(
+                f"condition_{item.status}:{item.condition_id}"
+                for item in report.condition_results
+                if item.status in {"satisfied", "contradicted"}
+            )
+        )
+        coverage_progress = tuple(report.coverage_progress)
+        if adds_frontier and "new_frontier_coverage" not in coverage_progress:
+            coverage_progress = (*coverage_progress, "new_frontier_coverage")
+        progress_flags = tuple(dict.fromkeys((*report.progress_flags, *goal_progress, *coverage_progress)))
+        normalized = replace(
+            report,
+            goal_progress=goal_progress,
+            coverage_progress=coverage_progress,
+            progress_flags=progress_flags,
+        )
+        result.append(normalized)
+        prior.extend(intervals)
+    return tuple(result)
+
+
+def _uncovered_duration(
+    interval: tuple[float, float],
+    covered: Sequence[tuple[float, float]],
+) -> float:
+    start, end = float(interval[0]), float(interval[1])
+    fragments = [(start, end)]
+    for left, right in covered:
+        next_fragments = []
+        for frag_start, frag_end in fragments:
+            if right <= frag_start or left >= frag_end:
+                next_fragments.append((frag_start, frag_end))
+                continue
+            if left > frag_start:
+                next_fragments.append((frag_start, min(left, frag_end)))
+            if right < frag_end:
+                next_fragments.append((max(right, frag_start), frag_end))
+        fragments = next_fragments
+        if not fragments:
+            return 0.0
+    return sum(max(0.0, frag_end - frag_start) for frag_start, frag_end in fragments)
 
 
 def _stagnation_status(reports: Sequence[InvestigationReport]) -> dict[str, Any]:
@@ -1550,17 +1940,26 @@ def _stagnation_status(reports: Sequence[InvestigationReport]) -> dict[str, Any]
     if len(gap_ids) != 1:
         return {"stagnant": False, "gap_id": "", "reason": ""}
     unresolved = all(report.resolution in {"partial", "unresolved"} for report in recent)
-    no_condition_progress = not any(report.resolved_conditions for report in recent)
-    repeated = sum(bool(report.cost.get("reused")) for report in recent) >= 1
-    same_range = _reports_share_range(recent)
-    stagnant = unresolved and no_condition_progress and (repeated or same_range)
-    gap_id = next(iter(gap_ids)) if stagnant else ""
+    no_goal_progress = not any(report.goal_progress for report in recent)
+    no_coverage_progress = not any(report.coverage_progress for report in recent)
+    stagnant = unresolved and no_goal_progress and no_coverage_progress
+    low_yield_coverage = len(recent) >= 3 and unresolved and no_goal_progress and not no_coverage_progress
+    gap_id = next(iter(gap_ids)) if stagnant or low_yield_coverage else ""
     return {
         "stagnant": stagnant,
         "gap_id": gap_id,
-        "reason": "equivalent_attempts_without_condition_progress" if stagnant else "",
-        "required_shift": "change range, direction, modality, or region focus" if stagnant else "",
+        "low_yield_coverage": low_yield_coverage,
+        "reason": "no_goal_or_frontier_progress" if stagnant else "coverage_without_condition_progress" if low_yield_coverage else "",
+        "required_shift": "change range, direction, modality, or region focus" if stagnant or low_yield_coverage else "",
     }
+
+
+def _retrieval_status(reports: Sequence[InvestigationReport], *, verified: bool) -> str:
+    if verified:
+        return "sufficient"
+    if any(report.goal_progress for report in reports):
+        return "partial"
+    return "failed"
 
 
 def _reports_share_range(reports: Sequence[InvestigationReport]) -> bool:
@@ -1666,6 +2065,12 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
             {
                 "case_id": result.case_id,
                 "answer": result.answer,
+                "grounded_answer": result.grounded_answer,
+                "forced_answer": result.forced_answer,
+                "selected_option": result.selected_option,
+                "answer_mode": result.answer_mode,
+                "grounding_status": result.grounding_status,
+                "retrieval_status": result.retrieval_status,
                 "citations": list(result.citations),
                 "correct": result.correct,
                 "verified": result.verified,

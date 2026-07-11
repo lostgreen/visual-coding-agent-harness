@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,18 @@ import requests
 import yaml
 from PIL import Image, ImageEnhance
 
+from vcah.evidence_primitives import (
+    ConditionResult,
+    GapCondition,
+    MeasurementFact,
+    RelationFact,
+    TargetPresenceFact,
+    derive_resolution,
+    normalize_condition_results,
+    normalize_measurements,
+    normalize_relations,
+    normalize_target_presence,
+)
 from vcah.investigator import (
     InvestigationReport,
     VirtualVideoInvestigator,
@@ -24,7 +37,7 @@ from vcah.investigator import (
     _task_terms,
 )
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
-from vcah.types import CoverageSegment, EvidenceRecord
+from vcah.types import CoverageSegment, EvidenceRecord, to_jsonable
 from vcah.video import probe_duration
 from vcah.virtual_index import build_virtual_beat_index
 from vcah.virtual_video import (
@@ -86,6 +99,12 @@ def _load_existing_case_summary(workspace_root: Path) -> dict[str, Any] | None:
     return {
         "case_id": str(payload.get("case_id", workspace_root.name) or workspace_root.name),
         "answer": str(payload.get("answer", "") or ""),
+        "grounded_answer": str(payload.get("grounded_answer", "") or ""),
+        "forced_answer": str(payload.get("forced_answer", "") or ""),
+        "selected_option": str(payload.get("selected_option", "") or ""),
+        "answer_mode": str(payload.get("answer_mode", "") or ""),
+        "grounding_status": str(payload.get("grounding_status", "") or ""),
+        "retrieval_status": str(payload.get("retrieval_status", "") or ""),
         "citations": list(payload.get("citations", ()) or ()),
         "correct": bool(payload.get("correct")),
         "verified": bool(payload.get("verified")),
@@ -144,6 +163,12 @@ def main() -> None:
         return {
             "case_id": result.case_id,
             "answer": result.answer,
+            "grounded_answer": result.grounded_answer,
+            "forced_answer": result.forced_answer,
+            "selected_option": result.selected_option,
+            "answer_mode": result.answer_mode,
+            "grounding_status": result.grounding_status,
+            "retrieval_status": result.retrieval_status,
             "citations": list(result.citations),
             "correct": result.correct,
             "verified": result.verified,
@@ -394,6 +419,8 @@ class GeminiReasoner:
                     )
                 candidate = self._repair_invalid_answer(kwargs, evidence_digest, candidate)
             if not _valid_option_answer(candidate.answer, kwargs.get("options") or {}):
+                if kwargs.get("force_finalize"):
+                    return self._force_best_effort(kwargs, evidence_digest)
                 return ReasonerDecision(
                     action="answer",
                     answer="",
@@ -552,27 +579,19 @@ class GeminiReasoner:
         evidence_digest: Sequence[Mapping[str, Any]],
         candidate: ReasonerDecision,
     ) -> ReasonerDecision:
-        prompt = (
-            "The previous response did not select a valid multiple-choice option. Using only the supplied evidence, choose exactly "
-            "one listed option even if support is incomplete. Return compact JSON only: "
-            "{\"answer\":\"A. option text\",\"citations\":[\"ev_...\"]}.\n"
-            f"Question: {kwargs.get('question', '')}\nOptions: {json.dumps(kwargs.get('options') or {}, ensure_ascii=False)}\n"
-            f"Invalid response: {candidate.answer}\n"
-            f"Evidence: {json.dumps(list(evidence_digest)[-12:], ensure_ascii=False)}"
-        )
-        raw = self.api.chat(prompt, max_tokens=500)
-        parsed = _parse_json(raw)
-        self._trace("reasoner_option_repair", prompt, raw, parsed)
-        answer, nested_citations = _normalize_answer_payload(parsed.get("answer"), kwargs.get("options") or {})
-        repaired = ReasonerDecision(
-            action="answer",
-            answer=answer,
-            citations=tuple(parsed.get("citations") or nested_citations or candidate.citations),
-            entity_clusters=candidate.entity_clusters,
-            support_status=candidate.support_status,
-            support_reason=candidate.support_reason,
-        )
-        return repaired if _valid_option_answer(repaired.answer, kwargs.get("options") or {}) else candidate
+        del evidence_digest
+        options = dict(kwargs.get("options") or {})
+        normalized_answer = re.sub(r"[^a-z0-9]+", "", candidate.answer.casefold())
+        matches = [
+            (str(label), str(text))
+            for label, text in options.items()
+            if normalized_answer
+            and normalized_answer == re.sub(r"[^a-z0-9]+", "", str(text).casefold())
+        ]
+        if len(matches) != 1:
+            return candidate
+        label, text = matches[0]
+        return replace(candidate, answer=f"{label}. {text}")
 
     def _maybe_verify_claim(
         self,
@@ -679,7 +698,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         preview_raw = self.api.chat(
             preview_prompt,
             image_paths=preview_paths,
-            max_tokens=1000 if event_window else 900 if claim_window else 700,
+            max_tokens=1200 if event_window else 1100 if claim_window else 1000,
         )
         preview = _parse_json(preview_raw)
         _append_jsonl(
@@ -725,14 +744,36 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             selected_frames = select_uniform_items(tuple(selected_packet["frames"]), 16)
             detail_paths = tuple(str(row["path"]) for row in selected_frames)
             if region_box is not None:
-                context_frames = select_uniform_items(selected_frames, min(8, len(selected_frames)))
+                context_frames = select_uniform_items(selected_frames, min(4, len(selected_frames)))
                 context_paths = tuple(str(row["path"]) for row in context_frames)
-                region_rows = _materialize_region_crops(
+                model_box_rows = _materialize_region_crops(
                     self.workspace,
                     observation_id,
                     context_frames,
                     region_box,
+                    prefix="model_box",
+                    region_kind="model_box",
                 )
+                coarse_rows = []
+                representative_frames = select_uniform_items(context_frames, min(2, len(context_frames)))
+                coarse_boxes = (
+                    (0.0, 0.0, 0.55, 0.55),
+                    (0.45, 0.0, 1.0, 0.55),
+                    (0.0, 0.45, 0.55, 1.0),
+                    (0.45, 0.45, 1.0, 1.0),
+                )
+                for tile_index, coarse_box in enumerate(coarse_boxes, start=1):
+                    coarse_rows.extend(
+                        _materialize_region_crops(
+                            self.workspace,
+                            observation_id,
+                            representative_frames,
+                            coarse_box,
+                            prefix=f"coarse_{tile_index}",
+                            region_kind="coarse_tile",
+                        )
+                    )
+                region_rows = (*model_box_rows, *coarse_rows)
                 region_frame_paths = tuple(str(row["path"]) for row in region_rows)
                 model_image_paths = (*context_paths, *region_frame_paths)
                 selected_packet = {
@@ -741,6 +782,11 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                         "hint": str(getattr(task, "region_hint", "") or preview.get("region_hint", "") or ""),
                         "normalized_box": list(region_box),
                         "crop_count": len(region_frame_paths),
+                        "ordered_image_groups": [
+                            {"kind": "full_context", "count": len(context_paths)},
+                            {"kind": "model_box", "count": len(model_box_rows)},
+                            {"kind": "coarse_tile", "count": len(coarse_rows)},
+                        ],
                     },
                 }
             else:
@@ -767,7 +813,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             raw = self.api.chat(
                 final_prompt,
                 image_paths=model_image_paths,
-                max_tokens=1000 if event_window else 900 if claim_window else 700,
+                max_tokens=1200 if event_window else 1100 if claim_window else 1000,
             )
             parsed = _parse_json(raw)
             tool_trace.append(f"inspect_window:{self.highfps:.1f}")
@@ -792,19 +838,27 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "time": time.time(),
             },
         )
+        evidence_id = f"ev_{observation_id}_001"
         confidence = _confidence(parsed.get("confidence"), default=0.6)
         entities = _normalize_entities(parsed.get("entities"))
         events = _normalize_events(parsed.get("events"), selected_window)
         claim_assessment = _normalize_claim_assessment(parsed, task) if claim_window else {}
+        target_presence = normalize_target_presence(parsed.get("target_presence"), evidence_id=evidence_id)
+        measurements = normalize_measurements(parsed.get("measurements"), evidence_id=evidence_id)
+        relations = normalize_relations(parsed.get("relations"), evidence_id=evidence_id)
         supports_identity_anchor = _truthy(parsed.get("supports_identity_anchor"))
         supports_answer_event = bool(events) or _truthy(parsed.get("supports_answer_event"))
         outcome = _normalize_investigation_outcome(
             parsed,
             task,
+            evidence_id=evidence_id,
             has_observation=bool(frame_paths),
             claim_assessment=claim_assessment,
             entities=entities,
             events=events,
+            target_presence=target_presence,
+            measurements=measurements,
+            relations=relations,
             region_used=bool(region_frame_paths),
             selected_window=selected_window,
         )
@@ -817,7 +871,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         else:
             evidence_kind = "visual_observation"
         evidence = EvidenceRecord(
-            evidence_id=f"ev_{observation_id}_001",
+            evidence_id=evidence_id,
             beat_id="",
             start_sec=float(selected_window[0]),
             end_sec=float(selected_window[1]),
@@ -844,6 +898,9 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "entities": entities,
                 "events": events,
                 "claim_assessment": claim_assessment,
+                "target_presence": to_jsonable(target_presence),
+                "measurements": to_jsonable(measurements),
+                "relations": to_jsonable(relations),
                 "supports_identity_anchor": supports_identity_anchor,
                 "supports_answer_event": supports_answer_event,
                 "investigation": outcome,
@@ -878,6 +935,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             failure_reason=str(outcome["failure_reason"]),
             progress_flags=tuple(outcome["progress_flags"]),
             coverage_delta=(tuple(outcome["coverage_delta"]),) if outcome["coverage_delta"] else (),
+            condition_results=tuple(outcome["condition_results"]),
+            goal_progress=tuple(outcome["goal_progress"]),
         )
 
     def _search_asr_task(self, task: Any) -> InvestigationReport:
@@ -954,6 +1013,36 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "time": time.time(),
             },
         )
+        conditions = tuple(getattr(task, "conditions", ()) or ())
+        has_hits = bool(packet["clusters"])
+        evidence_ids = tuple(record.evidence_id for record in evidence if record.observation_polarity == "positive")
+        condition_results = tuple(
+            ConditionResult(
+                condition.condition_id,
+                "satisfied"
+                if has_hits and any(term in condition.description.casefold() for term in ("locate", "find", "search", "candidate", "match"))
+                else "unknown",
+                "Literal ASR matches were returned." if has_hits else "No literal ASR matches were returned.",
+                evidence_ids=evidence_ids if has_hits else (),
+            )
+            for condition in conditions
+        )
+        resolution = derive_resolution(conditions, condition_results) if conditions else "resolved"
+        resolved = tuple(
+            condition.description
+            for condition, result in zip(conditions, condition_results)
+            if result.status == "satisfied"
+        )
+        unresolved = tuple(
+            condition.description
+            for condition, result in zip(conditions, condition_results)
+            if result.status != "satisfied"
+        )
+        goal_progress = tuple(
+            f"condition_satisfied:{result.condition_id}"
+            for result in condition_results
+            if result.status == "satisfied"
+        )
         return InvestigationReport(
             query_id=query_id,
             status="satisfied",
@@ -966,14 +1055,17 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "hit_clusters": len(evidence),
             },
             gap_id=str(getattr(task, "gap_id", "") or ""),
-            resolution="resolved",
-            resolved_conditions=tuple(getattr(task, "success_conditions", ()) or ()),
-            progress_flags=("lexical_navigation_completed",),
+            resolution=resolution,
+            resolved_conditions=resolved,
+            unresolved_conditions=unresolved,
+            progress_flags=("lexical_navigation_completed", *goal_progress),
             coverage_delta=tuple(
                 (float(record.start_sec), float(record.end_sec))
                 for record in evidence
                 if record.start_sec is not None and record.end_sec is not None
             ),
+            condition_results=condition_results,
+            goal_progress=goal_progress,
         )
 
     def _investigate_event_beats(self, task: Any, segment_packet: Mapping[str, Any]) -> InvestigationReport:
@@ -990,11 +1082,23 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 expected_evidence=str(getattr(task, "expected_evidence", "") or ""),
                 inspection_mode="event_window",
                 priority=float(getattr(task, "priority", 0.0) or 0.0),
+                gap_id=str(getattr(task, "gap_id", "") or ""),
+                success_conditions=tuple(getattr(task, "success_conditions", ()) or ()),
+                conditions=tuple(getattr(task, "conditions", ()) or ()),
+                direction=str(getattr(task, "direction", "") or ""),
+                preferred_ranges=tuple(getattr(task, "preferred_ranges", ()) or ()),
+                excluded_ranges=tuple(getattr(task, "excluded_ranges", ()) or ()),
             )
             report = self._investigate_task(beat_task, prior_events=prior_events)
             reports.append(report)
             prior_events = _ending_event_context(report.evidence, window)
         evidence = tuple(record for report in reports for record in report.evidence)
+        condition_results = _merge_condition_results(reports)
+        goal_progress = tuple(
+            f"condition_{result.status}:{result.condition_id}"
+            for result in condition_results
+            if result.status in {"satisfied", "contradicted"}
+        )
         return InvestigationReport(
             query_id=str(getattr(task, "query_id", "") or ""),
             status="satisfied" if evidence else "empty",
@@ -1031,6 +1135,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             coverage_delta=tuple(
                 interval for report in reports for interval in report.coverage_delta
             ),
+            condition_results=condition_results,
+            goal_progress=goal_progress,
         )
 
     def _next_observation_id(self, query_id: str) -> str:
@@ -1188,6 +1294,9 @@ def _materialize_region_crops(
     observation_id: str,
     frames: Sequence[Mapping[str, Any]],
     region_box: tuple[float, float, float, float],
+    *,
+    prefix: str = "region",
+    region_kind: str = "model_box",
 ) -> tuple[dict[str, Any], ...]:
     out_dir = workspace.root_dir / "observations" / "regions" / observation_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1213,7 +1322,7 @@ def _materialize_region_crops(
                         (max(1, int(round(crop.width * scale))), max(1, int(round(crop.height * scale)))),
                         Image.Resampling.LANCZOS,
                     )
-                path = out_dir / f"region_{index:03d}.jpg"
+                path = out_dir / f"{prefix}_{index:03d}.jpg"
                 crop.save(path, quality=94)
         except OSError:
             continue
@@ -1223,6 +1332,7 @@ def _materialize_region_crops(
                 "path": str(path),
                 "parent_path": str(source),
                 "region_box": list(region_box),
+                "region_kind": str(region_kind),
             }
         )
     return tuple(rows)
@@ -1232,48 +1342,60 @@ def _normalize_investigation_outcome(
     parsed: Mapping[str, Any],
     task: Any,
     *,
+    evidence_id: str,
     has_observation: bool,
     claim_assessment: Mapping[str, Any],
     entities: Sequence[Mapping[str, Any]],
     events: Sequence[Mapping[str, Any]],
+    target_presence: TargetPresenceFact,
+    measurements: Sequence[MeasurementFact],
+    relations: Sequence[RelationFact],
     region_used: bool,
     selected_window: tuple[float, float],
 ) -> dict[str, Any]:
-    conditions = tuple(str(item).strip() for item in getattr(task, "success_conditions", ()) or () if str(item).strip())
-    resolved = list(_string_items(parsed.get("resolved_conditions")))
-    unresolved = list(_string_items(parsed.get("unresolved_conditions")))
-    for row in parsed.get("condition_results", ()) or ():
-        if not isinstance(row, Mapping):
-            continue
-        condition = str(row.get("condition", "") or "").strip()
-        status = str(row.get("status", "") or "").strip().casefold()
-        if not condition:
-            continue
-        if status == "resolved":
-            resolved.append(condition)
-        elif status in {"partial", "unresolved"}:
-            unresolved.append(condition)
-    resolved = list(dict.fromkeys(resolved))
-    unresolved = list(dict.fromkeys(unresolved))
-    explicit = str(parsed.get("resolution", "") or "").strip().casefold()
-    if explicit in {"resolved", "partial", "unresolved"}:
-        resolution = explicit
+    conditions = tuple(
+        item if isinstance(item, GapCondition) else GapCondition(**dict(item))
+        for item in tuple(getattr(task, "conditions", ()) or ())
+        if isinstance(item, (GapCondition, Mapping))
+    )
+    condition_results = normalize_condition_results(
+        parsed.get("condition_results"),
+        conditions,
+        evidence_id=evidence_id,
+        target_presence=target_presence,
+        measurements=measurements,
+        relations=relations,
+    )
+    if conditions:
+        resolution = derive_resolution(conditions, condition_results)
     elif claim_assessment and str(claim_assessment.get("verdict", "") or "") in {"supports", "refutes"}:
         resolution = "resolved"
-    elif conditions:
-        resolution = "resolved" if resolved and not unresolved and len(resolved) >= len(conditions) else "partial" if has_observation else "unresolved"
     else:
         resolution = "resolved" if has_observation and bool(str(parsed.get("summary", "") or "").strip()) else "unresolved"
-    if conditions and resolution != "resolved" and not unresolved:
-        unresolved = [condition for condition in conditions if condition not in resolved]
+    by_id = {condition.condition_id: condition for condition in conditions}
+    resolved = [
+        by_id[result.condition_id].description
+        for result in condition_results
+        if result.status == "satisfied" and result.condition_id in by_id
+    ]
+    unresolved = [
+        condition.description
+        for condition in conditions
+        if not any(
+            result.condition_id == condition.condition_id and result.status == "satisfied"
+            for result in condition_results
+        )
+    ]
     failure_reason = str(parsed.get("failure_reason", "") or "").strip()
     if resolution != "resolved" and not failure_reason:
         failure_reason = str(parsed.get("reason", "") or "semantic success conditions remain unresolved").strip()
     progress = list(_string_items(parsed.get("progress_flags")))
-    if has_observation:
-        progress.append("new_time_coverage")
-    if resolved:
-        progress.append("condition_resolved")
+    goal_progress = [
+        f"condition_{result.status}:{result.condition_id}"
+        for result in condition_results
+        if result.status in {"satisfied", "contradicted"}
+    ]
+    progress.extend(goal_progress)
     if entities:
         progress.append("entity_observed")
     if events:
@@ -1287,8 +1409,36 @@ def _normalize_investigation_outcome(
         "unresolved_conditions": list(dict.fromkeys(unresolved)),
         "failure_reason": failure_reason,
         "progress_flags": list(dict.fromkeys(progress)),
+        "goal_progress": list(dict.fromkeys(goal_progress)),
+        "condition_results": condition_results,
         "coverage_delta": [float(selected_window[0]), float(selected_window[1])] if has_observation else [],
     }
+
+
+def _merge_condition_results(reports: Sequence[InvestigationReport]) -> tuple[ConditionResult, ...]:
+    by_id: dict[str, list[ConditionResult]] = {}
+    for report in reports:
+        for result in report.condition_results:
+            by_id.setdefault(result.condition_id, []).append(result)
+    merged = []
+    for condition_id, rows in by_id.items():
+        if rows and all(row.status == "satisfied" for row in rows):
+            status = "satisfied"
+        elif any(row.status == "contradicted" for row in rows):
+            status = "contradicted"
+        else:
+            status = "unknown"
+        merged.append(
+            ConditionResult(
+                condition_id=condition_id,
+                status=status,
+                observation="; ".join(dict.fromkeys(row.observation for row in rows if row.observation))[:800],
+                evidence_ids=tuple(
+                    dict.fromkeys(evidence_id for row in rows for evidence_id in row.evidence_ids)
+                ),
+            )
+        )
+    return tuple(merged)
 
 
 def _string_items(value: Any) -> tuple[str, ...]:
@@ -1767,6 +1917,8 @@ def _investigate_prompt(
         "visually, and change terms after a negative result.\n"
         "For full-video count questions, evidence from one chunk is only a source hypothesis, not complete proof.\n"
         "For total event-count questions, dispatch segment tasks that enumerate atomic event occurrences with timestamps.\n"
+        "For scalar_quantity questions, inspect each relevant displayed operand or checkpoint and ask for its unit, delta or cumulative "
+        "semantics, and relation to the stated boundary. Do not infer a quantity from answer options.\n"
         "For source-relative minute questions, prioritize the supplied temporal_navigation candidate segments.\n"
         "For identity-anchor questions, first locate evidence matching every identity_anchor_term before investigating the later event.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
@@ -1818,6 +1970,8 @@ def _followup_prompt(
         "Create one entity_cluster per unique person, and make the option count equal the number of clusters.\n"
         "For total event-count questions, count only the timestamped events rows in evidence, deduplicate overlapping observations, "
         "cite every evidence record containing a positive occurrence, and never infer the count from answer options or entity clusters.\n"
+        "For scalar_quantity questions, use only structured measurement facts with the requested unit. Distinguish delta or cumulative "
+        "measurements, exclude observations after the stated boundary, and cite every operand used in the derivation.\n"
         "For identity-anchor questions, do not answer while missing_identity_anchor_terms is non-empty. "
         "The final entity cluster must cite both anchor evidence and the later event evidence for the same person.\n"
         "Treat independent claim_assessment evidence as a direct check of the proposed relation. If it refutes a candidate, "
@@ -2084,12 +2238,20 @@ def _forced_answer_prompt(
 
 
 def _resolution_prompt(task: Any) -> str:
-    conditions = tuple(getattr(task, "success_conditions", ()) or ())
+    conditions = tuple(getattr(task, "conditions", ()) or ())
     return (
-        "Evaluate the task itself, not whether frames were returned. In the same JSON include "
-        "\"resolution\":\"resolved|partial|unresolved\", \"resolved_conditions\":[], "
-        "\"unresolved_conditions\":[], \"failure_reason\":\"\", and \"progress_flags\":[] . "
-        f"Success conditions: {json.dumps(list(conditions), ensure_ascii=False)}\n"
+        "Evaluate only what is directly observable, not whether frames were returned. In the same JSON include "
+        "\"target_presence\":{\"target\":\"...\",\"status\":\"present|absent|uncertain\",\"confidence\":0.0}, "
+        "\"measurements\":[{\"value\":0.0,\"unit\":\"...\",\"relation\":\"exact|approx|greater_than|less_than\","
+        "\"measurement_semantics\":\"delta|cumulative|unknown\",\"subject_id\":\"\",\"source_time_sec\":null,"
+        "\"boundary_relation\":\"before|at|after|unknown\",\"raw_text\":\"\"}], "
+        "\"relations\":[{\"relation_type\":\"identity|temporal|causal|transition\",\"subject_id\":\"\","
+        "\"object_id\":\"\",\"status\":\"supported|contradicted|unknown\",\"description\":\"\"}], and "
+        "\"condition_results\":[{\"condition_id\":\"...\",\"status\":\"satisfied|unknown|contradicted\","
+        "\"observation\":\"direct observation\"}]. Use only the stable condition_id values below. "
+        "For a crop, mark target_presence present only if the requested target is actually inside that crop; otherwise use absent or uncertain. "
+        "The driver derives overall resolution, so do not self-declare it. Return empty measurement/relation arrays when unsupported. "
+        f"Stable conditions: {json.dumps(to_jsonable(conditions), ensure_ascii=False)}\n"
     )
 
 
