@@ -3,6 +3,7 @@ from __future__ import annotations
 from math import ceil
 from pathlib import Path
 import subprocess
+import threading
 from typing import Sequence
 
 from PIL import Image
@@ -11,6 +12,9 @@ from vcah.types import Frame
 
 
 IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
+_FFMPEG_SEMAPHORE = threading.BoundedSemaphore(4)
+_FFMPEG_FRAME_TIMEOUT_SEC = 30.0
+_FFMPEG_FRAME_ATTEMPTS = 2
 
 
 def is_image_path(path: str | Path, *, must_exist: bool = False) -> bool:
@@ -128,6 +132,10 @@ def _sample_times(start_sec: float, end_sec: float, n_frames: int) -> tuple[floa
 def _extract_frame(video_path: str, time_sec: float, output_path: Path) -> None:
     command = [
         "ffmpeg",
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-y",
         "-ss",
         f"{float(time_sec):.3f}",
@@ -139,13 +147,28 @@ def _extract_frame(video_path: str, time_sec: float, output_path: Path) -> None:
         "2",
         str(output_path),
     ]
-    try:
-        completed = subprocess.run(command, check=False, capture_output=True, text=True)
-    except FileNotFoundError as exc:
-        raise RuntimeError("ffmpeg is required to sample frames") from exc
-    if completed.returncode != 0 or not output_path.exists():
+    last_error = ""
+    for _ in range(_FFMPEG_FRAME_ATTEMPTS):
+        output_path.unlink(missing_ok=True)
+        try:
+            with _FFMPEG_SEMAPHORE:
+                completed = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=_FFMPEG_FRAME_TIMEOUT_SEC,
+                )
+        except FileNotFoundError as exc:
+            raise RuntimeError("ffmpeg is required to sample frames") from exc
+        except subprocess.TimeoutExpired:
+            last_error = f"ffmpeg timed out after {_FFMPEG_FRAME_TIMEOUT_SEC:.0f}s while sampling a frame"
+            continue
+        if completed.returncode == 0 and output_path.exists():
+            return
         tail = (completed.stderr or completed.stdout or "").strip().splitlines()[-2:]
-        raise RuntimeError(f"ffmpeg failed to sample a frame: {' | '.join(tail)}")
+        last_error = f"ffmpeg failed to sample a frame: {' | '.join(tail)}"
+    raise RuntimeError(last_error or "ffmpeg failed to sample a frame")
 
 
 def _fit_image(path: Path, *, cell_size: tuple[int, int]) -> Image.Image:

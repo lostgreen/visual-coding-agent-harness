@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 from typing import Sequence
 
 import numpy as np
 from PIL import Image
+import pytest
 
+import vcah.video as video
 from vcah.types import Frame
 from vcah.virtual_index import build_virtual_beat_index, build_workspace_overview
 from vcah.virtual_video import (
@@ -42,6 +45,52 @@ class ColorModel:
             text = query.casefold()
             rows.append([0.0, 0.0, 1.0] if "blue" in text else [1.0, 0.0, 0.0])
         return np.asarray(rows, dtype=np.float32)
+
+
+def test_ffmpeg_frame_extraction_uses_concurrency_guard_and_timeout(monkeypatch, tmp_path: Path) -> None:
+    class Guard:
+        def __init__(self) -> None:
+            self.entries = 0
+
+        def __enter__(self) -> None:
+            self.entries += 1
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            del exc_type, exc, traceback
+
+    guard = Guard()
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((list(command), dict(kwargs)))
+        Image.new("RGB", (32, 18), color=(40, 60, 80)).save(command[-1])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(video, "_FFMPEG_SEMAPHORE", guard, raising=False)
+    monkeypatch.setattr(video.subprocess, "run", fake_run)
+    output_path = tmp_path / "frame.jpg"
+
+    video._extract_frame("source.mp4", 12.5, output_path)
+
+    assert guard.entries == 1
+    assert calls[0][1]["timeout"] == 30.0
+    assert "-nostdin" in calls[0][0]
+    assert output_path.exists()
+
+
+def test_ffmpeg_frame_extraction_retries_bounded_timeouts(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((list(command), dict(kwargs)))
+        raise subprocess.TimeoutExpired(command, kwargs.get("timeout"))
+
+    monkeypatch.setattr(video.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        video._extract_frame("source.mp4", 12.5, tmp_path / "frame.jpg")
+
+    assert len(calls) == 2
 
 
 def _fake_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
