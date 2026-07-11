@@ -238,6 +238,34 @@ def test_lowfps_cache_and_window_sampling_manifests_keep_separate_lineage(tmp_pa
     assert window_rows[0]["source_time_sec"] == 101.0
 
 
+def test_lowfps_cache_skips_isolated_sampling_failure_and_records_lineage(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    def flaky_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
+        if video_path == "target.mp4" and start_sec == 102.0:
+            raise RuntimeError("ffmpeg timed out after 30s while sampling a frame")
+        return _fake_sampler(video_path, start_sec, end_sec, n_frames, out_dir)
+
+    frames = materialize_lowfps_frame_cache(workspace, fps=1.0, sampler=flaky_sampler)
+    failures_path = workspace.root_dir / "frame_sampling_failures.jsonl"
+    failures = [json.loads(line) for line in failures_path.read_text(encoding="utf-8").splitlines()]
+
+    assert len(frames) == 9
+    assert all(frame.source_time_sec != 102.0 for frame in frames)
+    assert failures == [
+        {
+            "error": "ffmpeg timed out after 30s while sampling a frame",
+            "fps_level": "low",
+            "sampling_fps": 1.0,
+            "segment_id": "seg_b",
+            "source_path": "target.mp4",
+            "source_time_sec": 102.0,
+            "source_video_id": "target",
+            "virtual_time_sec": 6.0,
+        }
+    ]
+
+
 def test_materialized_frame_paths_are_unique_with_constant_sampler_names(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
 

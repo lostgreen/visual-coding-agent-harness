@@ -285,17 +285,36 @@ def materialize_lowfps_frame_cache(
     sampler = sampler or sample_frames
     step = 1.0 / max(0.001, float(fps))
     rows: list[VirtualFrameRef] = []
+    failures: list[dict[str, Any]] = []
+    failures_path = workspace.root_dir / "frame_sampling_failures.jsonl"
+    failures_path.unlink(missing_ok=True)
     frame_index = 1
     for segment in workspace.manifest.segments:
         duration = max(0.0, float(segment.virtual_end_sec) - float(segment.virtual_start_sec))
         count = max(1, int(duration * float(fps))) if duration > 0 else 0
+        segment_frame_count = 0
         for offset_index in range(count):
             virtual_time = round(float(segment.virtual_start_sec) + offset_index * step, 3)
             if virtual_time >= float(segment.virtual_end_sec):
                 virtual_time = round(float(segment.virtual_end_sec) - 0.001, 3)
             source_time = round(float(segment.source_start_sec) + (virtual_time - float(segment.virtual_start_sec)), 3)
             frame_dir = workspace.root_dir / "frames" / "low" / segment.segment_id / f"lo_{frame_index:06d}"
-            frame = tuple(sampler(segment.source_path, source_time, source_time, 1, frame_dir))[0]
+            try:
+                frame = tuple(sampler(segment.source_path, source_time, source_time, 1, frame_dir))[0]
+            except RuntimeError as exc:
+                failures.append(
+                    {
+                        "error": str(exc),
+                        "fps_level": "low",
+                        "sampling_fps": float(fps),
+                        "segment_id": segment.segment_id,
+                        "source_path": segment.source_path,
+                        "source_time_sec": source_time,
+                        "source_video_id": segment.source_video_id,
+                        "virtual_time_sec": virtual_time,
+                    }
+                )
+                continue
             rows.append(
                 VirtualFrameRef(
                     frame_id=f"lo_{frame_index:06d}",
@@ -310,6 +329,12 @@ def materialize_lowfps_frame_cache(
                 )
             )
             frame_index += 1
+            segment_frame_count += 1
+        if count and segment_frame_count == 0:
+            _write_jsonl(failures_path, failures)
+            raise RuntimeError(f"Failed to sample any low-fps frames for segment {segment.segment_id}")
+    if failures:
+        _write_jsonl(failures_path, failures)
     _write_jsonl(workspace.frame_manifest, (asdict(row) for row in rows))
     return tuple(rows)
 
