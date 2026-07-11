@@ -1290,6 +1290,19 @@ def test_score_answer_maps_unlabeled_numeric_text_back_to_option() -> None:
     )
 
 
+def test_score_answer_does_not_treat_indefinite_article_as_option_label() -> None:
+    options = {
+        "A": "One of his hands was hit by a firework while he was setting it off.",
+        "D": "One of his arms was dragged down by a dog lured with food by Wayne, while he was insulting Wayne's father.",
+    }
+    answer = options["D"]
+
+    assert multiround._letter(answer) == ""
+    assert multiround._letter("A. First option") == "A"
+    assert multiround._letter("The answer is D because the dog caused the injury.") == "D"
+    assert multiround._score_answer(answer, "D", options) is True
+
+
 def test_driver_repairs_empty_answers_with_unvisited_identity_anchor_segments(tmp_path: Path) -> None:
     workspace = _identity_repair_workspace(tmp_path)
     investigator = NegativeAnchorInvestigator(workspace)

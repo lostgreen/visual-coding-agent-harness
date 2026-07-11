@@ -1448,8 +1448,15 @@ def _answer_match_text(value: str) -> str:
 
 
 def _letter(value: str) -> str:
-    match = re.search(r"\b([A-H])\b", str(value or "").strip().upper())
-    return match.group(1) if match else ""
+    text = str(value or "").strip().upper()
+    leading = re.match(r"^[\(\[]?([A-H])(?:[\)\].:\-]|\s*$)", text)
+    if leading:
+        return leading.group(1)
+    explicit = re.search(
+        r"\b(?:ANSWER|OPTION|CHOICE)\s*(?:IS\s*)?[:\-]?\s*[\(\[]?([A-H])(?:[\)\].:\-]|\b)",
+        text,
+    )
+    return explicit.group(1) if explicit else ""
 
 
 def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResult) -> None:
