@@ -1,0 +1,93 @@
+{
+  "group_id": "videomme-long-hard-rotate-v2",
+  "dataset": "VideoMME",
+  "duration_category": "long",
+  "construction": "source_only",
+  "source_duration_minutes": 437.94,
+  "purpose": "Three unresolved regression cases plus seven unseen harder cases. Rotate solved cases out of the per-iteration loop while retaining the stable-v1 group for periodic regression.",
+  "cases": [
+    {
+      "case_id": "602-2",
+      "capability": "historical_temporal_ordering",
+      "task_type": "Temporal Reasoning",
+      "scope": "timeline_localization",
+      "modalities": ["asr", "visual"],
+      "source_duration_minutes": 47.0
+    },
+    {
+      "case_id": "609-3",
+      "capability": "event_sequence_reasoning",
+      "task_type": "Temporal Reasoning",
+      "scope": "event_localization",
+      "modalities": ["asr", "visual"],
+      "source_duration_minutes": 47.17
+    },
+    {
+      "case_id": "615-2",
+      "capability": "negative_multi_attribute_verification",
+      "task_type": "Attribute Perception",
+      "scope": "multi_evidence",
+      "modalities": ["visual", "ocr", "asr"],
+      "source_duration_minutes": 40.95
+    },
+    {
+      "case_id": "645-3",
+      "capability": "identity_linked_opinion_retrieval",
+      "task_type": "Object Recognition",
+      "scope": "identity_then_dialogue",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 44.44
+    },
+    {
+      "case_id": "648-3",
+      "capability": "numeric_ocr_fact",
+      "task_type": "OCR Problems",
+      "scope": "fact_localization",
+      "modalities": ["ocr", "visual", "asr"],
+      "source_duration_minutes": 33.19
+    },
+    {
+      "case_id": "698-3",
+      "capability": "atomic_event_count",
+      "task_type": "Counting Problem",
+      "scope": "full_video",
+      "modalities": ["visual"],
+      "source_duration_minutes": 50.5,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "701-3",
+      "capability": "localized_causal_action_reasoning",
+      "task_type": "Action Reasoning",
+      "scope": "explicit_time_hint",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 54.47,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "702-1",
+      "capability": "identity_linked_action_reasoning",
+      "task_type": "Action Recognition",
+      "scope": "coarse_temporal_hint",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 35.08,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "727-2",
+      "capability": "distinct_interviewee_count",
+      "task_type": "Counting Problem",
+      "scope": "full_video",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 43.37
+    },
+    {
+      "case_id": "764-3",
+      "capability": "sports_distance_estimation",
+      "task_type": "Spatial Reasoning",
+      "scope": "time_bounded_quantitative",
+      "modalities": ["visual", "ocr", "asr"],
+      "source_duration_minutes": 41.77
+    }
+  ]
+}
