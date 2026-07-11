@@ -737,6 +737,9 @@ def _answer_completion_gate(
     )
     if identity_gate is not None:
         return identity_gate
+    quantitative_gate = _quantitative_answer_gate(workspace, contract, answer, cited)
+    if quantitative_gate is not None:
+        return quantitative_gate
     if contract.required_scope != "full_video":
         return {"passed": True, "reason": "verified_window_evidence", "missing_segment_ids": []}
 
@@ -804,6 +807,67 @@ def _answer_completion_gate(
         "event_occurrence_count": len(event_occurrences),
         "missing_segment_ids": [],
     }
+
+
+def _quantitative_answer_gate(
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    answer: str,
+    cited: Sequence[EvidenceRecord],
+) -> dict[str, Any] | None:
+    if contract.quantifier in {"distinct_count", "total_count"}:
+        return None
+    selected = _letter(answer) or _option_letter_from_answer(answer, workspace.case.options)
+    option_text = str(workspace.case.options.get(selected, "") or answer)
+    atoms = _quantitative_atoms(option_text)
+    if not atoms:
+        return None
+    evidence_text = " ".join(
+        [record.verbatim for record in cited]
+        + [
+            str(event.get("description", "") or "")
+            for record in cited
+            for event in record.operation_metadata.get("events", ())
+            if isinstance(event, Mapping)
+        ]
+        + [json.dumps(record.operation_metadata.get("derivation"), ensure_ascii=False) for record in cited if record.operation_metadata.get("derivation")]
+    ).casefold()
+    evidence_times = set(re.findall(r"\b\d{1,2}:\d{2}\b", evidence_text))
+    evidence_numbers = {
+        token.replace(",", "")
+        for token in re.findall(r"\b\d+(?:,\d{3})*(?:\.\d+)?\b", evidence_text)
+    }
+    missing = [
+        atom
+        for atom in atoms
+        if (":" in atom and atom not in evidence_times) or (":" not in atom and atom not in evidence_numbers)
+    ]
+    if not missing:
+        return None
+    return {
+        "passed": False,
+        "reason": "quantitative_answer_not_grounded",
+        "missing_numeric_atoms": missing,
+        "missing_segment_ids": [],
+    }
+
+
+def _quantitative_atoms(option_text: str) -> tuple[str, ...]:
+    text = str(option_text or "").casefold()
+    times = tuple(re.findall(r"\b\d{1,2}:\d{2}\b", text))
+    remainder = re.sub(r"\b\d{1,2}:\d{2}\b", " ", text)
+    numbers = tuple(
+        token.replace(",", "")
+        for token in re.findall(r"\b\d+(?:,\d{3})*(?:\.\d+)?\b", remainder)
+    )
+    has_quantity_unit = bool(
+        re.search(
+            r"\b(?:thousand|million|billion|trillion|calories?|light[ -]?years?|kilometers?|kilometres?|meters?|metres?|km)\b",
+            text,
+        )
+    )
+    meaningful_numbers = tuple(token for token in numbers if len(token.split(".", 1)[0]) >= 3 or has_quantity_unit)
+    return tuple(dict.fromkeys(times + meaningful_numbers))
 
 
 def _identity_link_gate(

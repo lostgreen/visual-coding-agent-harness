@@ -815,6 +815,99 @@ def test_answer_gate_rejects_empty_answer_even_with_visual_citation(tmp_path: Pa
     assert gate["reason"] == "answer_missing"
 
 
+def test_answer_gate_soft_rejects_ungrounded_large_numeric_option(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="numeric-gate",
+        segments=(VirtualVideoSegment("seg_1", "source", "source.mp4", 0.0, 60.0, 0.0, 60.0, "content"),),
+    )
+    case = VirtualVideoCase(
+        case_id="numeric-gate",
+        question="What total diameter does the video state?",
+        options={"A": "About 100 trillion lightyears", "C": "Over 25 trillion lightyears"},
+        gold="C",
+        target_segment_id="seg_1",
+        target_virtual_interval=(0.0, 60.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "numeric-gate", manifest=manifest, case=case)
+    evidence = EvidenceRecord(
+        evidence_id="ev_numeric",
+        beat_id="",
+        start_sec=10.0,
+        end_sec=20.0,
+        modality="visual",
+        pointer="virtual://numeric",
+        verbatim="The observable universe is 93 billion lightyears across and a tiny fraction of the total expanse.",
+        frame_refs=("numeric.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+    )
+
+    gate = multiround._answer_completion_gate(
+        workspace,
+        multiround.compile_query_contract(case.question),
+        "A. About 100 trillion lightyears",
+        ("ev_numeric",),
+        (),
+        (evidence,),
+    )
+
+    assert gate["passed"] is False
+    assert gate["reason"] == "quantitative_answer_not_grounded"
+    assert gate["missing_numeric_atoms"] == ["100"]
+
+
+def test_answer_gate_accepts_interval_when_both_boundary_times_are_cited(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="interval-gate",
+        segments=(VirtualVideoSegment("seg_1", "source", "source.mp4", 0.0, 900.0, 0.0, 900.0, "content"),),
+    )
+    case = VirtualVideoCase(
+        case_id="interval-gate",
+        question="In which period does the home team overtake the guest team?",
+        options={"B": "5:58 - 2:57", "C": "8:13 - 5:58"},
+        gold="B",
+        target_segment_id="seg_1",
+        target_virtual_interval=(0.0, 900.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "interval-gate", manifest=manifest, case=case)
+    before = EvidenceRecord(
+        evidence_id="ev_before",
+        beat_id="",
+        start_sec=500.0,
+        end_sec=510.0,
+        modality="visual",
+        pointer="virtual://before",
+        verbatim="At 8:13 the home team is behind.",
+        frame_refs=("before.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+    )
+    after = EvidenceRecord(
+        evidence_id="ev_after",
+        beat_id="",
+        start_sec=690.0,
+        end_sec=700.0,
+        modality="visual",
+        pointer="virtual://after",
+        verbatim="At 5:58 the home team is ahead.",
+        frame_refs=("after.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="event_observation",
+    )
+
+    gate = multiround._answer_completion_gate(
+        workspace,
+        multiround.compile_query_contract(case.question),
+        "C. 8:13 - 5:58",
+        ("ev_before", "ev_after"),
+        (),
+        (before, after),
+    )
+
+    assert gate["passed"] is True
+    assert gate["reason"] == "verified_window_evidence"
+
+
 def test_driver_runs_answer_only_finalization_after_last_investigation_round(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     reasoner = FinalizationReasoner()
