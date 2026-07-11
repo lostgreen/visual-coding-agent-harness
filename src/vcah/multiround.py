@@ -378,6 +378,18 @@ class VirtualVideoMultiRoundDriver:
                 }
             )
             if decision.action == "answer":
+                filtered_citations = _answer_citations(decision.citations, evidence_store.records)
+                if filtered_citations != decision.citations:
+                    trace.append(
+                        {
+                            "type": "citation_filter",
+                            "round": round_id,
+                            "removed_citations": [
+                                citation for citation in decision.citations if citation not in filtered_citations
+                            ],
+                        }
+                    )
+                    decision = replace(decision, citations=filtered_citations)
                 gate = _answer_completion_gate(
                     workspace,
                     query_contract,
@@ -461,6 +473,18 @@ class VirtualVideoMultiRoundDriver:
                     force_finalize=True,
                 )
             )
+            filtered_citations = _answer_citations(final_decision.citations, evidence_store.records)
+            if filtered_citations != final_decision.citations:
+                trace.append(
+                    {
+                        "type": "citation_filter",
+                        "round": self.max_rounds + 1,
+                        "removed_citations": [
+                            citation for citation in final_decision.citations if citation not in filtered_citations
+                        ],
+                    }
+                )
+                final_decision = replace(final_decision, citations=filtered_citations)
             trace.append(
                 {
                     "type": "reasoner_finalization",
@@ -1232,11 +1256,17 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
 def _citations_are_visual(citations: Sequence[str], evidence: Sequence[EvidenceRecord]) -> bool:
     if not citations:
         return False
+    return _answer_citations(citations, evidence) == tuple(str(citation) for citation in citations)
+
+
+def _answer_citations(citations: Sequence[str], evidence: Sequence[EvidenceRecord]) -> tuple[str, ...]:
     by_id = {item.evidence_id: item for item in evidence}
-    cited = [by_id.get(str(citation)) for citation in citations]
-    return bool(cited) and all(
-        item is not None and item.modality in {"visual", "ocr"} and not is_path_only_visual_evidence(item)
-        for item in cited
+    return tuple(
+        citation
+        for citation in dict.fromkeys(str(item) for item in citations if str(item).strip())
+        if (record := by_id.get(citation)) is not None
+        and record.modality in {"visual", "ocr"}
+        and not is_path_only_visual_evidence(record)
     )
 
 

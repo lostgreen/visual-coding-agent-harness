@@ -797,6 +797,33 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             )
             evidence.append(record)
             self._record_visit(task, record, status="navigation_hint")
+        if not evidence:
+            record = EvidenceRecord(
+                evidence_id=f"ev_{query_id}_asr_empty",
+                beat_id="",
+                start_sec=None,
+                end_sec=None,
+                modality="asr",
+                pointer=f"virtual://{self.workspace.workspace_id}/asr-search/{query_id}/empty",
+                verbatim=f"No literal ASR matches found for terms: {', '.join(packet['terms'])}.",
+                attestation_model="literal-asr-search",
+                temporal_scope="workspace",
+                evidence_kind="navigation_hint",
+                observation_polarity="negative",
+                sampling_coverage="exact",
+                request_ids=(query_id,),
+                task_id=query_id,
+                observation_id=f"{query_id}_asr_empty",
+                confidence=1.0,
+                operation_metadata={
+                    "navigation_only": True,
+                    "matched_terms": [],
+                    "search_terms": list(packet["terms"]),
+                    "hit_count": 0,
+                },
+            )
+            evidence.append(record)
+            self._record_visit(task, record, status="navigation_hint")
         _append_jsonl(
             self.trace_path,
             {
@@ -809,7 +836,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         )
         return InvestigationReport(
             query_id=query_id,
-            status="satisfied" if evidence else "empty",
+            status="satisfied",
             evidence=tuple(evidence),
             cost={
                 "tool_trace": ("search_asr",),
@@ -1403,6 +1430,8 @@ def _investigate_prompt(
         "search_asr is optional literal grep over raw timestamped ASR. Use 1-5 distinctive exact terms from the question or options "
         "when the overview cannot locate a dialogue/fact. Its hits are navigation only: after a hit, inspect that segment/time window "
         "visually before answering, and never cite an ASR search hint as final visual evidence.\n"
+        "For identity or cause questions with answer options, compare distinctive terms from at least two competing options instead of "
+        "committing to the first lexical hit. Do not repeat search terms after a negative navigation hint; change terms or inspect visually.\n"
         "For full-video count questions, evidence from one chunk is only a source hypothesis, not complete proof.\n"
         "For total event-count questions, dispatch segment tasks that enumerate atomic event occurrences with timestamps.\n"
         "For source-relative minute questions, prioritize the supplied temporal_navigation candidate segments.\n"
@@ -1440,6 +1469,8 @@ def _followup_prompt(
         "You may request up to 4 more segments/windows. Do not answer with insufficient evidence.\n"
         "Evidence with evidence_kind=navigation_hint comes from literal ASR grep and is navigation only. Dispatch a visual window "
         "inspection at its segment/time range before using that clue in an answer.\n"
+        "For identity or cause questions, compare at least two competing option hypotheses before committing. Do not repeat a lexical "
+        "search whose negative navigation hint already reports zero matches; change terms or inspect a visual candidate.\n"
         "If completion_status.ready_for_answer is false, you MUST investigate its missing_segment_ids and must not answer. "
         "For a final full-video answer, cite every relevant visual evidence record from the adopted source.\n"
         "For distinct-count questions, reconcile the per-evidence entities by stable appearance. Do not add local counts. "

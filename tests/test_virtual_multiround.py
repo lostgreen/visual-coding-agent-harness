@@ -1020,6 +1020,117 @@ def test_navigation_hint_does_not_satisfy_visual_completion(tmp_path: Path) -> N
     assert status["ready_for_answer"] is False
 
 
+def test_answer_citations_drop_navigation_hints_when_visual_support_remains() -> None:
+    hint = EvidenceRecord(
+        evidence_id="ev_hint",
+        beat_id="",
+        start_sec=10.0,
+        end_sec=20.0,
+        modality="asr",
+        pointer="virtual://hint",
+        verbatim="Literal transcript hit.",
+        temporal_scope="window",
+        evidence_kind="navigation_hint",
+    )
+    visual = EvidenceRecord(
+        evidence_id="ev_visual",
+        beat_id="",
+        start_sec=10.0,
+        end_sec=20.0,
+        modality="visual",
+        pointer="virtual://visual",
+        verbatim="The requested fact is directly visible.",
+        frame_refs=("frame.jpg",),
+        attestation_model="test-vlm",
+        temporal_scope="window",
+        evidence_kind="visual_observation",
+    )
+
+    citations = multiround._answer_citations(("ev_hint", "ev_visual", "ev_missing"), (hint, visual))
+
+    assert citations == ("ev_visual",)
+
+
+def test_driver_filters_navigation_hint_from_mixed_final_citations(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    class MixedCitationReasoner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def decide(self, **kwargs: object) -> ReasonerDecision:
+            del kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return ReasonerDecision(
+                    action="investigate",
+                    tasks=(InvestigationTask("q1", "Read the jersey number.", "seg_target"),),
+                )
+            return ReasonerDecision(
+                action="answer",
+                answer="B. 11",
+                citations=("ev_hint", "ev_visual"),
+            )
+
+    class MixedCitationInvestigator:
+        def reset_run_state(self) -> None:
+            return None
+
+        def run_batch(self, tasks: Sequence[InvestigationTask]) -> tuple[InvestigationReport, ...]:
+            hint = EvidenceRecord(
+                evidence_id="ev_hint",
+                beat_id="",
+                start_sec=0.0,
+                end_sec=2.0,
+                modality="asr",
+                pointer="virtual://hint",
+                verbatim="number written on jersey",
+                temporal_scope="window",
+                evidence_kind="navigation_hint",
+            )
+            visual = EvidenceRecord(
+                evidence_id="ev_visual",
+                beat_id="",
+                start_sec=0.0,
+                end_sec=2.0,
+                modality="visual",
+                pointer="virtual://visual",
+                verbatim="The jersey visibly shows number 11.",
+                frame_refs=("frame.jpg",),
+                attestation_model="test-vlm",
+                temporal_scope="window",
+                evidence_kind="visual_observation",
+                source_lineage=(
+                    {
+                        "segment_id": "seg_target",
+                        "source_video_id": "target",
+                        "source_time_range": [10.0, 12.0],
+                        "virtual_time_range": [0.0, 2.0],
+                    },
+                ),
+            )
+            return (
+                InvestigationReport(
+                    query_id=tasks[0].query_id,
+                    status="satisfied",
+                    evidence=(hint, visual),
+                    cost={},
+                ),
+            )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=MixedCitationReasoner(),
+        investigator=MixedCitationInvestigator(),
+        max_rounds=2,
+        max_investigations=2,
+    ).run(workspace)
+
+    assert result.verified is True
+    assert result.citations == ("ev_visual",)
+    citation_filter = next(row for row in result.trace if row.get("type") == "citation_filter")
+    assert citation_filter["removed_citations"] == ["ev_hint"]
+
+
 def test_score_answer_maps_unlabeled_numeric_text_back_to_option() -> None:
     assert multiround._score_answer(
         "Based on the race progress, the athletes completed approximately 6000 meters in 25 minutes.",

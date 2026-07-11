@@ -219,6 +219,8 @@ def test_gemini_reasoner_can_request_global_lexical_asr_navigation(tmp_path: Pat
     assert decision.tasks[0].search_terms == ("dog", "father", "rent")
     assert "search_asr" in api.calls[0]["prompt"]
     assert "navigation only" in api.calls[0]["prompt"]
+    assert "competing option" in api.calls[0]["prompt"]
+    assert "Do not repeat" in api.calls[0]["prompt"]
 
 
 def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: Path) -> None:
@@ -243,6 +245,32 @@ def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: P
     assert all(record.modality == "asr" for record in report.evidence)
     assert all(record.evidence_kind == "navigation_hint" for record in report.evidence)
     assert all(not record.frame_refs for record in report.evidence)
+
+
+def test_model_investigator_records_empty_asr_search_as_negative_navigation(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(())
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    task = InvestigationTask(
+        query_id="search_missing",
+        goal="Check whether this literal clue appears in the transcript.",
+        inspection_mode="search_asr",
+        search_terms=("definitely-not-present",),
+        modality_hint=("asr",),
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert api.calls == []
+    assert report.status == "satisfied"
+    assert len(report.evidence) == 1
+    record = report.evidence[0]
+    assert record.evidence_kind == "navigation_hint"
+    assert record.observation_polarity == "negative"
+    assert record.start_sec is None
+    assert record.end_sec is None
+    assert record.operation_metadata["hit_count"] == 0
+    assert "No literal ASR matches" in record.verbatim
 
 
 def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> None:
