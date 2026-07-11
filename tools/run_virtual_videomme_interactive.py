@@ -321,6 +321,8 @@ class GeminiReasoner:
         self.api = api
         self.trace_path = trace_path
         self.calls = 0
+        self._last_candidate: ReasonerDecision | None = None
+        self._last_audit_reason = ""
 
     def decide(self, **kwargs: Any) -> ReasonerDecision:
         self.calls += 1
@@ -334,6 +336,16 @@ class GeminiReasoner:
             action = str(parsed.get("action") or "answer")
             self._trace("reasoner_investigate" if action == "investigate" else "reasoner_answer", prompt, raw, parsed)
             if action == "investigate":
+                if kwargs.get("force_finalize") and self._last_candidate is not None:
+                    return ReasonerDecision(
+                        action="answer",
+                        answer=self._last_candidate.answer,
+                        citations=self._last_candidate.citations,
+                        entity_clusters=self._last_candidate.entity_clusters,
+                        support_status="insufficient",
+                        support_reason=self._last_audit_reason
+                        or "The model requested more investigation after the budget was exhausted.",
+                    )
                 tasks = parsed.get("tasks") or []
                 return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
             candidate = ReasonerDecision(
@@ -343,12 +355,45 @@ class GeminiReasoner:
                 entity_clusters=tuple(parsed.get("entity_clusters") or ()),
             )
             if not candidate.answer:
+                if kwargs.get("force_finalize") and self._last_candidate is not None:
+                    return ReasonerDecision(
+                        action="answer",
+                        answer=self._last_candidate.answer,
+                        citations=self._last_candidate.citations,
+                        entity_clusters=self._last_candidate.entity_clusters,
+                        support_status="insufficient",
+                        support_reason=self._last_audit_reason or "The final model response omitted an answer.",
+                    )
+                return candidate
+            self._last_candidate = candidate
+            if not _should_audit_answer(kwargs):
                 return candidate
             audit_prompt = _answer_audit_prompt(kwargs, candidate, evidence_digest)
             audit_raw = self.api.chat(audit_prompt, max_tokens=900)
             audit = _parse_json(audit_raw)
             self._trace("reasoner_answer_audit", audit_prompt, audit_raw, audit)
             verdict = str(audit.get("verdict", "unknown") or "unknown").strip().casefold()
+            audit_reason = str(audit.get("reason", "") or "")
+            self._last_audit_reason = audit_reason
+            revised_answer = str(audit.get("revised_answer", "") or "").strip()
+            if revised_answer:
+                candidate = ReasonerDecision(
+                    action="answer",
+                    answer=revised_answer,
+                    citations=tuple(audit.get("revised_citations") or candidate.citations),
+                    entity_clusters=tuple(audit.get("revised_entity_clusters") or ()),
+                )
+                self._last_candidate = candidate
+                revised_status = str(audit.get("revised_support_status", "insufficient") or "insufficient").casefold()
+                if revised_status == "supported":
+                    return ReasonerDecision(
+                        action="answer",
+                        answer=candidate.answer,
+                        citations=candidate.citations,
+                        entity_clusters=candidate.entity_clusters,
+                        support_status="supported",
+                        support_reason=audit_reason,
+                    )
             audit_tasks = tuple(audit.get("tasks") or ())[:2]
             if (
                 verdict in {"insufficient", "contradicted"}
@@ -363,7 +408,7 @@ class GeminiReasoner:
                 citations=candidate.citations,
                 entity_clusters=candidate.entity_clusters,
                 support_status=verdict,
-                support_reason=str(audit.get("reason", "") or ""),
+                support_reason=audit_reason,
             )
         image_paths = [str(row.get("overview_thumbnail_grid_path")) for row in overview.get("segment_overviews", ())]
         prompt = _investigate_prompt(kwargs)
@@ -1063,6 +1108,25 @@ def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mappin
     )
 
 
+def _should_audit_answer(kwargs: Mapping[str, Any]) -> bool:
+    question = str(kwargs.get("question", "") or "").casefold()
+    contract = dict(kwargs.get("query_contract") or {})
+    requirements = dict(kwargs.get("query_requirements") or {})
+    if requirements.get("requires_identity_link"):
+        return True
+    if str(contract.get("required_scope", "") or "") == "full_video":
+        return True
+    relation_patterns = (
+        r"\bwhy\b",
+        r"\bhow\s+(?:did|does|do|was|were)\b",
+        r"\b(?:before|after)\b",
+        r"\bnot\s+(?:true|correct)\b",
+        r"\brelationship\b",
+        r"\b(?:view|opinion|believ\w*)\b",
+    )
+    return any(re.search(pattern, question) for pattern in relation_patterns)
+
+
 def _answer_audit_prompt(
     kwargs: Mapping[str, Any],
     candidate: ReasonerDecision,
@@ -1083,16 +1147,21 @@ def _answer_audit_prompt(
         else "No investigation budget remains; return no tasks and assess the best-effort answer honestly."
     )
     return (
-        "Audit a proposed answer for a long-video QA agent using only the supplied evidence. "
+        "Audit a proposed answer for a long-video QA agent using only the supplied evidence. Start by assuming the "
+        "proposed answer may be wrong and compare every option against the evidence. "
         "Do not reward citation relevance alone. The exact selected option must follow from the observations at the "
         "causal, temporal, identity, count, and attribute granularity asked by the question. "
         "For why/how questions, distinguish an underlying motive or observed cause from a downstream benefit, an after-state, "
         "or mere co-occurrence. For identity-linked questions, require evidence that links the same visible entity across the "
         "anchor and answer event. Do not use answer-option plausibility as evidence. "
         f"{task_instruction}\n"
-        "Return JSON only: {\"verdict\":\"supported|insufficient|contradicted\",\"reason\":\"...\","
+        "If another option is directly supported, provide revised_answer and its citations. Do not revise based only on "
+        "plausibility or elimination. Return JSON only: {\"verdict\":\"supported|insufficient|contradicted\",\"reason\":\"...\","
         "\"evidence_relation\":\"direct|causal_chain|consequence_only|cooccurrence_only|unclear\","
-        "\"unresolved_alternatives\":[\"A\"],\"tasks\":[{\"query_id\":\"audit_r2_t1\","
+        "\"option_assessments\":[{\"option\":\"A\",\"support\":\"direct|indirect|contradicted|missing\","
+        "\"evidence_ids\":[\"ev_...\"],\"reason\":\"...\"}],\"unresolved_alternatives\":[\"A\"],"
+        "\"revised_answer\":null,\"revised_citations\":[],\"revised_entity_clusters\":[],"
+        "\"revised_support_status\":\"supported|insufficient\",\"tasks\":[{\"query_id\":\"audit_r2_t1\","
         "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":[0.0,60.0],"
         "\"modality_hint\":[\"visual\",\"asr\"],\"expected_evidence\":\"...\"}]}.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"

@@ -41,6 +41,7 @@ _load_case_group = _interactive._load_case_group
 _event_evidence_prompt = _interactive._event_evidence_prompt
 _load_existing_case_summary = _interactive._load_existing_case_summary
 _run_case_batch = _interactive._run_case_batch
+_should_audit_answer = _interactive._should_audit_answer
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -231,6 +232,130 @@ def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> 
     assert decision.tasks[0].query_id == "audit_r2_t1"
     assert len(api.calls) == 2
     assert "Do not reward citation relevance alone" in api.calls[1]["prompt"]
+
+
+def test_gemini_reasoner_preserves_candidate_when_forced_finalization_still_investigates(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {
+                "action": "answer",
+                "answer": "A. Five.",
+                "citations": ["ev_1"],
+            },
+            {
+                "verdict": "insufficient",
+                "reason": "Another interviewee may be missing.",
+                "tasks": [
+                    {
+                        "query_id": "audit_more",
+                        "goal": "Inspect another interview window.",
+                        "segment_id": "seg_0002",
+                    }
+                ],
+            },
+            {
+                "action": "investigate",
+                "tasks": [{"query_id": "too_late", "goal": "Keep looking.", "segment_id": "seg_0003"}],
+            },
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+    kwargs = {
+        "question": "How many interviewees appear in total?",
+        "options": {"A": "Five", "D": "Six"},
+        "workspace_overview": {"segment_overviews": []},
+        "query_contract": {"required_scope": "full_video", "aggregation": "deduplicate"},
+        "query_requirements": {},
+        "completion_status": {"ready_for_answer": True},
+        "temporal_navigation": {},
+        "evidence_digest": (
+            {
+                "evidence_id": "ev_1",
+                "summary": "Five interviewees are currently identified.",
+                "virtual_time_range": [0.0, 60.0],
+                "modality": "visual",
+                "source_lineage": [{"segment_id": "seg_0001"}],
+            },
+        ),
+    }
+
+    first = reasoner.decide(**kwargs, remaining_budget=2)
+    final = reasoner.decide(**kwargs, remaining_budget=0, force_finalize=True)
+
+    assert first.action == "investigate"
+    assert final.action == "answer"
+    assert final.answer == "A. Five."
+    assert final.support_status == "insufficient"
+    assert len(api.calls) == 3
+
+
+def test_gemini_reasoner_adopts_directly_supported_revised_answer_from_audit(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "answer", "answer": "A. Five.", "citations": ["ev_1"]},
+            {
+                "verdict": "contradicted",
+                "reason": "Six distinct interviewees are directly supported.",
+                "revised_answer": "D. Six.",
+                "revised_citations": ["ev_1", "ev_2"],
+                "revised_support_status": "supported",
+                "revised_entity_clusters": [],
+                "tasks": [],
+            },
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="How many interviewees appear in total?",
+        options={"A": "Five", "D": "Six"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "full_video", "aggregation": "deduplicate"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=2,
+        evidence_digest=(
+            {"evidence_id": "ev_1", "summary": "Three interviewees.", "source_lineage": []},
+            {"evidence_id": "ev_2", "summary": "Three additional interviewees.", "source_lineage": []},
+        ),
+    )
+
+    assert decision.action == "answer"
+    assert decision.answer == "D. Six."
+    assert decision.citations == ("ev_1", "ev_2")
+    assert decision.support_status == "supported"
+
+
+def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities() -> None:
+    assert _should_audit_answer(
+        {
+            "question": "Why did the person give away the money?",
+            "query_contract": {"required_scope": "window", "aggregation": "none"},
+            "query_requirements": {},
+        }
+    )
+    assert _should_audit_answer(
+        {
+            "question": "How many people were interviewed in total?",
+            "query_contract": {"required_scope": "full_video", "aggregation": "deduplicate"},
+            "query_requirements": {},
+        }
+    )
+    assert not _should_audit_answer(
+        {
+            "question": "What number is written on the scoreboard?",
+            "query_contract": {"required_scope": "window", "aggregation": "none"},
+            "query_requirements": {},
+        }
+    )
+    assert not _should_audit_answer(
+        {
+            "question": "How many meters did they complete in 25 minutes?",
+            "query_contract": {"required_scope": "multi_window", "aggregation": "deduplicate"},
+            "query_requirements": {},
+        }
+    )
 
 
 class ScriptedVisionClient:
