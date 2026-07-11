@@ -350,10 +350,11 @@ class GeminiReasoner:
                     return self._force_best_effort(kwargs, evidence_digest)
                 tasks = parsed.get("tasks") or []
                 return ReasonerDecision(action="investigate", tasks=tuple(tasks[:4]))
+            answer, nested_citations = _normalize_answer_payload(parsed.get("answer"), kwargs.get("options") or {})
             candidate = ReasonerDecision(
                 action="answer",
-                answer=str(parsed.get("answer") or ""),
-                citations=tuple(parsed.get("citations") or (evidence_digest[-1]["evidence_id"],)),
+                answer=answer,
+                citations=tuple(parsed.get("citations") or nested_citations or (evidence_digest[-1]["evidence_id"],)),
                 entity_clusters=tuple(parsed.get("entity_clusters") or ()),
             )
             if not candidate.answer:
@@ -379,12 +380,15 @@ class GeminiReasoner:
             verdict = str(audit.get("verdict", "unknown") or "unknown").strip().casefold()
             audit_reason = str(audit.get("reason", "") or "")
             self._last_audit_reason = audit_reason
-            revised_answer = str(audit.get("revised_answer", "") or "").strip()
+            revised_answer, revised_nested_citations = _normalize_answer_payload(
+                audit.get("revised_answer"),
+                kwargs.get("options") or {},
+            )
             if revised_answer:
                 candidate = ReasonerDecision(
                     action="answer",
                     answer=revised_answer,
-                    citations=tuple(audit.get("revised_citations") or candidate.citations),
+                    citations=tuple(audit.get("revised_citations") or revised_nested_citations or candidate.citations),
                     entity_clusters=tuple(audit.get("revised_entity_clusters") or ()),
                 )
                 self._last_candidate = candidate
@@ -436,10 +440,11 @@ class GeminiReasoner:
         raw = self.api.chat(prompt, max_tokens=600)
         parsed = _parse_json(raw)
         self._trace("reasoner_forced_answer", prompt, raw, parsed)
+        answer, nested_citations = _normalize_answer_payload(parsed.get("answer"), kwargs.get("options") or {})
         decision = ReasonerDecision(
             action="answer",
-            answer=str(parsed.get("answer", "") or ""),
-            citations=tuple(parsed.get("citations") or ()),
+            answer=answer,
+            citations=tuple(parsed.get("citations") or nested_citations or ()),
             entity_clusters=tuple(parsed.get("entity_clusters") or ()),
             support_status="insufficient",
             support_reason="Best-effort answer produced after the investigation budget was exhausted.",
@@ -917,15 +922,34 @@ def _normalize_claim_assessment(value: Mapping[str, Any], task: Any) -> dict[str
     verdict = str(value.get("claim_verdict", "insufficient") or "insufficient").strip().casefold()
     if verdict not in {"supports", "refutes", "insufficient"}:
         verdict = "insufficient"
+    claim_relation = str(getattr(task, "claim_relation", "") or "").strip().casefold()
+    candidate_role = str(value.get("candidate_role", "unclear") or "unclear").strip().casefold()
+    reason = str(value.get("reason", "") or "")
+    if verdict == "supports" and not _claim_role_satisfies(claim_relation, candidate_role):
+        verdict = "insufficient"
+        mismatch = f"Candidate role {candidate_role or 'unclear'} does not satisfy required claim relation {claim_relation}."
+        reason = f"{mismatch} {reason}".strip()
     return {
         "candidate_answer": str(getattr(task, "claim_to_verify", "") or ""),
         "alternative_answers": tuple(str(item) for item in getattr(task, "alternative_answers", ()) or ()),
         "verdict": verdict,
+        "claim_relation": claim_relation,
         "relation_type": str(value.get("relation_type", "unclear") or "unclear"),
-        "candidate_role": str(value.get("candidate_role", "unclear") or "unclear"),
+        "candidate_role": candidate_role,
         "strongest_alternative": str(value.get("strongest_alternative", "") or ""),
-        "reason": str(value.get("reason", "") or ""),
+        "reason": reason,
     }
+
+
+def _claim_role_satisfies(claim_relation: str, candidate_role: str) -> bool:
+    allowed = {
+        "decision_motive": {"decision_motive", "initiating_cause"},
+        "initiating_cause_or_mechanism": {"initiating_cause", "mechanism"},
+        "identity_linked_cause": {"initiating_cause", "mechanism"},
+        "opinion": {"opinion_statement"},
+        "identity_link": {"identity_match"},
+    }
+    return not claim_relation or candidate_role in allowed.get(claim_relation, {candidate_role})
 
 
 def _load_rows(dataset_root: Path) -> list[dict[str, Any]]:
@@ -1192,7 +1216,9 @@ def _followup_prompt(kwargs: Mapping[str, Any], evidence_digest: Sequence[Mappin
         "For identity-anchor questions, do not answer while missing_identity_anchor_terms is non-empty. "
         "The final entity cluster must cite both anchor evidence and the later event evidence for the same person.\n"
         "Treat independent claim_assessment evidence as a direct check of the proposed relation. If it refutes a candidate, "
-        "revise the answer or investigate the strongest alternative; do not relabel relevance as support.\n"
+        "revise the answer or investigate the strongest alternative; do not relabel relevance as support. If candidate_role "
+        "does not satisfy claim_relation, investigate the missing relation or choose a better-supported option; a stated use, "
+        "downstream consequence, or after-state is not a decision motive.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
@@ -1260,6 +1286,23 @@ def _answer_candidate_key(answer: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(answer or "").casefold())
 
 
+def _normalize_answer_payload(value: Any, options: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
+    if not isinstance(value, Mapping):
+        return str(value or "").strip(), ()
+    citations = tuple(str(item) for item in value.get("citations", ()) or () if str(item).strip())
+    label_value = value.get("option") or value.get("label") or value.get("choice")
+    label_match = re.match(r"\s*([A-H])(?:\.|\)|:|\s|$)", str(label_value or "").upper())
+    if label_match:
+        label = label_match.group(1)
+        text = str(options.get(label) or value.get("text") or "").strip()
+        return (f"{label}. {text}" if text else label), citations
+    nested = value.get("answer")
+    if nested is not None and nested is not value:
+        answer, nested_citations = _normalize_answer_payload(nested, options)
+        return answer, citations or nested_citations
+    return str(value.get("text") or "").strip(), citations
+
+
 def _claim_verification_task(
     kwargs: Mapping[str, Any],
     candidate: ReasonerDecision,
@@ -1312,8 +1355,23 @@ def _claim_verification_task(
         inspection_mode="verify_claim",
         priority=1.0,
         claim_to_verify=candidate.answer,
+        claim_relation=_claim_relation_for_question(kwargs),
         alternative_answers=alternatives,
     )
+
+
+def _claim_relation_for_question(kwargs: Mapping[str, Any]) -> str:
+    question = str(kwargs.get("question", "") or "").casefold()
+    requires_identity = bool(dict(kwargs.get("query_requirements") or {}).get("requires_identity_link"))
+    if re.search(r"\bwhy\b", question):
+        return "decision_motive"
+    if re.search(r"\bhow\s+(?:did|does|do|was|were)\b", question):
+        return "identity_linked_cause" if requires_identity else "initiating_cause_or_mechanism"
+    if re.search(r"\b(?:view|opinion|believ\w*)\b", question):
+        return "opinion"
+    if requires_identity:
+        return "identity_link"
+    return "direct_relation"
 
 
 def _answer_audit_prompt(
@@ -1441,6 +1499,7 @@ def _claim_preview_prompt(
         "people, or words appear is not enough. Request a narrower detail window when motion or text remains unresolved.\n"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
+        f"Required claim relation: {getattr(task, 'claim_relation', '')}\n"
         f"Alternative answers: {json.dumps(list(getattr(task, 'alternative_answers', ()) or ()), ensure_ascii=False)}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
         f"Window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:6000]}"
@@ -1557,6 +1616,7 @@ def _claim_evidence_prompt(
         "\"strongest_alternative\":\"B. ...|none\",\"reason\":\"...\"}.\n"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
+        f"Required claim relation: {getattr(task, 'claim_relation', '')}\n"
         f"Alternative answers: {json.dumps(list(getattr(task, 'alternative_answers', ()) or ()), ensure_ascii=False)}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1800]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"

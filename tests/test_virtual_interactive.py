@@ -43,6 +43,7 @@ _load_existing_case_summary = _interactive._load_existing_case_summary
 _run_case_batch = _interactive._run_case_batch
 _should_audit_answer = _interactive._should_audit_answer
 _matching_claim_assessment = _interactive._matching_claim_assessment
+_followup_prompt = _interactive._followup_prompt
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -334,6 +335,41 @@ def test_gemini_reasoner_preserves_candidate_when_forced_finalization_still_inve
     assert len(api.calls) == 3
 
 
+def test_gemini_reasoner_normalizes_structured_answer_payload_and_nested_citations(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {
+                "action": "answer",
+                "answer": {"option": "B", "text": "9", "citations": ["ev_1"]},
+            },
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="What number appears on the board?",
+        options={"A": "7", "B": "9"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=2,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "The board shows 9.",
+                "virtual_time_range": [10.0, 20.0],
+                "modality": "visual",
+                "source_lineage": [{"segment_id": "seg_0001"}],
+            },
+        ),
+    )
+
+    assert decision.answer == "B. 9"
+    assert decision.citations == ("ev_1",)
+
+
 def test_gemini_reasoner_forces_best_effort_answer_when_no_candidate_exists(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (
@@ -442,6 +478,7 @@ def test_gemini_reasoner_dispatches_independent_claim_verification_for_relation_
     assert decision.action == "investigate"
     assert decision.tasks[0].inspection_mode == "verify_claim"
     assert decision.tasks[0].claim_to_verify.startswith("D.")
+    assert decision.tasks[0].claim_relation == "decision_motive"
     assert decision.tasks[0].segment_id == "seg_0002"
     assert decision.tasks[0].time_range == (0.0, 300.0)
 
@@ -498,6 +535,73 @@ def test_model_investigator_records_independent_claim_assessment(tmp_path: Path)
     assert assessment["candidate_answer"].startswith("D.")
     assert assessment["candidate_role"] == "downstream_consequence"
     assert assessment["strongest_alternative"].startswith("B.")
+
+
+def test_claim_verifier_downgrades_relation_role_mismatch_without_erasing_answer(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {
+                "summary": "The money has a stated downstream use.",
+                "confidence": 0.95,
+                "claim_verdict": "supports",
+                "relation_type": "direct",
+                "candidate_role": "stated_use",
+                "strongest_alternative": "B. A broader motive.",
+                "reason": "The dialogue directly states how the money can be used.",
+                "need_detail": False,
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="verify_r2_candidate",
+        goal="Verify the proposed reason.",
+        segment_id="seg_0001",
+        time_range=(0.0, 60.0),
+        modality_hint=("visual", "asr"),
+        inspection_mode="verify_claim",
+        claim_to_verify="D. A downstream benefit.",
+        alternative_answers=("B. A broader motive.",),
+        claim_relation="decision_motive",
+    )
+
+    report = investigator.run_batch((task,))[0]
+    assessment = report.evidence[0].operation_metadata["claim_assessment"]
+
+    assert assessment["candidate_answer"].startswith("D.")
+    assert assessment["claim_relation"] == "decision_motive"
+    assert assessment["candidate_role"] == "stated_use"
+    assert assessment["verdict"] == "insufficient"
+    assert "does not satisfy" in assessment["reason"]
+
+
+def test_followup_prompt_requires_reasoner_to_act_on_claim_role_mismatch() -> None:
+    prompt = _followup_prompt(
+        {
+            "question": "Why did the person perform the action?",
+            "options": {"B": "A motive", "D": "A downstream use"},
+            "workspace_overview": {"segment_overviews": []},
+            "query_contract": {},
+            "query_requirements": {},
+            "completion_status": {"ready_for_answer": True},
+            "temporal_navigation": {},
+        },
+        (
+            {
+                "evidence_id": "ev_claim",
+                "claim_assessment": {
+                    "claim_relation": "decision_motive",
+                    "candidate_role": "stated_use",
+                    "verdict": "insufficient",
+                },
+            },
+        ),
+    )
+
+    assert "candidate_role does not satisfy claim_relation" in prompt
+    assert "investigate the missing relation" in prompt
 
 
 def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities() -> None:
