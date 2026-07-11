@@ -395,6 +395,7 @@ def materialize_window_frames(
     sampler = sampler or sample_frames
     observations = workspace.root_dir / "observations"
     rows: list[VirtualFrameRef] = []
+    failures: list[dict[str, Any]] = []
     for frame_index, virtual_time in enumerate(_uniform_times(float(start_sec), float(end_sec), requested_fps, cap), start=1):
         window = _source_window_for_time(workspace.manifest, virtual_time)
         if window is None:
@@ -405,14 +406,31 @@ def materialize_window_frames(
             source_time = max(segment.source_start_sec, segment.source_end_sec - 0.1)
         source_time = round(source_time, 3)
         out_dir = observations / str(query_id) / window.segment_id / f"win_{frame_index:06d}"
-        frame, source_time = _sample_window_frame_with_tail_backoff(
-            sampler,
-            window,
-            source_time,
-            out_dir,
-            source_start_sec=segment.source_start_sec,
-            source_end_sec=segment.source_end_sec,
-        )
+        try:
+            frame, source_time = _sample_window_frame_with_tail_backoff(
+                sampler,
+                window,
+                source_time,
+                out_dir,
+                source_start_sec=segment.source_start_sec,
+                source_end_sec=segment.source_end_sec,
+            )
+        except RuntimeError as exc:
+            failures.append(
+                {
+                    "error": str(exc),
+                    "fps_level": "window",
+                    "frame_index": frame_index,
+                    "query_id": str(query_id),
+                    "requested_virtual_time_sec": virtual_time,
+                    "sampling_fps": requested_fps,
+                    "segment_id": window.segment_id,
+                    "source_path": window.source_path,
+                    "source_time_sec": source_time,
+                    "source_video_id": window.source_video_id,
+                }
+            )
+            continue
         sampled_virtual_time = round(
             window.virtual_start_sec + (source_time - window.source_start_sec),
             3,
@@ -431,6 +449,11 @@ def materialize_window_frames(
                 sampling_fps=requested_fps,
             )
         )
+    if failures:
+        _append_jsonl(observations / "window_sampling_failures.jsonl", failures)
+    if not rows:
+        detail = failures[-1]["error"] if failures else "no source window overlapped the request"
+        raise RuntimeError(f"Failed to sample any frames for query {query_id}: {detail}")
     manifest_path = observations / "window_frame_manifest.jsonl"
     _append_jsonl(manifest_path, (asdict(row) for row in rows))
     return tuple(rows)

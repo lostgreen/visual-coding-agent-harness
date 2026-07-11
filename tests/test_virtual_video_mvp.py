@@ -300,6 +300,78 @@ def test_window_sampling_uniformly_covers_full_window_when_capped(tmp_path: Path
     assert times[32] > 300.0
 
 
+def test_window_sampling_skips_isolated_failure_and_records_lineage(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    calls = 0
+
+    def flaky_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("ffmpeg timed out after 30s while sampling a frame")
+        return _fake_sampler(video_path, start_sec, end_sec, n_frames, out_dir)
+
+    frames = materialize_window_frames(
+        workspace,
+        5.0,
+        7.0,
+        query_id="q_flaky",
+        fps=2.0,
+        max_frames=4,
+        sampler=flaky_sampler,
+    )
+    failures_path = workspace.root_dir / "observations" / "window_sampling_failures.jsonl"
+    failures = [json.loads(line) for line in failures_path.read_text(encoding="utf-8").splitlines()]
+    manifest_rows = [
+        json.loads(line)
+        for line in (workspace.root_dir / "observations" / "window_frame_manifest.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+
+    assert len(frames) == 3
+    assert len(manifest_rows) == 3
+    assert failures == [
+        {
+            "error": "ffmpeg timed out after 30s while sampling a frame",
+            "fps_level": "window",
+            "frame_index": 2,
+            "query_id": "q_flaky",
+            "requested_virtual_time_sec": 5.667,
+            "sampling_fps": 2.0,
+            "segment_id": "seg_b",
+            "source_path": "target.mp4",
+            "source_time_sec": 101.667,
+            "source_video_id": "target",
+        }
+    ]
+
+
+def test_window_sampling_raises_when_every_frame_fails(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    def failing_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
+        del video_path, start_sec, end_sec, n_frames, out_dir
+        raise RuntimeError("source is not decodable")
+
+    with pytest.raises(RuntimeError, match="Failed to sample any frames for query q_empty"):
+        materialize_window_frames(
+            workspace,
+            5.0,
+            7.0,
+            query_id="q_empty",
+            fps=2.0,
+            max_frames=4,
+            sampler=failing_sampler,
+        )
+
+    failures = (workspace.root_dir / "observations" / "window_sampling_failures.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    assert len(failures) == 4
+    assert not (workspace.root_dir / "observations" / "window_frame_manifest.jsonl").exists()
+
+
 def test_window_sampling_avoids_exact_source_duration_endpoint(tmp_path: Path) -> None:
     manifest = VirtualVideoManifest(
         workspace_id="endpoint",
