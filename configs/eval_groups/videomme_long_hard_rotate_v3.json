@@ -1,0 +1,95 @@
+{
+  "group_id": "videomme-long-hard-rotate-v3",
+  "dataset": "VideoMME",
+  "duration_category": "long",
+  "construction": "source_only",
+  "source_duration_minutes": 397.6,
+  "purpose": "Retain five unresolved visual-investigation failures and rotate out solved or causally ambiguous cases for five unseen long-video capabilities.",
+  "cases": [
+    {
+      "case_id": "645-3",
+      "capability": "identity_linked_opinion_retrieval",
+      "task_type": "Object Recognition",
+      "scope": "identity_then_dialogue",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 44.44,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "648-3",
+      "capability": "numeric_ocr_fact",
+      "task_type": "OCR Problems",
+      "scope": "fact_localization",
+      "modalities": ["ocr", "visual", "asr"],
+      "source_duration_minutes": 33.19,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "698-3",
+      "capability": "atomic_event_count",
+      "task_type": "Counting Problem",
+      "scope": "full_video",
+      "modalities": ["visual"],
+      "source_duration_minutes": 50.5,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "702-1",
+      "capability": "identity_linked_action_reasoning",
+      "task_type": "Action Recognition",
+      "scope": "coarse_temporal_hint",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 35.08,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "727-2",
+      "capability": "distinct_interviewee_count",
+      "task_type": "Counting Problem",
+      "scope": "full_video",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 43.37,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "672-3",
+      "capability": "visual_transition_localization",
+      "task_type": "Temporal Perception",
+      "scope": "event_transition",
+      "modalities": ["visual"],
+      "source_duration_minutes": 31.85
+    },
+    {
+      "case_id": "742-3",
+      "capability": "scoreboard_lead_change_localization",
+      "task_type": "Temporal Perception",
+      "scope": "multi_interval_comparison",
+      "modalities": ["visual", "ocr"],
+      "source_duration_minutes": 31.98
+    },
+    {
+      "case_id": "799-3",
+      "capability": "localized_comedic_action_recognition",
+      "task_type": "Action Recognition",
+      "scope": "event_localization",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 41.89
+    },
+    {
+      "case_id": "839-1",
+      "capability": "cumulative_calorie_ocr_tracking",
+      "task_type": "OCR Problems",
+      "scope": "identity_then_numeric_state",
+      "modalities": ["visual", "ocr", "asr"],
+      "source_duration_minutes": 52.47
+    },
+    {
+      "case_id": "851-3",
+      "capability": "narrative_object_placement",
+      "task_type": "Spatial Perception",
+      "scope": "object_then_destination",
+      "modalities": ["visual", "asr"],
+      "source_duration_minutes": 32.83
+    }
+  ]
+}
