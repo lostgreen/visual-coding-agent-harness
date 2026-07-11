@@ -376,6 +376,17 @@ class GeminiReasoner:
                 if kwargs.get("force_finalize"):
                     return self._force_best_effort(kwargs, evidence_digest)
                 return candidate
+            if not _valid_option_answer(candidate.answer, kwargs.get("options") or {}):
+                if self._last_candidate is not None:
+                    return ReasonerDecision(
+                        action="answer",
+                        answer=self._last_candidate.answer,
+                        citations=self._last_candidate.citations,
+                        entity_clusters=self._last_candidate.entity_clusters,
+                        support_status="insufficient",
+                        support_reason="The latest response did not select a valid option; preserving the last valid candidate.",
+                    )
+                return candidate
             self._last_candidate = candidate
             if not _should_audit_answer(kwargs):
                 return candidate
@@ -402,7 +413,7 @@ class GeminiReasoner:
                 audit.get("revised_answer"),
                 kwargs.get("options") or {},
             )
-            if revised_answer:
+            if revised_answer and _valid_option_answer(revised_answer, kwargs.get("options") or {}):
                 candidate = ReasonerDecision(
                     action="answer",
                     answer=revised_answer,
@@ -482,8 +493,17 @@ class GeminiReasoner:
             support_status="insufficient",
             support_reason="Best-effort answer produced after the investigation budget was exhausted.",
         )
-        if decision.answer:
+        if decision.answer and _valid_option_answer(decision.answer, kwargs.get("options") or {}):
             self._last_candidate = decision
+        elif self._last_candidate is not None:
+            return ReasonerDecision(
+                action="answer",
+                answer=self._last_candidate.answer,
+                citations=self._last_candidate.citations,
+                entity_clusters=self._last_candidate.entity_clusters,
+                support_status="insufficient",
+                support_reason="The best-effort response did not select a valid option; preserving the last valid candidate.",
+            )
         return decision
 
     def _maybe_verify_claim(
@@ -1436,6 +1456,23 @@ def _normalize_answer_payload(value: Any, options: Mapping[str, Any]) -> tuple[s
         answer, nested_citations = _normalize_answer_payload(nested, options)
         return answer, citations or nested_citations
     return str(value.get("text") or "").strip(), citations
+
+
+def _valid_option_answer(answer: str, options: Mapping[str, Any]) -> bool:
+    label_match = re.match(r"\s*([A-H])(?:\.|\)|:|\s|$)", str(answer or "").upper())
+    if label_match and label_match.group(1) in {str(label).upper() for label in options}:
+        return True
+    normalized_answer = re.sub(r"[^a-z0-9]+", "", str(answer or "").casefold())
+    if not normalized_answer:
+        return False
+    matches = 0
+    for text in options.values():
+        normalized_option = re.sub(r"[^a-z0-9]+", "", str(text or "").casefold())
+        if normalized_option and (
+            normalized_option in normalized_answer or normalized_answer in normalized_option
+        ):
+            matches += 1
+    return matches == 1
 
 
 def _claim_verification_task(

@@ -355,6 +355,47 @@ def test_gemini_reasoner_preserves_candidate_when_forced_finalization_still_inve
     assert len(api.calls) == 3
 
 
+def test_gemini_reasoner_keeps_last_valid_choice_when_final_response_is_explanatory(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "answer", "answer": "C", "citations": ["ev_1"]},
+            {
+                "action": "answer",
+                "answer": "The evidence implies a value larger than the listed estimates, so no option is exact.",
+                "citations": ["ev_1"],
+            },
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+    kwargs = {
+        "question": "Which estimate does the video state?",
+        "options": {"A": "100 trillion", "B": "75 trillion", "C": "over 25 trillion", "D": "50 trillion"},
+        "workspace_overview": {"segment_overviews": []},
+        "query_contract": {"required_scope": "window", "aggregation": "none"},
+        "query_requirements": {},
+        "completion_status": {"ready_for_answer": True},
+        "temporal_navigation": {},
+        "evidence_digest": (
+            {
+                "evidence_id": "ev_1",
+                "summary": "The video states a lower bound above 25 trillion.",
+                "virtual_time_range": [10.0, 20.0],
+                "modality": "visual",
+                "source_lineage": [],
+            },
+        ),
+    }
+
+    first = reasoner.decide(**kwargs, remaining_budget=1)
+    final = reasoner.decide(**kwargs, remaining_budget=0, force_finalize=True)
+
+    assert first.answer == "C"
+    assert final.answer == "C"
+    assert final.citations == ("ev_1",)
+    assert final.support_status == "insufficient"
+    assert "valid option" in final.support_reason
+
+
 def test_gemini_reasoner_normalizes_structured_answer_payload_and_nested_citations(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (
