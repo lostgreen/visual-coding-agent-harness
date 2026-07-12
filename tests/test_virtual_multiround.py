@@ -108,6 +108,46 @@ def test_query_compiler_distinguishes_scalar_quantity_from_entity_count() -> Non
     assert timed_entities.quantifier == "distinct_count"
 
 
+def test_query_compiler_emits_semantic_contracts_for_failure_families() -> None:
+    events = multiround.compile_query_contract(
+        "How many dance group auditions are included in this video?"
+    )
+    spatial = multiround.compile_query_contract(
+        "Which direction is the narrator in red facing in relation to the narrator in green?"
+    )
+    absence = multiround.compile_query_contract(
+        "Which acrobatics skill is absent from this video?"
+    )
+    boundary_score = multiround.compile_query_contract(
+        "What was the halftime score?",
+        {"A": "32 - 23", "B": "37 - 27"},
+    )
+    episode = multiround.compile_query_contract("In which episode do they get married?")
+
+    assert (events.required_scope, events.quantifier, events.observation_target) == (
+        "full_video",
+        "total_count",
+        "event",
+    )
+    assert (spatial.quantifier, spatial.observation_target, spatial.aggregation) == (
+        "comparison",
+        "relation",
+        "compare",
+    )
+    assert (absence.required_scope, absence.quantifier, absence.aggregation) == (
+        "full_video",
+        "universal",
+        "compare",
+    )
+    assert boundary_score.measurement_unit == "point"
+    assert boundary_score.boundary_hint.casefold() == "halftime"
+    assert (episode.required_scope, episode.observation_target, episode.aggregation) == (
+        "multi_window",
+        "event",
+        "compare",
+    )
+
+
 def test_new_coverage_does_not_count_as_goal_progress() -> None:
     condition = ConditionResult("gap_clock_c1", "unknown", "The scoreboard is too small.")
     report = InvestigationReport(
@@ -546,14 +586,14 @@ class RankedCandidateReasoner:
             return ReasonerDecision(
                 action="answer",
                 answer="B. 11",
-                citations=(),
-                support_status="supported",
-                support_reason="The observed jersey directly shows 11.",
+                citations=("ev_q1_001",),
+                support_status="insufficient",
+                support_reason="The related visual evidence favors 11 but remains inconclusive.",
             )
         return ReasonerDecision(
             action="answer",
             answer="A. 7",
-            citations=(),
+            citations=("ev_q1_001",),
             support_status="contradicted",
             support_reason="The later candidate conflicts with the observation.",
         )
@@ -1482,6 +1522,25 @@ def test_driver_keeps_stronger_supported_candidate_over_later_contradicted_answe
     assert result.verified is False
 
 
+def test_driver_bootstraps_an_empty_investigation_decision(tmp_path: Path) -> None:
+    class NoTaskReasoner:
+        def decide(self, **kwargs: object) -> ReasonerDecision:
+            del kwargs
+            return ReasonerDecision(action="investigate", tasks=())
+
+    workspace = _workspace(tmp_path)
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=NoTaskReasoner(),
+        investigator=VirtualVideoInvestigator(workspace, sampler=_sampler),
+        max_rounds=1,
+        max_investigations=1,
+    ).run(workspace)
+
+    assert result.accepted_investigations == 1
+    repair = next(row for row in result.trace if row.get("type") == "repair_override")
+    assert repair["reason"] == "empty_investigation_bootstrap"
+
+
 def test_navigation_hint_does_not_satisfy_visual_completion(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     hint = EvidenceRecord(
@@ -2103,3 +2162,180 @@ def test_identity_gate_rejects_anchor_only_cluster_without_event_observation(tmp
     assert gate["reason"] == "identity_anchor_not_linked"
     assert completion["ready_for_answer"] is False
     assert completion["identity_anchor_evidence_ids"] == []
+
+
+def test_spatial_gate_requires_same_frame_relation_and_reference_frame(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="spatial",
+        segments=(VirtualVideoSegment("seg_1", "source", "source.mp4", 0.0, 5.0, 0.0, 5.0),),
+    )
+    case = VirtualVideoCase(
+        case_id="spatial",
+        question="Which direction is red facing in relation to green?",
+        options={"A": "Right front", "B": "Left front"},
+        gold="A",
+        target_segment_id="seg_1",
+        target_virtual_interval=(0.0, 5.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "spatial", manifest=manifest, case=case)
+
+    def evidence(reference_frame: str) -> EvidenceRecord:
+        return EvidenceRecord(
+            evidence_id="ev_spatial",
+            beat_id="",
+            start_sec=0.0,
+            end_sec=5.0,
+            modality="visual",
+            pointer="virtual://spatial",
+            verbatim="Red and green are visible together; red faces toward green's right-front side.",
+            frame_refs=("spatial.jpg",),
+            attestation_model="test-vlm",
+            operation_metadata={
+                "relations": [
+                    {
+                        "relation_type": "relative_bearing",
+                        "subject_id": "red",
+                        "object_id": "green",
+                        "value": "right_front",
+                        "reference_frame": reference_frame,
+                        "same_frame": True,
+                        "status": "supported",
+                    }
+                ]
+            },
+        )
+
+    contract = multiround.compile_query_contract(case.question, case.options)
+    requirements = multiround.compile_query_requirements(case.question)
+    valid = evidence("object_egocentric")
+    invalid = evidence("")
+    ready = {"ready_for_answer": True}
+
+    passed = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "A. Right front",
+        (valid.evidence_id,),
+        (),
+        (valid,),
+        query_requirements=requirements,
+        completion_status=ready,
+    )
+    blocked = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "A. Right front",
+        (invalid.evidence_id,),
+        (),
+        (invalid,),
+        query_requirements=requirements,
+        completion_status=ready,
+    )
+
+    assert passed["reason"] == "spatial_relation_grounded"
+    assert blocked["reason"] == "spatial_relation_not_grounded"
+
+
+def test_boundary_score_gate_requires_explicit_same_boundary_snapshot(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="score",
+        segments=(VirtualVideoSegment("seg_1", "source", "source.mp4", 0.0, 5.0, 0.0, 5.0),),
+    )
+    case = VirtualVideoCase(
+        case_id="score",
+        question="What was the halftime score?",
+        options={"A": "32 - 23", "B": "37 - 27"},
+        gold="A",
+        target_segment_id="seg_1",
+        target_virtual_interval=(0.0, 5.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "score", manifest=manifest, case=case)
+
+    def evidence(event_id: str) -> EvidenceRecord:
+        measurements = [
+            {
+                "value": value,
+                "unit": "point",
+                "quantity_type": "score",
+                "subject_id": subject,
+                "event_id": event_id,
+                "boundary_relation": "at",
+                "binding_status": "explicit",
+            }
+            for value, subject in ((32, "home"), (23, "guest"))
+        ]
+        return EvidenceRecord(
+            evidence_id="ev_score",
+            beat_id="",
+            start_sec=0.0,
+            end_sec=5.0,
+            modality="ocr",
+            pointer="virtual://score",
+            verbatim="The same scoreboard frame at halftime reads 32-23.",
+            frame_refs=("score.jpg",),
+            attestation_model="test-vlm",
+            operation_metadata={"measurements": measurements},
+        )
+
+    contract = multiround.compile_query_contract(case.question, case.options)
+    valid = evidence("halftime")
+    invalid = evidence("live_play")
+    ready = {"ready_for_answer": True}
+
+    passed = multiround._answer_completion_gate(
+        workspace, contract, "A. 32 - 23", (valid.evidence_id,), (), (valid,), completion_status=ready
+    )
+    blocked = multiround._answer_completion_gate(
+        workspace, contract, "A. 32 - 23", (invalid.evidence_id,), (), (invalid,), completion_status=ready
+    )
+
+    assert passed["reason"] == "boundary_score_grounded"
+    assert blocked["reason"] == "boundary_score_snapshot_missing"
+
+
+def test_semantic_contract_readiness_blocks_only_contracts_that_need_closure(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    evidence = EvidenceRecord(
+        evidence_id="ev_visual",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://visual",
+        verbatim="The jersey visibly reads 11.",
+        frame_refs=("jersey.jpg",),
+        attestation_model="test-vlm",
+    )
+    incomplete = {
+        "ready_for_answer": False,
+        "reason": "critical conditions remain unresolved",
+        "unresolved_critical_condition_ids": ["gap_relation_c1"],
+    }
+    simple = multiround.compile_query_contract(workspace.case.question, workspace.case.options)
+    spatial = multiround.compile_query_contract(
+        "Which direction is red facing in relation to green?",
+        {"A": "Right front", "B": "Left front"},
+    )
+
+    simple_gate = multiround._answer_completion_gate(
+        workspace,
+        simple,
+        "B. 11",
+        (evidence.evidence_id,),
+        (),
+        (evidence,),
+        completion_status=incomplete,
+    )
+    spatial_gate = multiround._answer_completion_gate(
+        workspace,
+        spatial,
+        "A. Right front",
+        (evidence.evidence_id,),
+        (),
+        (evidence,),
+        query_requirements={"spatial_reference_frame": "object_egocentric"},
+        completion_status=incomplete,
+    )
+
+    assert simple_gate["passed"] is True
+    assert spatial_gate["reason"] == "contract_completion_not_ready"

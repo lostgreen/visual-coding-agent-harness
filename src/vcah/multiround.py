@@ -5,7 +5,15 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
-from vcah.evidence_primitives import GapCondition, MeasurementFact, canonical_unit, make_gap_conditions, merge_condition_states
+from vcah.evidence_primitives import (
+    GapCondition,
+    MeasurementFact,
+    canonical_unit,
+    make_gap_conditions,
+    merge_condition_states,
+    normalize_measurements,
+    normalize_relations,
+)
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.memory import EvidenceStore
 from vcah.types import ClaimContract, EvidenceRecord, is_path_only_visual_evidence, to_jsonable
@@ -187,7 +195,9 @@ def compile_query_contract(
 ) -> ClaimContract:
     text = str(question or "").casefold()
     is_count = bool(re.search(r"\bhow many\b|\bnumber of\b", text))
-    is_occurrence_count = bool(re.search(r"\bhow many times\b|\bnumber of times\b", text))
+    is_occurrence_count = bool(re.search(r"\bhow many times\b|\bnumber of times\b", text)) or (
+        is_count and _count_target_is_event(text)
+    )
     measurement_text = " ".join((text, *(str(item).casefold() for item in (options or {}).values())))
     asked_measurement_unit = _asked_measurement_unit(text)
     measurement_unit = asked_measurement_unit or _measurement_unit(measurement_text)
@@ -196,10 +206,49 @@ def compile_query_contract(
         re.search(r"\b(?:throughout|across)\b.*\b(?:video|film|recording)\b", text)
         or re.search(r"\b(?:entire|whole)\s+(?:video|film|recording)\b", text)
         or re.search(r"\bin\s+(?:this|the)\s+(?:video|film|recording)\b", text)
+        or re.search(r"\bfrom\s+(?:this|the)\s+(?:video|film|recording)\b", text)
         or re.search(r"\bover the course of\s+(?:this|the)\s+(?:video|film|recording)\b", text)
     )
     language_action = any(term in text for term in ("comment", "say", "speak", "discuss", "mention"))
     identity_anchor_terms = _identity_anchor_terms(question)
+    if _is_boundary_score_question(text, options or {}, boundary_hint):
+        return ClaimContract(
+            required_scope="window",
+            quantifier="comparison",
+            observation_target="attribute",
+            aggregation="compare",
+            required_observability=("visual", "ocr"),
+            observability_mode="any",
+            measurement_unit="point",
+            boundary_hint=boundary_hint,
+        )
+    if _is_spatial_relation_question(text):
+        return ClaimContract(
+            required_scope="window",
+            quantifier="comparison",
+            observation_target="relation",
+            aggregation="compare",
+            required_observability=("visual",),
+            observability_mode="all",
+        )
+    if full_video and _is_global_absence_question(text):
+        return ClaimContract(
+            required_scope="full_video",
+            quantifier="universal",
+            observation_target="object",
+            aggregation="compare",
+            required_observability=("visual",),
+            observability_mode="all",
+        )
+    if re.search(r"\bwhich\s+episode\b", text):
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="event",
+            aggregation="compare",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+        )
     if measurement_unit and not is_occurrence_count and (
         bool(asked_measurement_unit) or "how much" in text or "what total" in text
     ):
@@ -279,6 +328,13 @@ def _asked_measurement_unit(text: str) -> str:
 
 def _boundary_hint(question: str) -> str:
     text = " ".join(str(question or "").split())
+    named_boundary = re.search(
+        r"\b(?:half[ -]?time|end of (?:the )?first half|quarter end|end of (?:the )?(?:first|second|third|fourth) quarter|intermission)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if named_boundary:
+        return named_boundary.group(0).strip()
     match = re.search(
         r"\b(?:before|when|until|by the time|at the time)\b\s+([^?.,;]+)",
         text,
@@ -287,11 +343,67 @@ def _boundary_hint(question: str) -> str:
     return match.group(0).strip() if match else ""
 
 
+def _count_target_is_event(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:how many|number of)\s+(?:distinct\s+|different\s+)?(?:[a-z-]+\s+){0,3}"
+            r"(?:auditions?|performances?|acts?|segments?|episodes?|scenes?|occurrences?|events?)\b",
+            str(text or "").casefold(),
+        )
+    )
+
+
+def _is_spatial_relation_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return any(
+        term in normalized
+        for term in (
+            "in relation to",
+            "relative to",
+            "which direction",
+            "facing",
+            "left front",
+            "right front",
+            "directly in front",
+            "behind",
+            "upper left",
+            "upper right",
+            "lower left",
+            "lower right",
+        )
+    )
+
+
+def _is_global_absence_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(r"\babsent\b", normalized)
+        or re.search(r"\b(?:does not|doesn't|never)\s+(?:appear|show|feature|occur)\b", normalized)
+        or re.search(r"\bnot\s+(?:shown|seen|featured|included)\b", normalized)
+    )
+
+
+def _is_boundary_score_question(text: str, options: Mapping[str, str], boundary_hint: str) -> bool:
+    if "score" not in str(text or "").casefold() or not boundary_hint:
+        return False
+    return any(_score_pair(str(option)) is not None for option in options.values())
+
+
 def compile_query_requirements(question: str) -> dict[str, Any]:
     terms = _identity_anchor_terms(question)
+    text = str(question or "").casefold()
+    spatial = _is_spatial_relation_question(text)
     return {
         "requires_identity_link": bool(terms),
         "identity_anchor_terms": list(terms),
+        "requires_spatial_relation": spatial,
+        "spatial_reference_frame": (
+            "object_egocentric"
+            if spatial and any(term in text for term in ("in relation to", "relative to"))
+            else "viewer"
+            if spatial
+            else ""
+        ),
     }
 
 
@@ -572,6 +684,23 @@ class VirtualVideoMultiRoundDriver:
                         "task_count": 1,
                     })
                     decision = ReasonerDecision(action="investigate", tasks=candidate_repairs)
+            if decision.action == "investigate" and not decision.tasks and remaining > 0:
+                bootstrap_tasks = _bootstrap_investigation_tasks(
+                    workspace,
+                    query_contract,
+                    round_id=round_id,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+                if bootstrap_tasks:
+                    trace.append(
+                        {
+                            "type": "repair_override",
+                            "round": round_id,
+                            "reason": "empty_investigation_bootstrap",
+                            "task_count": len(bootstrap_tasks),
+                        }
+                    )
+                    decision = ReasonerDecision(action="investigate", tasks=bootstrap_tasks)
             trace.append(
                 {
                     "type": "reasoner_decision",
@@ -605,13 +734,14 @@ class VirtualVideoMultiRoundDriver:
                     decision.entity_clusters,
                     evidence_store.records,
                     query_requirements=query_requirements,
+                    completion_status=completion_status,
                 )
                 gate = _apply_answer_audit(gate, decision)
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
                 gate_feedback = dict(gate)
                 support_rank = _answer_support_rank(decision)
-                if decision.answer.strip() and support_rank >= best_support_rank:
+                if _candidate_can_be_forced(decision, evidence_store.records) and support_rank >= best_support_rank:
                     best_answer = decision.answer
                     best_citations = decision.citations
                     best_verification_reason = last_gate_reason
@@ -770,6 +900,7 @@ class VirtualVideoMultiRoundDriver:
                     final_decision.entity_clusters,
                     evidence_store.records,
                     query_requirements=query_requirements,
+                    completion_status=completion_status,
                 )
                 gate = _apply_answer_audit(gate, final_decision)
                 trace.append(
@@ -782,7 +913,7 @@ class VirtualVideoMultiRoundDriver:
                 )
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
                 support_rank = _answer_support_rank(final_decision)
-                if final_decision.answer.strip() and support_rank >= best_support_rank:
+                if _candidate_can_be_forced(final_decision, evidence_store.records) and support_rank >= best_support_rank:
                     best_answer = final_decision.answer
                     best_citations = final_decision.citations
                     best_verification_reason = last_gate_reason
@@ -887,6 +1018,43 @@ def _coverage_repair_tasks(
             priority=1.0,
         )
         for index, segment_id in enumerate(tuple(segment_ids)[: max(0, int(limit))], start=1)
+    )
+
+
+def _bootstrap_investigation_tasks(
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    segment_limit = max(0, int(limit))
+    if segment_limit <= 0:
+        return ()
+    segments = tuple(workspace.manifest.segments)
+    if contract.required_scope != "full_video":
+        segments = segments[:1]
+    modalities = tuple(contract.required_observability or ("visual",))
+    event_count = contract.quantifier == "total_count" and contract.observation_target == "event"
+    return tuple(
+        InvestigationTask(
+            query_id=f"bootstrap_r{round_id}_{index:03d}",
+            goal=(
+                f"Enumerate atomic question-relevant events in source segment {segment.segment_id}."
+                if event_count
+                else f"Inspect source segment {segment.segment_id} for direct evidence required by the question."
+            ),
+            segment_id=segment.segment_id,
+            modality_hint=modalities,
+            expected_evidence=(
+                "timestamped atomic event occurrences with stable event identifiers"
+                if event_count
+                else "direct observations that resolve the question's semantic obligations"
+            ),
+            inspection_mode="enumerate_events" if event_count else "window",
+            priority=1.0,
+        )
+        for index, segment in enumerate(segments[:segment_limit], start=1)
     )
 
 
@@ -1382,6 +1550,7 @@ def _answer_completion_gate(
     evidence: Sequence[EvidenceRecord],
     *,
     query_requirements: Mapping[str, Any] | None = None,
+    completion_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not str(answer or "").strip():
         return {"passed": False, "reason": "answer_missing", "missing_segment_ids": []}
@@ -1389,6 +1558,9 @@ def _answer_completion_gate(
         return {"passed": False, "reason": "invalid_option_answer", "missing_segment_ids": []}
     if not _citations_are_visual(citations, evidence):
         return {"passed": False, "reason": "invalid_visual_citations", "missing_segment_ids": []}
+    readiness_gate = _contract_readiness_gate(contract, completion_status)
+    if readiness_gate is not None:
+        return readiness_gate
     by_id = {record.evidence_id: record for record in evidence}
     cited = tuple(by_id[str(citation)] for citation in citations)
     identity_gate = _identity_link_gate(
@@ -1398,6 +1570,13 @@ def _answer_completion_gate(
     )
     if identity_gate is not None:
         return identity_gate
+    if contract.observation_target == "relation":
+        return _spatial_relation_gate(
+            workspace,
+            answer,
+            cited,
+            query_requirements=query_requirements,
+        )
     quantitative_gate = _quantitative_answer_gate(workspace, contract, answer, cited)
     if quantitative_gate is not None:
         return quantitative_gate
@@ -1428,6 +1607,8 @@ def _answer_completion_gate(
             "source_video_ids": sorted(cited_sources),
             "missing_segment_ids": missing,
         }
+    if contract.quantifier == "universal":
+        return _global_absence_gate(workspace, answer, evidence, cited)
     if contract.quantifier == "distinct_count":
         clusters = tuple(_entity_cluster(item) for item in entity_clusters)
         if not clusters:
@@ -1579,6 +1760,157 @@ def _entity_cluster_witness_gate(
     }
 
 
+def _contract_readiness_gate(
+    contract: ClaimContract,
+    completion_status: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    status = dict(completion_status or {})
+    if not status or bool(status.get("ready_for_answer")):
+        return None
+    requires_semantic_closure = (
+        contract.required_scope == "full_video"
+        or contract.observation_target == "relation"
+        or bool(contract.boundary_hint)
+        or contract.quantifier in {"universal", "comparison"}
+        or (contract.observation_target == "event" and contract.aggregation == "compare")
+    )
+    if not requires_semantic_closure:
+        return None
+    return {
+        "passed": False,
+        "reason": "contract_completion_not_ready",
+        "completion_reason": str(status.get("reason", "") or ""),
+        "unresolved_critical_condition_ids": list(
+            status.get("unresolved_critical_condition_ids", ()) or ()
+        ),
+        "unsupported_claim_atom_ids": list(status.get("unsupported_claim_atom_ids", ()) or ()),
+        "missing_segment_ids": list(status.get("missing_segment_ids", ()) or ()),
+    }
+
+
+def _spatial_relation_gate(
+    workspace: VirtualVideoWorkspace,
+    answer: str,
+    cited: Sequence[EvidenceRecord],
+    *,
+    query_requirements: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    selected = _letter(answer) or _option_letter_from_answer(answer, workspace.case.options)
+    expected = _spatial_relation_value(str(workspace.case.options.get(selected, "") or answer))
+    if not expected:
+        return {"passed": False, "reason": "spatial_option_relation_missing", "missing_segment_ids": []}
+    required_frame = str((query_requirements or {}).get("spatial_reference_frame", "") or "")
+    observed = []
+    for record in cited:
+        for fact in normalize_relations(record.operation_metadata.get("relations"), evidence_id=record.evidence_id):
+            if fact.relation_type not in {"spatial", "relative_bearing"}:
+                continue
+            observed.append(
+                {
+                    "value": fact.value,
+                    "reference_frame": fact.reference_frame,
+                    "same_frame": fact.same_frame,
+                    "subject_id": fact.subject_id,
+                    "object_id": fact.object_id,
+                    "evidence_ids": list(fact.evidence_ids),
+                }
+            )
+            if (
+                fact.status == "supported"
+                and fact.same_frame
+                and fact.subject_id
+                and fact.object_id
+                and fact.value == expected
+                and fact.reference_frame
+                and (not required_frame or fact.reference_frame == required_frame)
+            ):
+                return {
+                    "passed": True,
+                    "reason": "spatial_relation_grounded",
+                    "spatial_relation": observed[-1],
+                    "missing_segment_ids": [],
+                }
+    return {
+        "passed": False,
+        "reason": "spatial_relation_not_grounded",
+        "expected_relation": expected,
+        "required_reference_frame": required_frame,
+        "observed_relations": observed,
+        "missing_segment_ids": [],
+    }
+
+
+def _global_absence_gate(
+    workspace: VirtualVideoWorkspace,
+    answer: str,
+    evidence: Sequence[EvidenceRecord],
+    cited: Sequence[EvidenceRecord],
+) -> dict[str, Any]:
+    selected = _letter(answer) or _option_letter_from_answer(answer, workspace.case.options)
+    option_text = str(workspace.case.options.get(selected, "") or answer)
+    probes = []
+    for record in evidence:
+        presence = dict(record.operation_metadata.get("target_presence", {}) or {})
+        if not presence or not _target_matches_option(str(presence.get("target", "") or ""), option_text):
+            continue
+        status = str(presence.get("status", "") or "").casefold()
+        probes.append((record.evidence_id, status))
+    positive = [evidence_id for evidence_id, status in probes if status == "present"]
+    if positive:
+        return {
+            "passed": False,
+            "reason": "global_absence_contradicted",
+            "positive_evidence_ids": positive,
+            "missing_segment_ids": [],
+        }
+    cited_ids = {record.evidence_id for record in cited}
+    negative = [evidence_id for evidence_id, status in probes if status == "absent" and evidence_id in cited_ids]
+    if not negative:
+        return {
+            "passed": False,
+            "reason": "option_specific_absence_evidence_missing",
+            "missing_segment_ids": [],
+        }
+    return {
+        "passed": True,
+        "reason": "global_absence_grounded",
+        "negative_evidence_ids": negative,
+        "missing_segment_ids": [],
+    }
+
+
+def _target_matches_option(target: str, option_text: str) -> bool:
+    stop = {"the", "this", "that", "skill", "video", "shown", "seen", "featured", "included"}
+    left = {
+        token[:-1] if token.endswith("s") and len(token) > 4 else token
+        for token in re.findall(r"[a-z0-9]+", str(target or "").casefold())
+        if len(token) >= 3 and token not in stop
+    }
+    right = {
+        token[:-1] if token.endswith("s") and len(token) > 4 else token
+        for token in re.findall(r"[a-z0-9]+", str(option_text or "").casefold())
+        if len(token) >= 3 and token not in stop
+    }
+    return bool(left and right and left.intersection(right))
+
+
+def _spatial_relation_value(text: str) -> str:
+    normalized = str(text or "").casefold()
+    patterns = (
+        ("right_front", ("right front", "front right")),
+        ("left_front", ("left front", "front left")),
+        ("front", ("directly in front", "in front")),
+        ("behind", ("behind", "back")),
+        ("upper_left", ("upper left", "top left")),
+        ("upper_right", ("upper right", "top right")),
+        ("lower_left", ("lower left", "bottom left")),
+        ("lower_right", ("lower right", "bottom right")),
+        ("right", ("right",)),
+        ("left", ("left",)),
+    )
+    return next((value for value, aliases in patterns if any(alias in normalized for alias in aliases)), "")
+
+
 def _quantitative_answer_gate(
     workspace: VirtualVideoWorkspace,
     contract: ClaimContract,
@@ -1589,6 +1921,8 @@ def _quantitative_answer_gate(
         return None
     selected = _letter(answer) or _option_letter_from_answer(answer, workspace.case.options)
     option_text = str(workspace.case.options.get(selected, "") or answer)
+    if contract.measurement_unit == "point" and contract.boundary_hint and _score_pair(option_text):
+        return _boundary_score_gate(contract, option_text, cited)
     if contract.quantifier == "scalar_quantity":
         return _scalar_quantity_gate(contract, option_text, cited)
     atoms = _quantitative_atoms(option_text)
@@ -1660,6 +1994,75 @@ def _quantitative_answer_gate(
         "missing_numeric_atoms": missing,
         "missing_segment_ids": [],
     }
+
+
+def _boundary_score_gate(
+    contract: ClaimContract,
+    option_text: str,
+    cited: Sequence[EvidenceRecord],
+) -> dict[str, Any]:
+    expected = _score_pair(option_text)
+    if expected is None:
+        return {"passed": False, "reason": "score_pair_missing", "missing_segment_ids": []}
+    boundary_key = _boundary_event_key(contract.boundary_hint)
+    observed = []
+    for record in cited:
+        grouped: dict[str, list[MeasurementFact]] = {}
+        for fact in _measurement_facts((record,)):
+            if fact.quantity_type != "score" or fact.unit != "point" or not fact.event_id:
+                continue
+            grouped.setdefault(fact.event_id.casefold(), []).append(fact)
+        for event_id, facts in grouped.items():
+            eligible = tuple(
+                fact
+                for fact in facts
+                if fact.boundary_relation == "at"
+                and fact.binding_status == "explicit"
+                and fact.subject_id
+            )
+            values = tuple(int(round(fact.value)) for fact in eligible)
+            observed.append(
+                {
+                    "evidence_id": record.evidence_id,
+                    "event_id": event_id,
+                    "values": list(values),
+                    "subjects": [fact.subject_id for fact in eligible],
+                }
+            )
+            if (
+                len(eligible) >= 2
+                and len({fact.subject_id for fact in eligible}) >= 2
+                and (not boundary_key or boundary_key in event_id)
+                and (values[:2] == expected or values[:2] == tuple(reversed(expected)))
+            ):
+                return {
+                    "passed": True,
+                    "reason": "boundary_score_grounded",
+                    "score_snapshot": observed[-1],
+                    "missing_segment_ids": [],
+                }
+    return {
+        "passed": False,
+        "reason": "boundary_score_snapshot_missing",
+        "expected_score": list(expected),
+        "required_boundary_event": boundary_key,
+        "observed_score_snapshots": observed,
+        "missing_segment_ids": [],
+    }
+
+
+def _score_pair(text: str) -> tuple[int, int] | None:
+    match = re.search(r"(?<!\d)(\d{1,3})\s*(?:-|–|—|:)\s*(\d{1,3})(?!\d)", str(text or ""))
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def _boundary_event_key(text: str) -> str:
+    normalized = str(text or "").casefold()
+    if "half" in normalized or "intermission" in normalized:
+        return "halftime"
+    if "quarter" in normalized:
+        return "quarter_end"
+    return re.sub(r"[^a-z0-9]+", "_", normalized).strip("_")
 
 
 def _scalar_quantity_gate(
@@ -1744,28 +2147,14 @@ def _scalar_quantity_gate(
 
 
 def _measurement_facts(cited: Sequence[EvidenceRecord]) -> tuple[MeasurementFact, ...]:
-    facts = []
-    for record in cited:
-        for row in record.operation_metadata.get("measurements", ()) or ():
-            if not isinstance(row, Mapping):
-                continue
-            try:
-                facts.append(
-                    MeasurementFact(
-                        value=float(row.get("value")),
-                        unit=str(row.get("unit", "") or ""),
-                        relation=str(row.get("relation", "exact") or "exact"),
-                        semantics=str(row.get("measurement_semantics", row.get("semantics", "unknown")) or "unknown"),
-                        subject_id=str(row.get("subject_id", "") or ""),
-                        source_time_sec=row.get("source_time_sec"),
-                        boundary_relation=str(row.get("boundary_relation", "unknown") or "unknown"),
-                        raw_text=str(row.get("raw_text", "") or ""),
-                        evidence_ids=tuple(row.get("evidence_ids", ()) or ()) or (record.evidence_id,),
-                    )
-                )
-            except (TypeError, ValueError):
-                continue
-    return tuple(facts)
+    return tuple(
+        fact
+        for record in cited
+        for fact in normalize_measurements(
+            record.operation_metadata.get("measurements"),
+            evidence_id=record.evidence_id,
+        )
+    )
 
 
 def _deduplicated_delta_measurements(facts: Sequence[MeasurementFact]) -> tuple[MeasurementFact, ...]:
@@ -2246,6 +2635,14 @@ def _answer_support_rank(decision: ReasonerDecision) -> int:
         "unknown": 2,
         "supported": 3,
     }.get(decision.support_status, 2)
+
+
+def _candidate_can_be_forced(decision: ReasonerDecision, evidence: Sequence[EvidenceRecord]) -> bool:
+    return (
+        bool(decision.answer.strip())
+        and decision.support_status != "contradicted"
+        and _citations_are_visual(decision.citations, evidence)
+    )
 
 
 def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any], ...]:

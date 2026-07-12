@@ -172,11 +172,17 @@ class RelationFact:
     status: str = "unknown"
     description: str = ""
     evidence_ids: tuple[str, ...] = ()
+    value: str = ""
+    reference_frame: str = ""
+    same_frame: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "relation_type", str(self.relation_type or "").strip().casefold())
         object.__setattr__(self, "subject_id", str(self.subject_id or "").strip())
         object.__setattr__(self, "object_id", str(self.object_id or "").strip())
+        object.__setattr__(self, "value", _normalized_role(self.value))
+        object.__setattr__(self, "reference_frame", _normalized_role(self.reference_frame))
+        object.__setattr__(self, "same_frame", bool(self.same_frame))
         status = str(self.status or "unknown").strip().casefold()
         object.__setattr__(self, "status", status if status in {"supported", "contradicted", "unknown"} else "unknown")
         object.__setattr__(self, "description", str(self.description or "").strip())
@@ -249,6 +255,9 @@ def normalize_relations(value: Any, *, evidence_id: str = "") -> tuple[RelationF
             relation_type=str(row.get("relation_type", "") or ""),
             subject_id=str(row.get("subject_id", "") or ""),
             object_id=str(row.get("object_id", "") or ""),
+            value=str(row.get("value", "") or ""),
+            reference_frame=str(row.get("reference_frame", "") or ""),
+            same_frame=_as_bool(row.get("same_frame")),
             status=str(row.get("status", "unknown") or "unknown"),
             description=str(row.get("description", "") or ""),
             evidence_ids=(evidence_id,)
@@ -486,7 +495,27 @@ def _requires_measurement(description: str) -> bool:
 
 def _requires_relation(description: str) -> bool:
     text = str(description or "").casefold()
-    return any(term in text for term in ("same person", "same entity", "identity", "before", "after", "transition", "overtake", "causal", "cause"))
+    return any(
+        term in text
+        for term in (
+            "same person",
+            "same entity",
+            "identity",
+            "before",
+            "after",
+            "transition",
+            "overtake",
+            "causal",
+            "cause",
+            "left",
+            "right",
+            "front",
+            "behind",
+            "facing",
+            "direction",
+            "relative to",
+        )
+    )
 
 
 def _measurement_carries_temporal_relation(
@@ -499,6 +528,24 @@ def _measurement_carries_temporal_relation(
         expected.add("before")
     if "after" in text:
         expected.add("after")
-    if any(term in text for term in (" at ", "when", "boundary")):
+    if any(
+        term in text
+        for term in (
+            " at ",
+            "when",
+            "boundary",
+            "halftime",
+            "half-time",
+            "first half",
+            "quarter end",
+            "intermission",
+        )
+    ):
         expected.add("at")
     return bool(expected) and any(fact.boundary_relation in expected for fact in measurements)
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().casefold() in {"1", "true", "yes"}

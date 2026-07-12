@@ -82,6 +82,23 @@ def test_load_case_group_preserves_order_and_default_construction(tmp_path: Path
     assert group["case_ids"] == ("606-3", "769-1")
 
 
+def test_reasoner_task_normalization_keeps_enumeration_goals() -> None:
+    tasks = _interactive._normalize_reasoner_tasks(
+        (
+            {
+                "goal": "Enumerate every audition shown in this segment.",
+                "segment_id": "seg_0020",
+                "modality_hint": ["visual", "asr"],
+            },
+        ),
+        round_id=2,
+    )
+
+    assert len(tasks) == 1
+    assert tasks[0]["segment_id"] == "seg_0020"
+    assert tasks[0]["goal"].startswith("Enumerate")
+
+
 def test_run_case_batch_executes_cases_concurrently_and_preserves_order() -> None:
     barrier = threading.Barrier(3)
 

@@ -2433,6 +2433,11 @@ def _is_observation_task_goal(goal: str) -> bool:
             "examine",
             "read",
             "search",
+            "enumerate",
+            "list",
+            "catalog",
+            "track",
+            "compare",
         )
     )
 
@@ -2698,12 +2703,20 @@ def _resolution_prompt(task: Any) -> str:
         "\"target_presence\":{\"target\":\"...\",\"status\":\"present|absent|uncertain\",\"confidence\":0.0}, "
         "\"measurements\":[{\"value\":0.0,\"unit\":\"...\",\"relation\":\"exact|approx|greater_than|less_than\","
         "\"measurement_semantics\":\"delta|cumulative|unknown\",\"subject_id\":\"\",\"source_time_sec\":null,"
-        "\"boundary_relation\":\"before|at|after|unknown\",\"raw_text\":\"\"}], "
-        "\"relations\":[{\"relation_type\":\"identity|temporal|causal|transition\",\"subject_id\":\"\","
-        "\"object_id\":\"\",\"status\":\"supported|contradicted|unknown\",\"description\":\"\"}], and "
+        "\"boundary_relation\":\"before|at|after|unknown\",\"quantity_type\":\"score|clock|amount|\","
+        "\"event_id\":\"halftime|period_end|event identifier|\",\"binding_status\":\"explicit|contextual|ambiguous|unbound\","
+        "\"raw_text\":\"\"}], "
+        "\"relations\":[{\"relation_type\":\"identity|temporal|causal|transition|spatial|relative_bearing\","
+        "\"subject_id\":\"\",\"object_id\":\"\",\"value\":\"left_front|right_front|front|behind|left|right|\","
+        "\"reference_frame\":\"viewer|subject_egocentric|object_egocentric|scene\",\"same_frame\":true|false,"
+        "\"status\":\"supported|contradicted|unknown\",\"description\":\"\"}], and "
         "\"condition_results\":[{\"condition_id\":\"...\",\"status\":\"satisfied|unknown|contradicted\","
         "\"observation\":\"direct observation\"}]. Use only the stable condition_id values below. "
         "For a crop, mark target_presence present only if the requested target is actually inside that crop; otherwise use absent or uncertain. "
+        "For a scoreboard boundary question, emit both team scores as separate measurements from the same frame, use unit=point, "
+        "quantity_type=score, the same event_id, boundary_relation=at, and binding_status=explicit only when the requested phase "
+        "or boundary is visible in that frame. For relative spatial questions, bind subject and object, state the relation value and "
+        "reference_frame explicitly, and set same_frame=true only when both are jointly visible. "
         "The driver derives overall resolution, so do not self-declare it. Return empty measurement/relation arrays when unsupported. "
         f"Stable conditions: {json.dumps(to_jsonable(conditions), ensure_ascii=False)}\n"
     )
