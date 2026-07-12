@@ -2938,10 +2938,14 @@ def _parse_answer_audit(text: str) -> dict[str, Any]:
         str(text or ""),
         flags=re.IGNORECASE,
     )
-    verdict = verdict_match.group(1).casefold() if verdict_match else "insufficient"
+    verdict = verdict_match.group(1).casefold() if verdict_match else "unknown"
     return {
         "verdict": verdict,
-        "reason": "Answer audit output was truncated or invalid JSON; only its leading verdict could be retained.",
+        "reason": (
+            "Answer audit output was truncated; only its explicit leading verdict could be retained."
+            if verdict_match
+            else "Answer audit returned no parseable verdict; preserve the independent completion gate result."
+        ),
         "tasks": [],
     }
 

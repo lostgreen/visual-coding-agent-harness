@@ -1721,6 +1721,15 @@ def test_reasoner_payload_expands_segment_tasks_and_drops_meta_tasks() -> None:
     assert all(task["query_id"].startswith("auto_r3_") for task in payload["tasks"])
 
 
+def test_empty_answer_audit_is_unknown_not_semantic_insufficiency() -> None:
+    empty = _interactive._parse_answer_audit("")
+    truncated = _interactive._parse_answer_audit('{"verdict":"insufficient","reason":"missing')
+
+    assert empty["verdict"] == "unknown"
+    assert "completion gate" in empty["reason"]
+    assert truncated["verdict"] == "insufficient"
+
+
 def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> None:
     events = _interactive._normalize_events(
         [
