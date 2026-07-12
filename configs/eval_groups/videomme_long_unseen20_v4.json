@@ -1,0 +1,114 @@
+{
+  "group_id": "videomme_long_unseen20_v4",
+  "description": "Twenty diagnostic Video-MME long cases selected from previously unseen source videos.",
+  "duration_category": "long",
+  "construction": "source_only",
+  "selection_seed": 20260712,
+  "selection_policy": {
+    "exclude_previously_run_case_ids": true,
+    "exclude_previously_viewed_source_videos": true,
+    "stratify_by_task_type_and_domain": true
+  },
+  "cases": [
+    {
+      "case_id": "847-3",
+      "domain": "Life Record",
+      "task_type": "Spatial Perception"
+    },
+    {
+      "case_id": "684-2",
+      "domain": "Knowledge",
+      "task_type": "Spatial Perception"
+    },
+    {
+      "case_id": "757-3",
+      "domain": "Sports Competition",
+      "task_type": "Temporal Perception"
+    },
+    {
+      "case_id": "687-2",
+      "domain": "Knowledge",
+      "task_type": "Temporal Perception"
+    },
+    {
+      "case_id": "892-2",
+      "domain": "Multilingual",
+      "task_type": "OCR Problems"
+    },
+    {
+      "case_id": "709-1",
+      "domain": "Film & Television",
+      "task_type": "OCR Problems"
+    },
+    {
+      "case_id": "875-1",
+      "domain": "Life Record",
+      "task_type": "Spatial Reasoning"
+    },
+    {
+      "case_id": "762-1",
+      "domain": "Sports Competition",
+      "task_type": "Spatial Reasoning"
+    },
+    {
+      "case_id": "804-1",
+      "domain": "Artistic Performance",
+      "task_type": "Counting Problem"
+    },
+    {
+      "case_id": "820-1",
+      "domain": "Artistic Performance",
+      "task_type": "Counting Problem"
+    },
+    {
+      "case_id": "898-1",
+      "domain": "Multilingual",
+      "task_type": "Attribute Perception"
+    },
+    {
+      "case_id": "720-1",
+      "domain": "Film & Television",
+      "task_type": "Attribute Perception"
+    },
+    {
+      "case_id": "814-1",
+      "domain": "Artistic Performance",
+      "task_type": "Action Recognition"
+    },
+    {
+      "case_id": "773-2",
+      "domain": "Sports Competition",
+      "task_type": "Action Recognition"
+    },
+    {
+      "case_id": "605-2",
+      "domain": "Knowledge",
+      "task_type": "Object Recognition"
+    },
+    {
+      "case_id": "887-3",
+      "domain": "Life Record",
+      "task_type": "Temporal Reasoning"
+    },
+    {
+      "case_id": "697-1",
+      "domain": "Film & Television",
+      "task_type": "Action Reasoning"
+    },
+    {
+      "case_id": "891-1",
+      "domain": "Multilingual",
+      "task_type": "Object Reasoning"
+    },
+    {
+      "case_id": "843-2",
+      "domain": "Life Record",
+      "task_type": "Object Reasoning"
+    },
+    {
+      "case_id": "629-2",
+      "domain": "Knowledge",
+      "task_type": "Information Synopsis"
+    }
+  ]
+}
