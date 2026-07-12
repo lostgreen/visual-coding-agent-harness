@@ -342,6 +342,9 @@ class OpenAICompatibleVisionClient:
         self.base = str(planner["base"]).rstrip("/")
         self.model = str(planner["model"])
         self.api_key = str(planner["api_key"])
+        self.api_type = str(planner.get("type", "openai_compatible") or "openai_compatible").strip().casefold()
+        self.user_key = str(planner.get("user_key", "") or "")
+        self.biz_scene = str(planner.get("biz_scene", "") or "")
         self.timeout = float(planner.get("timeout", 300))
         self.max_retries = max(0, int(planner.get("max_retries", 5)))
         self.retry_base_sec = max(0.0, float(planner.get("retry_base_sec", 1.0)))
@@ -362,7 +365,7 @@ class OpenAICompatibleVisionClient:
             if Path(path).exists():
                 content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
         request = {
-            "headers": {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            "headers": self._headers(),
             "json": {
                 "model": self.model,
                 "messages": [{"role": "user", "content": content}],
@@ -371,6 +374,8 @@ class OpenAICompatibleVisionClient:
             },
             "timeout": self.timeout,
         }
+        if self.api_type in {"gemini_gateway", "kuaishou_gateway"}:
+            request["json"]["stream"] = False
         retryable_statuses = {408, 409, 429, 500, 502, 503, 504}
         for attempt in range(self.max_retries + 1):
             try:
@@ -386,8 +391,22 @@ class OpenAICompatibleVisionClient:
                 time.sleep(self._retry_delay(attempt, retry_after=response.headers.get("Retry-After")))
                 continue
             snippet = response.text[:500].replace(self.api_key, "<redacted>")
+            if self.user_key:
+                snippet = snippet.replace(self.user_key, "<redacted>")
             raise RuntimeError(f"HTTP {response.status_code}: {snippet}")
         raise RuntimeError("API retry loop exhausted")
+
+    def _headers(self) -> dict[str, str]:
+        base = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_type in {"gemini_gateway", "kuaishou_gateway"}:
+            return {
+                **base,
+                "x-api-key": self.api_key,
+                "x-ks-user-key": self.user_key,
+                "x-ks-llm-model": self.model,
+                "x-ks-biz-scene": self.biz_scene,
+            }
+        return {**base, "Authorization": f"Bearer {self.api_key}"}
 
     def _retry_delay(self, attempt: int, *, retry_after: str | None = None) -> float:
         delay = self.retry_base_sec * (2 ** max(0, int(attempt)))

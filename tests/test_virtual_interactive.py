@@ -144,6 +144,27 @@ def test_load_role_clients_uses_distinct_configs(tmp_path: Path) -> None:
     assert reasoner.base != investigator.base
 
 
+def test_gateway_client_uses_kuaishou_role_headers() -> None:
+    client = OpenAICompatibleVisionClient(
+        {
+            "base": "https://gateway.invalid/v1",
+            "model": "gpt-5.5",
+            "api_key": "api-secret",
+            "type": "gemini_gateway",
+            "user_key": "user-secret",
+            "biz_scene": "video-agent",
+        }
+    )
+
+    headers = client._headers()
+
+    assert headers["x-api-key"] == "api-secret"
+    assert headers["x-ks-user-key"] == "user-secret"
+    assert headers["x-ks-llm-model"] == "gpt-5.5"
+    assert headers["x-ks-biz-scene"] == "video-agent"
+    assert "Authorization" not in headers
+
+
 def test_run_case_assigns_text_only_reasoner_and_multimodal_investigator(tmp_path: Path, monkeypatch) -> None:
     workspace = _workspace(tmp_path)
     reasoner_api = SimpleNamespace(model="gpt-5.5")
