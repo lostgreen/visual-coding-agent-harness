@@ -115,6 +115,7 @@ def _load_existing_case_summary(workspace_root: Path) -> dict[str, Any] | None:
         "workspace": str(workspace_root),
         "trace": str(Path(workspace_root) / "interactions.jsonl"),
         "skipped_completed": True,
+        "models": dict(payload.get("models", {}) or {}),
     }
 
 
@@ -123,7 +124,11 @@ def main() -> None:
     dataset_root = Path(args.dataset_root)
     out_root = Path(args.out_root)
     out_root.mkdir(parents=True, exist_ok=True)
-    api = OpenAICompatibleVisionClient.from_yaml(Path(args.config))
+    reasoner_api, investigator_api = load_role_clients(
+        shared_config=args.config,
+        reasoner_config=args.reasoner_config,
+        investigator_config=args.investigator_config,
+    )
     case_group = _load_case_group(Path(args.case_group)) if args.case_group else None
     if case_group is not None:
         case_ids = tuple(case_group["case_ids"])
@@ -160,7 +165,13 @@ def main() -> None:
             rebuild=bool(args.rebuild),
         )
         ensure_index(workspace, low_fps=float(args.low_fps), beat_sec=float(args.beat_sec), rebuild=bool(args.rebuild_index))
-        result = run_case(workspace, api=api, max_rounds=int(args.max_rounds), max_investigations=int(args.max_investigations))
+        result = run_case(
+            workspace,
+            reasoner_api=reasoner_api,
+            investigator_api=investigator_api,
+            max_rounds=int(args.max_rounds),
+            max_investigations=int(args.max_investigations),
+        )
         return {
             "case_id": result.case_id,
             "answer": result.answer,
@@ -179,6 +190,7 @@ def main() -> None:
             "workspace": str(workspace.root_dir),
             "trace": str(workspace.root_dir / "interactions.jsonl"),
             "skipped_completed": False,
+            "models": {"reasoner": reasoner_api.model, "investigator": investigator_api.model},
         }
 
     summaries = list(_run_case_batch(selected, run_one, workers=int(args.workers)))
@@ -187,6 +199,7 @@ def main() -> None:
         "case_group": None if case_group is None else case_group["group_id"],
         "case_count": len(summaries),
         "correct": sum(1 for item in summaries if item["correct"]),
+        "models": {"reasoner": reasoner_api.model, "investigator": investigator_api.model},
         "cases": summaries,
     }
     (out_root / f"{args.mode}_summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
@@ -264,21 +277,64 @@ def ensure_index(workspace: VirtualVideoWorkspace, *, low_fps: float, beat_sec: 
 def run_case(
     workspace: VirtualVideoWorkspace,
     *,
-    api: "OpenAICompatibleVisionClient",
+    reasoner_api: "OpenAICompatibleVisionClient" | None = None,
+    investigator_api: "OpenAICompatibleVisionClient" | None = None,
+    api: "OpenAICompatibleVisionClient" | None = None,
     max_rounds: int,
     max_investigations: int,
 ) -> Any:
+    reasoner_api = reasoner_api or api
+    investigator_api = investigator_api or api
+    if reasoner_api is None or investigator_api is None:
+        raise ValueError("run_case requires both reasoner_api and investigator_api")
     trace_path = workspace.root_dir / "interactions.jsonl"
     trace_path.write_text("", encoding="utf-8")
-    reasoner = GeminiReasoner(api, trace_path=trace_path)
-    investigator = GeminiInvestigator(workspace, api=api, trace_path=trace_path)
+    reasoner = ReasonerAgent(reasoner_api, trace_path=trace_path, allow_visual_input=False)
+    investigator = GeminiInvestigator(workspace, api=investigator_api, trace_path=trace_path)
     driver = VirtualVideoMultiRoundDriver(
         reasoner=reasoner,
         investigator=investigator,
         max_rounds=max_rounds,
         max_investigations=max_investigations,
     )
-    return driver.run(workspace)
+    result = driver.run(workspace)
+    _write_model_roles(workspace, reasoner_api=reasoner_api, investigator_api=investigator_api)
+    return result
+
+
+def load_role_clients(
+    *,
+    shared_config: str | Path | None,
+    reasoner_config: str | Path | None,
+    investigator_config: str | Path | None,
+) -> tuple["OpenAICompatibleVisionClient", "OpenAICompatibleVisionClient"]:
+    reasoner_value = reasoner_config or shared_config
+    investigator_value = investigator_config or shared_config
+    if not reasoner_value or not investigator_value:
+        raise ValueError("Provide --config or both --reasoner-config and --investigator-config")
+    reasoner_path = Path(reasoner_value)
+    investigator_path = Path(investigator_value)
+    return (
+        OpenAICompatibleVisionClient.from_yaml(reasoner_path, section="reasoner_api"),
+        OpenAICompatibleVisionClient.from_yaml(investigator_path, section="investigator_api"),
+    )
+
+
+def _write_model_roles(
+    workspace: VirtualVideoWorkspace,
+    *,
+    reasoner_api: "OpenAICompatibleVisionClient",
+    investigator_api: "OpenAICompatibleVisionClient",
+) -> None:
+    path = workspace.root_dir / "run_summary.json"
+    if not path.exists():
+        return
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["models"] = {
+        "reasoner": reasoner_api.model,
+        "investigator": investigator_api.model,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 class OpenAICompatibleVisionClient:
@@ -295,9 +351,10 @@ class OpenAICompatibleVisionClient:
             os.environ[str(key)] = str(value)
 
     @classmethod
-    def from_yaml(cls, path: Path) -> "OpenAICompatibleVisionClient":
+    def from_yaml(cls, path: Path, *, section: str | None = None) -> "OpenAICompatibleVisionClient":
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return cls(payload.get("planner_api") or payload)
+        planner = payload.get(section) if section else None
+        return cls(planner or payload.get("planner_api") or payload)
 
     def chat(self, prompt: str, *, image_paths: Sequence[str] = (), max_tokens: int = 900) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
@@ -345,9 +402,16 @@ class OpenAICompatibleVisionClient:
 
 
 class GeminiReasoner:
-    def __init__(self, api: OpenAICompatibleVisionClient, *, trace_path: Path) -> None:
+    def __init__(
+        self,
+        api: OpenAICompatibleVisionClient,
+        *,
+        trace_path: Path,
+        allow_visual_input: bool = True,
+    ) -> None:
         self.api = api
         self.trace_path = trace_path
+        self.allow_visual_input = bool(allow_visual_input)
         self.calls = 0
         self._last_candidate: ReasonerDecision | None = None
         self._last_audit_reason = ""
@@ -355,9 +419,10 @@ class GeminiReasoner:
 
     def decide(self, **kwargs: Any) -> ReasonerDecision:
         self.calls += 1
+        kwargs["reasoner_visual_input"] = self.allow_visual_input
         evidence_digest = tuple(kwargs.get("evidence_digest", ()) or ())
         if evidence_digest:
-            image_paths, visual_manifest = _reasoner_visual_context(kwargs)
+            image_paths, visual_manifest = self._visual_context(kwargs)
             prompt = _followup_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
             raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
             parsed = self._parse_or_repair(raw, kwargs)
@@ -506,7 +571,7 @@ class GeminiReasoner:
                 support_reason=audit_reason,
             )
             return self._maybe_verify_claim(kwargs, evidence_digest, decision) if verdict == "supported" else decision
-        image_paths, visual_manifest = _reasoner_visual_context(kwargs)
+        image_paths, visual_manifest = self._visual_context(kwargs)
         prompt = _investigate_prompt(kwargs, visual_manifest=visual_manifest)
         raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
         parsed = self._parse_or_repair(raw, kwargs)
@@ -530,7 +595,7 @@ class GeminiReasoner:
         kwargs: Mapping[str, Any],
         evidence_digest: Sequence[Mapping[str, Any]],
     ) -> ReasonerDecision:
-        image_paths, visual_manifest = _reasoner_visual_context(kwargs)
+        image_paths, visual_manifest = self._visual_context(kwargs)
         prompt = _forced_answer_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
         raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=600)
         parsed = _parse_json(raw)
@@ -649,6 +714,9 @@ class GeminiReasoner:
             self.trace_path,
             {
                 "type": kind,
+                "agent_role": "reasoner",
+                "model": str(getattr(self.api, "model", type(self.api).__name__)),
+                "visual_input_enabled": self.allow_visual_input,
                 "round": self.calls,
                 "prompt": prompt,
                 "image_paths": list(image_paths),
@@ -658,6 +726,14 @@ class GeminiReasoner:
                 "time": time.time(),
             },
         )
+
+    def _visual_context(self, kwargs: Mapping[str, Any]) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...]]:
+        if not self.allow_visual_input:
+            return (), ()
+        return _reasoner_visual_context(kwargs)
+
+
+ReasonerAgent = GeminiReasoner
 
 
 class GeminiInvestigator(VirtualVideoInvestigator):
@@ -688,6 +764,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         repaired = _parse_json(repaired_raw)
         _append_jsonl(self.trace_path, {
             "type": "investigator_json_repair",
+            "agent_role": "investigator",
+            "model": str(getattr(self.api, "model", type(self.api).__name__)),
             "query_id": query_id,
             "prompt": repair_prompt,
             "frame_paths": list(image_paths),
@@ -756,6 +834,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             self.trace_path,
             {
                 "type": "investigator_preview",
+                "agent_role": "investigator",
+                "model": str(getattr(self.api, "model", type(self.api).__name__)),
                 "query_id": query_id,
                 "observation_id": observation_id,
                 "preview_query_id": preview_query_id,
@@ -889,6 +969,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             self.trace_path,
             {
                 "type": "investigator_evidence",
+                "agent_role": "investigator",
+                "model": str(getattr(self.api, "model", type(self.api).__name__)),
                 "query_id": query_id,
                 "observation_id": observation_id,
                 "preview_query_id": preview_query_id,
@@ -1078,6 +1160,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             self.trace_path,
             {
                 "type": "investigator_asr_search",
+                "agent_role": "investigator",
+                "model": str(getattr(self.api, "model", type(self.api).__name__)),
                 "query_id": query_id,
                 "search_terms": list(packet["terms"]),
                 "clusters": list(packet["clusters"]),
@@ -1251,6 +1335,8 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
         trace_path,
         {
             "type": "investigator_select_window",
+            "agent_role": "investigator",
+            "model": str(getattr(api, "model", type(api).__name__)),
             "query_id": getattr(task, "query_id"),
             "raw": raw,
             "parsed": parsed,
@@ -1968,8 +2054,13 @@ def _investigate_prompt(
     *,
     visual_manifest: Sequence[Mapping[str, Any]] = (),
 ) -> str:
+    context_description = (
+        "You receive segment overview images plus metadata."
+        if kwargs.get("reasoner_visual_input", True)
+        else "You are text-only. You receive segment/ASR metadata and structured Investigator evidence; image paths are provenance, not visible evidence."
+    )
     return (
-        "You are the Reasoner for a long virtual video QA agent. You only see segment overview images.\n"
+        f"You are the Reasoner for a long virtual video QA agent. {context_description}\n"
         "Identify one primary observable evidence gap, then dispatch up to 4 tasks that directly test its success conditions. "
         "One gap may use several parallel windows. Return JSON only: "
         "{\"action\":\"investigate\",\"primary_gap\":{\"gap_id\":\"gap_r1\",\"description\":\"observable unknown\","
@@ -2675,10 +2766,12 @@ def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Gemini-backed VirtualVideo investigation on Video-MME v1 virtual concatenations.")
+    parser = argparse.ArgumentParser(description="Run dual-model Reasoner/Investigator evaluation on Video-MME virtual videos.")
     parser.add_argument("--dataset-root", default="/ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/datasets--lmms-lab--Video-MME/snapshots/ead1408f75b618502df9a1d8e0950166bf0a2a0b")
     parser.add_argument("--out-root", default="/m2v_intern/xuboshen/zgw/VideoAgent/virtual_videomme_interactive")
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--config", help="Legacy shared API config used for both roles.")
+    parser.add_argument("--reasoner-config", help="Text-only planning/reasoning API config.")
+    parser.add_argument("--investigator-config", help="Multimodal observation API config.")
     cases = parser.add_mutually_exclusive_group()
     cases.add_argument("--case-ids", nargs="*")
     cases.add_argument("--case-group", help="JSON manifest containing an ordered cases[] list and default construction.")

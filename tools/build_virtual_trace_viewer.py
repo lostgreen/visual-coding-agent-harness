@@ -90,6 +90,7 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
         "correct": run_summary.get("correct"),
         "rounds": run_summary.get("rounds"),
         "accepted_investigations": run_summary.get("accepted_investigations"),
+        "models": dict(run_summary.get("models", {}) or {}),
         "trace_lines": len(trace_rows),
         "evidence_records": len(evidence_rows),
         "exploration_visits": len(ledger_rows),
@@ -100,7 +101,8 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
         f"<section class='case' id='{_id(workspace.name)}'>",
         f"<h2>{_e(workspace.name)} · {_e(case.get('question', ''))}</h2>",
         _summary_card(case, run_summary, timeline),
-        "<h3>Reasoner Initial Input: Segment Overview</h3>",
+        "<h3>Workspace Segment Overview</h3>",
+        "<p>For text-only Reasoner runs these images are viewer context only and are not sent to the Reasoner API.</p>",
         _overview_grid(overview_images, segments),
     ]
 
@@ -117,7 +119,10 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
         parsed = dict(reasoner_event.get("parsed") or {})
         is_answer = reasoner_event.get("type") == "reasoner_answer"
         body.append("<section class='round'>")
-        body.append(f"<h3>Reasoner Round {round_id} · {'Answer' if is_answer else 'Investigate'}</h3>")
+        body.append(
+            f"<h3>Reasoner Round {round_id} · {'Answer' if is_answer else 'Investigate'} · "
+            f"{_e(reasoner_event.get('model', run_summary.get('models', {}).get('reasoner', 'unknown model')))}</h3>"
+        )
         body.append(_details("Reasoner Prompt", _pre(reasoner_event.get("prompt", ""))))
         body.append(_details("Reasoner Raw Output", _pre(reasoner_event.get("raw", ""))))
         body.append(_json_block(parsed))
@@ -126,7 +131,14 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
             query_id = str(task.get("query_id", ""))
             segment_id = str(task.get("segment_id", ""))
             body.append("<section class='task'>")
-            body.append(f"<h4>Investigator Task {_e(query_id)} · Segment {_e(segment_id)}</h4>")
+            investigator_model = (
+                evidence_event_by_query.get(query_id, {}).get("model")
+                or preview_by_query.get(query_id, {}).get("model")
+                or run_summary.get("models", {}).get("investigator", "unknown model")
+            )
+            body.append(
+                f"<h4>Investigator Task {_e(query_id)} · Segment {_e(segment_id)} · {_e(investigator_model)}</h4>"
+            )
             body.append(_json_block(task))
             body.append("<h4>Investigator Input: open_segment Beat Thumbnails</h4>")
             body.append(_beat_grid(beats_by_segment.get(segment_id, ()), bundle))
@@ -172,6 +184,7 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
 
 def _summary_card(case: Mapping[str, Any], run_summary: Mapping[str, Any], timeline: Mapping[str, Any]) -> str:
     options = case.get("options") or {}
+    models = dict(run_summary.get("models", {}) or {})
     option_lines = "".join(f"<li><b>{_e(k)}</b>: {_e(v)}</li>" for k, v in sorted(dict(options).items()))
     return (
         "<div class='summary'>"
@@ -183,6 +196,8 @@ def _summary_card(case: Mapping[str, Any], run_summary: Mapping[str, Any], timel
         f"<div><b>Correct</b>: {_e(run_summary.get('correct', ''))}</div>"
         f"<div><b>Rounds</b>: {_e(run_summary.get('rounds', ''))}</div>"
         f"<div><b>Accepted investigations</b>: {_e(run_summary.get('accepted_investigations', ''))}</div>"
+        f"<div><b>Reasoner model</b>: {_e(models.get('reasoner', ''))}</div>"
+        f"<div><b>Investigator model</b>: {_e(models.get('investigator', ''))}</div>"
         f"<div><b>Virtual duration</b>: {_fmt_time(float(timeline.get('duration_sec') or 0.0))}</div>"
         f"<div class='wide'><b>Options</b><ul>{option_lines}</ul></div>"
         "</div>"

@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
 
 from PIL import Image
@@ -46,6 +47,8 @@ _should_audit_answer = _interactive._should_audit_answer
 _matching_claim_assessment = _interactive._matching_claim_assessment
 _followup_prompt = _interactive._followup_prompt
 _compile_option_claim_contract = _interactive._compile_option_claim_contract
+load_role_clients = _interactive.load_role_clients
+run_case = _interactive.run_case
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -116,6 +119,72 @@ def test_load_existing_case_summary_marks_resumed_case(tmp_path: Path) -> None:
     assert row["case_id"] == "case-1"
     assert row["skipped_completed"] is True
     assert row["workspace"] == str(workspace)
+
+
+def test_load_role_clients_uses_distinct_configs(tmp_path: Path) -> None:
+    reasoner_config = tmp_path / "reasoner.yaml"
+    investigator_config = tmp_path / "investigator.yaml"
+    reasoner_config.write_text(
+        "planner_api:\n  base: https://reasoner.invalid/v1\n  model: gpt-5.5\n  api_key: reasoner-key\n",
+        encoding="utf-8",
+    )
+    investigator_config.write_text(
+        "planner_api:\n  base: https://investigator.invalid/v1\n  model: gemini-2.5-pro\n  api_key: investigator-key\n",
+        encoding="utf-8",
+    )
+
+    reasoner, investigator = load_role_clients(
+        shared_config=None,
+        reasoner_config=reasoner_config,
+        investigator_config=investigator_config,
+    )
+
+    assert reasoner.model == "gpt-5.5"
+    assert investigator.model == "gemini-2.5-pro"
+    assert reasoner.base != investigator.base
+
+
+def test_run_case_assigns_text_only_reasoner_and_multimodal_investigator(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path)
+    reasoner_api = SimpleNamespace(model="gpt-5.5")
+    investigator_api = SimpleNamespace(model="gemini-2.5-pro")
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    class FakeReasoner:
+        def __init__(self, api: Any, *, trace_path: Path, allow_visual_input: bool) -> None:
+            captured["reasoner"] = (api, trace_path, allow_visual_input)
+
+    class FakeInvestigator:
+        def __init__(self, source_workspace: Any, *, api: Any, trace_path: Path) -> None:
+            captured["investigator"] = (source_workspace, api, trace_path)
+
+    class FakeDriver:
+        def __init__(self, **kwargs: Any) -> None:
+            captured["driver"] = kwargs
+
+        def run(self, source_workspace: Any) -> object:
+            (source_workspace.root_dir / "run_summary.json").write_text("{}", encoding="utf-8")
+            return sentinel
+
+    monkeypatch.setattr(_interactive, "ReasonerAgent", FakeReasoner)
+    monkeypatch.setattr(_interactive, "GeminiInvestigator", FakeInvestigator)
+    monkeypatch.setattr(_interactive, "VirtualVideoMultiRoundDriver", FakeDriver)
+
+    result = run_case(
+        workspace,
+        reasoner_api=reasoner_api,
+        investigator_api=investigator_api,
+        max_rounds=4,
+        max_investigations=20,
+    )
+
+    assert result is sentinel
+    assert captured["reasoner"][0] is reasoner_api
+    assert captured["reasoner"][2] is False
+    assert captured["investigator"][1] is investigator_api
+    summary = json.loads((workspace.root_dir / "run_summary.json").read_text(encoding="utf-8"))
+    assert summary["models"] == {"reasoner": "gpt-5.5", "investigator": "gemini-2.5-pro"}
 
 
 def test_vision_client_retries_transient_http_errors_with_exponential_backoff(monkeypatch) -> None:
@@ -343,6 +412,40 @@ def test_gemini_reasoner_uses_explicit_forced_choice_only_at_finalization(tmp_pa
     assert "investigation budget is exhausted" in api.calls[1]["prompt"]
     assert decision.answer.startswith("B.")
     assert decision.support_status == "insufficient"
+
+
+def test_text_only_reasoner_never_sends_overview_or_evidence_images(tmp_path: Path) -> None:
+    overview = tmp_path / "overview.jpg"
+    Image.new("RGB", (64, 36), color=(20, 30, 40)).save(overview)
+    api = ScriptedVisionClient((
+        {
+            "action": "investigate",
+            "primary_gap": {"gap_id": "gap_1", "description": "locate the event", "success_conditions": []},
+            "tasks": [{"query_id": "q1", "goal": "Open the segment.", "segment_id": "seg_1"}],
+        },
+    ))
+    api.model = "gpt-5.5"
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl", allow_visual_input=False)
+
+    reasoner.decide(
+        question="What happens?",
+        options={"A": "One", "B": "Two"},
+        workspace_overview={
+            "segment_overviews": [{"segment_id": "seg_1", "overview_thumbnail_grid_path": str(overview)}]
+        },
+        query_contract={},
+        query_requirements={},
+        temporal_navigation={},
+        remaining_budget=4,
+        evidence_digest=(),
+    )
+
+    assert api.calls[0]["image_paths"] == ()
+    assert "You are text-only" in api.calls[0]["prompt"]
+    trace = json.loads((tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert trace["agent_role"] == "reasoner"
+    assert trace["model"] == "gpt-5.5"
+    assert trace["visual_input_enabled"] is False
 
 
 def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: Path) -> None:
