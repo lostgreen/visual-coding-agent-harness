@@ -1732,6 +1732,24 @@ def test_model_investigator_repairs_truncated_structured_observation_once(tmp_pa
     assert report.cost["vlm_calls"] == 2
 
 
+def test_model_investigator_recovers_closed_summary_when_json_repair_stays_truncated(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient((
+        '{"summary":"A complete explicit observation.","events":[',
+        '```json\n{"summary":"A complete explicit observation.","events":[',
+    ))
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_fallback", goal="Inspect the visible sequence.", segment_id="seg_0001",
+        time_range=(0.0, 10.0), modality_hint=("visual",),
+    )
+    report = investigator.run_batch((task,))[0]
+    metadata = report.evidence[0].operation_metadata
+    assert metadata["structured_parse_status"] == "fallback_extracted"
+    assert report.evidence[0].verbatim == "A complete explicit observation."
+
+
 def test_model_investigator_falls_back_to_explicit_measurement_text(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     workspace = VirtualVideoWorkspace.create(

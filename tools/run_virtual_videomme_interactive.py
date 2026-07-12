@@ -695,7 +695,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             "parsed": repaired,
             "time": time.time(),
         })
-        return repaired, "repaired" if repaired else "failed", error, 1
+        if repaired:
+            return repaired, "repaired", error, 1
+        fallback = _recover_closed_json_fields(repaired_raw) or _recover_closed_json_fields(raw)
+        return fallback, "fallback_extracted" if fallback else "failed", error, 1
 
     def _investigate_task(
         self,
@@ -2587,6 +2590,19 @@ def _parse_json(text: str) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _recover_closed_json_fields(text: str) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for field in ("summary", "failure_reason"):
+        match = re.search(rf'"{field}"\s*:\s*"((?:\\.|[^"\\])*)"', str(text or ""), re.S)
+        if not match:
+            continue
+        try:
+            result[field] = json.loads(f'"{match.group(1)}"')
+        except json.JSONDecodeError:
+            continue
+    return result
 
 
 def _with_explicit_measurement_fallback(
