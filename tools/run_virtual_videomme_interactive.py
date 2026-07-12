@@ -448,7 +448,7 @@ class GeminiReasoner:
             image_paths, visual_manifest = self._visual_context(kwargs)
             prompt = _followup_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
             raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
-            parsed = _normalize_reasoner_payload(self._parse_or_repair(raw, kwargs))
+            parsed = _normalize_reasoner_payload(self._parse_or_repair(raw, kwargs), round_id=self.calls)
             action = str(parsed.get("action") or "answer")
             self._trace(
                 "reasoner_investigate" if action == "investigate" else "reasoner_answer",
@@ -597,7 +597,7 @@ class GeminiReasoner:
         image_paths, visual_manifest = self._visual_context(kwargs)
         prompt = _investigate_prompt(kwargs, visual_manifest=visual_manifest)
         raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
-        parsed = _normalize_reasoner_payload(self._parse_or_repair(raw, kwargs))
+        parsed = _normalize_reasoner_payload(self._parse_or_repair(raw, kwargs), round_id=self.calls)
         self._trace(
             "reasoner_investigate",
             prompt,
@@ -988,6 +988,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             parse_status = "fallback_extracted"
 
         frame_paths = tuple(model_image_paths)
+        frame_time_by_path = {
+            str(row.get("path", "")): float(row["virtual_time_sec"])
+            for row in (*selected_frames, *region_rows)
+            if str(row.get("path", "")) and row.get("virtual_time_sec") is not None
+        }
+        frame_times = tuple(frame_time_by_path.get(path) for path in frame_paths)
         _append_jsonl(
             self.trace_path,
             {
@@ -1015,6 +1021,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         entities = _normalize_entities(
             parsed.get("entities"),
             frame_paths=frame_paths,
+            frame_times=frame_times,
             observation_id=observation_id,
             window_duration_sec=max(0.0, float(selected_window[1]) - float(selected_window[0])),
         )
@@ -1687,12 +1694,14 @@ def _normalize_entities(
     value: Any,
     *,
     frame_paths: Sequence[str] = (),
+    frame_times: Sequence[float | None] = (),
     observation_id: str = "",
     window_duration_sec: float | None = None,
 ) -> tuple[dict[str, Any], ...]:
     if not isinstance(value, list):
         return ()
     available_frames = tuple(str(path) for path in frame_paths if str(path).strip())
+    available_times = tuple(frame_times)
     rows = []
     for index, item in enumerate(value, start=1):
         if not isinstance(item, Mapping):
@@ -1714,6 +1723,11 @@ def _normalize_entities(
             if 0 <= frame_index < len(available_frames) and frame_index not in frame_indices:
                 frame_indices.append(frame_index)
         witness_frame_refs = tuple(available_frames[frame_index] for frame_index in frame_indices)
+        witness_virtual_times_sec = tuple(
+            float(available_times[frame_index])
+            for frame_index in frame_indices
+            if frame_index < len(available_times) and available_times[frame_index] is not None
+        )
         supports_question_relation = _truthy(item.get("supports_question_relation"))
         candidate_reason = ""
         if not witness_frame_refs:
@@ -1736,6 +1750,7 @@ def _normalize_entities(
                 "supports_question_relation": supports_question_relation,
                 "frame_indices": frame_indices,
                 "witness_frame_refs": list(witness_frame_refs),
+                "witness_virtual_times_sec": list(witness_virtual_times_sec),
                 "witness_count": len(witness_frame_refs),
                 "countable": not candidate_reason,
                 "candidate_only": bool(candidate_reason),
@@ -2212,7 +2227,8 @@ def _followup_prompt(
         "option count equal the number of clusters. Only entities with countable=true are admissible. A summary-level person, "
         "candidate_only entity, parse-failed observation, or broad-window count without a frame witness is navigation context, "
         "not count evidence. When Latest answer-gate feedback reports entity_cluster_witness_missing, investigate narrower repair "
-        "windows instead of repeating the answer.\n"
+        "windows instead of repeating the answer. Candidate entities include witness_virtual_times_sec; inspect a narrow window "
+        "around those timestamps to promote or reject them.\n"
         "For total event-count questions, count only the timestamped events rows in evidence, deduplicate overlapping observations, "
         "cite every evidence record containing a positive occurrence, and never infer the count from answer options or entity clusters.\n"
         "For scalar_quantity questions, use only structured measurement facts with the requested unit. Distinguish delta or cumulative "
@@ -2312,8 +2328,9 @@ def _normalize_answer_payload(value: Any, options: Mapping[str, Any]) -> tuple[s
     return str(value.get("text") or "").strip(), citations
 
 
-def _normalize_reasoner_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_reasoner_payload(value: Mapping[str, Any], *, round_id: int = 0) -> dict[str, Any]:
     payload = dict(value)
+    payload["tasks"] = list(_normalize_reasoner_tasks(payload.get("tasks"), round_id=round_id))
     action = str(payload.get("action", "") or "").strip().casefold()
     if action not in {"investigate", "answer"}:
         if payload.get("tasks"):
@@ -2325,6 +2342,75 @@ def _normalize_reasoner_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload.get("primary_gap"), Mapping) and isinstance(payload.get("gap"), Mapping):
         payload["primary_gap"] = dict(payload["gap"])
     return payload
+
+
+def _normalize_reasoner_tasks(value: Any, *, round_id: int) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    normalized = []
+    for task_index, raw_task in enumerate(value, start=1):
+        if not isinstance(raw_task, Mapping):
+            continue
+        task = dict(raw_task)
+        goal = str(task.get("goal") or task.get("task") or "").strip()
+        if not goal or not _is_observation_task_goal(goal):
+            continue
+        segment_values = task.get("segment_ids") or task.get("segments") or ()
+        if isinstance(segment_values, str):
+            segment_values = (segment_values,)
+        if isinstance(segment_values, Sequence) and not isinstance(segment_values, (str, bytes)):
+            segments = tuple(str(item).strip() for item in segment_values if str(item).strip())
+        else:
+            segments = ()
+        if segments and not task.get("segment_id"):
+            for segment_index, segment_id in enumerate(segments, start=1):
+                normalized.append(
+                    {
+                        "query_id": f"auto_r{round_id}_t{task_index}_{segment_index}",
+                        "goal": goal,
+                        "segment_id": segment_id,
+                        "time_range": None,
+                        "inspection_mode": "window",
+                        "search_terms": [],
+                        "modality_hint": list(task.get("modality_hint") or ("visual", "asr")),
+                        "expected_evidence": str(task.get("expected_evidence") or goal),
+                    }
+                )
+            continue
+        segment_id = str(task.get("segment_id", "") or "").strip()
+        time_range = task.get("time_range")
+        inspection_mode = str(task.get("inspection_mode", "window") or "window")
+        search_terms = list(task.get("search_terms") or ())
+        executable = bool(segment_id or time_range is not None)
+        if inspection_mode == "search_asr":
+            executable = bool(search_terms)
+        if not executable:
+            continue
+        task["query_id"] = str(task.get("query_id") or f"auto_r{round_id}_t{task_index}")
+        task["goal"] = goal
+        normalized.append(task)
+    return tuple(normalized[:4])
+
+
+def _is_observation_task_goal(goal: str) -> bool:
+    text = str(goal or "").casefold()
+    return any(
+        marker in text
+        for marker in (
+            "inspect",
+            "find",
+            "scan",
+            "check",
+            "locate",
+            "verify",
+            "identify",
+            "confirm",
+            "observe",
+            "examine",
+            "read",
+            "search",
+        )
+    )
 
 
 def _valid_option_answer(answer: str, options: Mapping[str, Any]) -> bool:

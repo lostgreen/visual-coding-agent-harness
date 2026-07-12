@@ -1642,6 +1642,7 @@ def test_entity_normalizer_binds_countable_observation_to_supplied_frames() -> N
             }
         ],
         frame_paths=("f0.jpg", "f1.jpg", "f2.jpg", "f3.jpg"),
+        frame_times=(10.0, 20.0, 30.0, 40.0),
         observation_id="r1_t1_c01",
         window_duration_sec=60.0,
     )
@@ -1649,6 +1650,7 @@ def test_entity_normalizer_binds_countable_observation_to_supplied_frames() -> N
     assert entities[0]["entity_observation_id"] == "r1_t1_c01:person_1"
     assert entities[0]["frame_indices"] == [1, 3]
     assert entities[0]["witness_frame_refs"] == ["f1.jpg", "f3.jpg"]
+    assert entities[0]["witness_virtual_times_sec"] == [20.0, 40.0]
     assert entities[0]["countable"] is True
     assert entities[0]["candidate_only"] is False
 
@@ -1690,7 +1692,7 @@ def test_reasoner_payload_normalizes_synonym_actions_from_structured_models() ->
         {
             "action": "inspect_video_segments",
             "gap": {"gap_id": "gap_entities", "description": "missing entity witnesses"},
-            "tasks": [{"query_id": "q1", "goal": "Inspect a narrower window."}],
+            "tasks": [{"query_id": "q1", "goal": "Inspect a narrower window.", "segment_id": "seg_1"}],
         }
     )
     answer = _interactive._normalize_reasoner_payload(
@@ -1700,6 +1702,23 @@ def test_reasoner_payload_normalizes_synonym_actions_from_structured_models() ->
     assert investigate["action"] == "investigate"
     assert investigate["primary_gap"] == investigate["gap"]
     assert answer["action"] == "answer"
+
+
+def test_reasoner_payload_expands_segment_tasks_and_drops_meta_tasks() -> None:
+    payload = _interactive._normalize_reasoner_payload(
+        {
+            "action": "count_scholars",
+            "tasks": [
+                {"segments": ["seg_1", "seg_2"], "task": "Inspect each segment for scholar witnesses."},
+                {"task": "Deduplicate all scholars and return the answer."},
+            ],
+        },
+        round_id=3,
+    )
+
+    assert payload["action"] == "investigate"
+    assert [task["segment_id"] for task in payload["tasks"]] == ["seg_1", "seg_2"]
+    assert all(task["query_id"].startswith("auto_r3_") for task in payload["tasks"])
 
 
 def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> None:

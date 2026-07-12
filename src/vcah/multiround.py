@@ -473,8 +473,23 @@ class VirtualVideoMultiRoundDriver:
                     remaining_budget=remaining,
                 )
             ))
+            if decision.action == "investigate":
+                executable_tasks = tuple(task for task in decision.tasks if _task_is_executable(task))
+                if executable_tasks != decision.tasks:
+                    trace.append(
+                        {
+                            "type": "task_validation",
+                            "round": round_id,
+                            "accepted_task_count": len(executable_tasks),
+                            "rejected_task_count": len(decision.tasks) - len(executable_tasks),
+                        }
+                    )
+                    decision = replace(decision, tasks=executable_tasks)
             missing_segments = tuple(completion_status.get("missing_segment_ids", ()) or ())
             missing_identity_terms = tuple(completion_status.get("missing_identity_anchor_terms", ()) or ())
+            unresolved_entity_candidates = tuple(
+                completion_status.get("unresolved_candidate_entity_observation_ids", ()) or ()
+            )
             if missing_segments and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
                 repair_tasks = _coverage_repair_tasks(
                     round_id,
@@ -515,6 +530,27 @@ class VirtualVideoMultiRoundDriver:
                             "round": round_id,
                             "reason": repair_reason,
                             "identity_anchor_terms": list(missing_identity_terms),
+                            "task_count": len(repair_tasks),
+                        }
+                    )
+                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
+            elif unresolved_entity_candidates and remaining > 0 and (
+                decision.action != "investigate" or not decision.tasks
+            ):
+                repair_tasks = _entity_candidate_repair_tasks(
+                    workspace,
+                    evidence_store.records,
+                    unresolved_entity_candidates,
+                    round_id=round_id,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+                if repair_tasks:
+                    trace.append(
+                        {
+                            "type": "repair_override",
+                            "round": round_id,
+                            "reason": "entity_candidate_unresolved",
+                            "entity_observation_ids": list(unresolved_entity_candidates),
                             "task_count": len(repair_tasks),
                         }
                     )
@@ -886,6 +922,69 @@ def _identity_repair_tasks(
     )
 
 
+def _entity_candidate_repair_tasks(
+    workspace: VirtualVideoWorkspace,
+    evidence: Sequence[EvidenceRecord],
+    candidate_ids: Sequence[str],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    wanted = {str(item) for item in candidate_ids if str(item)}
+    rows = []
+    for record in evidence:
+        for entity in record.operation_metadata.get("entities", ()) or ():
+            if not isinstance(entity, Mapping):
+                continue
+            observation_id = str(entity.get("entity_observation_id", "") or "")
+            if observation_id not in wanted:
+                continue
+            witness_times = tuple(
+                float(item)
+                for item in entity.get("witness_virtual_times_sec", ())
+                if isinstance(item, (int, float))
+            )
+            if not witness_times:
+                continue
+            center = witness_times[0]
+            segment = next(
+                (
+                    item
+                    for item in workspace.manifest.segments
+                    if item.virtual_start_sec <= center <= item.virtual_end_sec
+                ),
+                None,
+            )
+            if segment is None:
+                continue
+            start = max(float(segment.virtual_start_sec), center - 30.0)
+            end = min(float(segment.virtual_end_sec), center + 30.0)
+            if end <= start:
+                continue
+            signature = str(entity.get("visual_signature") or entity.get("description") or "visible person")
+            rows.append((observation_id, segment.segment_id, start, end, signature))
+    tasks = []
+    for index, (observation_id, segment_id, start, end, signature) in enumerate(rows, start=1):
+        tasks.append(
+            InvestigationTask(
+                query_id=f"entity_repair_r{round_id}_{index:03d}",
+                goal=f"Verify candidate {observation_id} in a narrow window and compare it with prior entity observations.",
+                segment_id=segment_id,
+                time_range=(start, end),
+                modality_hint=("visual", "asr"),
+                expected_evidence=(
+                    f"frame-witnessed identity with stable signature; candidate signature: {signature}"
+                ),
+                priority=1.0,
+                source_candidate_ids=(observation_id,),
+                inspection_intent="entity_candidate_verification",
+            )
+        )
+        if len(tasks) >= max(0, int(limit)):
+            break
+    return tuple(tasks)
+
+
 def _navigation_repair_tasks(
     evidence: Sequence[EvidenceRecord],
     *,
@@ -1050,6 +1149,14 @@ def _task_for_contract(task: InvestigationTask, contract: ClaimContract) -> Inve
     return task
 
 
+def _task_is_executable(task: InvestigationTask) -> bool:
+    if not task.query_id or not task.goal:
+        return False
+    if task.inspection_mode == "search_asr":
+        return bool(task.search_terms)
+    return bool(task.segment_id or task.time_range is not None)
+
+
 def _completion_status(
     workspace: VirtualVideoWorkspace,
     contract: ClaimContract,
@@ -1061,7 +1168,12 @@ def _completion_status(
 ) -> dict[str, Any]:
     answer_evidence = tuple(record for record in evidence if record.evidence_kind != "navigation_hint")
     navigation_evidence = tuple(record for record in evidence if record.evidence_kind == "navigation_hint")
-    coverage = _source_coverage(workspace, answer_evidence)
+    coverage_evidence = (
+        _entity_census_coverage_evidence(answer_evidence)
+        if contract.quantifier == "distinct_count"
+        else answer_evidence
+    )
+    coverage = _source_coverage(workspace, coverage_evidence)
     if contract.required_scope != "full_video":
         base = _apply_identity_completion(
             {
@@ -1179,11 +1291,19 @@ def _apply_entity_completion(
         return result
     countable = []
     candidates = []
+    resolved_candidates = []
     parse_failures = []
     for record in evidence:
         parse_status = str(record.operation_metadata.get("structured_parse_status", "") or "")
         if parse_status and parse_status != "parsed":
             parse_failures.append(record.evidence_id)
+        if parse_status == "parsed" and record.start_sec is not None and record.end_sec is not None:
+            if float(record.end_sec) - float(record.start_sec) <= 120.0:
+                resolved_candidates.extend(
+                    str(item)
+                    for item in record.operation_metadata.get("source_candidate_ids", ())
+                    if str(item)
+                )
         for entity in record.operation_metadata.get("entities", ()) or ():
             if not isinstance(entity, Mapping):
                 continue
@@ -1194,15 +1314,29 @@ def _apply_entity_completion(
                 countable.append(observation_id)
             else:
                 candidates.append(observation_id)
+    unresolved_candidates = [item for item in dict.fromkeys(candidates) if item not in set(resolved_candidates)]
     result.update(
         {
             "countable_entity_observation_ids": list(dict.fromkeys(countable)),
             "candidate_entity_observation_ids": list(dict.fromkeys(candidates)),
+            "resolved_candidate_entity_observation_ids": list(dict.fromkeys(resolved_candidates)),
+            "unresolved_candidate_entity_observation_ids": unresolved_candidates,
             "entity_protocol_parse_failure_evidence_ids": list(dict.fromkeys(parse_failures)),
             "entity_witness_ready": bool(countable),
         }
     )
+    result["ready_for_answer"] = bool(result.get("ready_for_answer")) and not unresolved_candidates
     return result
+
+
+def _entity_census_coverage_evidence(evidence: Sequence[EvidenceRecord]) -> tuple[EvidenceRecord, ...]:
+    return tuple(
+        record
+        for record in evidence
+        if record.start_sec is not None
+        and record.end_sec is not None
+        and float(record.end_sec) - float(record.start_sec) <= 120.0
+    )
 
 
 def _source_coverage(
@@ -1278,7 +1412,8 @@ def _answer_completion_gate(
     }
     if not cited_sources:
         return {"passed": False, "reason": "source_not_identified", "missing_segment_ids": []}
-    source_coverage = _source_coverage(workspace, evidence)
+    coverage_evidence = _entity_census_coverage_evidence(evidence) if contract.quantifier == "distinct_count" else evidence
+    source_coverage = _source_coverage(workspace, coverage_evidence)
     missing = sorted(
         {
             segment_id
@@ -2163,6 +2298,11 @@ def _entity_observation_digest(value: Mapping[str, Any]) -> dict[str, Any]:
         "question_relation": str(row.get("question_relation", "") or ""),
         "supports_question_relation": _metadata_flag(row.get("supports_question_relation")),
         "frame_indices": [int(item) for item in row.get("frame_indices", ()) if isinstance(item, int)],
+        "witness_virtual_times_sec": [
+            float(item)
+            for item in row.get("witness_virtual_times_sec", ())
+            if isinstance(item, (int, float))
+        ],
         "witness_count": int(row.get("witness_count", 0) or 0),
         "countable": _metadata_flag(row.get("countable")),
         "candidate_only": _metadata_flag(row.get("candidate_only")),

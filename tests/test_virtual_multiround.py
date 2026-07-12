@@ -125,6 +125,119 @@ def test_new_coverage_does_not_count_as_goal_progress() -> None:
     assert annotated[0].coverage_progress == ("new_frontier_coverage",)
 
 
+def test_investigation_task_validation_requires_executable_locator() -> None:
+    valid_window = InvestigationTask("q_window", "Inspect candidate.", segment_id="seg_1")
+    valid_search = InvestigationTask(
+        "q_search",
+        "Search transcript.",
+        inspection_mode="search_asr",
+        search_terms=("professor",),
+    )
+    meta_task = InvestigationTask("q_meta", "Deduplicate and count all people.")
+
+    assert multiround._task_is_executable(valid_window) is True
+    assert multiround._task_is_executable(valid_search) is True
+    assert multiround._task_is_executable(meta_task) is False
+
+
+def test_entity_candidate_repair_uses_witness_virtual_timestamp(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    candidate_id = "broad:person_1"
+    candidate = EvidenceRecord(
+        evidence_id="ev_candidate",
+        beat_id="",
+        start_sec=10.0,
+        end_sec=15.0,
+        modality="visual",
+        pointer="virtual://candidate",
+        verbatim="A white-haired woman appears in a coarse scan.",
+        frame_refs=("candidate.jpg",),
+        attestation_model="test-vlm",
+        source_lineage=(
+            {"segment_id": "seg_target_b", "source_video_id": "target", "virtual_time_range": [10.0, 15.0]},
+        ),
+        operation_metadata={
+            "structured_parse_status": "parsed",
+            "entities": [
+                {
+                    "entity_observation_id": candidate_id,
+                    "description": "older woman with white hair",
+                    "visual_signature": "short white hair and blue top",
+                    "witness_virtual_times_sec": [12.0],
+                    "candidate_only": True,
+                    "countable": False,
+                }
+            ],
+        },
+    )
+
+    tasks = multiround._entity_candidate_repair_tasks(
+        workspace,
+        (candidate,),
+        (candidate_id,),
+        round_id=2,
+        limit=4,
+    )
+
+    assert len(tasks) == 1
+    assert tasks[0].segment_id == "seg_target_b"
+    assert tasks[0].time_range == (10.0, 15.0)
+    assert tasks[0].source_candidate_ids == (candidate_id,)
+    assert tasks[0].inspection_intent == "entity_candidate_verification"
+
+
+def test_distinct_count_readiness_tracks_unresolved_and_resolved_candidates(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    contract = multiround.compile_query_contract(workspace.case.question, workspace.case.options)
+    candidate_id = "broad:person_1"
+    candidate = EvidenceRecord(
+        evidence_id="ev_candidate",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=180.0,
+        modality="visual",
+        pointer="virtual://candidate",
+        verbatim="A candidate person appears in a coarse scan.",
+        frame_refs=("candidate.jpg",),
+        attestation_model="test-vlm",
+        operation_metadata={
+            "structured_parse_status": "parsed",
+            "entities": [
+                {
+                    "entity_observation_id": candidate_id,
+                    "candidate_only": True,
+                    "countable": False,
+                    "witness_virtual_times_sec": [12.0],
+                }
+            ],
+        },
+    )
+    verified = EvidenceRecord(
+        evidence_id="ev_verified",
+        beat_id="",
+        start_sec=10.0,
+        end_sec=15.0,
+        modality="visual",
+        pointer="virtual://verified",
+        verbatim="The candidate is verified in a narrow window.",
+        frame_refs=("verified.jpg",),
+        attestation_model="test-vlm",
+        operation_metadata={
+            "structured_parse_status": "parsed",
+            "source_candidate_ids": [candidate_id],
+            "entities": [],
+        },
+    )
+
+    unresolved = multiround._apply_entity_completion({}, contract, (candidate,))
+    resolved = multiround._apply_entity_completion({}, contract, (candidate, verified))
+
+    assert unresolved["unresolved_candidate_entity_observation_ids"] == [candidate_id]
+    assert unresolved["ready_for_answer"] is False
+    assert resolved["unresolved_candidate_entity_observation_ids"] == []
+    assert multiround._entity_census_coverage_evidence((candidate, verified)) == (verified,)
+
+
 def test_evidence_digest_serializes_structured_condition_results() -> None:
     evidence = EvidenceRecord(
         evidence_id="ev_condition",
