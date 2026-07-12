@@ -490,7 +490,7 @@ class VirtualVideoMultiRoundDriver:
             unresolved_entity_candidates = tuple(
                 completion_status.get("unresolved_candidate_entity_observation_ids", ()) or ()
             )
-            if missing_segments and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
+            if missing_segments and remaining > 0:
                 repair_tasks = _coverage_repair_tasks(
                     round_id,
                     missing_segments,
@@ -501,7 +501,7 @@ class VirtualVideoMultiRoundDriver:
                     {
                         "type": "repair_override",
                         "round": round_id,
-                        "reason": "premature_answer_before_coverage",
+                        "reason": "mandatory_full_source_coverage",
                         "missing_segment_ids": list(missing_segments),
                         "task_count": len(repair_tasks),
                     }
