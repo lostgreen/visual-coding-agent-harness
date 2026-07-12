@@ -1450,6 +1450,30 @@ def test_contrastive_candidate_override_uses_at_most_one_slot() -> None:
     assert tasks[0].source_candidate_ids == ("ev_dog",)
 
 
+def test_search_round_can_dispatch_one_new_option_linked_candidate() -> None:
+    hint = EvidenceRecord(
+        evidence_id="ev_dog", beat_id="", start_sec=20.0, end_sec=40.0, modality="asr",
+        pointer="virtual://dog", verbatim="dog and father", evidence_kind="navigation_hint",
+        observation_polarity="positive", operation_metadata={"matched_terms": ["dog", "father"], "hit_count": 2},
+        source_lineage=({"segment_id": "seg_dog", "source_video_id": "source"},),
+    )
+    search_tasks = (
+        InvestigationTask("search", "Search competing causes.", inspection_mode="search_asr", search_terms=("dog", "firework")),
+    )
+
+    followup = multiround._post_search_candidate_tasks(
+        search_tasks,
+        (hint,),
+        options={"A": "A firework explodes", "D": "A dog attacks his father"},
+        round_id=6,
+        remaining_round_slots=3,
+        remaining_budget=4,
+    )
+
+    assert len(followup) == 1
+    assert followup[0].source_candidate_ids == ("ev_dog",)
+
+
 def test_search_tasks_yield_to_unresolved_navigation_windows() -> None:
     hint = EvidenceRecord(
         evidence_id="ev_dog_hint",

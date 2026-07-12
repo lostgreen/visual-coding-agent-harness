@@ -643,6 +643,31 @@ class VirtualVideoMultiRoundDriver:
                     "outcomes": list(_outcome_digest(batch)),
                 }
             )
+            followup_tasks = _post_search_candidate_tasks(
+                tasks,
+                evidence_store.records,
+                options=workspace.case.options,
+                round_id=round_id,
+                remaining_round_slots=max(0, self.max_tasks_per_round - len(tasks)),
+                remaining_budget=max(0, self.max_investigations - accepted),
+            )
+            if followup_tasks:
+                accepted += len(followup_tasks)
+                followup_batch = _annotate_batch_progress(investigator.run_batch(followup_tasks), reports)
+                reports.extend(followup_batch)
+                known_evidence = {record.evidence_id for record in evidence_store.records}
+                for report in followup_batch:
+                    for record in report.evidence:
+                        if record.evidence_id not in known_evidence:
+                            evidence_store.add(record)
+                            known_evidence.add(record.evidence_id)
+                trace.append({
+                    "type": "candidate_dispatch_conversion",
+                    "round": round_id,
+                    "candidate_ids": [candidate_id for task in followup_tasks for candidate_id in task.source_candidate_ids],
+                    "accepted_tasks": len(followup_tasks),
+                    "outcomes": list(_outcome_digest(followup_batch)),
+                })
             if accepted >= self.max_investigations:
                 continue
 
@@ -945,6 +970,28 @@ def _prefer_navigation_repairs(
     if has_search:
         return (*kept[: max(0, int(limit) - 1)], *repairs)
     return (*repairs, *kept[: max(0, int(limit) - 1)])
+
+
+def _post_search_candidate_tasks(
+    completed_tasks: Sequence[InvestigationTask],
+    evidence: Sequence[EvidenceRecord],
+    *,
+    options: Mapping[str, str],
+    round_id: int,
+    remaining_round_slots: int,
+    remaining_budget: int,
+) -> tuple[InvestigationTask, ...]:
+    if not any(task.inspection_mode == "search_asr" for task in completed_tasks):
+        return ()
+    if min(int(remaining_round_slots), int(remaining_budget)) <= 0:
+        return ()
+    return _navigation_repair_tasks(
+        evidence,
+        options=options,
+        round_id=round_id,
+        limit=1,
+        require_hypothesis=True,
+    )
 
 
 def _navigation_hint_is_observed(hint: EvidenceRecord, visual: Sequence[EvidenceRecord]) -> bool:
