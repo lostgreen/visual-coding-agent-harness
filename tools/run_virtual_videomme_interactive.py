@@ -364,14 +364,18 @@ class OpenAICompatibleVisionClient:
         for path in image_paths:
             if Path(path).exists():
                 content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": content}],
+        }
+        if "gpt-5" in self.model.casefold():
+            body["max_completion_tokens"] = int(max_tokens)
+        else:
+            body["temperature"] = 0
+            body["max_tokens"] = int(max_tokens)
         request = {
             "headers": self._headers(),
-            "json": {
-                "model": self.model,
-                "messages": [{"role": "user", "content": content}],
-                "temperature": 0,
-                "max_tokens": int(max_tokens),
-            },
+            "json": body,
             "timeout": self.timeout,
         }
         if self.api_type in {"gemini_gateway", "kuaishou_gateway"}:

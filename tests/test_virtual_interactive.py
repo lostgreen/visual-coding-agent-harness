@@ -165,6 +165,34 @@ def test_gateway_client_uses_kuaishou_role_headers() -> None:
     assert "Authorization" not in headers
 
 
+def test_gpt5_client_uses_completion_token_parameter(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+        text = ""
+        headers: dict[str, str] = {}
+
+        @staticmethod
+        def json() -> Mapping[str, Any]:
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    def post(*args: Any, **kwargs: Any) -> Response:
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(_interactive.requests, "post", post)
+    client = OpenAICompatibleVisionClient(
+        {"base": "https://gateway.invalid/v1", "model": "gpt-5.5", "api_key": "secret"}
+    )
+
+    client.chat("plan", max_tokens=1400)
+
+    assert captured["json"]["max_completion_tokens"] == 1400
+    assert "max_tokens" not in captured["json"]
+    assert "temperature" not in captured["json"]
+
+
 def test_run_case_assigns_text_only_reasoner_and_multimodal_investigator(tmp_path: Path, monkeypatch) -> None:
     workspace = _workspace(tmp_path)
     reasoner_api = SimpleNamespace(model="gpt-5.5")
