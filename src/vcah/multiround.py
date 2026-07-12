@@ -1073,6 +1073,7 @@ def _completion_status(
             answer_evidence,
             query_requirements,
         )
+        base = _apply_entity_completion(base, contract, answer_evidence)
         return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
     if not coverage:
         base = _apply_identity_completion(
@@ -1086,6 +1087,7 @@ def _completion_status(
             answer_evidence,
             query_requirements,
         )
+        base = _apply_entity_completion(base, contract, answer_evidence)
         return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
     adopted_source = max(
         coverage,
@@ -1106,6 +1108,7 @@ def _completion_status(
         answer_evidence,
         query_requirements,
     )
+    base = _apply_entity_completion(base, contract, answer_evidence)
     return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
 
 
@@ -1163,6 +1166,42 @@ def _apply_identity_completion(
         }
     )
     result["ready_for_answer"] = bool(result.get("ready_for_answer")) and not missing_terms
+    return result
+
+
+def _apply_entity_completion(
+    status: Mapping[str, Any],
+    contract: ClaimContract,
+    evidence: Sequence[EvidenceRecord],
+) -> dict[str, Any]:
+    result = dict(status)
+    if contract.quantifier != "distinct_count":
+        return result
+    countable = []
+    candidates = []
+    parse_failures = []
+    for record in evidence:
+        parse_status = str(record.operation_metadata.get("structured_parse_status", "") or "")
+        if parse_status and parse_status != "parsed":
+            parse_failures.append(record.evidence_id)
+        for entity in record.operation_metadata.get("entities", ()) or ():
+            if not isinstance(entity, Mapping):
+                continue
+            observation_id = str(entity.get("entity_observation_id", "") or "")
+            if not observation_id:
+                continue
+            if _metadata_flag(entity.get("countable")):
+                countable.append(observation_id)
+            else:
+                candidates.append(observation_id)
+    result.update(
+        {
+            "countable_entity_observation_ids": list(dict.fromkeys(countable)),
+            "candidate_entity_observation_ids": list(dict.fromkeys(candidates)),
+            "entity_protocol_parse_failure_evidence_ids": list(dict.fromkeys(parse_failures)),
+            "entity_witness_ready": bool(countable),
+        }
+    )
     return result
 
 
@@ -1264,6 +1303,9 @@ def _answer_completion_gate(
         cited_ids = {str(citation) for citation in citations}
         if any(not cluster["evidence_ids"] or not set(cluster["evidence_ids"]).issubset(cited_ids) for cluster in clusters):
             return {"passed": False, "reason": "entity_cluster_evidence_invalid", "missing_segment_ids": []}
+        witness_gate = _entity_cluster_witness_gate(clusters, cited)
+        if witness_gate is not None:
+            return witness_gate
         expected_count = _answer_count(answer, workspace.case.options)
         if expected_count is not None and expected_count != len(clusters):
             return {
@@ -1293,6 +1335,111 @@ def _answer_completion_gate(
         "source_video_ids": sorted(cited_sources),
         "entity_cluster_count": len(entity_clusters),
         "event_occurrence_count": len(event_occurrences),
+        "missing_segment_ids": [],
+    }
+
+
+def _entity_cluster_witness_gate(
+    clusters: Sequence[Mapping[str, Any]],
+    cited: Sequence[EvidenceRecord],
+) -> dict[str, Any] | None:
+    # Evidence created before the witnessed-entity protocol remains readable. New
+    # model-driven observations always carry structured_parse_status and are gated.
+    if not any("structured_parse_status" in record.operation_metadata for record in cited):
+        return None
+
+    observations: dict[str, dict[str, Any]] = {}
+    observations_by_evidence: dict[str, list[str]] = {}
+    records_by_id = {record.evidence_id: record for record in cited}
+    for record in cited:
+        for raw_entity in record.operation_metadata.get("entities", ()) or ():
+            if not isinstance(raw_entity, Mapping):
+                continue
+            entity = dict(raw_entity)
+            observation_id = str(
+                entity.get("entity_observation_id")
+                or (
+                    f"{record.observation_id}:{entity.get('local_id')}"
+                    if record.observation_id and entity.get("local_id")
+                    else ""
+                )
+            ).strip()
+            if not observation_id:
+                continue
+            countable = (
+                _metadata_flag(entity.get("countable"))
+                and _metadata_flag(entity.get("supports_question_relation"))
+                and bool(str(entity.get("visual_signature", "") or "").strip())
+                and bool(tuple(entity.get("witness_frame_refs", ()) or ()))
+            )
+            observations[observation_id] = {
+                "evidence_id": record.evidence_id,
+                "countable": countable,
+                "candidate_reason": str(entity.get("candidate_reason", "") or ""),
+            }
+            observations_by_evidence.setdefault(record.evidence_id, []).append(observation_id)
+
+    assigned: dict[str, str] = {}
+    unsupported = []
+    for raw_cluster in clusters:
+        cluster = _entity_cluster(raw_cluster)
+        observation_ids = tuple(cluster["entity_observation_ids"])
+        if not observation_ids:
+            inferred = tuple(
+                dict.fromkeys(
+                    observation_id
+                    for evidence_id in cluster["evidence_ids"]
+                    for observation_id in observations_by_evidence.get(evidence_id, ())
+                    if observations.get(observation_id, {}).get("countable")
+                )
+            )
+            if len(inferred) == 1:
+                observation_ids = inferred
+        invalid_ids = tuple(
+            observation_id
+            for observation_id in observation_ids
+            if observation_id not in observations or not observations[observation_id]["countable"]
+        )
+        duplicate_ids = tuple(
+            observation_id
+            for observation_id in observation_ids
+            if observation_id in assigned and assigned[observation_id] != cluster["entity_id"]
+        )
+        if not observation_ids or invalid_ids or duplicate_ids:
+            repair_records = [records_by_id[item] for item in cluster["evidence_ids"] if item in records_by_id]
+            unsupported.append(
+                {
+                    "entity_id": cluster["entity_id"],
+                    "evidence_ids": list(cluster["evidence_ids"]),
+                    "entity_observation_ids": list(observation_ids),
+                    "invalid_entity_observation_ids": list(invalid_ids),
+                    "duplicate_entity_observation_ids": list(duplicate_ids),
+                    "candidate_entity_observation_ids": list(
+                        dict.fromkeys(
+                            observation_id
+                            for evidence_id in cluster["evidence_ids"]
+                            for observation_id in observations_by_evidence.get(evidence_id, ())
+                        )
+                    ),
+                    "repair_windows": [
+                        [record.start_sec, record.end_sec]
+                        for record in repair_records
+                        if record.start_sec is not None and record.end_sec is not None
+                    ],
+                }
+            )
+            continue
+        for observation_id in observation_ids:
+            assigned[observation_id] = cluster["entity_id"]
+    if not unsupported:
+        return None
+    return {
+        "passed": False,
+        "reason": "entity_cluster_witness_missing",
+        "unsupported_entity_clusters": unsupported,
+        "countable_entity_observation_ids": sorted(
+            observation_id for observation_id, row in observations.items() if row["countable"]
+        ),
         "missing_segment_ids": [],
     }
 
@@ -1916,6 +2063,9 @@ def _entity_cluster(value: Mapping[str, Any]) -> dict[str, Any]:
         "entity_id": str(row.get("entity_id", "") or ""),
         "description": str(row.get("description", "") or ""),
         "evidence_ids": tuple(str(item) for item in row.get("evidence_ids", ()) if str(item).strip()),
+        "entity_observation_ids": tuple(
+            str(item) for item in row.get("entity_observation_ids", ()) if str(item).strip()
+        ),
     }
 
 
@@ -1974,7 +2124,11 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
             "evidence_kind": item.evidence_kind,
             "observation_polarity": item.observation_polarity,
             "source_lineage": [dict(row) for row in item.source_lineage],
-            "entities": list(item.operation_metadata.get("entities", ())),
+            "entities": [
+                _entity_observation_digest(entity)
+                for entity in item.operation_metadata.get("entities", ())
+                if isinstance(entity, Mapping)
+            ],
             "events": list(item.operation_metadata.get("events", ())),
             "target_presence": dict(item.operation_metadata.get("target_presence", {}) or {}),
             "measurements": list(item.operation_metadata.get("measurements", ())),
@@ -1996,6 +2150,24 @@ def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any]
         }
         for item in evidence
     )
+
+
+def _entity_observation_digest(value: Mapping[str, Any]) -> dict[str, Any]:
+    row = dict(value)
+    return {
+        "entity_observation_id": str(row.get("entity_observation_id", "") or ""),
+        "local_id": str(row.get("local_id", "") or ""),
+        "description": str(row.get("description", "") or ""),
+        "visual_signature": str(row.get("visual_signature", "") or ""),
+        "role": str(row.get("role", "") or ""),
+        "question_relation": str(row.get("question_relation", "") or ""),
+        "supports_question_relation": _metadata_flag(row.get("supports_question_relation")),
+        "frame_indices": [int(item) for item in row.get("frame_indices", ()) if isinstance(item, int)],
+        "witness_count": int(row.get("witness_count", 0) or 0),
+        "countable": _metadata_flag(row.get("countable")),
+        "candidate_only": _metadata_flag(row.get("candidate_only")),
+        "candidate_reason": str(row.get("candidate_reason", "") or ""),
+    }
 
 
 def _outcome_digest(reports: Sequence[InvestigationReport]) -> tuple[dict[str, Any], ...]:

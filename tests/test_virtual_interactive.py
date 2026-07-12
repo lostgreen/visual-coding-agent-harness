@@ -1622,8 +1622,67 @@ def test_investigator_prompt_and_entity_schema_are_question_generic(tmp_path: Pa
     assert "supports_question_relation" in preview_prompt
     assert '"events"' in preview_prompt
     assert '"events"' in detail_prompt
+    assert '"frame_indices"' in preview_prompt
+    assert "candidate discovery" in preview_prompt
     assert entities[0]["question_relation"] == "points to the diagram"
     assert entities[0]["supports_question_relation"] is True
+
+
+def test_entity_normalizer_binds_countable_observation_to_supplied_frames() -> None:
+    entities = _interactive._normalize_entities(
+        [
+            {
+                "local_id": "person_1",
+                "description": "an older woman in a blue top",
+                "visual_signature": "short white hair, blue top, brick wall background",
+                "frame_indices": [1, 3, 99],
+                "role": "scholar",
+                "question_relation": "visibly speaks about Napoleon",
+                "supports_question_relation": True,
+            }
+        ],
+        frame_paths=("f0.jpg", "f1.jpg", "f2.jpg", "f3.jpg"),
+        observation_id="r1_t1_c01",
+        window_duration_sec=60.0,
+    )
+
+    assert entities[0]["entity_observation_id"] == "r1_t1_c01:person_1"
+    assert entities[0]["frame_indices"] == [1, 3]
+    assert entities[0]["witness_frame_refs"] == ["f1.jpg", "f3.jpg"]
+    assert entities[0]["countable"] is True
+    assert entities[0]["candidate_only"] is False
+
+
+def test_entity_normalizer_marks_broad_or_unwitnessed_observations_as_candidates() -> None:
+    payload = [
+        {
+            "local_id": "person_1",
+            "description": "a man in a dark shirt",
+            "visual_signature": "short dark hair and dark shirt",
+            "frame_indices": [0],
+            "role": "scholar",
+            "question_relation": "comments on the topic",
+            "supports_question_relation": True,
+        }
+    ]
+
+    broad = _interactive._normalize_entities(
+        payload,
+        frame_paths=("frame.jpg",),
+        observation_id="broad",
+        window_duration_sec=900.0,
+    )
+    unwitnessed = _interactive._normalize_entities(
+        [{**payload[0], "frame_indices": []}],
+        frame_paths=("frame.jpg",),
+        observation_id="missing",
+        window_duration_sec=30.0,
+    )
+
+    assert broad[0]["countable"] is False
+    assert broad[0]["candidate_reason"] == "coarse_window_candidate"
+    assert unwitnessed[0]["countable"] is False
+    assert unwitnessed[0]["candidate_reason"] == "missing_frame_witness"
 
 
 def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> None:

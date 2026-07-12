@@ -845,7 +845,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         preview_raw = self.api.chat(
             preview_prompt,
             image_paths=preview_paths,
-            max_tokens=1200 if event_window else 1100 if claim_window else 1000,
+            max_tokens=1400,
         )
         preview, parse_status, parse_error, parse_repair_calls = self._parse_structured_observation(
             preview_raw,
@@ -967,7 +967,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             raw = self.api.chat(
                 final_prompt,
                 image_paths=model_image_paths,
-                max_tokens=1200 if event_window else 1100 if claim_window else 1000,
+                max_tokens=1400,
             )
             parsed, parse_status, parse_error, detail_repair_calls = self._parse_structured_observation(
                 raw,
@@ -1012,13 +1012,20 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         )
         evidence_id = f"ev_{observation_id}_001"
         confidence = _confidence(parsed.get("confidence"), default=0.6)
-        entities = _normalize_entities(parsed.get("entities"))
+        entities = _normalize_entities(
+            parsed.get("entities"),
+            frame_paths=frame_paths,
+            observation_id=observation_id,
+            window_duration_sec=max(0.0, float(selected_window[1]) - float(selected_window[0])),
+        )
         events = _normalize_events(parsed.get("events"), selected_window)
         claim_assessment = _normalize_claim_assessment(parsed, task) if claim_window else {}
         target_presence = normalize_target_presence(parsed.get("target_presence"), evidence_id=evidence_id)
         measurements = normalize_measurements(parsed.get("measurements"), evidence_id=evidence_id)
         relations = normalize_relations(parsed.get("relations"), evidence_id=evidence_id)
-        supports_identity_anchor = _truthy(parsed.get("supports_identity_anchor"))
+        supports_identity_anchor = _truthy(parsed.get("supports_identity_anchor")) and any(
+            bool(item.get("countable")) for item in entities
+        )
         supports_answer_event = bool(events) or _truthy(parsed.get("supports_answer_event"))
         outcome = _normalize_investigation_outcome(
             parsed,
@@ -1673,9 +1680,19 @@ def _confidence(value: Any, *, default: float) -> float:
         return float(default)
 
 
-def _normalize_entities(value: Any) -> tuple[dict[str, Any], ...]:
+ENTITY_WITNESS_MAX_WINDOW_SEC = 120.0
+
+
+def _normalize_entities(
+    value: Any,
+    *,
+    frame_paths: Sequence[str] = (),
+    observation_id: str = "",
+    window_duration_sec: float | None = None,
+) -> tuple[dict[str, Any], ...]:
     if not isinstance(value, list):
         return ()
+    available_frames = tuple(str(path) for path in frame_paths if str(path).strip())
     rows = []
     for index, item in enumerate(value, start=1):
         if not isinstance(item, Mapping):
@@ -1683,13 +1700,46 @@ def _normalize_entities(value: Any) -> tuple[dict[str, Any], ...]:
         description = str(item.get("description", "") or "").strip()
         if not description:
             continue
+        local_id = str(item.get("local_id", "") or f"person_{index}")
+        visual_signature = str(item.get("visual_signature", "") or description).strip()
+        raw_indices = item.get("frame_indices", ())
+        if not isinstance(raw_indices, Sequence) or isinstance(raw_indices, (str, bytes)):
+            raw_indices = ()
+        frame_indices = []
+        for raw_index in raw_indices:
+            try:
+                frame_index = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= frame_index < len(available_frames) and frame_index not in frame_indices:
+                frame_indices.append(frame_index)
+        witness_frame_refs = tuple(available_frames[frame_index] for frame_index in frame_indices)
+        supports_question_relation = _truthy(item.get("supports_question_relation"))
+        candidate_reason = ""
+        if not witness_frame_refs:
+            candidate_reason = "missing_frame_witness"
+        elif not visual_signature:
+            candidate_reason = "missing_visual_signature"
+        elif not supports_question_relation:
+            candidate_reason = "question_relation_unverified"
+        elif window_duration_sec is not None and float(window_duration_sec) > ENTITY_WITNESS_MAX_WINDOW_SEC:
+            candidate_reason = "coarse_window_candidate"
+        entity_observation_id = f"{observation_id}:{local_id}" if observation_id else local_id
         rows.append(
             {
-                "local_id": str(item.get("local_id", "") or f"person_{index}"),
+                "local_id": local_id,
+                "entity_observation_id": entity_observation_id,
                 "description": description,
+                "visual_signature": visual_signature,
                 "role": str(item.get("role", "") or ""),
                 "question_relation": str(item.get("question_relation", "") or ""),
-                "supports_question_relation": _truthy(item.get("supports_question_relation")),
+                "supports_question_relation": supports_question_relation,
+                "frame_indices": frame_indices,
+                "witness_frame_refs": list(witness_frame_refs),
+                "witness_count": len(witness_frame_refs),
+                "countable": not candidate_reason,
+                "candidate_only": bool(candidate_reason),
+                "candidate_reason": candidate_reason,
             }
         )
     return tuple(rows)
@@ -2102,7 +2152,9 @@ def _investigate_prompt(
         "from every materially different competing option, up to 5 total terms. This preserves task slots and prevents committing to "
         "the first lexical hit. Do not repeat an identical lexical search after any navigation result: inspect positive hit windows "
         "visually, and change terms after a negative result.\n"
-        "For full-video count questions, evidence from one chunk is only a source hypothesis, not complete proof.\n"
+        "For full-video count questions, evidence from one chunk is only a source hypothesis, not complete proof. For distinct-person "
+        "counts, a window longer than 120 seconds is candidate discovery only; follow it with narrower windows that can bind each "
+        "person to explicit frame witnesses and stable appearance attributes.\n"
         "For total event-count questions, dispatch segment tasks that enumerate atomic event occurrences with timestamps.\n"
         "For scalar_quantity questions, inspect each relevant displayed operand or checkpoint and ask for its unit, delta or cumulative "
         "semantics, and relation to the stated boundary. Do not infer a quantity from answer options.\n"
@@ -2133,7 +2185,7 @@ def _followup_prompt(
         f"{finalization_instruction}"
         "If enough, return JSON only: {\"action\":\"answer\", \"answer\":\"A. ...\", \"citations\":[\"ev_...\"],"
         "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"canonical identity\","
-        "\"evidence_ids\":[\"ev_...\"]}]}.\n"
+        "\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"observation:person_1\"]}]}.\n"
         "If not enough, identify the single primary observable evidence gap and return JSON only: "
         "{\"action\":\"investigate\",\"primary_gap\":{\"gap_id\":\"gap_r2\",\"description\":\"observable unknown\","
         "\"success_conditions\":[\"condition 1\"],\"falsification_conditions\":[]},\"tasks\":[{\"query_id\":\"r2_t1\","
@@ -2156,7 +2208,11 @@ def _followup_prompt(
         "when no actionable repair remains, preserve the best choice honestly rather than looping. "
         "For a final full-video answer, cite every relevant visual evidence record from the adopted source.\n"
         "For distinct-count questions, reconcile the per-evidence entities by stable appearance. Do not add local counts. "
-        "Create one entity_cluster per unique person, and make the option count equal the number of clusters.\n"
+        "Create one entity_cluster per unique person, list every adopted entity_observation_id in that cluster, and make the "
+        "option count equal the number of clusters. Only entities with countable=true are admissible. A summary-level person, "
+        "candidate_only entity, parse-failed observation, or broad-window count without a frame witness is navigation context, "
+        "not count evidence. When Latest answer-gate feedback reports entity_cluster_witness_missing, investigate narrower repair "
+        "windows instead of repeating the answer.\n"
         "For total event-count questions, count only the timestamped events rows in evidence, deduplicate overlapping observations, "
         "cite every evidence record containing a positive occurrence, and never infer the count from answer options or entity clusters.\n"
         "For scalar_quantity questions, use only structured measurement facts with the requested unit. Distinguish delta or cumulative "
@@ -2378,7 +2434,9 @@ def _answer_audit_prompt(
         "OptionClaimContract; do not require non-discriminative background from the question. For why questions, distinguish "
         "an underlying motive or observed cause from a downstream benefit, an after-state, "
         "or mere co-occurrence. For identity-linked questions, require evidence that links the same visible entity across the "
-        "anchor and answer event. Do not use answer-option plausibility as evidence. "
+        "anchor and answer event. For distinct counts, audit every entity cluster against its entity_observation_ids: each adopted "
+        "observation must have countable=true, a direct frame witness, a stable visual signature, and a verified question relation. "
+        "Free-text local counts and candidate-only entities are not count evidence. Do not use answer-option plausibility as evidence. "
         f"{task_instruction}\n"
         "Identify the single strongest_alternative after comparing every option internally. If that alternative is directly "
         "supported, provide revised_answer and its citations. Do not revise based only on plausibility or elimination. Keep the "
@@ -2387,7 +2445,8 @@ def _answer_audit_prompt(
         "\"evidence_relation\":\"direct|causal_chain|consequence_only|cooccurrence_only|unclear\","
         "\"strongest_alternative\":{\"option\":\"A\",\"support\":\"direct|indirect|contradicted|missing\","
         "\"evidence_ids\":[\"ev_...\"],\"reason\":\"...\"},"
-        "\"revised_answer\":null,\"revised_citations\":[],\"revised_entity_clusters\":[],"
+        "\"revised_answer\":null,\"revised_citations\":[],\"revised_entity_clusters\":[{\"entity_id\":\"entity_1\","
+        "\"description\":\"...\",\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"obs:person_1\"]}],"
         "\"revised_support_status\":\"supported|insufficient\",\"tasks\":[{\"query_id\":\"audit_r2_t1\","
         "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":[0.0,60.0],"
         "\"modality_hint\":[\"visual\",\"asr\"],\"expected_evidence\":\"...\"}]}.\n"
@@ -2466,7 +2525,9 @@ def _forced_answer_prompt(
         "do not return investigate, abstain, or an empty answer. This is a best-effort answer and may remain unverified. "
         "Return JSON only: {\"answer\":\"A. option text\",\"citations\":[\"ev_...\"],"
         "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"...\","
-        "\"evidence_ids\":[\"ev_...\"]}]}.\n"
+        "\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"observation:person_1\"]}]}. "
+        "For distinct counts, use only countable entity observations; candidate-only summaries may inform the best effort but "
+        "must not be presented as grounded identity evidence.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Evidence dashboard: {json.dumps(dashboard, ensure_ascii=False)}"
@@ -2496,7 +2557,8 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
     return (
         "You are the Investigator. Inspect the low-fps preview frames and local ASR without choosing an answer option. "
         "Return JSON only: {\"summary\":\"atomic observation\",\"confidence\":0.0-1.0,"
-        "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"stable visible attributes\","
+        "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"atomic visible observation\","
+        "\"visual_signature\":\"stable face, hair, clothing, and accessories\",\"frame_indices\":[0],"
         "\"role\":\"visible role or unknown\",\"question_relation\":\"directly observed relation or unknown\","
         "\"supports_question_relation\":true|false}],"
         "\"events\":[{\"local_id\":\"event_1\",\"description\":\"one atomic occurrence relevant to the question\","
@@ -2505,8 +2567,11 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\","
         "\"region_hint\":\"scoreboard/text/object or empty\",\"region_box\":[x1,y1,x2,y2]|null}. "
         "Region coordinates are normalized 0-1.\n"
-        "List each visible person separately using stable appearance attributes. Do not estimate a segment-level or video-level count. "
-        "The same person may recur in later chunks.\n"
+        "List each visible person separately using stable appearance attributes. Every entity must cite one or more 0-based "
+        "frame_indices from the supplied images; omit people who are inferred from ASR or summary text but are not visible in "
+        "those frames. The summary must not introduce a person absent from entities. Do not estimate a segment-level or "
+        "video-level count. The same person may recur in later chunks. A window longer than 120 seconds is candidate discovery "
+        "only: request a narrower detail window before treating any identity as countable.\n"
         "Enumerate every distinct question-relevant event occurrence visible in this inspected window. "
         "Use virtual timestamps from the window metadata, one row per occurrence, and return an empty events list when none is supported.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
@@ -2594,13 +2659,16 @@ def _evidence_prompt(
         "You are the Investigator. Inspect the detail frames and local ASR. Report only an atomic observation, "
         "not an answer-option judgment. Return JSON only: "
         "{\"summary\":\"atomic visual evidence summary\", \"confidence\":0.0-1.0,"
-        "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"stable visible attributes\","
+        "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"atomic visible observation\","
+        "\"visual_signature\":\"stable face, hair, clothing, and accessories\",\"frame_indices\":[0],"
         "\"role\":\"visible role or unknown\",\"question_relation\":\"directly observed relation or unknown\","
         "\"supports_question_relation\":true|false}],"
         "\"events\":[{\"local_id\":\"event_1\",\"description\":\"one atomic occurrence relevant to the question\","
         "\"start_sec\":float,\"end_sec\":float,\"supports_question_event\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false}.\n"
-        "List visible people separately and do not infer a count across frames or chunks.\n"
+        "List visible people separately and give every entity one or more 0-based frame_indices from the supplied images. "
+        "Omit any person not directly visible in a cited frame, and never introduce additional people only in summary text. "
+        "Do not infer a count across frames or chunks.\n"
         "Enumerate every distinct question-relevant event occurrence visible in this inspected window. "
         "Use virtual timestamps from the window metadata, one row per occurrence, and return an empty events list when none is supported.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "

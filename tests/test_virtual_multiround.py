@@ -880,6 +880,115 @@ def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_pa
     assert gate["reason"] == "entity_reconciliation_missing"
 
 
+def test_distinct_count_gate_rejects_free_text_entity_without_frame_witness(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    contract = multiround.compile_query_contract(workspace.case.question, workspace.case.options)
+    evidence = EvidenceRecord(
+        evidence_id="ev_broad_summary",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=15.0,
+        modality="visual",
+        pointer="virtual://broad-summary",
+        verbatim="Three different men appear in interviews.",
+        frame_refs=("preview.jpg",),
+        attestation_model="test-vlm",
+        evidence_kind="visual_observation",
+        coverage_manifest=(CoverageSegment("q_broad", 0.0, 15.0, "visual", 1.0),),
+        source_lineage=(
+            {"segment_id": "seg_target_a", "source_video_id": "target", "virtual_time_range": [0.0, 5.0]},
+            {"segment_id": "seg_target_b", "source_video_id": "target", "virtual_time_range": [10.0, 15.0]},
+        ),
+        operation_metadata={
+            "entities": [],
+            "structured_parse_status": "fallback_extracted",
+        },
+    )
+    clusters = tuple(
+        {
+            "entity_id": f"scholar_{index}",
+            "description": "summary-only candidate",
+            "evidence_ids": (evidence.evidence_id,),
+        }
+        for index in range(1, 4)
+    )
+
+    gate = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "B. Three",
+        (evidence.evidence_id,),
+        clusters,
+        (evidence,),
+    )
+
+    assert gate["passed"] is False
+    assert gate["reason"] == "entity_cluster_witness_missing"
+    assert len(gate["unsupported_entity_clusters"]) == 3
+
+
+def test_distinct_count_gate_accepts_explicit_witnessed_entity_observations(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    contract = multiround.compile_query_contract(workspace.case.question, workspace.case.options)
+    entities = tuple(
+        {
+            "local_id": f"person_{index}",
+            "entity_observation_id": f"obs:person_{index}",
+            "description": description,
+            "visual_signature": description,
+            "supports_question_relation": True,
+            "witness_frame_refs": [f"person_{index}.jpg"],
+            "countable": True,
+        }
+        for index, description in enumerate(
+            ("bald man with glasses", "older woman with white hair", "brown-haired man in a light shirt"),
+            start=1,
+        )
+    )
+    evidence = EvidenceRecord(
+        evidence_id="ev_witnessed_entities",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=15.0,
+        modality="visual",
+        pointer="virtual://witnessed",
+        verbatim="Three individually witnessed scholars appear.",
+        frame_refs=tuple(f"person_{index}.jpg" for index in range(1, 4)),
+        attestation_model="test-vlm",
+        evidence_kind="entity_observation",
+        coverage_manifest=(CoverageSegment("q_witness", 0.0, 15.0, "visual", 1.0),),
+        source_lineage=(
+            {"segment_id": "seg_target_a", "source_video_id": "target", "virtual_time_range": [0.0, 5.0]},
+            {"segment_id": "seg_target_b", "source_video_id": "target", "virtual_time_range": [10.0, 15.0]},
+        ),
+        operation_metadata={
+            "entities": entities,
+            "structured_parse_status": "parsed",
+        },
+    )
+    clusters = tuple(
+        {
+            "entity_id": f"scholar_{index}",
+            "description": entities[index - 1]["description"],
+            "evidence_ids": (evidence.evidence_id,),
+            "entity_observation_ids": (entities[index - 1]["entity_observation_id"],),
+        }
+        for index in range(1, 4)
+    )
+
+    gate = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "B. Three",
+        (evidence.evidence_id,),
+        clusters,
+        (evidence,),
+    )
+
+    assert gate["passed"] is True
+    assert gate["reason"] == "full_source_coverage_verified"
+
+
 def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citations_for_answer(tmp_path: Path) -> None:
     workspace = _two_chunk_workspace(tmp_path)
     contract = multiround.compile_query_contract("How many times does a title card appear in this video?")
