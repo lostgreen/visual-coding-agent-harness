@@ -10,11 +10,25 @@ class GapCondition:
     condition_id: str
     description: str
     critical: bool = True
+    condition_type: str = "auto"
+    target_role: str = ""
+    quantity_type: str = ""
+    unit: str = ""
+    relation_type: str = ""
+    subject_role: str = ""
+    object_role: str = ""
+    required_relation: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "condition_id", str(self.condition_id or "").strip())
         object.__setattr__(self, "description", str(self.description or "").strip())
         object.__setattr__(self, "critical", bool(self.critical))
+        condition_type = str(self.condition_type or "auto").strip().casefold()
+        allowed = {"auto", "semantic", "lexical_navigation", "presence", "measurement", "relation", "temporal"}
+        object.__setattr__(self, "condition_type", condition_type if condition_type in allowed else "auto")
+        for name in ("target_role", "quantity_type", "relation_type", "subject_role", "object_role", "required_relation"):
+            object.__setattr__(self, name, str(getattr(self, name) or "").strip().casefold())
+        object.__setattr__(self, "unit", canonical_unit(self.unit))
 
 
 @dataclass(frozen=True)
@@ -36,6 +50,54 @@ class ConditionResult:
             "evidence_ids",
             tuple(dict.fromkeys(str(item).strip() for item in self.evidence_ids if str(item).strip())),
         )
+
+
+@dataclass(frozen=True)
+class ConditionState:
+    condition_id: str
+    status: str = "unknown"
+    supporting_evidence_ids: tuple[str, ...] = ()
+    refuting_evidence_ids: tuple[str, ...] = ()
+    updated_by_task_id: str | None = None
+
+    def __post_init__(self) -> None:
+        status = str(self.status or "unknown").strip().casefold()
+        object.__setattr__(self, "condition_id", str(self.condition_id or "").strip())
+        object.__setattr__(self, "status", status if status in {"unknown", "satisfied", "refuted", "conflicted"} else "unknown")
+        object.__setattr__(self, "supporting_evidence_ids", _unique_strings(self.supporting_evidence_ids))
+        object.__setattr__(self, "refuting_evidence_ids", _unique_strings(self.refuting_evidence_ids))
+        task_id = str(self.updated_by_task_id or "").strip()
+        object.__setattr__(self, "updated_by_task_id", task_id or None)
+
+
+def merge_condition_states(updates: Sequence[tuple[str, ConditionResult]]) -> dict[str, ConditionState]:
+    states: dict[str, ConditionState] = {}
+    for task_id, result in updates:
+        current = states.get(result.condition_id, ConditionState(result.condition_id))
+        supporting = list(current.supporting_evidence_ids)
+        refuting = list(current.refuting_evidence_ids)
+        updated_by = current.updated_by_task_id
+        if result.status == "satisfied":
+            supporting.extend(result.evidence_ids)
+            updated_by = str(task_id or "") or updated_by
+        elif result.status == "contradicted":
+            refuting.extend(result.evidence_ids)
+            updated_by = str(task_id or "") or updated_by
+        supporting_ids = _unique_strings(supporting)
+        refuting_ids = _unique_strings(refuting)
+        status = "conflicted" if supporting_ids and refuting_ids else "satisfied" if supporting_ids else "refuted" if refuting_ids else "unknown"
+        states[result.condition_id] = ConditionState(
+            result.condition_id,
+            status,
+            supporting_ids,
+            refuting_ids,
+            updated_by,
+        )
+    return states
+
+
+def _unique_strings(values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
 
 
 @dataclass(frozen=True)
@@ -68,6 +130,12 @@ class MeasurementFact:
     boundary_relation: str = "unknown"
     raw_text: str = ""
     evidence_ids: tuple[str, ...] = ()
+    quantity_type: str = ""
+    predicate: str = ""
+    object_id: str = ""
+    event_id: str = ""
+    extraction_source: str = "vlm_structured"
+    binding_status: str = "unbound"
 
     def __post_init__(self) -> None:
         value, unit = _normalized_measurement_value_unit(self.value, self.unit)
@@ -82,6 +150,13 @@ class MeasurementFact:
         boundary = str(self.boundary_relation or "unknown").strip().casefold()
         object.__setattr__(self, "boundary_relation", boundary if boundary in {"before", "at", "after", "unknown"} else "unknown")
         object.__setattr__(self, "raw_text", str(self.raw_text or "").strip())
+        object.__setattr__(self, "quantity_type", str(self.quantity_type or "").strip().casefold())
+        object.__setattr__(self, "predicate", str(self.predicate or "").strip().casefold())
+        object.__setattr__(self, "object_id", str(self.object_id or "").strip())
+        object.__setattr__(self, "event_id", str(self.event_id or "").strip())
+        object.__setattr__(self, "extraction_source", str(self.extraction_source or "vlm_structured").strip().casefold())
+        binding = str(self.binding_status or "unbound").strip().casefold()
+        object.__setattr__(self, "binding_status", binding if binding in {"explicit", "contextual", "ambiguous", "unbound"} else "unbound")
         object.__setattr__(
             self,
             "evidence_ids",
@@ -150,6 +225,12 @@ def normalize_measurements(value: Any, *, evidence_id: str = "") -> tuple[Measur
                 boundary_relation=str(row.get("boundary_relation", "unknown") or "unknown"),
                 raw_text=str(row.get("raw_text", "") or ""),
                 evidence_ids=(evidence_id,) if evidence_id else (),
+                quantity_type=str(row.get("quantity_type", "") or ""),
+                predicate=str(row.get("predicate", "") or ""),
+                object_id=str(row.get("object_id", "") or ""),
+                event_id=str(row.get("event_id", "") or ""),
+                extraction_source=str(row.get("extraction_source", "vlm_structured") or "vlm_structured"),
+                binding_status=str(row.get("binding_status", "unbound") or "unbound"),
             )
         except (TypeError, ValueError):
             continue
@@ -208,19 +289,36 @@ def normalize_condition_results(
         observation = str(row.get("observation", "") or "").strip()
         if status in {"satisfied", "resolved"} and not observation:
             status = "unknown"
-        if status in {"satisfied", "resolved"} and _requires_visible_target(condition.description):
+        requires_target = condition.condition_type == "presence" or (
+            condition.condition_type == "auto" and _requires_visible_target(condition.description)
+        )
+        requires_measurement = condition.condition_type == "measurement" or (
+            condition.condition_type == "auto" and _requires_measurement(condition.description)
+        )
+        requires_relation = condition.condition_type in {"relation", "temporal"} or (
+            condition.condition_type == "auto" and _requires_relation(condition.description)
+        )
+        if status in {"satisfied", "resolved"} and requires_target:
             if (
                 target_presence is None
                 or target_presence.status != "present"
-                or not _target_matches_condition(target_presence.target, condition.description)
+                or not _target_matches_condition(target_presence.target, condition.target_role or condition.description)
             ):
                 status = "unknown"
-        if status in {"satisfied", "resolved"} and _requires_measurement(condition.description) and not measurements:
-            status = "unknown"
-        if status in {"satisfied", "resolved"} and _requires_relation(condition.description):
-            if not _measurement_carries_temporal_relation(condition.description, measurements) and not any(
-                fact.status == "supported" for fact in relations
-            ):
+        if status in {"satisfied", "resolved"} and requires_measurement:
+            matching = tuple(
+                fact for fact in measurements
+                if (not condition.quantity_type or fact.quantity_type == condition.quantity_type)
+                and (not condition.unit or fact.unit == condition.unit)
+            )
+            if not matching:
+                status = "unknown"
+        if status in {"satisfied", "resolved"} and requires_relation:
+            temporal_match = condition.condition_type in {"auto", "temporal"} and _measurement_carries_temporal_relation(
+                condition.description,
+                measurements,
+            )
+            if not temporal_match and not any(_relation_matches_condition(fact, condition) for fact in relations):
                 status = "unknown"
         normalized = ConditionResult(
             condition_id=condition.condition_id,
@@ -281,12 +379,64 @@ def _normalized_measurement_value_unit(value: float, unit: str) -> tuple[float, 
         "million": 1e6,
         "billion": 1e9,
         "trillion": 1e12,
+        "quadrillion": 1e15,
+        "quintillion": 1e18,
     }
     for prefix, factor in scales.items():
         marker = f"{prefix}_"
         if normalized.startswith(marker):
             return float(value) * factor, canonical_unit(normalized[len(marker) :])
     return float(value), canonical_unit(normalized)
+
+
+def extract_measurements_from_text(
+    text: str,
+    *,
+    quantity_type: str = "",
+    binding_status: str = "unbound",
+    evidence_id: str = "",
+) -> tuple[MeasurementFact, ...]:
+    source = str(text or "")
+    matches: list[tuple[int, MeasurementFact]] = []
+    pattern = re.compile(
+        r"(?P<relation>over|more\s+than|greater\s+than|under|less\s+than|about|approximately|around)?\s*"
+        r"(?P<value>\d+(?:\.\d+)?)\s*(?P<scale>thousand|million|billion|trillion|quadrillion|quintillion)?\s*"
+        r"(?P<unit>light[\s-]?years?|calories?|points?|meters?|metres?|kilometers?|kilometres?|minutes?|seconds?|dollars?|usd)\b",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(source):
+        relation_text = " ".join(str(match.group("relation") or "").casefold().split())
+        relation = "greater_than" if relation_text in {"over", "more than", "greater than"} else "less_than" if relation_text in {"under", "less than"} else "approx" if relation_text else "exact"
+        unit = " ".join(part for part in (str(match.group("scale") or ""), str(match.group("unit") or "")) if part)
+        matches.append((match.start(), MeasurementFact(
+            float(match.group("value")), unit, relation=relation, raw_text=match.group(0).strip(),
+            evidence_ids=(evidence_id,) if evidence_id else (), quantity_type=quantity_type,
+            extraction_source="text_fallback", binding_status=binding_status,
+        )))
+    for match in re.finditer(r"\b(?P<minutes>\d{1,2}):(?P<seconds>[0-5]\d)\b", source):
+        matches.append((match.start(), MeasurementFact(
+            int(match.group("minutes")) * 60 + int(match.group("seconds")), "second", raw_text=match.group(0),
+            evidence_ids=(evidence_id,) if evidence_id else (), quantity_type="countdown_clock",
+            extraction_source="text_fallback", binding_status="explicit",
+        )))
+    return tuple(fact for _, fact in sorted(matches, key=lambda item: item[0]))
+
+
+def _relation_matches_condition(fact: RelationFact, condition: GapCondition) -> bool:
+    if fact.status != "supported":
+        return False
+    required_type = condition.relation_type or condition.required_relation
+    if required_type and fact.relation_type != required_type:
+        return False
+    if condition.subject_role and _normalized_role(fact.subject_id) != _normalized_role(condition.subject_role):
+        return False
+    if condition.object_role and _normalized_role(fact.object_id) != _normalized_role(condition.object_role):
+        return False
+    return True
+
+
+def _normalized_role(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").casefold()).strip("_")
 
 
 def _requires_visible_target(description: str) -> bool:

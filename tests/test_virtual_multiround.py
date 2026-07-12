@@ -1291,6 +1291,37 @@ def test_navigation_hint_does_not_satisfy_visual_completion(tmp_path: Path) -> N
     )
 
     assert status["ready_for_answer"] is False
+    assert status["candidate_available"] is True
+    assert status["retrieval_ready"] is False
+    assert status["choice_ready"] is False
+    assert status["grounded_ready"] is False
+
+
+def test_completion_status_uses_monotonic_condition_ledger(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    evidence = EvidenceRecord(
+        evidence_id="ev_clock", beat_id="", start_sec=0.0, end_sec=2.0, modality="visual",
+        pointer="virtual://clock", verbatim="The scoreboard clock reads 8:13.",
+        frame_refs=("clock.jpg",), attestation_model="test-vlm",
+    )
+    reports = (
+        InvestigationReport(
+            query_id="q_clock", status="satisfied", evidence=(evidence,), gap_id="gap_clock", resolution="resolved",
+            condition_results=(ConditionResult("gap_clock_c1", "satisfied", "Clock reads 8:13.", ("ev_clock",)),),
+        ),
+        InvestigationReport(
+            query_id="q_unrelated", status="satisfied", evidence=(evidence,), gap_id="gap_clock", resolution="partial",
+            condition_results=(ConditionResult("gap_clock_c1", "unknown", "Unrelated view."),),
+        ),
+    )
+    status = multiround._completion_status(
+        workspace, multiround.compile_query_contract(workspace.case.question), (evidence,),
+        reports=reports, best_choice="B. 11",
+    )
+    assert status["retrieval_ready"] is True
+    assert status["choice_ready"] is True
+    assert status["grounded_ready"] is True
+    assert status["condition_states"]["gap_clock_c1"]["status"] == "satisfied"
 
 
 def test_navigation_repair_prioritizes_unverified_positive_hint() -> None:
@@ -1331,6 +1362,7 @@ def test_navigation_repair_prioritizes_unverified_positive_hint() -> None:
         attestation_model="test-vlm",
         evidence_kind="event_observation",
         source_lineage=verified_hint.source_lineage,
+        operation_metadata={"source_candidate_ids": ["ev_firework_hint"]},
     )
     unverified_hint = EvidenceRecord(
         evidence_id="ev_dog_hint",
@@ -1369,6 +1401,53 @@ def test_navigation_repair_prioritizes_unverified_positive_hint() -> None:
     assert tasks[0].time_range == (20.0, 40.0)
     assert tasks[0].modality_hint == ("visual",)
     assert "dog growls" in tasks[0].expected_evidence
+    assert tasks[0].source_candidate_ids == ("ev_dog_hint",)
+
+
+def test_candidate_status_requires_explicit_provenance_not_time_overlap() -> None:
+    hint = EvidenceRecord(
+        evidence_id="ev_candidate", beat_id="", start_sec=10.0, end_sec=30.0, modality="asr",
+        pointer="virtual://candidate", verbatim="dog and father", evidence_kind="navigation_hint",
+        observation_polarity="positive", operation_metadata={"matched_terms": ["dog", "father"]},
+    )
+    overlap_only = EvidenceRecord(
+        evidence_id="ev_overlap", beat_id="", start_sec=10.0, end_sec=30.0, modality="visual",
+        pointer="virtual://overlap", verbatim="A firework is visible.", frame_refs=("frame.jpg",),
+        attestation_model="test-vlm",
+    )
+    explicit = EvidenceRecord(
+        evidence_id="ev_explicit", beat_id="", start_sec=10.0, end_sec=30.0, modality="visual",
+        pointer="virtual://explicit", verbatim="A dog chases the father.", frame_refs=("frame.jpg",),
+        attestation_model="test-vlm", operation_metadata={"source_candidate_ids": ["ev_candidate"]},
+    )
+    unseen = multiround._navigation_candidates((hint, overlap_only), {"D": "A dog chases his father"})
+    inspected = multiround._navigation_candidates((hint, overlap_only, explicit), {"D": "A dog chases his father"})
+    assert unseen[0]["status"] == "unseen"
+    assert unseen[0]["possibly_covered"] is True
+    assert inspected[0]["status"] == "inspected"
+    assert inspected[0]["resulting_evidence_ids"] == ["ev_explicit"]
+
+
+def test_contrastive_candidate_override_uses_at_most_one_slot() -> None:
+    hints = tuple(
+        EvidenceRecord(
+            evidence_id=f"ev_{name}", beat_id="", start_sec=start, end_sec=start + 20.0, modality="asr",
+            pointer=f"virtual://{name}", verbatim=" ".join(terms), evidence_kind="navigation_hint",
+            observation_polarity="positive", operation_metadata={"matched_terms": list(terms), "hit_count": 2},
+            source_lineage=({"segment_id": f"seg_{name}", "source_video_id": "source"},),
+        )
+        for name, start, terms in (("firework", 100.0, ("firework",)), ("dog", 20.0, ("dog", "father")))
+    )
+    requested = (
+        InvestigationTask("model_1", "Inspect another firework.", "seg_model_1"),
+        InvestigationTask("model_2", "Inspect a later firework.", "seg_model_2"),
+    )
+    tasks = multiround._prefer_navigation_repairs(
+        requested, hints, options={"A": "A firework explodes", "D": "A dog chases his father"}, round_id=2, limit=2,
+    )
+    assert len(tasks) == 2
+    assert sum(task.query_id.startswith("navigation_repair_") for task in tasks) == 1
+    assert tasks[0].source_candidate_ids == ("ev_dog",)
 
 
 def test_search_tasks_yield_to_unresolved_navigation_windows() -> None:

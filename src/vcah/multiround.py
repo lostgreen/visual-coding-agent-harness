@@ -5,7 +5,7 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
-from vcah.evidence_primitives import GapCondition, MeasurementFact, canonical_unit, make_gap_conditions
+from vcah.evidence_primitives import GapCondition, MeasurementFact, canonical_unit, make_gap_conditions, merge_condition_states
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.memory import EvidenceStore
 from vcah.types import ClaimContract, EvidenceRecord, is_path_only_visual_evidence, to_jsonable
@@ -67,6 +67,8 @@ class InvestigationTask:
     excluded_ranges: tuple[tuple[float, float], ...] = ()
     region_hint: str = ""
     conditions: tuple[GapCondition, ...] = ()
+    source_candidate_ids: tuple[str, ...] = ()
+    inspection_intent: str = ""
 
     def __post_init__(self) -> None:
         if self.time_range is not None:
@@ -91,6 +93,8 @@ class InvestigationTask:
         if not conditions and self.success_conditions:
             conditions = make_gap_conditions(self.gap_id or self.query_id, self.success_conditions)
         object.__setattr__(self, "conditions", conditions)
+        object.__setattr__(self, "source_candidate_ids", tuple(dict.fromkeys(str(item) for item in self.source_candidate_ids if str(item))))
+        object.__setattr__(self, "inspection_intent", str(self.inspection_intent or "").strip())
         object.__setattr__(
             self,
             "search_terms",
@@ -441,7 +445,10 @@ class VirtualVideoMultiRoundDriver:
                 query_contract,
                 evidence_store.records,
                 query_requirements=query_requirements,
+                reports=reports,
+                best_choice=best_answer,
             )
+            navigation_candidates = _navigation_candidates(evidence_store.records, workspace.case.options)
             stagnation_status = _stagnation_status(reports)
             decision = _bind_gap_to_tasks(_decision(
                 self.reasoner.decide(
@@ -460,6 +467,7 @@ class VirtualVideoMultiRoundDriver:
                     evidence=evidence_store.records,
                     evidence_digest=_evidence_digest(evidence_store.records),
                     investigation_outcomes=_outcome_digest(reports),
+                    navigation_candidates=navigation_candidates,
                     stagnation_status=stagnation_status,
                     answer_gate_feedback=gate_feedback,
                     remaining_budget=remaining,
@@ -511,6 +519,23 @@ class VirtualVideoMultiRoundDriver:
                         }
                     )
                     decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
+            elif decision.action == "answer" and remaining > 0:
+                candidate_repairs = _navigation_repair_tasks(
+                    evidence_store.records,
+                    options=workspace.case.options,
+                    round_id=round_id,
+                    limit=1,
+                    require_hypothesis=True,
+                )
+                if candidate_repairs:
+                    trace.append({
+                        "type": "repair_override",
+                        "round": round_id,
+                        "reason": "high_value_candidate_uninspected",
+                        "source_candidate_ids": list(candidate_repairs[0].source_candidate_ids),
+                        "task_count": 1,
+                    })
+                    decision = ReasonerDecision(action="investigate", tasks=candidate_repairs)
             trace.append(
                 {
                     "type": "reasoner_decision",
@@ -584,6 +609,7 @@ class VirtualVideoMultiRoundDriver:
             tasks = _prefer_navigation_repairs(
                 requested_tasks,
                 evidence_store.records,
+                options=workspace.case.options,
                 round_id=round_id,
                 limit=min(self.max_tasks_per_round, remaining),
             )
@@ -626,6 +652,8 @@ class VirtualVideoMultiRoundDriver:
                 query_contract,
                 evidence_store.records,
                 query_requirements=query_requirements,
+                reports=reports,
+                best_choice=best_answer,
             )
             final_decision = _bind_gap_to_tasks(_decision(
                 self.reasoner.decide(
@@ -644,6 +672,7 @@ class VirtualVideoMultiRoundDriver:
                     evidence=evidence_store.records,
                     evidence_digest=_evidence_digest(evidence_store.records),
                     investigation_outcomes=_outcome_digest(reports),
+                    navigation_candidates=_navigation_candidates(evidence_store.records, workspace.case.options),
                     stagnation_status=_stagnation_status(reports),
                     answer_gate_feedback=gate_feedback,
                     remaining_budget=0,
@@ -835,8 +864,10 @@ def _identity_repair_tasks(
 def _navigation_repair_tasks(
     evidence: Sequence[EvidenceRecord],
     *,
+    options: Mapping[str, str] | None = None,
     round_id: int,
     limit: int,
+    require_hypothesis: bool = False,
 ) -> tuple[InvestigationTask, ...]:
     visual = tuple(record for record in evidence if record.modality in {"visual", "ocr"})
     grouped: dict[str, list[EvidenceRecord]] = {}
@@ -868,7 +899,12 @@ def _navigation_repair_tasks(
             None,
         )
         if lineage is not None:
-            unresolved.append((hint, str(lineage["segment_id"])))
+            hypotheses = _candidate_hypotheses(hint, options or {})
+            if require_hypothesis and not hypotheses:
+                continue
+            unresolved.append((hint, str(lineage["segment_id"]), hypotheses))
+
+    unresolved.sort(key=lambda item: (-_candidate_score(item[0], item[2]), float(item[0].start_sec or 0.0)))
 
     return tuple(
         InvestigationTask(
@@ -879,8 +915,10 @@ def _navigation_repair_tasks(
             modality_hint=("visual",),
             expected_evidence=f"complete temporal context and direct visual evidence for or against: {hint.verbatim[:240]}",
             priority=1.0,
+            source_candidate_ids=(hint.evidence_id,),
+            inspection_intent="verify navigation candidate against its linked option hypothesis",
         )
-        for index, (hint, segment_id) in enumerate(unresolved[: max(0, int(limit))], start=1)
+        for index, (hint, segment_id, _) in enumerate(unresolved[: max(0, int(limit))], start=1)
     )
 
 
@@ -888,44 +926,71 @@ def _prefer_navigation_repairs(
     requested: Sequence[InvestigationTask],
     evidence: Sequence[EvidenceRecord],
     *,
+    options: Mapping[str, str] | None = None,
     round_id: int,
     limit: int,
 ) -> tuple[InvestigationTask, ...]:
     bounded = tuple(requested[: max(0, int(limit))])
-    if not any(task.inspection_mode == "search_asr" for task in bounded):
-        return bounded
-    kept = tuple(task for task in bounded if task.inspection_mode != "search_asr")
+    has_search = any(task.inspection_mode == "search_asr" for task in bounded)
     repairs = _navigation_repair_tasks(
         evidence,
+        options=options,
         round_id=round_id,
-        limit=max(0, int(limit) - len(kept)),
+        limit=1,
+        require_hypothesis=not has_search,
     )
     if not repairs:
         return bounded
-    return (*kept, *repairs)
+    kept = tuple(task for task in bounded if task.inspection_mode != "search_asr")
+    if has_search:
+        return (*kept[: max(0, int(limit) - 1)], *repairs)
+    return (*repairs, *kept[: max(0, int(limit) - 1)])
 
 
 def _navigation_hint_is_observed(hint: EvidenceRecord, visual: Sequence[EvidenceRecord]) -> bool:
-    if hint.start_sec is None or hint.end_sec is None:
-        return False
-    hint_sources = {
-        str(item.get("source_video_id", "") or "")
-        for item in hint.source_lineage
-        if str(item.get("source_video_id", "") or "")
+    return any(hint.evidence_id in tuple(record.operation_metadata.get("source_candidate_ids", ()) or ()) for record in visual)
+
+
+def _navigation_candidates(evidence: Sequence[EvidenceRecord], options: Mapping[str, str]) -> tuple[dict[str, Any], ...]:
+    visual = tuple(record for record in evidence if record.modality in {"visual", "ocr"})
+    rows = []
+    for hint in evidence:
+        if hint.evidence_kind != "navigation_hint" or hint.observation_polarity != "positive":
+            continue
+        linked = tuple(record for record in visual if hint.evidence_id in tuple(record.operation_metadata.get("source_candidate_ids", ()) or ()))
+        hypotheses = _candidate_hypotheses(hint, options)
+        rows.append({
+            "candidate_id": hint.evidence_id,
+            "source_task_id": hint.task_id,
+            "virtual_time_range": [hint.start_sec, hint.end_sec],
+            "hypothesis_ids": list(hypotheses),
+            "discriminative_score": _candidate_score(hint, hypotheses),
+            "matched_terms": list(hint.operation_metadata.get("matched_terms", ())),
+            "status": "inspected" if linked else "unseen",
+            "possibly_covered": not linked and any(_windows_overlap(hint, record) for record in visual),
+            "resulting_evidence_ids": [record.evidence_id for record in linked],
+        })
+    return tuple(sorted(rows, key=lambda row: (-float(row["discriminative_score"]), str(row["candidate_id"]))))
+
+
+def _candidate_hypotheses(record: EvidenceRecord, options: Mapping[str, str]) -> tuple[str, ...]:
+    terms = {
+        token for term in record.operation_metadata.get("matched_terms", ()) or ()
+        for token in re.findall(r"[a-z0-9]+", str(term).casefold()) if len(token) >= 3
     }
-    for record in visual:
-        if record.start_sec is None or record.end_sec is None:
-            continue
-        record_sources = {
-            str(item.get("source_video_id", "") or "")
-            for item in record.source_lineage
-            if str(item.get("source_video_id", "") or "")
-        }
-        if hint_sources and record_sources and hint_sources.isdisjoint(record_sources):
-            continue
-        if min(float(hint.end_sec), float(record.end_sec)) > max(float(hint.start_sec), float(record.start_sec)):
-            return True
-    return False
+    return tuple(str(label) for label, text in options.items() if terms.intersection(re.findall(r"[a-z0-9]+", str(text).casefold())))
+
+
+def _candidate_score(record: EvidenceRecord, hypotheses: Sequence[str]) -> float:
+    matched = len(tuple(record.operation_metadata.get("matched_terms", ()) or ()))
+    hits = int(record.operation_metadata.get("hit_count", 0) or 0)
+    return round((1.0 if hypotheses else 0.0) + min(1.0, matched * 0.25) + min(0.5, hits * 0.05), 3)
+
+
+def _windows_overlap(left: EvidenceRecord, right: EvidenceRecord) -> bool:
+    if left.start_sec is None or left.end_sec is None or right.start_sec is None or right.end_sec is None:
+        return False
+    return min(float(left.end_sec), float(right.end_sec)) > max(float(left.start_sec), float(right.start_sec))
 
 
 def _task_for_contract(task: InvestigationTask, contract: ClaimContract) -> InvestigationTask:
@@ -944,11 +1009,14 @@ def _completion_status(
     evidence: Sequence[EvidenceRecord],
     *,
     query_requirements: Mapping[str, Any] | None = None,
+    reports: Sequence[InvestigationReport] = (),
+    best_choice: str = "",
 ) -> dict[str, Any]:
     answer_evidence = tuple(record for record in evidence if record.evidence_kind != "navigation_hint")
+    navigation_evidence = tuple(record for record in evidence if record.evidence_kind == "navigation_hint")
     coverage = _source_coverage(workspace, answer_evidence)
     if contract.required_scope != "full_video":
-        return _apply_identity_completion(
+        base = _apply_identity_completion(
             {
                 "ready_for_answer": bool(answer_evidence),
                 "required_scope": contract.required_scope,
@@ -958,8 +1026,9 @@ def _completion_status(
             answer_evidence,
             query_requirements,
         )
+        return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
     if not coverage:
-        return _apply_identity_completion(
+        base = _apply_identity_completion(
             {
                 "ready_for_answer": False,
                 "required_scope": contract.required_scope,
@@ -970,6 +1039,7 @@ def _completion_status(
             answer_evidence,
             query_requirements,
         )
+        return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
     adopted_source = max(
         coverage,
         key=lambda source_id: (
@@ -978,7 +1048,7 @@ def _completion_status(
         ),
     )
     missing = list(coverage[adopted_source]["missing_segment_ids"])
-    return _apply_identity_completion(
+    base = _apply_identity_completion(
         {
             "ready_for_answer": not missing,
             "required_scope": contract.required_scope,
@@ -989,6 +1059,37 @@ def _completion_status(
         answer_evidence,
         query_requirements,
     )
+    return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
+
+
+def _apply_readiness_dashboard(
+    status: Mapping[str, Any],
+    answer_evidence: Sequence[EvidenceRecord],
+    navigation_evidence: Sequence[EvidenceRecord],
+    reports: Sequence[InvestigationReport],
+    best_choice: str,
+) -> dict[str, Any]:
+    result = dict(status)
+    active_gap_id = next((report.gap_id for report in reversed(reports) if report.gap_id), "")
+    updates = tuple(
+        (report.query_id, condition_result)
+        for report in reports if not active_gap_id or report.gap_id == active_gap_id
+        for condition_result in report.condition_results
+    )
+    states = merge_condition_states(updates)
+    unresolved = sorted(condition_id for condition_id, state in states.items() if state.status != "satisfied")
+    grounded = bool(result.get("ready_for_answer")) and not unresolved
+    result.update({
+        "candidate_available": any(record.observation_polarity == "positive" for record in navigation_evidence),
+        "retrieval_ready": any(record.modality in {"visual", "ocr"} for record in answer_evidence),
+        "choice_ready": bool(str(best_choice or "").strip()),
+        "grounded_ready": grounded,
+        "unresolved_critical_condition_ids": unresolved,
+        "unsupported_claim_atom_ids": list(unresolved),
+        "condition_states": {condition_id: to_jsonable(state) for condition_id, state in states.items()},
+    })
+    result["ready_for_answer"] = grounded
+    return result
 
 
 def _apply_identity_completion(
@@ -1691,6 +1792,8 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         excluded_ranges=tuple(value.get("excluded_ranges", ()) or ()),
         region_hint=str(value.get("region_hint", "") or ""),
         conditions=tuple(value.get("conditions", ()) or ()),
+        source_candidate_ids=tuple(value.get("source_candidate_ids", ()) or ()),
+        inspection_intent=str(value.get("inspection_intent", "") or ""),
     )
 
 
@@ -1732,6 +1835,14 @@ def _gap_condition(value: GapCondition | Mapping[str, Any] | str) -> GapConditio
             condition_id=str(value.get("condition_id", "") or ""),
             description=str(value.get("description", value.get("condition", "")) or ""),
             critical=bool(value.get("critical", True)),
+            condition_type=str(value.get("condition_type", "auto") or "auto"),
+            target_role=str(value.get("target_role", "") or ""),
+            quantity_type=str(value.get("quantity_type", "") or ""),
+            unit=str(value.get("unit", "") or ""),
+            relation_type=str(value.get("relation_type", "") or ""),
+            subject_role=str(value.get("subject_role", "") or ""),
+            object_role=str(value.get("object_role", "") or ""),
+            required_relation=str(value.get("required_relation", "") or ""),
         )
     return GapCondition("", str(value or ""))
 

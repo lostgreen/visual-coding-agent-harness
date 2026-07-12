@@ -45,6 +45,7 @@ _run_case_batch = _interactive._run_case_batch
 _should_audit_answer = _interactive._should_audit_answer
 _matching_claim_assessment = _interactive._matching_claim_assessment
 _followup_prompt = _interactive._followup_prompt
+_compile_option_claim_contract = _interactive._compile_option_claim_contract
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -367,6 +368,24 @@ def test_model_investigator_returns_asr_navigation_hints_without_vlm(tmp_path: P
     assert all(record.evidence_kind == "navigation_hint" for record in report.evidence)
     assert all(not record.frame_refs for record in report.evidence)
     assert all(record.operation_metadata["search_terms"] == ["number", "board"] for record in report.evidence)
+
+
+def test_asr_search_only_resolves_explicit_lexical_navigation_conditions(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    investigator = GeminiInvestigator(workspace, api=ScriptedVisionClient(()), trace_path=workspace.root_dir / "trace.jsonl")
+    task = InvestigationTask(
+        query_id="search_number", goal="Find and read the number on the board.", inspection_mode="search_asr",
+        search_terms=("number", "board"), gap_id="gap_number",
+        conditions=(
+            _interactive.GapCondition("gap_number_nav", "locate a literal transcript match", condition_type="lexical_navigation"),
+            _interactive.GapCondition("gap_number_read", "read the visible number on the board", condition_type="measurement"),
+        ),
+    )
+    report = investigator.run_batch((task,))[0]
+    assert [result.status for result in report.condition_results] == ["satisfied", "unknown"]
+    assert report.resolution == "partial"
+    assert report.resolved_conditions == ("locate a literal transcript match",)
+    assert report.unresolved_conditions == ("read the visible number on the board",)
 
 
 def test_model_investigator_records_empty_asr_search_as_negative_navigation(tmp_path: Path) -> None:
@@ -1155,6 +1174,45 @@ def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities
     )
 
 
+def test_option_claim_contract_keeps_selected_mechanism_and_excludes_question_background() -> None:
+    contract = _compile_option_claim_contract(
+        "How does the man get off the airplane while it is flying over an island?",
+        {"A": "He applies lipstick, creates fake spots, and is removed on a stretcher.", "B": "He jumps onto the island."},
+        "A. He applies lipstick, creates fake spots, and is removed on a stretcher.",
+    )
+    assert contract["option_id"] == "A"
+    assert any("lipstick" in atom for atom in contract["atoms"])
+    assert any("spots" in atom for atom in contract["atoms"])
+    assert any("stretcher" in atom for atom in contract["atoms"])
+    assert all("island" not in atom for atom in contract["atoms"])
+    assert contract["compiler_source"] == "selected_option_text"
+
+
+def test_reasoner_deduplicates_identical_answer_audit(tmp_path: Path) -> None:
+    api = ScriptedVisionClient((
+        {"action": "answer", "answer": "A. By a stretcher.", "citations": ["ev_1"]},
+        {"verdict": "insufficient", "reason": "The mechanism is incomplete.", "tasks": []},
+        {"action": "answer", "answer": "A. By a stretcher.", "citations": ["ev_1"]},
+    ))
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "trace.jsonl")
+    kwargs = {
+        "question": "How does he leave the airplane?",
+        "options": {"A": "By a stretcher", "B": "By jumping"},
+        "workspace_overview": {"segment_overviews": []},
+        "query_contract": {}, "query_requirements": {},
+        "completion_status": {"ready_for_answer": True}, "temporal_navigation": {}, "remaining_budget": 2,
+        "evidence_digest": ({
+            "evidence_id": "ev_1", "summary": "He is carried on a stretcher.",
+            "virtual_time_range": [10.0, 20.0], "modality": "visual", "source_lineage": [],
+        },),
+    }
+    first = reasoner.decide(**kwargs)
+    second = reasoner.decide(**kwargs)
+    assert first.support_status == "insufficient"
+    assert second.support_status == "insufficient"
+    assert len(api.calls) == 3
+
+
 class ScriptedVisionClient:
     def __init__(self, responses: Sequence[Any]) -> None:
         self.responses = [dict(item) if isinstance(item, Mapping) else str(item) for item in responses]
@@ -1628,6 +1686,78 @@ def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> No
     assert len(api.calls) == 2
     assert report.evidence[0].sampling_fps == 0.5
     assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5")
+
+
+def test_model_investigator_preserves_candidate_provenance(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(({"summary": "A dog chases a man.", "confidence": 0.9, "need_detail": False},))
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_candidate", goal="Inspect this candidate.", segment_id="seg_0001", time_range=(0.0, 10.0),
+        source_candidate_ids=("ev_candidate",), inspection_intent="verify dog/father hypothesis",
+    )
+    report = investigator.run_batch((task,))[0]
+    metadata = report.evidence[0].operation_metadata
+    assert metadata["source_candidate_ids"] == ["ev_candidate"]
+    assert metadata["inspection_intent"] == "verify dog/father hypothesis"
+
+
+def test_model_investigator_repairs_truncated_structured_observation_once(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient((
+        '```json\n{"summary":"He applies lipstick, creates spots, then leaves on a stretcher",',
+        {
+            "summary": "He applies lipstick, creates spots, then leaves on a stretcher.",
+            "confidence": 0.9, "need_detail": False,
+            "events": [
+                {"local_id": "e1", "description": "applies lipstick", "start_sec": 1, "end_sec": 2, "supports_question_event": True},
+                {"local_id": "e2", "description": "leaves on a stretcher", "start_sec": 3, "end_sec": 4, "supports_question_event": True},
+            ],
+            "supports_answer_event": True,
+        },
+    ))
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_truncated", goal="Inspect the visible sequence.", segment_id="seg_0001",
+        time_range=(0.0, 10.0), modality_hint=("visual",),
+    )
+    report = investigator.run_batch((task,))[0]
+    assert len(api.calls) == 2
+    metadata = report.evidence[0].operation_metadata
+    assert metadata["structured_parse_status"] == "repaired"
+    assert metadata["structured_parse_error"]
+    assert len(metadata["events"]) == 2
+    assert report.cost["vlm_calls"] == 2
+
+
+def test_model_investigator_falls_back_to_explicit_measurement_text(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    workspace = VirtualVideoWorkspace.create(
+        workspace.root_dir,
+        manifest=workspace.manifest,
+        case=_interactive.VirtualVideoCase(
+            case_id="measurement", question="What total diameter is stated in light-years?",
+            options={"A": "23 trillion", "B": "30 quintillion"}, gold="B",
+            target_segment_id="seg_0001", target_virtual_interval=(0.0, 10.0),
+        ),
+    )
+    api = ScriptedVisionClient((
+        {"summary": "The stated diameter is 30 quintillion light-years.", "confidence": 0.9, "need_detail": False},
+    ))
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_measurement", goal="Inspect the stated diameter display.", segment_id="seg_0001",
+        time_range=(0.0, 10.0), modality_hint=("visual",),
+    )
+    report = investigator.run_batch((task,))[0]
+    metadata = report.evidence[0].operation_metadata
+    assert metadata["structured_parse_status"] == "fallback_extracted"
+    assert metadata["measurements"][0]["value"] == 30_000_000_000_000_000_000
+    assert metadata["measurements"][0]["quantity_type"] == "diameter"
+    assert metadata["measurements"][0]["binding_status"] == "explicit"
 
 
 def test_model_investigator_reports_partial_gap_instead_of_frame_success(tmp_path: Path) -> None:

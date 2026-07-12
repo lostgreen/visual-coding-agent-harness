@@ -24,6 +24,7 @@ from vcah.evidence_primitives import (
     RelationFact,
     TargetPresenceFact,
     derive_resolution,
+    extract_measurements_from_text,
     normalize_condition_results,
     normalize_measurements,
     normalize_relations,
@@ -350,6 +351,7 @@ class GeminiReasoner:
         self.calls = 0
         self._last_candidate: ReasonerDecision | None = None
         self._last_audit_reason = ""
+        self._audit_fingerprints: set[str] = set()
 
     def decide(self, **kwargs: Any) -> ReasonerDecision:
         self.calls += 1
@@ -431,6 +433,17 @@ class GeminiReasoner:
             self._last_candidate = candidate
             if not _should_audit_answer(kwargs):
                 return candidate
+            audit_fingerprint = _answer_audit_fingerprint(kwargs, candidate, evidence_digest)
+            if audit_fingerprint in self._audit_fingerprints:
+                return ReasonerDecision(
+                    action="answer",
+                    answer=candidate.answer,
+                    citations=candidate.citations,
+                    entity_clusters=candidate.entity_clusters,
+                    support_status="insufficient",
+                    support_reason=self._last_audit_reason or "An equivalent answer audit already found unresolved evidence.",
+                )
+            self._audit_fingerprints.add(audit_fingerprint)
             audit_prompt = _answer_audit_prompt(
                 kwargs,
                 candidate,
@@ -654,6 +667,36 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         self.trace_path = trace_path
         self._query_calls: dict[str, int] = {}
 
+    def _parse_structured_observation(
+        self,
+        raw: str,
+        *,
+        query_id: str,
+        prompt: str,
+        image_paths: Sequence[str],
+    ) -> tuple[dict[str, Any], str, str, int]:
+        parsed = _parse_json(raw)
+        if parsed:
+            return parsed, "parsed", "", 0
+        error = "invalid_or_truncated_json"
+        repair_prompt = (
+            "Recover the following investigator response as one compact valid JSON object. Preserve only facts explicitly "
+            "present in the response or supplied images. Do not infer identity or causality. Return JSON only.\n"
+            f"Investigation prompt: {prompt[:2400]}\nTruncated response: {str(raw or '')[:5000]}"
+        )
+        repaired_raw = self.api.chat(repair_prompt, image_paths=image_paths, max_tokens=900)
+        repaired = _parse_json(repaired_raw)
+        _append_jsonl(self.trace_path, {
+            "type": "investigator_json_repair",
+            "query_id": query_id,
+            "prompt": repair_prompt,
+            "frame_paths": list(image_paths),
+            "raw": repaired_raw,
+            "parsed": repaired,
+            "time": time.time(),
+        })
+        return repaired, "repaired" if repaired else "failed", error, 1
+
     def _investigate_task(
         self,
         task: Any,
@@ -700,7 +743,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             image_paths=preview_paths,
             max_tokens=1200 if event_window else 1100 if claim_window else 1000,
         )
-        preview = _parse_json(preview_raw)
+        preview, parse_status, parse_error, parse_repair_calls = self._parse_structured_observation(
+            preview_raw,
+            query_id=query_id,
+            prompt=preview_prompt,
+            image_paths=preview_paths,
+        )
         _append_jsonl(
             self.trace_path,
             {
@@ -729,7 +777,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         final_prompt = preview_prompt
         detail_query_id = ""
         tool_trace = ["open_segment", "inspect_window:0.5"]
-        vlm_calls = 1 if requested_window is not None else 2
+        vlm_calls = (1 if requested_window is not None else 2) + parse_repair_calls
 
         if _needs_highfps(task) or _truthy(preview.get("need_detail")) or region_box is not None:
             selected_window = _select_detail_window(preview, window, task, segment_packet)
@@ -815,9 +863,23 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 image_paths=model_image_paths,
                 max_tokens=1200 if event_window else 1100 if claim_window else 1000,
             )
-            parsed = _parse_json(raw)
+            parsed, parse_status, parse_error, detail_repair_calls = self._parse_structured_observation(
+                raw,
+                query_id=query_id,
+                prompt=final_prompt,
+                image_paths=model_image_paths,
+            )
             tool_trace.append(f"inspect_window:{self.highfps:.1f}")
-            vlm_calls += 1
+            vlm_calls += 1 + detail_repair_calls
+
+        parsed, fallback_used = _with_explicit_measurement_fallback(
+            parsed,
+            raw,
+            task=task,
+            question=self.workspace.case.question,
+        )
+        if fallback_used:
+            parse_status = "fallback_extracted"
 
         frame_paths = tuple(model_image_paths)
         _append_jsonl(
@@ -835,6 +897,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "region_frame_paths": list(region_frame_paths),
                 "raw": raw,
                 "parsed": parsed,
+                "structured_parse_status": parse_status,
+                "structured_parse_error": parse_error,
                 "time": time.time(),
             },
         )
@@ -901,6 +965,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "target_presence": to_jsonable(target_presence),
                 "measurements": to_jsonable(measurements),
                 "relations": to_jsonable(relations),
+                "structured_parse_status": parse_status,
+                "structured_parse_error": parse_error,
+                "source_candidate_ids": list(getattr(task, "source_candidate_ids", ()) or ()),
+                "inspection_intent": str(getattr(task, "inspection_intent", "") or ""),
                 "supports_identity_anchor": supports_identity_anchor,
                 "supports_answer_event": supports_answer_event,
                 "investigation": outcome,
@@ -1020,7 +1088,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             ConditionResult(
                 condition.condition_id,
                 "satisfied"
-                if has_hits and any(term in condition.description.casefold() for term in ("locate", "find", "search", "candidate", "match"))
+                if has_hits and condition.condition_type == "lexical_navigation"
                 else "unknown",
                 "Literal ASR matches were returned." if has_hits else "No literal ASR matches were returned.",
                 evidence_ids=evidence_ids if has_hits else (),
@@ -1085,6 +1153,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 gap_id=str(getattr(task, "gap_id", "") or ""),
                 success_conditions=tuple(getattr(task, "success_conditions", ()) or ()),
                 conditions=tuple(getattr(task, "conditions", ()) or ()),
+                source_candidate_ids=tuple(getattr(task, "source_candidate_ids", ()) or ()),
+                inspection_intent=str(getattr(task, "inspection_intent", "") or ""),
                 direction=str(getattr(task, "direction", "") or ""),
                 preferred_ranges=tuple(getattr(task, "preferred_ranges", ()) or ()),
                 excluded_ranges=tuple(getattr(task, "excluded_ranges", ()) or ()),
@@ -1964,7 +2034,9 @@ def _followup_prompt(
         "For identity or cause questions, use one contrastive search_asr task with one distinctive term from every materially different "
         "competing option, up to 5 terms, then visually inspect unresolved positive clusters before committing. Do not repeat an "
         "identical lexical search after any navigation result: inspect positive hit windows, and change terms after a negative result.\n"
-        "If completion_status.ready_for_answer is false, you MUST investigate its missing_segment_ids and must not answer. "
+        "If completion_status.grounded_ready is false, prefer a targeted repair for missing segments, unresolved critical conditions, "
+        "unsupported claim atoms, or high-value unseen candidates. Do not claim grounded support merely because a best choice exists; "
+        "when no actionable repair remains, preserve the best choice honestly rather than looping. "
         "For a final full-video answer, cite every relevant visual evidence record from the adopted source.\n"
         "For distinct-count questions, reconcile the per-evidence entities by stable appearance. Do not add local counts. "
         "Create one entity_cluster per unique person, and make the option count equal the number of clusters.\n"
@@ -1986,6 +2058,7 @@ def _followup_prompt(
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}\n"
         f"Evidence so far: {json.dumps(list(evidence_digest), ensure_ascii=False)}\n"
         f"Investigation outcomes: {json.dumps(list(kwargs.get('investigation_outcomes') or ()), ensure_ascii=False)}\n"
+        f"Navigation candidates: {json.dumps(list(kwargs.get('navigation_candidates') or ()), ensure_ascii=False)}\n"
         f"Stagnation status: {json.dumps(kwargs.get('stagnation_status') or {}, ensure_ascii=False)}\n"
         f"Latest answer-gate feedback: {json.dumps(kwargs.get('answer_gate_feedback') or {}, ensure_ascii=False)}"
         f"{_visual_manifest_prompt(visual_manifest)}"
@@ -2018,7 +2091,7 @@ def _requires_independent_claim_verification(kwargs: Mapping[str, Any]) -> bool:
         return True
     relation_patterns = (
         r"\bwhy\b",
-        r"\bhow\s+(?:did|does|was|were)\b",
+        r"\b(?:cause|reason|motive|because)\b",
         r"\brelationship\b",
         r"\b(?:view|opinion|believ\w*)\b",
     )
@@ -2175,12 +2248,18 @@ def _answer_audit_prompt(
         if budget > 0 and not kwargs.get("force_finalize")
         else "No investigation budget remains; return no tasks and assess the best-effort answer honestly."
     )
+    claim_contract = _compile_option_claim_contract(
+        str(kwargs.get("question", "") or ""),
+        dict(kwargs.get("options") or {}),
+        candidate.answer,
+    )
     return (
         "Audit a proposed answer for a long-video QA agent using only the supplied evidence. Start by assuming the "
         "proposed answer may be wrong and compare every option against the evidence. "
         "Do not reward citation relevance alone. The exact selected option must follow from the observations at the "
-        "causal, temporal, identity, count, and attribute granularity asked by the question. "
-        "For why/how questions, distinguish an underlying motive or observed cause from a downstream benefit, an after-state, "
+        "causal, temporal, identity, count, and attribute granularity asked by the question. Audit only the required atoms in "
+        "OptionClaimContract; do not require non-discriminative background from the question. For why questions, distinguish "
+        "an underlying motive or observed cause from a downstream benefit, an after-state, "
         "or mere co-occurrence. For identity-linked questions, require evidence that links the same visible entity across the "
         "anchor and answer event. Do not use answer-option plausibility as evidence. "
         f"{task_instruction}\n"
@@ -2197,10 +2276,51 @@ def _answer_audit_prompt(
         "\"modality_hint\":[\"visual\",\"asr\"],\"expected_evidence\":\"...\"}]}.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Proposed answer: {candidate.answer}\nCitations: {json.dumps(list(candidate.citations), ensure_ascii=False)}\n"
+        f"OptionClaimContract: {json.dumps(claim_contract, ensure_ascii=False)}\n"
         f"Evidence context: {json.dumps(context, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}"
         f"{_visual_manifest_prompt(visual_manifest)}"
     )
+
+
+def _compile_option_claim_contract(question: str, options: Mapping[str, Any], answer: str) -> dict[str, Any]:
+    del question
+    label_match = re.match(r"\s*([A-H])(?:\.|\)|:|\s|$)", str(answer or "").upper())
+    option_id = label_match.group(1) if label_match else ""
+    option_text = str(options.get(option_id, "") or answer).strip()
+    atoms = tuple(
+        fragment.strip(" ,.;")
+        for fragment in re.split(r"\s*(?:,|;|\bthen\b|\band\b)\s*", option_text, flags=re.IGNORECASE)
+        if len(fragment.strip(" ,.;")) >= 3
+    )
+    return {
+        "option_id": option_id,
+        "atoms": list(atoms or (option_text,)),
+        "excluded_context_atoms": [],
+        "compiler_source": "selected_option_text",
+        "compiler_version": "v1",
+    }
+
+
+def _answer_audit_fingerprint(
+    kwargs: Mapping[str, Any],
+    candidate: ReasonerDecision,
+    evidence_digest: Sequence[Mapping[str, Any]],
+) -> str:
+    cited = set(candidate.citations)
+    ranges = [row.get("virtual_time_range") for row in evidence_digest if str(row.get("evidence_id", "") or "") in cited]
+    contract = _compile_option_claim_contract(
+        str(kwargs.get("question", "") or ""),
+        dict(kwargs.get("options") or {}),
+        candidate.answer,
+    )
+    return json.dumps({
+        "option": contract["option_id"],
+        "atoms": contract["atoms"],
+        "citations": sorted(cited),
+        "ranges": ranges,
+        "method": "answer_audit_v1",
+    }, sort_keys=True)
 
 
 def _forced_answer_prompt(
@@ -2467,6 +2587,47 @@ def _parse_json(text: str) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _with_explicit_measurement_fallback(
+    parsed: Mapping[str, Any],
+    raw: str,
+    *,
+    task: Any,
+    question: str,
+) -> tuple[dict[str, Any], bool]:
+    result = dict(parsed)
+    if tuple(result.get("measurements", ()) or ()):
+        return result, False
+    source_text = " ".join((str(result.get("summary", "") or ""), str(raw or "")))
+    context = " ".join((
+        str(question or ""),
+        str(getattr(task, "goal", "") or ""),
+        str(getattr(task, "expected_evidence", "") or ""),
+    )).casefold()
+    combined = f"{source_text} {context}".casefold()
+    if any(term in combined for term in ("diameter", "wide", "width", "extent")):
+        quantity_type = "diameter"
+    elif "calorie" in combined:
+        quantity_type = "calorie"
+    elif any(term in combined for term in ("game clock", "scoreboard clock", "countdown")):
+        quantity_type = "countdown_clock"
+    elif any(term in combined for term in ("distance", "meters", "metres", "kilometers", "kilometres")):
+        quantity_type = "distance"
+    else:
+        quantity_type = ""
+    explicit = bool(quantity_type and quantity_type.replace("_", " ") in source_text.casefold())
+    if quantity_type == "diameter":
+        explicit = any(term in source_text.casefold() for term in ("diameter", "wide", "width", "extent"))
+    measurements = extract_measurements_from_text(
+        source_text,
+        quantity_type=quantity_type,
+        binding_status="explicit" if explicit else "contextual" if quantity_type else "unbound",
+    )
+    if not measurements:
+        return result, False
+    result["measurements"] = [to_jsonable(item) for item in measurements]
+    return result, True
 
 
 def _parse_answer_audit(text: str) -> dict[str, Any]:
