@@ -630,6 +630,14 @@ class GeminiReasoner:
             image_paths=image_paths,
             visual_manifest=visual_manifest,
         )
+        if not parsed:
+            retry_prompt = _compact_forced_answer_prompt(kwargs, evidence_digest)
+            retry_raw = self.api.chat(retry_prompt, max_tokens=600)
+            retry_parsed = _parse_json(retry_raw)
+            self._trace("reasoner_forced_answer_retry", retry_prompt, retry_raw, retry_parsed)
+            if retry_parsed:
+                raw = retry_raw
+                parsed = retry_parsed
         answer, nested_citations = _normalize_answer_payload(parsed.get("answer"), kwargs.get("options") or {})
         decision = ReasonerDecision(
             action="answer",
@@ -2633,6 +2641,37 @@ def _forced_answer_prompt(
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Evidence dashboard: {json.dumps(dashboard, ensure_ascii=False)}"
         f"{_visual_manifest_prompt(visual_manifest)}"
+    )
+
+
+def _compact_forced_answer_prompt(
+    kwargs: Mapping[str, Any],
+    evidence_digest: Sequence[Mapping[str, Any]],
+) -> str:
+    rows = []
+    for row in select_uniform_items(tuple(evidence_digest), 12):
+        entities = [
+            {
+                "id": entity.get("entity_observation_id"),
+                "signature": str(entity.get("visual_signature", "") or entity.get("description", ""))[:140],
+                "countable": bool(entity.get("countable")),
+            }
+            for entity in tuple(row.get("entities", ()) or ())[:4]
+        ]
+        rows.append(
+            {
+                "evidence_id": row.get("evidence_id"),
+                "summary": str(row.get("summary", "") or "")[:220],
+                "entities": entities,
+            }
+        )
+    return (
+        "Choose the single best multiple-choice answer from the compact verified evidence. Do not request more investigation. "
+        "For distinct counts, merge repeated people by visual signature and count only countable entities. Return compact JSON "
+        "only: {\"answer\":\"A. option text\",\"citations\":[\"ev_...\"],\"entity_clusters\":[{\"entity_id\":"
+        "\"entity_1\",\"description\":\"...\",\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"obs:person_1\"]}]}.\n"
+        f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
+        f"Evidence: {json.dumps(rows, ensure_ascii=False)}"
     )
 
 

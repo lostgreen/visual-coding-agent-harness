@@ -1030,6 +1030,42 @@ def test_gemini_reasoner_forces_best_effort_answer_when_no_candidate_exists(tmp_
     assert "must choose one best option" in api.calls[1]["prompt"]
 
 
+def test_gemini_reasoner_retries_empty_forced_answer_with_compact_evidence(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "investigate", "tasks": [{"query_id": "late", "goal": "Inspect more.", "segment_id": "seg_1"}]},
+            "",
+            {"answer": "B. Three", "citations": ["ev_1"], "entity_clusters": []},
+        )
+    )
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="How many scholars appear?",
+        options={"A": "Two", "B": "Three"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "full_video", "aggregation": "deduplicate"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=0,
+        force_finalize=True,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "Three witnessed scholar identities remain after deduplication.",
+                "entities": [],
+                "virtual_time_range": [0.0, 60.0],
+                "modality": "visual",
+            },
+        ),
+    )
+
+    assert decision.answer == "B. Three"
+    assert len(api.calls) == 3
+    assert "compact verified evidence" in api.calls[2]["prompt"]
+
+
 def test_gemini_reasoner_adopts_directly_supported_revised_answer_from_audit(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (
