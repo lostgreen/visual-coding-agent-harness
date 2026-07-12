@@ -350,6 +350,7 @@ class OpenAICompatibleVisionClient:
         self.retry_base_sec = max(0.0, float(planner.get("retry_base_sec", 1.0)))
         self.retry_max_sec = max(self.retry_base_sec, float(planner.get("retry_max_sec", 30.0)))
         self.retry_jitter = max(0.0, min(1.0, float(planner.get("retry_jitter", 0.2))))
+        self.last_response_metadata: dict[str, Any] = {}
         for key, value in (planner.get("proxy_env") or {}).items():
             os.environ[str(key)] = str(value)
 
@@ -390,7 +391,21 @@ class OpenAICompatibleVisionClient:
                 time.sleep(self._retry_delay(attempt))
                 continue
             if response.status_code < 400:
-                return str(response.json()["choices"][0]["message"]["content"])
+                payload = response.json()
+                choice = payload["choices"][0]
+                message = choice.get("message") or {}
+                usage = payload.get("usage") or {}
+                completion_details = usage.get("completion_tokens_details") or {}
+                content = str(message.get("content") or "")
+                self.last_response_metadata = {
+                    "finish_reason": str(choice.get("finish_reason") or ""),
+                    "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
+                    "reasoning_tokens": completion_details.get("reasoning_tokens"),
+                    "content_chars": len(content),
+                    "requested_completion_tokens": int(max_tokens),
+                }
+                return content
             if response.status_code in retryable_statuses and attempt < self.max_retries:
                 time.sleep(self._retry_delay(attempt, retry_after=response.headers.get("Retry-After")))
                 continue
@@ -620,7 +635,7 @@ class GeminiReasoner:
     ) -> ReasonerDecision:
         image_paths, visual_manifest = self._visual_context(kwargs)
         prompt = _forced_answer_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
-        raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=600)
+        raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=4096)
         parsed = _parse_json(raw)
         self._trace(
             "reasoner_forced_answer",
@@ -632,7 +647,7 @@ class GeminiReasoner:
         )
         if not parsed:
             retry_prompt = _compact_forced_answer_prompt(kwargs, evidence_digest)
-            retry_raw = self.api.chat(retry_prompt, max_tokens=600)
+            retry_raw = self.api.chat(retry_prompt, max_tokens=4096)
             retry_parsed = _parse_json(retry_raw)
             self._trace("reasoner_forced_answer_retry", retry_prompt, retry_raw, retry_parsed)
             if retry_parsed:
@@ -754,6 +769,7 @@ class GeminiReasoner:
                 "visual_manifest": [dict(item) for item in visual_manifest],
                 "raw": raw,
                 "parsed": dict(parsed),
+                "api_response": dict(getattr(self.api, "last_response_metadata", {}) or {}),
                 "time": time.time(),
             },
         )

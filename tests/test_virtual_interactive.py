@@ -193,6 +193,39 @@ def test_gpt5_client_uses_completion_token_parameter(monkeypatch) -> None:
     assert "temperature" not in captured["json"]
 
 
+def test_gpt5_client_records_reasoning_token_exhaustion(monkeypatch) -> None:
+    class Response:
+        status_code = 200
+        text = ""
+        headers: dict[str, str] = {}
+
+        @staticmethod
+        def json() -> Mapping[str, Any]:
+            return {
+                "choices": [{"finish_reason": "length", "message": {"content": None}}],
+                "usage": {
+                    "prompt_tokens": 1200,
+                    "completion_tokens": 600,
+                    "completion_tokens_details": {"reasoning_tokens": 600},
+                },
+            }
+
+    monkeypatch.setattr(_interactive.requests, "post", lambda *args, **kwargs: Response())
+    client = OpenAICompatibleVisionClient(
+        {"base": "https://gateway.invalid/v1", "model": "gpt-5.5", "api_key": "secret"}
+    )
+
+    assert client.chat("Return JSON.", max_tokens=600) == ""
+    assert client.last_response_metadata == {
+        "finish_reason": "length",
+        "prompt_tokens": 1200,
+        "completion_tokens": 600,
+        "reasoning_tokens": 600,
+        "content_chars": 0,
+        "requested_completion_tokens": 600,
+    }
+
+
 def test_run_case_assigns_text_only_reasoner_and_multimodal_investigator(tmp_path: Path, monkeypatch) -> None:
     workspace = _workspace(tmp_path)
     reasoner_api = SimpleNamespace(model="gpt-5.5")
@@ -1064,6 +1097,8 @@ def test_gemini_reasoner_retries_empty_forced_answer_with_compact_evidence(tmp_p
     assert decision.answer == "B. Three"
     assert len(api.calls) == 3
     assert "compact verified evidence" in api.calls[2]["prompt"]
+    assert api.calls[1]["max_tokens"] == 4096
+    assert api.calls[2]["max_tokens"] == 4096
 
 
 def test_gemini_reasoner_adopts_directly_supported_revised_answer_from_audit(tmp_path: Path) -> None:
