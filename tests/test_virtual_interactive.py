@@ -1685,6 +1685,23 @@ def test_entity_normalizer_marks_broad_or_unwitnessed_observations_as_candidates
     assert unwitnessed[0]["candidate_reason"] == "missing_frame_witness"
 
 
+def test_reasoner_payload_normalizes_synonym_actions_from_structured_models() -> None:
+    investigate = _interactive._normalize_reasoner_payload(
+        {
+            "action": "inspect_video_segments",
+            "gap": {"gap_id": "gap_entities", "description": "missing entity witnesses"},
+            "tasks": [{"query_id": "q1", "goal": "Inspect a narrower window."}],
+        }
+    )
+    answer = _interactive._normalize_reasoner_payload(
+        {"action": "finish", "answer": "B. Three", "citations": ["ev_1"]}
+    )
+
+    assert investigate["action"] == "investigate"
+    assert investigate["primary_gap"] == investigate["gap"]
+    assert answer["action"] == "answer"
+
+
 def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> None:
     events = _interactive._normalize_events(
         [

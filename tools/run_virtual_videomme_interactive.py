@@ -448,7 +448,7 @@ class GeminiReasoner:
             image_paths, visual_manifest = self._visual_context(kwargs)
             prompt = _followup_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
             raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
-            parsed = self._parse_or_repair(raw, kwargs)
+            parsed = _normalize_reasoner_payload(self._parse_or_repair(raw, kwargs))
             action = str(parsed.get("action") or "answer")
             self._trace(
                 "reasoner_investigate" if action == "investigate" else "reasoner_answer",
@@ -597,7 +597,7 @@ class GeminiReasoner:
         image_paths, visual_manifest = self._visual_context(kwargs)
         prompt = _investigate_prompt(kwargs, visual_manifest=visual_manifest)
         raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
-        parsed = self._parse_or_repair(raw, kwargs)
+        parsed = _normalize_reasoner_payload(self._parse_or_repair(raw, kwargs))
         self._trace(
             "reasoner_investigate",
             prompt,
@@ -2310,6 +2310,21 @@ def _normalize_answer_payload(value: Any, options: Mapping[str, Any]) -> tuple[s
         answer, nested_citations = _normalize_answer_payload(nested, options)
         return answer, citations or nested_citations
     return str(value.get("text") or "").strip(), citations
+
+
+def _normalize_reasoner_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(value)
+    action = str(payload.get("action", "") or "").strip().casefold()
+    if action not in {"investigate", "answer"}:
+        if payload.get("tasks"):
+            action = "investigate"
+        elif payload.get("answer"):
+            action = "answer"
+    if action:
+        payload["action"] = action
+    if not isinstance(payload.get("primary_gap"), Mapping) and isinstance(payload.get("gap"), Mapping):
+        payload["primary_gap"] = dict(payload["gap"])
+    return payload
 
 
 def _valid_option_answer(answer: str, options: Mapping[str, Any]) -> bool:
