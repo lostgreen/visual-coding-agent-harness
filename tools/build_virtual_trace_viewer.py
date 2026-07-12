@@ -24,7 +24,7 @@ def main() -> None:
     summary_rows = []
     for workspace in workspaces:
         bundle = AssetBundler(run_root=run_root, assets_dir=assets_dir, case_id=workspace.name)
-        case_html, summary = _render_case(workspace, bundle)
+        case_html, summary = _render_case(workspace, bundle, light=bool(args.light))
         cases_html.append(case_html)
         summary_rows.append(summary)
 
@@ -62,7 +62,7 @@ class AssetBundler:
         return rel.as_posix()
 
 
-def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, Any]]:
+def _render_case(workspace: Path, bundle: AssetBundler, *, light: bool = False) -> tuple[str, dict[str, Any]]:
     case = _read_json(workspace / "case.json")
     timeline = _read_json(workspace / "virtual_timeline.json")
     run_summary = _read_json(workspace / "run_summary.json")
@@ -141,7 +141,7 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
             )
             body.append(_json_block(task))
             body.append("<h4>Investigator Input: open_segment Beat Thumbnails</h4>")
-            body.append(_beat_grid(beats_by_segment.get(segment_id, ()), bundle))
+            body.append(_beat_grid(beats_by_segment.get(segment_id, ()), bundle, light=light))
             select = select_by_query.get(query_id, {})
             body.append("<h4>Investigator Window Selection</h4>")
             body.append(_json_block(select.get("parsed") or {}))
@@ -155,15 +155,17 @@ def _render_case(workspace: Path, bundle: AssetBundler) -> tuple[str, dict[str, 
             )
             detail_query_id = str(evidence_event.get("detail_query_id") or query_id)
             body.append("<h4>inspect_window Frames</h4>")
-            body.append(_frame_group("Preview 0.5fps", frames_by_query.get(preview_query_id, ()), bundle))
+            body.append(
+                _frame_group("Preview 0.5fps", frames_by_query.get(preview_query_id, ()), bundle, light=light)
+            )
             if detail_query_id:
-                body.append(_frame_group("Detail frames", frames_by_query.get(detail_query_id, ()), bundle))
+                body.append(_frame_group("Detail frames", frames_by_query.get(detail_query_id, ()), bundle, light=light))
             region_rows = tuple(
                 {"path": path, "frame_id": Path(str(path)).stem, "fps_level": "region crop"}
                 for path in evidence_event.get("region_frame_paths", ()) or ()
             )
             if region_rows:
-                body.append(_frame_group("Region crops", region_rows, bundle))
+                body.append(_frame_group("Region crops", region_rows, bundle, light=light))
             body.append(_details("Preview Observation Raw Output", _pre(preview_event.get("raw", ""))))
             body.append("<h4>Evidence Report</h4>")
             body.append(_json_block(evidence_by_query.get(observation_id) or evidence_by_query.get(query_id) or {}))
@@ -220,10 +222,13 @@ def _overview_grid(images: Sequence[Mapping[str, Any]], segments: Sequence[Mappi
     return f"<div class='grid overview'>{''.join(cards)}</div>"
 
 
-def _beat_grid(beats: Sequence[Mapping[str, Any]], bundle: AssetBundler) -> str:
+def _beat_grid(beats: Sequence[Mapping[str, Any]], bundle: AssetBundler, *, light: bool = False) -> str:
     cards = []
-    for beat in beats:
+    selected_beats = _uniform_subset(beats, 12) if light else tuple(beats)
+    for beat in selected_beats:
         paths = list(beat.get("thumbnail_grid_paths") or [beat.get("thumbnail_grid_path", "")])
+        if light:
+            paths = paths[:1]
         imgs = []
         for index, path in enumerate(paths):
             rel = bundle.add(path, label=f"{beat.get('beat_id', 'beat')}_{index}")
@@ -238,7 +243,28 @@ def _beat_grid(beats: Sequence[Mapping[str, Any]], bundle: AssetBundler) -> str:
     return f"<div class='grid beats'>{''.join(cards) or '<p>No beat thumbnails found.</p>'}</div>"
 
 
-def _frame_group(title: str, frames: Sequence[Mapping[str, Any]], bundle: AssetBundler) -> str:
+def _frame_group(
+    title: str,
+    frames: Sequence[Mapping[str, Any]],
+    bundle: AssetBundler,
+    *,
+    light: bool = False,
+) -> str:
+    if light:
+        sampled = _uniform_subset(frames, 12)
+        metadata = [
+            {
+                "virtual_time_sec": frame.get("virtual_time_sec"),
+                "source_video_id": frame.get("source_video_id"),
+                "source_time_sec": frame.get("source_time_sec"),
+                "fps_level": frame.get("fps_level"),
+            }
+            for frame in sampled
+        ]
+        return (
+            f"<details><summary>{_e(title)} ({len(frames)} frames; images omitted in light bundle)</summary>"
+            f"{_json_block(metadata)}</details>"
+        )
     cards = []
     for frame in frames:
         rel = bundle.add(frame.get("path"), label=str(frame.get("frame_id") or "frame"))
@@ -251,6 +277,18 @@ def _frame_group(title: str, frames: Sequence[Mapping[str, Any]], bundle: AssetB
             "</figure>"
         )
     return f"<details open><summary>{_e(title)} ({len(cards)} frames)</summary><div class='grid frames'>{''.join(cards) or '<p>No frames found.</p>'}</div></details>"
+
+
+def _uniform_subset(rows: Sequence[Any], limit: int) -> tuple[Any, ...]:
+    values = tuple(rows)
+    count = min(len(values), max(0, int(limit)))
+    if count == 0:
+        return ()
+    if count == len(values):
+        return values
+    if count == 1:
+        return (values[len(values) // 2],)
+    return tuple(values[round(index * (len(values) - 1) / (count - 1))] for index in range(count))
 
 
 def _page_html(run_root: Path, summaries: Sequence[Mapping[str, Any]], cases_html: Sequence[str]) -> str:
@@ -412,6 +450,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", required=True, help="Output directory for index.html and copied assets.")
     parser.add_argument("--zip-path", help="Optional zip output path. Defaults to <out-dir>.zip.")
     parser.add_argument("--case-ids", nargs="*", help="Optional subset of case IDs.")
+    parser.add_argument(
+        "--light",
+        action="store_true",
+        help="Omit raw preview/detail frames and cap beat navigation thumbnails for a compact review bundle.",
+    )
     return parser.parse_args()
 
 

@@ -2330,3 +2330,51 @@ def test_trace_viewer_renders_every_reasoner_round(tmp_path: Path) -> None:
     assert "Exploration Ledger" in html
     assert "visit_0001" in html
     assert "reused_from" in html
+
+
+def test_trace_viewer_light_bundle_omits_raw_frames(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    frame_path = workspace.root_dir / "frame.jpg"
+    Image.new("RGB", (64, 36), color=(80, 90, 100)).save(frame_path)
+    observations = workspace.root_dir / "observations"
+    observations.mkdir()
+    (observations / "window_frame_manifest.jsonl").write_text(
+        json.dumps(
+            {
+                "frame_id": "frame_1",
+                "path": str(frame_path),
+                "virtual_time_sec": 10.0,
+                "segment_id": "seg_0001",
+                "source_video_id": "source",
+                "source_path": "source.mp4",
+                "source_time_sec": 10.0,
+                "fps_level": "low",
+                "sampling_fps": 0.5,
+                "query_id": "q1_preview",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (workspace.root_dir / "run_summary.json").write_text("{}", encoding="utf-8")
+    (workspace.root_dir / "interactions.jsonl").write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in (
+                {
+                    "type": "reasoner_investigate",
+                    "round": 1,
+                    "parsed": {"tasks": [{"query_id": "q1", "segment_id": "seg_0001"}]},
+                },
+                {"type": "investigator_preview", "query_id": "q1", "preview_query_id": "q1_preview"},
+            )
+        ),
+        encoding="utf-8",
+    )
+    assets = tmp_path / "viewer" / "assets"
+    bundle = AssetBundler(run_root=tmp_path, assets_dir=assets, case_id=workspace.root_dir.name)
+
+    html, _ = _render_case(workspace.root_dir, bundle, light=True)
+
+    assert "images omitted in light bundle" in html
+    assert not any(assets.rglob("frame.jpg"))
