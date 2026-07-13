@@ -123,7 +123,14 @@ def _seen_cases(run_roots: Sequence[Path]) -> tuple[set[str], set[str]]:
     for root in run_roots:
         if not root.exists():
             continue
-        for path in root.rglob("case.json"):
+        patterns = (
+            "case.json",
+            "workspaces/*/case.json",
+            "*/case.json",
+            "*/workspaces/*/case.json",
+        )
+        paths = tuple(dict.fromkeys(path for pattern in patterns for path in root.glob(pattern)))
+        for path in paths:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
