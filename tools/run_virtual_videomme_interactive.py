@@ -2253,8 +2253,9 @@ def _followup_prompt(
         "not count evidence. When Latest answer-gate feedback reports entity_cluster_witness_missing, investigate narrower repair "
         "windows instead of repeating the answer. Candidate entities include witness_virtual_times_sec; inspect a narrow window "
         "around those timestamps to promote or reject them.\n"
-        "For total event-count questions, count only the timestamped events rows in evidence, deduplicate overlapping observations, "
-        "cite every evidence record containing a positive occurrence, and never infer the count from answer options or entity clusters.\n"
+        "For total event-count questions, use confirmed_event_candidates in completion_status and matching event_candidate evidence rows. "
+        "Count one per stable candidate_id, cite at least one supporting visual evidence_id per adopted candidate, investigate every "
+        "unresolved_event_window before claiming grounded completion, and never use entity_clusters for events.\n"
         "For scalar_quantity questions, use only structured measurement facts with the requested unit. Distinguish delta or cumulative "
         "measurements, exclude observations after the stated boundary, and cite every operand used in the derivation.\n"
         "For identity-anchor questions, do not answer while missing_identity_anchor_terms is non-empty. "
@@ -2696,7 +2697,7 @@ def _compact_forced_answer_prompt(
     )
 
 
-def _resolution_prompt(task: Any) -> str:
+def _resolution_prompt(task: Any, *, question: str = "") -> str:
     conditions = tuple(getattr(task, "conditions", ()) or ())
     return (
         "Evaluate only what is directly observable, not whether frames were returned. In the same JSON include "
@@ -2713,12 +2714,26 @@ def _resolution_prompt(task: Any) -> str:
         "\"condition_results\":[{\"condition_id\":\"...\",\"status\":\"satisfied|unknown|contradicted\","
         "\"observation\":\"direct observation\"}]. Use only the stable condition_id values below. "
         "For a crop, mark target_presence present only if the requested target is actually inside that crop; otherwise use absent or uncertain. "
-        "For a scoreboard boundary question, emit both team scores as separate measurements from the same frame, use unit=point, "
+        "For a scoreboard boundary question, compare every answer-option score pair rather than anchoring on the first readable score. "
+        "Emit both team scores as separate measurements from the same frame, use unit=point, "
         "quantity_type=score, the same event_id, boundary_relation=at, and binding_status=explicit only when the requested phase "
         "or boundary is visible in that frame. For relative spatial questions, bind subject and object, state the relation value and "
         "reference_frame explicitly, and set same_frame=true only when both are jointly visible. "
+        f"{_spatial_reference_semantics(question)}"
         "The driver derives overall resolution, so do not self-declare it. Return empty measurement/relation arrays when unsupported. "
         f"Stable conditions: {json.dumps(to_jsonable(conditions), ensure_ascii=False)}\n"
+    )
+
+
+def _spatial_reference_semantics(question: str) -> str:
+    text = str(question or "").casefold()
+    if not any(term in text for term in ("in relation to", "relative to")):
+        return ""
+    return (
+        "For wording 'subject ... in relation to object', subject_id is the first named entity and object_id is the reference entity. "
+        "Interpret left/right/front/behind in the object's intrinsic forward-facing frame, emit relation_type=relative_bearing and "
+        "reference_frame=object_egocentric. Viewer-relative or subject-egocentric facts are auxiliary only. If the object's forward "
+        "direction is not visually established, emit status=unknown instead of guessing. "
     )
 
 
@@ -2747,7 +2762,7 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
         "Request detail only when motion, OCR, identity, or a small visual attribute remains unresolved. "
         "Any detail window must be inside the preview window and narrower than it.\n"
-        f"{_resolution_prompt(task)}"
+        f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
@@ -2775,7 +2790,7 @@ def _claim_preview_prompt(
         "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null}.\n"
         "Use supports only when the exact candidate relation is directly established. The fact that candidate-related objects, "
         "people, or words appear is not enough. Request a narrower detail window when motion or text remains unresolved.\n"
-        f"{_resolution_prompt(task)}"
+        f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
         f"Required claim relation: {getattr(task, 'claim_relation', '')}\n"
@@ -2807,7 +2822,7 @@ def _event_preview_prompt(
         "Compare against the prior adjacent-window events below. Reuse an exact event_key and set continues_from_previous=true "
         "only when the same occurrence visibly continues across the boundary. "
         "Do not list people or infer a video-level count. Request a narrower detail window only when an occurrence boundary is unclear.\n"
-        f"{_resolution_prompt(task)}"
+        f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Prior adjacent-window ending events: {json.dumps(list(prior_events), ensure_ascii=False)[:1800]}\n"
@@ -2842,7 +2857,7 @@ def _evidence_prompt(
         "Use virtual timestamps from the window metadata, one row per occurrence, and return an empty events list when none is supported.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
         "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
-        f"{_resolution_prompt(task)}"
+        f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
@@ -2872,7 +2887,7 @@ def _event_evidence_prompt(
         "title, or visible anchor, not only its generic class. Compare against the prior adjacent-window events below; reuse "
         "an exact event_key and set continues_from_previous=true only for the same continuing occurrence. "
         "Do not list people or infer a video-level count.\n"
-        f"{_resolution_prompt(task)}"
+        f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Prior adjacent-window ending events: {json.dumps(list(prior_events), ensure_ascii=False)[:1800]}\n"
@@ -2899,7 +2914,7 @@ def _claim_evidence_prompt(
         "\"relation_type\":\"direct|causal_chain|consequence_only|cooccurrence_only|identity_mismatch|unclear\","
         "\"candidate_role\":\"decision_motive|initiating_cause|mechanism|stated_use|downstream_consequence|after_state|unclear\","
         "\"strongest_alternative\":\"B. ...|none\",\"reason\":\"...\"}.\n"
-        f"{_resolution_prompt(task)}"
+        f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
         f"Required claim relation: {getattr(task, 'claim_relation', '')}\n"

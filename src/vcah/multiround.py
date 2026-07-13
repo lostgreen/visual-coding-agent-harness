@@ -16,6 +16,7 @@ from vcah.evidence_primitives import (
 )
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.memory import EvidenceStore
+from vcah.semantic_evidence import event_candidate_ledger as _event_candidate_ledger, semantic_repair_requests
 from vcah.types import ClaimContract, EvidenceRecord, is_path_only_visual_evidence, to_jsonable
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace
@@ -577,7 +578,7 @@ class VirtualVideoMultiRoundDriver:
                     available_tools=tuple(workspace_overview["available_tools"]),
                     available_navigation=tuple(workspace_overview.get("available_navigation", ())),
                     evidence=evidence_store.records,
-                    evidence_digest=_evidence_digest(evidence_store.records),
+                    evidence_digest=_evidence_digest(evidence_store.records, query_contract),
                     investigation_outcomes=_outcome_digest(reports),
                     navigation_candidates=navigation_candidates,
                     stagnation_status=stagnation_status,
@@ -667,7 +668,27 @@ class VirtualVideoMultiRoundDriver:
                         }
                     )
                     decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
-            elif decision.action == "answer" and remaining > 0:
+            elif remaining > 0:
+                repair_reason, repair_tasks = _semantic_contract_repair_tasks(
+                    workspace,
+                    query_contract,
+                    query_requirements,
+                    completion_status,
+                    evidence_store.records,
+                    round_id=round_id,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+                if repair_tasks:
+                    trace.append(
+                        {
+                            "type": "repair_override",
+                            "round": round_id,
+                            "reason": repair_reason,
+                            "task_count": len(repair_tasks),
+                        }
+                    )
+                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
+            if decision.action == "answer" and remaining > 0:
                 candidate_repairs = _navigation_repair_tasks(
                     evidence_store.records,
                     options=workspace.case.options,
@@ -861,7 +882,7 @@ class VirtualVideoMultiRoundDriver:
                     available_tools=tuple(workspace_overview["available_tools"]),
                     available_navigation=tuple(workspace_overview.get("available_navigation", ())),
                     evidence=evidence_store.records,
-                    evidence_digest=_evidence_digest(evidence_store.records),
+                    evidence_digest=_evidence_digest(evidence_store.records, query_contract),
                     investigation_outcomes=_outcome_digest(reports),
                     navigation_candidates=_navigation_candidates(evidence_store.records, workspace.case.options),
                     stagnation_status=_stagnation_status(reports),
@@ -1055,6 +1076,40 @@ def _bootstrap_investigation_tasks(
             priority=1.0,
         )
         for index, segment in enumerate(segments[:segment_limit], start=1)
+    )
+
+
+def _semantic_contract_repair_tasks(
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    query_requirements: Mapping[str, Any],
+    completion_status: Mapping[str, Any],
+    evidence: Sequence[EvidenceRecord],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[str, tuple[InvestigationTask, ...]]:
+    reason, requests = semantic_repair_requests(
+        workspace,
+        contract,
+        query_requirements,
+        completion_status,
+        evidence,
+        round_id=round_id,
+        limit=limit,
+    )
+    return reason, tuple(
+        InvestigationTask(
+            query_id=request.query_id,
+            goal=request.goal,
+            segment_id=request.segment_id,
+            time_range=request.time_range,
+            modality_hint=request.modality_hint,
+            expected_evidence=request.expected_evidence,
+            inspection_mode=request.inspection_mode,
+            priority=1.0,
+        )
+        for request in requests
     )
 
 
@@ -1354,6 +1409,7 @@ def _completion_status(
             query_requirements,
         )
         base = _apply_entity_completion(base, contract, answer_evidence)
+        base = _apply_event_completion(base, contract, answer_evidence)
         return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
     if not coverage:
         base = _apply_identity_completion(
@@ -1368,6 +1424,7 @@ def _completion_status(
             query_requirements,
         )
         base = _apply_entity_completion(base, contract, answer_evidence)
+        base = _apply_event_completion(base, contract, answer_evidence)
         return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
     adopted_source = max(
         coverage,
@@ -1389,6 +1446,7 @@ def _completion_status(
         query_requirements,
     )
     base = _apply_entity_completion(base, contract, answer_evidence)
+    base = _apply_event_completion(base, contract, answer_evidence)
     return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
 
 
@@ -1494,6 +1552,24 @@ def _apply_entity_completion(
         }
     )
     result["ready_for_answer"] = bool(result.get("ready_for_answer")) and not unresolved_candidates
+    return result
+
+
+def _apply_event_completion(
+    status: Mapping[str, Any],
+    contract: ClaimContract,
+    evidence: Sequence[EvidenceRecord],
+) -> dict[str, Any]:
+    result = dict(status)
+    if contract.quantifier != "total_count" or contract.observation_target != "event":
+        return result
+    ledger = _event_candidate_ledger(evidence)
+    result.update(ledger)
+    result["ready_for_answer"] = (
+        bool(result.get("ready_for_answer"))
+        and bool(ledger["confirmed_event_candidates"])
+        and not ledger["unresolved_event_windows"]
+    )
     return result
 
 
@@ -1633,7 +1709,16 @@ def _answer_completion_gate(
             }
     event_occurrences: tuple[dict[str, Any], ...] = ()
     if contract.quantifier == "total_count":
-        event_occurrences = _event_occurrences(cited)
+        ledger = _event_candidate_ledger(cited)
+        event_occurrences = tuple(ledger["confirmed_event_candidates"])
+        if ledger["unresolved_event_windows"]:
+            return {
+                "passed": False,
+                "reason": "event_candidate_reconciliation_incomplete",
+                "confirmed_event_candidate_count": len(event_occurrences),
+                "unresolved_event_windows": ledger["unresolved_event_windows"],
+                "missing_segment_ids": [],
+            }
         if not event_occurrences:
             return {"passed": False, "reason": "event_occurrences_missing", "missing_segment_ids": []}
         expected_count = _answer_count(answer, workspace.case.options)
@@ -2645,7 +2730,46 @@ def _candidate_can_be_forced(decision: ReasonerDecision, evidence: Sequence[Evid
     )
 
 
-def _evidence_digest(evidence: Sequence[EvidenceRecord]) -> tuple[dict[str, Any], ...]:
+def _evidence_digest(
+    evidence: Sequence[EvidenceRecord],
+    contract: ClaimContract | None = None,
+) -> tuple[dict[str, Any], ...]:
+    if contract and contract.quantifier == "total_count" and contract.observation_target == "event":
+        ledger = _event_candidate_ledger(evidence)
+        rows = []
+        for candidate in ledger["confirmed_event_candidates"]:
+            evidence_ids = list(candidate.get("evidence_ids", ()) or ())
+            rows.append(
+                {
+                    "evidence_id": evidence_ids[0] if evidence_ids else "",
+                    "supporting_evidence_ids": evidence_ids,
+                    "summary": "; ".join(candidate.get("descriptions", ()) or ())[:500],
+                    "virtual_time_range": list(candidate.get("virtual_time_range", ()) or ()),
+                    "modality": "visual",
+                    "evidence_kind": "event_candidate",
+                    "events": [
+                        {
+                            "candidate_id": candidate.get("candidate_id"),
+                            "event_key": candidate.get("signature"),
+                            "supports_question_event": True,
+                        }
+                    ],
+                }
+            )
+        for window in ledger["unresolved_event_windows"]:
+            evidence_ids = list(window.get("evidence_ids", ()) or ())
+            rows.append(
+                {
+                    "evidence_id": evidence_ids[0] if evidence_ids else "",
+                    "supporting_evidence_ids": evidence_ids,
+                    "summary": "Unresolved generic event candidate; inspect again for a stable identity.",
+                    "virtual_time_range": list(window.get("virtual_time_range", ()) or ()),
+                    "modality": "visual",
+                    "evidence_kind": "event_candidate_unresolved",
+                    "events": [],
+                }
+            )
+        return tuple(rows)
     return tuple(
         {
             "evidence_id": item.evidence_id,

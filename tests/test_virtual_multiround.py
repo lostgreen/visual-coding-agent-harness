@@ -870,6 +870,94 @@ def test_total_count_contract_marks_tasks_for_event_enumeration() -> None:
     assert contract.required_observability == ("visual",)
 
 
+def test_event_candidate_ledger_compacts_aliases_and_exposes_generic_windows() -> None:
+    lineage = (
+        {
+            "segment_id": "seg_1",
+            "source_video_id": "source",
+            "virtual_time_range": [0.0, 60.0],
+            "source_time_range": [0.0, 60.0],
+        },
+    )
+
+    def record(evidence_id: str, key: str, start: float, end: float) -> EvidenceRecord:
+        return EvidenceRecord(
+            evidence_id=evidence_id,
+            beat_id="",
+            start_sec=start,
+            end_sec=end,
+            modality="visual",
+            pointer=f"virtual://{evidence_id}",
+            verbatim="A question-relevant audition is visible.",
+            frame_refs=(f"{evidence_id}.jpg",),
+            attestation_model="test-vlm",
+            source_lineage=lineage,
+            operation_metadata={
+                "events": [
+                    {
+                        "local_id": "event_1",
+                        "event_key": key,
+                        "description": "one occurrence",
+                        "start_sec": start,
+                        "end_sec": end,
+                        "supports_question_event": True,
+                    }
+                ]
+            },
+        )
+
+    evidence = (
+        record("ev_1", "dance group audition: Light Balance", 10.0, 20.0),
+        record("ev_2", "audition: light balance", 12.0, 22.0),
+        record("ev_3", "dance group audition on America's Got Talent", 30.0, 40.0),
+        record("ev_4", "audition: light balance", 50.0, 55.0),
+    )
+    ledger = multiround._event_candidate_ledger(evidence)
+    contract = multiround.compile_query_contract("How many auditions are included in this video?")
+    digest = multiround._evidence_digest(evidence, contract)
+
+    assert ledger["confirmed_event_candidate_count"] == 2
+    assert ledger["confirmed_event_candidates"][0]["signature"] == "light balance"
+    assert ledger["confirmed_event_candidates"][0]["evidence_ids"] == ["ev_1", "ev_2"]
+    assert ledger["confirmed_event_candidates"][1]["evidence_ids"] == ["ev_4"]
+    assert ledger["unresolved_event_candidate_count"] == 1
+    assert [row["evidence_kind"] for row in digest] == [
+        "event_candidate",
+        "event_candidate",
+        "event_candidate_unresolved",
+    ]
+
+
+def test_semantic_event_repair_targets_unresolved_window_once(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    contract = multiround.compile_query_contract("How many auditions are included in this video?")
+    status = {
+        "ready_for_answer": False,
+        "unresolved_event_windows": [
+            {
+                "source_video_id": "target",
+                "virtual_time_range": [1.0, 4.0],
+                "evidence_ids": ["ev_generic"],
+            }
+        ],
+    }
+
+    reason, tasks = multiround._semantic_contract_repair_tasks(
+        workspace,
+        contract,
+        {},
+        status,
+        (),
+        round_id=2,
+        limit=4,
+    )
+
+    assert reason == "event_candidate_unresolved"
+    assert len(tasks) == 1
+    assert tasks[0].inspection_mode == "enumerate_events"
+    assert tasks[0].time_range == (1.0, 4.0)
+
+
 def test_query_contract_generalizes_across_full_recording_paraphrases() -> None:
     entity_contract = multiround.compile_query_contract(
         "Across the entire recording, what is the number of different experts who speak about the subject?"

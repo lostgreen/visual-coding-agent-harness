@@ -99,6 +99,17 @@ def test_reasoner_task_normalization_keeps_enumeration_goals() -> None:
     assert tasks[0]["goal"].startswith("Enumerate")
 
 
+def test_investigator_prompt_defines_object_relative_spatial_reference_frame() -> None:
+    prompt = _interactive._resolution_prompt(
+        SimpleNamespace(conditions=()),
+        question="Which direction is red facing in relation to green?",
+    )
+
+    assert "reference_frame=object_egocentric" in prompt
+    assert "Viewer-relative or subject-egocentric facts are auxiliary only" in prompt
+    assert "compare every answer-option score pair" in prompt
+
+
 def test_run_case_batch_executes_cases_concurrently_and_preserves_order() -> None:
     barrier = threading.Barrier(3)
 
