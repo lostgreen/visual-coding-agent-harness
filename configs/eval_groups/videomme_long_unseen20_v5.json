@@ -1,0 +1,37 @@
+{
+  "group_id": "videomme_long_unseen20_v5",
+  "description": "Video-MME long cases from unseen source videos, stratified by task type and domain.",
+  "duration_category": "long",
+  "construction": "source_only",
+  "selection_seed": 20260713,
+  "selection_policy": {
+    "exclude_previously_run_case_ids": true,
+    "exclude_previously_viewed_source_videos": true,
+    "distinct_source_video_per_case": true,
+    "stratify_by_task_type_and_domain": true
+  },
+  "seen_case_count": 48,
+  "seen_source_video_count": 48,
+  "cases": [
+    {"case_id": "666-2", "domain": "Knowledge", "task_type": "Action Reasoning", "source_video_id": "mzvHYBgD-tI"},
+    {"case_id": "732-3", "domain": "Sports Competition", "task_type": "Action Recognition", "source_video_id": "xvQOEdwAgj0"},
+    {"case_id": "601-3", "domain": "Knowledge", "task_type": "Attribute Perception", "source_video_id": "TGom0uiW130"},
+    {"case_id": "792-1", "domain": "Artistic Performance", "task_type": "Counting Problem", "source_video_id": "0bwyCF0HteE"},
+    {"case_id": "828-3", "domain": "Life Record", "task_type": "Information Synopsis", "source_video_id": "vv2EiRK0Lmg"},
+    {"case_id": "776-3", "domain": "Sports Competition", "task_type": "OCR Problems", "source_video_id": "7tLtu3QT2OI"},
+    {"case_id": "650-3", "domain": "Knowledge", "task_type": "Object Reasoning", "source_video_id": "55Jas5HrzcQ"},
+    {"case_id": "654-3", "domain": "Knowledge", "task_type": "Object Recognition", "source_video_id": "HvKpnaXYUPU"},
+    {"case_id": "661-2", "domain": "Knowledge", "task_type": "Spatial Reasoning", "source_video_id": "CoPfYGgzCkM"},
+    {"case_id": "831-2", "domain": "Life Record", "task_type": "Temporal Perception", "source_video_id": "6Pt3-NDxzRk"},
+    {"case_id": "675-2", "domain": "Knowledge", "task_type": "Temporal Reasoning", "source_video_id": "lVeNTofDB2k"},
+    {"case_id": "691-1", "domain": "Film & Television", "task_type": "Action Reasoning", "source_video_id": "lMxFbRc3Luk"},
+    {"case_id": "893-1", "domain": "Multilingual", "task_type": "Information Synopsis", "source_video_id": "WQn-c_4dVWs"},
+    {"case_id": "692-1", "domain": "Film & Television", "task_type": "Action Recognition", "source_video_id": "TF9I1GxNdJQ"},
+    {"case_id": "781-1", "domain": "Artistic Performance", "task_type": "Counting Problem", "source_video_id": "kDXerubF4I4"},
+    {"case_id": "894-2", "domain": "Multilingual", "task_type": "Object Reasoning", "source_video_id": "tslKtm6Le1s"},
+    {"case_id": "699-2", "domain": "Film & Television", "task_type": "Object Recognition", "source_video_id": "I2dv1jNM7gM"},
+    {"case_id": "744-3", "domain": "Sports Competition", "task_type": "Temporal Reasoning", "source_video_id": "4od5mdtEp-E"},
+    {"case_id": "789-2", "domain": "Artistic Performance", "task_type": "Attribute Perception", "source_video_id": "i7ivyMFsw-w"},
+    {"case_id": "840-3", "domain": "Life Record", "task_type": "OCR Problems", "source_video_id": "y9Fne3oUwX4"}
+  ]
+}
