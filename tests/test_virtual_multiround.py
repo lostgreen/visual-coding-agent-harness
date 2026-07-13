@@ -2290,6 +2290,7 @@ def test_spatial_gate_requires_same_frame_relation_and_reference_frame(tmp_path:
                         "value": "right_front",
                         "reference_frame": reference_frame,
                         "same_frame": True,
+                        "witness_frame_indices": [0] if reference_frame else [],
                         "status": "supported",
                     }
                 ]

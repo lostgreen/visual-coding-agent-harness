@@ -1892,6 +1892,9 @@ def _spatial_relation_gate(
         for fact in normalize_relations(record.operation_metadata.get("relations"), evidence_id=record.evidence_id):
             if fact.relation_type != required_type:
                 continue
+            witness_indices = tuple(
+                index for index in fact.witness_frame_indices if 0 <= index < len(record.frame_refs)
+            )
             observed.append(
                 {
                     "value": fact.value,
@@ -1899,12 +1902,14 @@ def _spatial_relation_gate(
                     "same_frame": fact.same_frame,
                     "subject_id": fact.subject_id,
                     "object_id": fact.object_id,
+                    "witness_frame_indices": list(witness_indices),
                     "evidence_ids": list(fact.evidence_ids),
                 }
             )
             if (
                 fact.status == "supported"
                 and fact.same_frame
+                and witness_indices
                 and fact.subject_id
                 and fact.object_id
                 and fact.value == expected

@@ -175,6 +175,7 @@ class RelationFact:
     value: str = ""
     reference_frame: str = ""
     same_frame: bool = False
+    witness_frame_indices: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "relation_type", str(self.relation_type or "").strip().casefold())
@@ -183,6 +184,11 @@ class RelationFact:
         object.__setattr__(self, "value", _normalized_role(self.value))
         object.__setattr__(self, "reference_frame", _normalized_role(self.reference_frame))
         object.__setattr__(self, "same_frame", bool(self.same_frame))
+        object.__setattr__(
+            self,
+            "witness_frame_indices",
+            tuple(dict.fromkeys(int(item) for item in self.witness_frame_indices if isinstance(item, int) and item >= 0)),
+        )
         status = str(self.status or "unknown").strip().casefold()
         object.__setattr__(self, "status", status if status in {"supported", "contradicted", "unknown"} else "unknown")
         object.__setattr__(self, "description", str(self.description or "").strip())
@@ -258,6 +264,7 @@ def normalize_relations(value: Any, *, evidence_id: str = "") -> tuple[RelationF
             value=str(row.get("value", "") or ""),
             reference_frame=str(row.get("reference_frame", "") or ""),
             same_frame=_as_bool(row.get("same_frame")),
+            witness_frame_indices=tuple(row.get("witness_frame_indices", ()) or ()),
             status=str(row.get("status", "unknown") or "unknown"),
             description=str(row.get("description", "") or ""),
             evidence_ids=(evidence_id,)
