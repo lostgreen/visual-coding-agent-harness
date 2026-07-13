@@ -398,6 +398,7 @@ def compile_query_requirements(question: str) -> dict[str, Any]:
         "requires_identity_link": bool(terms),
         "identity_anchor_terms": list(terms),
         "requires_spatial_relation": spatial,
+        "spatial_relation_type": "relative_facing" if spatial and "facing" in text else "relative_bearing" if spatial else "",
         "spatial_reference_frame": (
             "object_egocentric"
             if spatial and any(term in text for term in ("in relation to", "relative to"))
@@ -1885,10 +1886,11 @@ def _spatial_relation_gate(
     if not expected:
         return {"passed": False, "reason": "spatial_option_relation_missing", "missing_segment_ids": []}
     required_frame = str((query_requirements or {}).get("spatial_reference_frame", "") or "")
+    required_type = str((query_requirements or {}).get("spatial_relation_type", "") or "relative_bearing")
     observed = []
     for record in cited:
         for fact in normalize_relations(record.operation_metadata.get("relations"), evidence_id=record.evidence_id):
-            if fact.relation_type not in {"spatial", "relative_bearing"}:
+            if fact.relation_type != required_type:
                 continue
             observed.append(
                 {
@@ -1919,6 +1921,7 @@ def _spatial_relation_gate(
         "passed": False,
         "reason": "spatial_relation_not_grounded",
         "expected_relation": expected,
+        "required_relation_type": required_type,
         "required_reference_frame": required_frame,
         "observed_relations": observed,
         "missing_segment_ids": [],

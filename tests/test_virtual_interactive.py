@@ -106,6 +106,8 @@ def test_investigator_prompt_defines_object_relative_spatial_reference_frame() -
     )
 
     assert "reference_frame=object_egocentric" in prompt
+    assert "relation_type=relative_facing" in prompt
+    assert "Do not substitute the subject's relative position" in prompt
     assert "Viewer-relative or subject-egocentric facts are auxiliary only" in prompt
     assert "compare every answer-option score pair" in prompt
 

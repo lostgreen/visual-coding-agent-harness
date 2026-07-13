@@ -134,6 +134,9 @@ def test_query_compiler_emits_semantic_contracts_for_failure_families() -> None:
         "relation",
         "compare",
     )
+    assert multiround.compile_query_requirements(
+        "Which direction is red facing in relation to green?"
+    )["spatial_relation_type"] == "relative_facing"
     assert (absence.required_scope, absence.quantifier, absence.aggregation) == (
         "full_video",
         "universal",
@@ -2281,7 +2284,7 @@ def test_spatial_gate_requires_same_frame_relation_and_reference_frame(tmp_path:
             operation_metadata={
                 "relations": [
                     {
-                        "relation_type": "relative_bearing",
+                        "relation_type": "relative_facing",
                         "subject_id": "red",
                         "object_id": "green",
                         "value": "right_front",

@@ -51,6 +51,7 @@ def semantic_repair_requests(
         requests = _spatial_repairs(
             workspace,
             evidence,
+            str(query_requirements.get("spatial_relation_type", "") or "relative_bearing"),
             str(query_requirements.get("spatial_reference_frame", "") or ""),
             round_id,
             task_limit,
@@ -132,6 +133,7 @@ def _boundary_score_repairs(
 def _spatial_repairs(
     workspace: VirtualVideoWorkspace,
     evidence: Sequence[EvidenceRecord],
+    relation_type: str,
     reference_frame: str,
     round_id: int,
     limit: int,
@@ -164,7 +166,7 @@ def _spatial_repairs(
             time_range=(start, end),
             modality_hint=("visual",),
             expected_evidence=(
-                f"supported relative_bearing with both subject/object IDs, same_frame=true, and "
+                f"supported {relation_type} with both subject/object IDs, same_frame=true, and "
                 f"reference_frame={reference_frame or 'explicit'}"
             ),
         )
@@ -176,8 +178,8 @@ _GENERIC_EVENT_TOKENS = {
     "a", "an", "and", "america", "american", "appears", "audition", "auditions", "by", "card",
     "dance", "dancing", "event", "events", "got", "graphic", "group", "groups", "introduction",
     "introduced", "occurrence", "occurrences", "on", "one", "performance", "recap", "receives",
-    "show", "start", "talent", "the", "title", "to", "world", "golden", "buzzer", "acrobatic",
-    "gymnastics",
+    "show", "stage", "start", "talent", "the", "title", "to", "world", "golden", "buzzer", "acrobatic",
+    "crew", "gymnastics",
 }
 
 

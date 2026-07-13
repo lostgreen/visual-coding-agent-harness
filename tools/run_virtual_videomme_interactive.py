@@ -2707,7 +2707,7 @@ def _resolution_prompt(task: Any, *, question: str = "") -> str:
         "\"boundary_relation\":\"before|at|after|unknown\",\"quantity_type\":\"score|clock|amount|\","
         "\"event_id\":\"halftime|period_end|event identifier|\",\"binding_status\":\"explicit|contextual|ambiguous|unbound\","
         "\"raw_text\":\"\"}], "
-        "\"relations\":[{\"relation_type\":\"identity|temporal|causal|transition|spatial|relative_bearing\","
+        "\"relations\":[{\"relation_type\":\"identity|temporal|causal|transition|spatial|relative_bearing|relative_facing\","
         "\"subject_id\":\"\",\"object_id\":\"\",\"value\":\"left_front|right_front|front|behind|left|right|\","
         "\"reference_frame\":\"viewer|subject_egocentric|object_egocentric|scene\",\"same_frame\":true|false,"
         "\"status\":\"supported|contradicted|unknown\",\"description\":\"\"}], and "
@@ -2729,10 +2729,17 @@ def _spatial_reference_semantics(question: str) -> str:
     text = str(question or "").casefold()
     if not any(term in text for term in ("in relation to", "relative to")):
         return ""
+    predicate = (
+        "The question asks for the subject's forward-facing direction expressed in the object's frame; emit "
+        "relation_type=relative_facing. Do not substitute the subject's relative position. "
+        if "facing" in text
+        else "The question asks for the subject's position in the object's frame; emit relation_type=relative_bearing. "
+    )
     return (
         "For wording 'subject ... in relation to object', subject_id is the first named entity and object_id is the reference entity. "
-        "Interpret left/right/front/behind in the object's intrinsic forward-facing frame, emit relation_type=relative_bearing and "
-        "reference_frame=object_egocentric. Viewer-relative or subject-egocentric facts are auxiliary only. If the object's forward "
+        f"{predicate}"
+        "Interpret left/right/front/behind in the object's intrinsic forward-facing frame and emit reference_frame=object_egocentric. "
+        "Viewer-relative or subject-egocentric facts are auxiliary only. If the object's forward "
         "direction is not visually established, emit status=unknown instead of guessing. "
     )
 
