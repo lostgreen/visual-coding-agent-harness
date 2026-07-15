@@ -838,14 +838,16 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         self.api = api
         self.trace_path = trace_path
         self._query_calls: dict[str, int] = {}
-        self._event_segment_cache: dict[str, InvestigationReport] = {}
-        self._window_observation_history: dict[tuple[str, float, float, str], list[str]] = {}
+        self._event_segment_cache: dict[tuple[str, str, float], InvestigationReport] = {}
+        self._window_observation_history: dict[tuple[str, float, float, str, str], list[dict[str, Any]]] = {}
+        self._terminal_window_evidence: dict[tuple[str, float, float, str, str], EvidenceRecord] = {}
 
     def reset_run_state(self) -> None:
         super().reset_run_state()
         self._query_calls.clear()
         self._event_segment_cache.clear()
         self._window_observation_history.clear()
+        self._terminal_window_evidence.clear()
 
     def _parse_structured_observation(
         self,
@@ -906,14 +908,21 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             round(float(window[0]), 1),
             round(float(window[1]), 1),
             str(getattr(task, "inspection_mode", "window") or "window"),
+            _sampling_goal_key(task),
         )
         prior_window_observations = tuple(self._window_observation_history.get(window_key, ()))
-        attempt = len(prior_window_observations)
+        terminal_evidence = self._terminal_window_evidence.get(window_key)
+        if terminal_evidence is not None and len(prior_window_observations) >= 3:
+            return self._reuse_report(
+                task,
+                terminal_evidence,
+                tool_trace=("open_segment", "adaptive_attempt_cap"),
+                vlm_calls=0 if requested_window is not None else 1,
+            )
         requested_floor = float(getattr(task, "sampling_floor_fps", 0.5) or 0.5)
-        required_fps = max(requested_floor, 2.0 if attempt > 0 and requested_floor >= 1.0 else requested_floor)
-        arbitration_retry = attempt > 0 and requested_floor >= 1.0
-        phase_offset_sec = 0.5 / required_fps if arbitration_retry else 0.0
-        cached = None if arbitration_retry else self._find_reusable_evidence(
+        required_fps = requested_floor
+        phase_offset_sec = 0.0
+        cached = self._find_reusable_evidence(
             task,
             window[0],
             window[1],
@@ -927,77 +936,111 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 vlm_calls=0 if requested_window is not None else 1,
             )
 
-        preview_query_id = f"{observation_id}_preview"
-        preview_max_frames = min(
-            512,
-            max(64, int(max(0.0, float(window[1]) - float(window[0])) * required_fps + 0.999)),
-        )
-        low = self.inspect_window(
-            window[0],
-            window[1],
-            fps=required_fps,
-            max_frames=preview_max_frames,
-            query_id=preview_query_id,
-            phase_offset_sec=phase_offset_sec,
-        )
-        preview_frame_limit = 16 if required_fps <= 0.5 else 32 if required_fps <= 1.0 else 64
-        preview_frames = select_uniform_items(tuple(low["frames"]), preview_frame_limit)
-        preview_paths = tuple(str(row["path"]) for row in preview_frames)
         event_window = str(getattr(task, "inspection_mode", "window")) == "event_window"
         claim_window = str(getattr(task, "inspection_mode", "window")) == "verify_claim"
-        if event_window:
-            preview_prompt = _event_preview_prompt(
-                self.workspace,
-                task,
-                segment_packet,
-                low,
-                prior_events=prior_events,
-                prior_observations=prior_window_observations,
+        adaptive_rows: list[dict[str, Any]] = []
+        adaptive_triggers: list[str] = []
+        preview_packets: list[Mapping[str, Any]] = []
+        preview_frames_by_attempt: list[tuple[Mapping[str, Any], ...]] = []
+        preview_paths_by_attempt: list[tuple[str, ...]] = []
+        preview_query_ids: list[str] = []
+        preview_prompts: list[str] = []
+        preview_raws: list[str] = []
+        preview_payloads: list[dict[str, Any]] = []
+        parse_status = "failed"
+        parse_error = ""
+        parse_repair_calls = 0
+        adaptive_extra_frames = 0
+
+        max_adaptive_attempts = max(1, 3 - min(2, len(prior_window_observations)))
+        for adaptive_index in range(max_adaptive_attempts):
+            preview_query_id = f"{observation_id}_preview_a{adaptive_index + 1}"
+            preview_max_frames = min(
+                512 if adaptive_index == 0 else max(1, 154 - adaptive_extra_frames),
+                max(64, int(max(0.0, float(window[1]) - float(window[0])) * required_fps + 0.999)),
             )
-        elif claim_window:
-            preview_prompt = _claim_preview_prompt(
-                self.workspace,
-                task,
-                segment_packet,
-                low,
-                prior_observations=prior_window_observations,
+            low = self.inspect_window(
+                window[0],
+                window[1],
+                fps=required_fps,
+                max_frames=preview_max_frames,
+                query_id=preview_query_id,
+                phase_offset_sec=phase_offset_sec,
             )
-        else:
-            preview_prompt = _preview_prompt(
-                self.workspace,
-                task,
-                segment_packet,
-                low,
-                prior_observations=prior_window_observations,
+            preview_frame_limit = 16 if required_fps <= 0.5 else 32 if required_fps <= 1.0 else 64
+            preview_frames = select_uniform_items(tuple(low["frames"]), preview_frame_limit)
+            preview_paths = tuple(str(row["path"]) for row in preview_frames)
+            arbitration_context = (*prior_window_observations, *adaptive_rows)
+            if event_window:
+                preview_prompt = _event_preview_prompt(
+                    self.workspace, task, segment_packet, low,
+                    prior_events=prior_events, prior_observations=arbitration_context,
+                )
+            elif claim_window:
+                preview_prompt = _claim_preview_prompt(
+                    self.workspace, task, segment_packet, low,
+                    prior_observations=arbitration_context,
+                )
+            else:
+                preview_prompt = _preview_prompt(
+                    self.workspace, task, segment_packet, low,
+                    prior_observations=arbitration_context,
+                )
+            preview_raw = self.api.chat(preview_prompt, image_paths=preview_paths, max_tokens=1400)
+            preview, attempt_parse_status, attempt_parse_error, attempt_repair_calls = self._parse_structured_observation(
+                preview_raw, query_id=query_id, prompt=preview_prompt, image_paths=preview_paths,
             )
-        preview_raw = self.api.chat(
-            preview_prompt,
-            image_paths=preview_paths,
-            max_tokens=1400,
-        )
-        preview, parse_status, parse_error, parse_repair_calls = self._parse_structured_observation(
-            preview_raw,
-            query_id=query_id,
-            prompt=preview_prompt,
-            image_paths=preview_paths,
-        )
-        _append_jsonl(
-            self.trace_path,
-            {
-                "type": "investigator_preview",
-                "agent_role": "investigator",
-                "model": str(getattr(self.api, "model", type(self.api).__name__)),
-                "query_id": query_id,
-                "observation_id": observation_id,
-                "preview_query_id": preview_query_id,
-                "window": list(window),
-                "prompt": preview_prompt,
-                "frame_paths": list(preview_paths),
-                "raw": preview_raw,
-                "parsed": preview,
-                "time": time.time(),
-            },
-        )
+            parse_status = attempt_parse_status
+            parse_error = attempt_parse_error
+            parse_repair_calls += attempt_repair_calls
+            row = _observation_governance_row(preview, required_fps, phase_offset_sec)
+            trigger_reasons = _adaptive_sampling_triggers(row, arbitration_context)
+            adaptive_rows.append(row)
+            adaptive_triggers.extend(trigger_reasons)
+            preview_packets.append(low)
+            preview_frames_by_attempt.append(tuple(preview_frames))
+            preview_paths_by_attempt.append(preview_paths)
+            preview_query_ids.append(preview_query_id)
+            preview_prompts.append(preview_prompt)
+            preview_raws.append(preview_raw)
+            preview_payloads.append(preview)
+            _append_jsonl(
+                self.trace_path,
+                {
+                    "type": "investigator_preview",
+                    "agent_role": "investigator",
+                    "model": str(getattr(self.api, "model", type(self.api).__name__)),
+                    "query_id": query_id,
+                    "observation_id": observation_id,
+                    "preview_query_id": preview_query_id,
+                    "adaptive_attempt": adaptive_index + 1,
+                    "adaptive_trigger_reasons": trigger_reasons,
+                    "window": list(window),
+                    "prompt": preview_prompt,
+                    "frame_paths": list(preview_paths),
+                    "raw": preview_raw,
+                    "parsed": preview,
+                    "time": time.time(),
+                },
+            )
+            if not trigger_reasons or adaptive_index + 1 >= max_adaptive_attempts:
+                break
+            if adaptive_index > 0:
+                adaptive_extra_frames += len(preview_frames)
+            if adaptive_extra_frames >= 154:
+                adaptive_triggers.append("adaptive_frame_budget_exhausted")
+                break
+            required_fps = min(2.0, max(required_fps * 2.0, 1.0))
+            phase_offset_sec = 1.0 / (2.0 * required_fps) if adaptive_index == 0 else 2.0 / (3.0 * required_fps)
+
+        adaptive_extra_frames = sum(len(items) for items in preview_frames_by_attempt[1:])
+        low = preview_packets[-1]
+        preview_frames = preview_frames_by_attempt[-1]
+        preview_paths = preview_paths_by_attempt[-1]
+        preview_query_id = preview_query_ids[-1]
+        preview_prompt = preview_prompts[-1]
+        preview_raw = preview_raws[-1]
+        preview = preview_payloads[-1]
 
         selected_window = window
         selected_packet = low
@@ -1010,13 +1053,15 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         raw = preview_raw
         final_prompt = preview_prompt
         detail_query_id = ""
-        inspection_trace = f"inspect_window:{required_fps:.1f}"
-        if phase_offset_sec:
-            inspection_trace += f":phase={phase_offset_sec:.3f}"
-        tool_trace = ["open_segment", inspection_trace]
-        vlm_calls = (1 if requested_window is not None else 2) + parse_repair_calls
+        tool_trace = ["open_segment"]
+        for row in adaptive_rows:
+            inspection_trace = f"inspect_window:{float(row['sampling_fps']):.1f}"
+            if float(row["phase_offset_sec"]):
+                inspection_trace += f":phase={float(row['phase_offset_sec']):.3f}"
+            tool_trace.append(inspection_trace)
+        vlm_calls = len(preview_payloads) + (0 if requested_window is not None else 1) + parse_repair_calls
 
-        if _truthy(preview.get("need_detail")) or region_box is not None:
+        if (_truthy(preview.get("need_detail")) or region_box is not None) and len(adaptive_rows) < 3:
             detail_fps, detail_max_frames = _detail_sampling_request(
                 preview,
                 default_fps=self.highfps,
@@ -1152,9 +1197,14 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         )
         if fallback_used:
             parse_status = "fallback_extracted"
-        observation_summary = str(parsed.get("summary") or raw or "").strip()[:800]
-        if observation_summary:
-            self._window_observation_history.setdefault(window_key, []).append(observation_summary)
+        governance_row = _observation_governance_row(parsed, float(selected_packet["sampling"]["fps"]), phase_offset_sec)
+        governance_row["summary"] = str(parsed.get("summary") or raw or "").strip()[:800]
+        conflicted_slot_ids = _conflicted_slot_ids((*prior_window_observations, *adaptive_rows, governance_row))
+        history = self._window_observation_history.setdefault(window_key, [])
+        history.extend(dict(row) for row in adaptive_rows)
+        if detail_query_id and governance_row != adaptive_rows[-1]:
+            history.append(governance_row)
+        window_attempt_count = len(history)
 
         frame_paths = tuple(model_image_paths)
         frame_time_by_path = {
@@ -1187,6 +1237,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         )
         evidence_id = f"ev_{observation_id}_001"
         confidence = _confidence(parsed.get("confidence"), default=0.6)
+        finding = _normalize_finding(parsed)
         entities = _normalize_entities(
             parsed.get("entities"),
             frame_paths=frame_paths,
@@ -1237,7 +1288,9 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             attestation_model=str(getattr(self.api, "model", type(self.api).__name__)),
             temporal_scope="window",
             evidence_kind=evidence_kind,
-            observation_polarity="positive" if frame_paths else "unknown",
+            observation_polarity=(
+                "positive" if finding == "found" else "negative" if finding == "not_found" else "unknown"
+            ),
             sampling_coverage="sparse",
             request_ids=(query_id,),
             coverage_manifest=(
@@ -1265,11 +1318,34 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "investigation": outcome,
                 "sampling_policy": {
                     "floor_fps": requested_floor,
-                    "effective_fps": required_fps,
+                    "floor_specified": bool(getattr(task, "sampling_floor_specified", False)),
+                    "floor_unspecified": not bool(getattr(task, "sampling_floor_specified", False)),
+                    "temporal_resolution_rationale": str(
+                        getattr(task, "temporal_resolution_rationale", "") or ""
+                    ),
+                    "effective_fps": float(selected_packet["sampling"]["fps"]),
                     "phase_offset_sec": phase_offset_sec,
-                    "same_window_attempt": attempt + 1,
+                    "adaptive_attempt_count": len(adaptive_rows) + (1 if detail_query_id else 0),
+                    "window_attempt_count": window_attempt_count,
+                    "adaptive_trigger_reasons": list(dict.fromkeys(adaptive_triggers)),
+                    "adaptive_frame_budget": 154,
+                    "adaptive_extra_frames": adaptive_extra_frames,
                     "arbitration_prior_observations": list(prior_window_observations[-3:]),
                 },
+                "finding": finding,
+                "structured_slots": governance_row["structured_slots"],
+                "conflicted_slot_ids": list(conflicted_slot_ids),
+                "evidence_state": "conflicted" if conflicted_slot_ids else "active",
+                "absence_resolution_fps": (
+                    float(selected_packet["sampling"]["fps"]) if finding == "not_found" else None
+                ),
+                "phase_coverage": sorted(
+                    {round(float(row["phase_offset_sec"]), 6) for row in adaptive_rows}
+                ),
+                "qualified_absence": bool(
+                    finding == "not_found"
+                    and (float(selected_packet["sampling"]["fps"]) >= 2.0 or window_attempt_count >= 3)
+                ),
                 "region_observation": {
                     "hint": str(getattr(task, "region_hint", "") or preview.get("region_hint", "") or ""),
                     "normalized_box": list(region_box) if region_box is not None else [],
@@ -1281,6 +1357,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         if frame_paths:
             self._remember_evidence(task, evidence)
             self._record_visit(task, evidence, status="satisfied")
+        if window_attempt_count >= 3 and (
+            evidence.observation_polarity != "positive" or conflicted_slot_ids
+        ):
+            self._terminal_window_evidence[window_key] = evidence
         return InvestigationReport(
             query_id=query_id,
             status="satisfied" if frame_paths else "empty",
@@ -1438,7 +1518,18 @@ class GeminiInvestigator(VirtualVideoInvestigator):
 
     def _investigate_event_beats(self, task: Any, segment_packet: Mapping[str, Any]) -> InvestigationReport:
         segment_id = str(getattr(task, "segment_id", "") or "")
-        cached = self._event_segment_cache.get(segment_id)
+        cache_key = (
+            segment_id,
+            _sampling_goal_key(task),
+            float(getattr(task, "sampling_floor_fps", 0.5) or 0.5),
+        )
+        cached = self._event_segment_cache.get(cache_key)
+        if cached is not None and any(
+            record.observation_polarity != "positive"
+            or str(record.operation_metadata.get("evidence_state", "active") or "active") != "active"
+            for record in cached.evidence
+        ):
+            cached = None
         if cached is not None:
             return replace(
                 cached,
@@ -1473,6 +1564,14 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 conditions=tuple(getattr(task, "conditions", ()) or ()),
                 source_candidate_ids=tuple(getattr(task, "source_candidate_ids", ()) or ()),
                 inspection_intent=str(getattr(task, "inspection_intent", "") or ""),
+                sampling_floor_fps=(
+                    float(getattr(task, "sampling_floor_fps", 0.5) or 0.5)
+                    if bool(getattr(task, "sampling_floor_specified", False))
+                    else None
+                ),
+                temporal_resolution_rationale=str(
+                    getattr(task, "temporal_resolution_rationale", "") or ""
+                ),
                 direction=str(getattr(task, "direction", "") or ""),
                 preferred_ranges=tuple(getattr(task, "preferred_ranges", ()) or ()),
                 excluded_ranges=tuple(getattr(task, "excluded_ranges", ()) or ()),
@@ -1526,7 +1625,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             condition_results=condition_results,
             goal_progress=goal_progress,
         )
-        self._event_segment_cache[segment_id] = combined
+        self._event_segment_cache[cache_key] = combined
         return combined
 
     def _next_observation_id(self, query_id: str) -> str:
@@ -2403,6 +2502,19 @@ def _visual_manifest_prompt(visual_manifest: Sequence[Mapping[str, Any]]) -> str
     )
 
 
+def _sampling_plan_instruction() -> str:
+    return (
+        "Every visual task must declare sampling_floor_fps as 0.5, 1.0, or 2.0 and "
+        "temporal_resolution_rationale as one short sentence about the expected visible dwell time or transition speed. "
+        "Choose from evidence dynamics, not the question category: use 0.5 for persistent scenes or states, 1.0 for "
+        "ordinary appearance and motion, and 2.0 for brief transitions, fast relative motion, small changing text, or exact "
+        "temporal boundaries. Estimate target dwell time d when possible and keep the sampling interval <= d/2. "
+        "Use inspection_mode=enumerate_events when the task must exhaustively enumerate timestamped occurrences, "
+        "event_window for one atomic occurrence, verify_claim for an independent contrastive check, search_asr for literal "
+        "navigation, and window otherwise. When validating a change, request ordered before/during/after evidence with timestamps.\n"
+    )
+
+
 def _investigate_prompt(
     kwargs: Mapping[str, Any],
     *,
@@ -2419,10 +2531,12 @@ def _investigate_prompt(
         "One gap may use several parallel windows. Return JSON only: "
         "{\"action\":\"investigate\",\"primary_gap\":{\"gap_id\":\"gap_r1\",\"description\":\"observable unknown\","
         "\"success_conditions\":[\"condition 1\"],\"falsification_conditions\":[]},\"tasks\":[{\"query_id\":\"r1_t1\",\"goal\":\"...\","
-        "\"segment_id\":\"seg_0001\",\"time_range\":null,\"inspection_mode\":\"window|search_asr\","
+        "\"segment_id\":\"seg_0001\",\"time_range\":null,\"inspection_mode\":\"window|event_window|enumerate_events|verify_claim|search_asr\","
         "\"search_terms\":[],\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\","
         "\"gap_id\":\"gap_r1\",\"success_conditions\":[\"condition 1\"],\"direction\":\"local|forward|backward|global\","
-        "\"region_hint\":\"optional visible region\"}]}.\n"
+        "\"region_hint\":\"optional visible region\",\"sampling_floor_fps\":1.0,"
+        "\"temporal_resolution_rationale\":\"Expected visible dwell time and required interval.\"}]}.\n"
+        f"{_sampling_plan_instruction()}"
         "The gap must be a neutral fact that can be observed, not an answer option or a request for more related frames. "
         "Keep the gap description under 24 words, use at most 3 success conditions under 12 words each, and keep each task goal under 30 words. "
         "Clock-like or numeric text in answer options is visual content to read, not a virtual timestamp, unless temporal_navigation explicitly maps it.\n"
@@ -2483,9 +2597,11 @@ def _followup_prompt(
         "{\"action\":\"investigate\",\"primary_gap\":{\"gap_id\":\"gap_r2\",\"description\":\"observable unknown\","
         "\"success_conditions\":[\"condition 1\"],\"falsification_conditions\":[]},\"tasks\":[{\"query_id\":\"r2_t1\","
         "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,"
-        "\"inspection_mode\":\"window|search_asr\",\"search_terms\":[],\"modality_hint\":[\"visual\"],"
+        "\"inspection_mode\":\"window|event_window|enumerate_events|verify_claim|search_asr\",\"search_terms\":[],\"modality_hint\":[\"visual\"],"
         "\"expected_evidence\":\"...\",\"gap_id\":\"gap_r2\",\"success_conditions\":[\"condition 1\"],"
-        "\"direction\":\"local|forward|backward|global\",\"region_hint\":\"optional visible region\"}]}.\n"
+        "\"direction\":\"local|forward|backward|global\",\"region_hint\":\"optional visible region\","
+        "\"sampling_floor_fps\":1.0,\"temporal_resolution_rationale\":\"Expected dwell time and required interval.\"}]}.\n"
+        f"{_sampling_plan_instruction()}"
         "You may request up to 4 more segments/windows. Do not answer with insufficient evidence.\n"
         "Keep the gap description under 24 words, use at most 3 success conditions under 12 words each, and keep each task goal under 30 words.\n"
         "A returned frame is not proof that a gap was resolved. Use the investigation outcomes below: partial/unresolved results must change "
@@ -2673,10 +2789,18 @@ def _normalize_reasoner_tasks(value: Any, *, round_id: int) -> tuple[dict[str, A
                         "goal": goal,
                         "segment_id": segment_id,
                         "time_range": None,
-                        "inspection_mode": "window",
-                        "search_terms": [],
+                        "inspection_mode": str(task.get("inspection_mode", "window") or "window"),
+                        "search_terms": list(task.get("search_terms") or ()),
                         "modality_hint": list(task.get("modality_hint") or ("visual", "asr")),
                         "expected_evidence": str(task.get("expected_evidence") or goal),
+                        "temporal_resolution_rationale": str(
+                            task.get("temporal_resolution_rationale", "") or ""
+                        ),
+                        **(
+                            {"sampling_floor_fps": task.get("sampling_floor_fps")}
+                            if "sampling_floor_fps" in task
+                            else {}
+                        ),
                     }
                 )
             continue
@@ -2857,7 +2981,9 @@ def _answer_audit_prompt(
         f"{task_instruction}\n"
         "Identify the single strongest_alternative after comparing every option internally. If that alternative is directly "
         "supported, provide revised_answer and its citations. Do not revise based only on plausibility or elimination. Keep the "
-        "reason under 100 words and each task goal under 40 words. Return compact JSON only: "
+        "reason under 100 words and each task goal under 40 words. "
+        f"{_sampling_plan_instruction()}"
+        "Return compact JSON only: "
         "{\"verdict\":\"supported|insufficient|contradicted\",\"reason\":\"...\","
         "\"evidence_relation\":\"direct|causal_chain|consequence_only|cooccurrence_only|unclear\","
         "\"strongest_alternative\":{\"option\":\"A\",\"support\":\"direct|indirect|contradicted|missing\","
@@ -2866,7 +2992,8 @@ def _answer_audit_prompt(
         "\"description\":\"...\",\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"obs:person_1\"]}],"
         "\"revised_support_status\":\"supported|insufficient\",\"tasks\":[{\"query_id\":\"audit_r2_t1\","
         "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":[0.0,60.0],"
-        "\"modality_hint\":[\"visual\",\"asr\"],\"expected_evidence\":\"...\"}]}.\n"
+        "\"modality_hint\":[\"visual\",\"asr\"],\"expected_evidence\":\"...\","
+        "\"sampling_floor_fps\":1.0,\"temporal_resolution_rationale\":\"Expected dwell time and interval.\"}]}.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"workspace_duration_sec: {float(kwargs.get('workspace_duration_sec', 0.0) or 0.0)}\n"
@@ -3112,10 +3239,103 @@ def _calibrate_forced_decision(
     )
 
 
+def _sampling_goal_key(task: Any) -> str:
+    text = " ".join(
+        (
+            str(getattr(task, "goal", "") or ""),
+            str(getattr(task, "expected_evidence", "") or ""),
+        )
+    ).casefold()
+    return re.sub(r"[^a-z0-9]+", " ", text).strip()[:240]
+
+
+def _normalize_structured_slots(value: Any) -> dict[str, str]:
+    rows = value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else ()
+    result: dict[str, str] = {}
+    for item in rows:
+        if not isinstance(item, Mapping):
+            continue
+        slot_id = re.sub(r"[^a-z0-9_]+", "_", str(item.get("slot_id", "") or "").casefold()).strip("_")
+        slot_value = re.sub(r"\s+", " ", str(item.get("value", "") or "").strip().casefold())
+        if slot_id and slot_value and slot_value not in {"unknown", "uncertain", "not visible"}:
+            result[slot_id] = slot_value
+    return result
+
+
+def _normalize_finding(value: Mapping[str, Any]) -> str:
+    finding = str(value.get("finding", "") or "").strip().casefold()
+    if finding in {"found", "not_found", "uncertain"}:
+        return finding
+    presence = dict(value.get("target_presence", {}) or {})
+    status = str(presence.get("status", "") or "").casefold()
+    if status == "present":
+        return "found"
+    if status == "absent":
+        return "not_found"
+    if value.get("entities") or value.get("events") or _truthy(value.get("supports_answer_event")):
+        return "found"
+    return "uncertain"
+
+
+def _observation_governance_row(
+    value: Mapping[str, Any],
+    sampling_fps: float,
+    phase_offset_sec: float,
+) -> dict[str, Any]:
+    return {
+        "summary": str(value.get("summary", "") or "")[:500],
+        "finding": _normalize_finding(value),
+        "confidence": _confidence(value.get("confidence"), default=0.6),
+        "confidence_explicit": "confidence" in value,
+        "structured_slots": _normalize_structured_slots(value.get("structured_slots")),
+        "slot_arbitration": [
+            dict(item)
+            for item in tuple(value.get("slot_arbitration", ()) or ())
+            if isinstance(item, Mapping)
+        ],
+        "need_detail": _truthy(value.get("need_detail")),
+        "sampling_fps": float(sampling_fps),
+        "phase_offset_sec": float(phase_offset_sec),
+    }
+
+
+def _conflicted_slot_ids(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    values: dict[str, set[str]] = {}
+    resolved: set[str] = set()
+    for row in rows:
+        for slot_id, value in dict(row.get("structured_slots", {}) or {}).items():
+            values.setdefault(str(slot_id), set()).add(str(value))
+        for verdict in tuple(row.get("slot_arbitration", ()) or ()):
+            if not isinstance(verdict, Mapping):
+                continue
+            if str(verdict.get("verdict", "") or "") in {"confirm_latest", "confirm_prior"}:
+                resolved.add(str(verdict.get("slot_id", "") or ""))
+    return tuple(sorted(slot_id for slot_id, observed in values.items() if len(observed) > 1 and slot_id not in resolved))
+
+
+def _adaptive_sampling_triggers(
+    current: Mapping[str, Any],
+    prior: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    reasons = []
+    if bool(current.get("need_detail")):
+        return ()
+    if str(current.get("finding", "") or "") == "not_found":
+        reasons.append("not_found")
+    if bool(current.get("confidence_explicit")) and float(current.get("confidence", 0.0) or 0.0) < 0.7:
+        reasons.append("low_confidence")
+    if _conflicted_slot_ids((*prior, current)):
+        reasons.append("structured_slot_conflict")
+    return tuple(reasons)
+
+
 def _resolution_prompt(task: Any, *, question: str = "") -> str:
     conditions = tuple(getattr(task, "conditions", ()) or ())
     return (
         "Evaluate only what is directly observable, not whether frames were returned. In the same JSON include "
+        "\"finding\":\"found|not_found|uncertain\", where finding refers only to the task's expected evidence, "
+        "\"structured_slots\":[{\"slot_id\":\"stable task-local name\",\"value\":\"directly observed value\","
+        "\"frame_indices\":[0]}], and "
         "\"target_presence\":{\"target\":\"...\",\"status\":\"present|absent|uncertain\",\"confidence\":0.0}, "
         "\"measurements\":[{\"value\":0.0,\"unit\":\"...\",\"relation\":\"exact|approx|greater_than|less_than\","
         "\"measurement_semantics\":\"delta|cumulative|unknown\",\"subject_id\":\"\",\"source_time_sec\":null,"
@@ -3198,14 +3418,16 @@ def _summary_observation_semantics(question: str) -> str:
     )
 
 
-def _prior_observation_arbitration(rows: Sequence[str]) -> str:
-    prior = tuple(str(item).strip() for item in rows if str(item).strip())[-3:]
+def _prior_observation_arbitration(rows: Sequence[Any]) -> str:
+    prior = tuple(dict(item) if isinstance(item, Mapping) else {"summary": str(item)} for item in rows)[-3:]
     if not prior:
         return ""
     return (
         "This is a denser, phase-shifted arbitration pass over a previously inspected window. "
         "Do not repeat the most recent description by default. Compare the new frames against every prior observation, "
-        "state which claims remain visually supported, and mark unresolved when they conflict. "
+        "state which claims remain visually supported, and mark unresolved when they conflict. If structured_slots disagree, "
+        "include slot_arbitration [{\"slot_id\":\"...\",\"verdict\":\"confirm_latest|confirm_prior|cannot_determine\","
+        "\"frame_indices\":[0]}]. "
         f"Prior observations: {json.dumps(prior, ensure_ascii=False)}\n"
     )
 

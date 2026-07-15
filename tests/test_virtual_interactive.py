@@ -55,6 +55,24 @@ load_role_clients = _interactive.load_role_clients
 run_case = _interactive.run_case
 
 
+def test_reasoner_prompt_requires_evidence_dynamics_sampling_plan() -> None:
+    prompt = _interactive._investigate_prompt(
+        {
+            "question": "What happens?",
+            "options": {"A": "One event", "B": "Another event"},
+            "query_contract": {},
+            "query_requirements": {},
+            "workspace_duration_sec": 120.0,
+            "temporal_navigation": {},
+            "workspace_overview": {"segment_overviews": []},
+        }
+    )
+
+    assert "sampling_floor_fps" in prompt
+    assert "temporal_resolution_rationale" in prompt
+    assert "Choose from evidence dynamics, not the question category" in prompt
+
+
 def test_forced_count_choice_penalizes_strong_assertions_without_positive_evidence() -> None:
     kwargs = {
         "question": "How many green cylinders are visible?",
@@ -157,6 +175,9 @@ def test_reasoner_task_normalization_keeps_enumeration_goals() -> None:
                 "goal": "Enumerate every audition shown in this segment.",
                 "segment_id": "seg_0020",
                 "modality_hint": ["visual", "asr"],
+                "inspection_mode": "enumerate_events",
+                "sampling_floor_fps": 1.0,
+                "temporal_resolution_rationale": "Each appearance should remain visible for roughly two seconds.",
             },
         ),
         round_id=2,
@@ -165,6 +186,9 @@ def test_reasoner_task_normalization_keeps_enumeration_goals() -> None:
     assert len(tasks) == 1
     assert tasks[0]["segment_id"] == "seg_0020"
     assert tasks[0]["goal"].startswith("Enumerate")
+    assert tasks[0]["inspection_mode"] == "enumerate_events"
+    assert tasks[0]["sampling_floor_fps"] == 1.0
+    assert tasks[0]["temporal_resolution_rationale"].startswith("Each appearance")
 
 
 def test_investigator_prompt_defines_object_relative_spatial_reference_frame() -> None:
@@ -2383,6 +2407,131 @@ def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> No
     assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5")
 
 
+def test_model_investigator_adapts_not_found_across_fps_and_phase(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {"summary": "Target absent on the first grid.", "finding": "not_found", "confidence": 0.9},
+            {"summary": "Target absent on the shifted grid.", "finding": "not_found", "confidence": 0.9},
+            {
+                "summary": "The brief target is visible after densification.",
+                "finding": "found",
+                "confidence": 0.95,
+                "structured_slots": [{"slot_id": "target_state", "value": "visible", "frame_indices": [0]}],
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_adaptive",
+        goal="Locate the requested brief visible evidence.",
+        segment_id="seg_0001",
+        time_range=(0.0, 30.0),
+    )
+
+    report = investigator.run_batch((task,))[0]
+    policy = report.evidence[0].operation_metadata["sampling_policy"]
+
+    assert report.cost["tool_trace"] == (
+        "open_segment",
+        "inspect_window:0.5",
+        "inspect_window:1.0:phase=0.500",
+        "inspect_window:2.0:phase=0.333",
+    )
+    assert report.evidence[0].sampling_fps == 2.0
+    assert report.evidence[0].observation_polarity == "positive"
+    assert policy["adaptive_attempt_count"] == 3
+    assert policy["adaptive_trigger_reasons"] == ["not_found"]
+
+
+def test_model_investigator_caps_repeated_negative_window_at_three_attempts(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        tuple(
+            {"summary": f"Negative phase {index}.", "finding": "not_found", "confidence": 0.9}
+            for index in range(3)
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_negative_cap", goal="Locate the requested brief evidence.",
+        segment_id="seg_0001", time_range=(0.0, 30.0),
+    )
+
+    first = investigator.run_batch((task,))[0]
+    repeated = investigator.run_batch((replace(task, query_id="q_negative_cap_repeat"),))[0]
+
+    assert len(api.calls) == 3
+    assert first.evidence[0].operation_metadata["qualified_absence"] is True
+    assert repeated.cost["reused"] is True
+    assert repeated.cost["tool_trace"] == ("open_segment", "adaptive_attempt_cap")
+
+
+def test_model_investigator_blocks_unresolved_structured_slot_conflict(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {
+                "summary": "The jacket appears blue.", "finding": "found", "confidence": 0.9,
+                "structured_slots": [{"slot_id": "jacket_color", "value": "blue", "frame_indices": [0]}],
+            },
+            {
+                "summary": "The jacket appears black.", "finding": "found", "confidence": 0.9,
+                "structured_slots": [{"slot_id": "jacket_color", "value": "black", "frame_indices": [0]}],
+            },
+            {
+                "summary": "The denser pass cannot settle the color.", "finding": "uncertain", "confidence": 0.8,
+                "structured_slots": [{"slot_id": "jacket_color", "value": "black", "frame_indices": [0]}],
+                "slot_arbitration": [{"slot_id": "jacket_color", "verdict": "cannot_determine", "frame_indices": [0]}],
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    base = InvestigationTask(
+        query_id="q_color_a", goal="Observe the jacket color.", segment_id="seg_0001",
+        time_range=(0.0, 30.0), sampling_floor_fps=0.5,
+        temporal_resolution_rationale="The clothing remains visible for several seconds.",
+    )
+    denser = replace(base, query_id="q_color_b", sampling_floor_fps=1.0)
+
+    first, second = investigator.run_batch((base, denser))
+
+    assert first.evidence[0].operation_metadata["evidence_state"] == "active"
+    assert second.evidence[0].operation_metadata["evidence_state"] == "conflicted"
+    assert second.evidence[0].operation_metadata["conflicted_slot_ids"] == ["jacket_color"]
+    assert "structured_slot_conflict" in second.evidence[0].operation_metadata["sampling_policy"]["adaptive_trigger_reasons"]
+
+
+def test_negative_observation_is_not_reused_as_positive_support(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    investigator = GeminiInvestigator(
+        workspace,
+        api=ScriptedVisionClient(()),
+        trace_path=workspace.root_dir / "interactions.jsonl",
+    )
+    task = InvestigationTask(
+        query_id="q_negative_cache", goal="Locate the requested target.", segment_id="seg_0001",
+        time_range=(0.0, 30.0),
+    )
+    negative = EvidenceRecord(
+        evidence_id="ev_negative", beat_id="", start_sec=0.0, end_sec=30.0,
+        modality="visual", pointer="virtual://negative", verbatim="Target not found.",
+        frame_refs=("frame.jpg",), observation_polarity="negative", sampling_fps=2.0,
+        source_lineage=({
+            "segment_id": "seg_0001", "source_video_id": "source",
+            "source_time_range": [0.0, 30.0], "virtual_time_range": [0.0, 30.0],
+        },),
+    )
+    investigator._remember_evidence(task, negative)
+
+    reused = investigator._find_reusable_evidence(task, 0.0, 30.0, required_fps=0.5)
+
+    assert reused is None
+
+
 def test_model_investigator_does_not_force_detail_from_keywords(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(
@@ -2599,6 +2748,17 @@ def test_model_investigator_reports_partial_gap_instead_of_frame_success(tmp_pat
                 ],
                 "failure_reason": "text remains unreadable after detail inspection",
             },
+            {
+                "summary": "A final phase-shifted pass still cannot resolve the value.",
+                "confidence": 0.6,
+                "finding": "uncertain",
+                "target_presence": {"target": "final board", "status": "present", "confidence": 0.9},
+                "condition_results": [
+                    {"condition_id": "gap_final_value_c1", "status": "satisfied", "observation": "Board visible."},
+                    {"condition_id": "gap_final_value_c2", "status": "unknown", "observation": "Value unreadable."},
+                ],
+                "failure_reason": "text remains unreadable after adaptive sampling",
+            },
         )
     )
     investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
@@ -2619,8 +2779,8 @@ def test_model_investigator_reports_partial_gap_instead_of_frame_success(tmp_pat
     assert report.resolution == "partial"
     assert report.resolved_conditions == ("locate the final board",)
     assert report.unresolved_conditions == ("read the final value and unit",)
-    assert report.failure_reason == "text is too small"
-    assert len(api.calls) == 1
+    assert report.failure_reason == "text remains unreadable after adaptive sampling"
+    assert len(api.calls) == 3
     assert report.evidence[0].operation_metadata["investigation"]["resolution"] == "partial"
     assert report.condition_results[0].condition_id == "gap_final_value_c1"
     assert report.goal_progress == ("condition_satisfied:gap_final_value_c1",)
@@ -2697,9 +2857,9 @@ def test_repeated_query_ids_get_distinct_observation_and_frame_ids(tmp_path: Pat
     api = ScriptedVisionClient(
         (
             {"start_sec": 0.0, "end_sec": 30.0},
-            {"summary": "First pass.", "confidence": 0.8, "need_detail": False},
+            {"summary": "First pass.", "finding": "found", "confidence": 0.8, "need_detail": False},
             {"start_sec": 0.0, "end_sec": 30.0},
-            {"summary": "Second pass.", "confidence": 0.8, "need_detail": False},
+            {"summary": "Second pass.", "finding": "found", "confidence": 0.8, "need_detail": False},
         )
     )
     investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")

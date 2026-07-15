@@ -78,7 +78,9 @@ class InvestigationTask:
     conditions: tuple[GapCondition, ...] = ()
     source_candidate_ids: tuple[str, ...] = ()
     inspection_intent: str = ""
-    sampling_floor_fps: float = 0.5
+    sampling_floor_fps: float | None = None
+    temporal_resolution_rationale: str = ""
+    sampling_floor_specified: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if self.time_range is not None:
@@ -105,8 +107,17 @@ class InvestigationTask:
         object.__setattr__(self, "conditions", conditions)
         object.__setattr__(self, "source_candidate_ids", tuple(dict.fromkeys(str(item) for item in self.source_candidate_ids if str(item))))
         object.__setattr__(self, "inspection_intent", str(self.inspection_intent or "").strip())
+        specified = self.sampling_floor_fps is not None
         floor_fps = float(self.sampling_floor_fps or 0.5)
         object.__setattr__(self, "sampling_floor_fps", min(2.0, max(0.5, floor_fps)))
+        object.__setattr__(self, "sampling_floor_specified", specified)
+        object.__setattr__(
+            self,
+            "temporal_resolution_rationale",
+            str(self.temporal_resolution_rationale or "").strip(),
+        )
+        if specified and not str(self.temporal_resolution_rationale or "").strip():
+            object.__setattr__(self, "priority", float(self.priority) * 0.8)
         object.__setattr__(
             self,
             "search_terms",
@@ -1862,44 +1873,7 @@ def _windows_overlap(left: EvidenceRecord, right: EvidenceRecord) -> bool:
 
 
 def _task_for_contract(task: InvestigationTask, contract: ClaimContract) -> InvestigationTask:
-    sampling_floor = max(
-        float(task.sampling_floor_fps),
-        2.0
-        if contract.aggregation == "order"
-        or (contract.observation_target == "entity" and contract.aggregation == "compare")
-        else 1.0
-        if contract.quantifier in {"distinct_count", "total_count"}
-        or contract.aggregation == "compare"
-        else 0.5,
-    )
-    task = replace(task, sampling_floor_fps=sampling_floor)
-    if contract.aggregation == "summarize" and task.inspection_mode != "search_asr":
-        expected = str(task.expected_evidence or "").strip()
-        narrative = (
-            "segment narrative thesis and role (setup, example, process detail, comparison, or conclusion), "
-            "grounded in local ASR and kept separate from visually salient examples"
-        )
-        return replace(
-            task,
-            modality_hint=("visual", "asr"),
-            expected_evidence=f"{expected}; {narrative}" if expected else narrative,
-        )
-    if (
-        task.inspection_mode == "window"
-        and contract.quantifier == "total_count"
-        and contract.observation_target == "event"
-    ):
-        return replace(task, inspection_mode="enumerate_events")
-    if contract.required_scope == "multi_window" and contract.aggregation == "compare":
-        expected = str(task.expected_evidence or "").strip()
-        transition = (
-            "continuous before-transition-after evidence with ordered timestamps and stable subject/event identity"
-        )
-        return replace(
-            task,
-            modality_hint=tuple(dict.fromkeys((*task.modality_hint, "visual", "motion"))),
-            expected_evidence=f"{expected}; {transition}" if expected else transition,
-        )
+    del contract
     return task
 
 
@@ -2115,15 +2089,25 @@ def _apply_readiness_dashboard(
                 for result in report.condition_results
             }
             states = {condition_id: state for condition_id, state in states.items() if condition_id in gap_ids}
+    conflicted_slot_ids = {
+        f"slot:{slot_id}"
+        for record in answer_evidence
+        for slot_id in tuple(record.operation_metadata.get("conflicted_slot_ids", ()) or ())
+        if str(slot_id)
+    }
     unresolved = sorted(
         missing_active_ids
         | {condition_id for condition_id, state in states.items() if state.status != "satisfied"}
+        | conflicted_slot_ids
     )
     base_ready = bool(result.get("ready_for_answer"))
     retrieval_ready = any(record.modality in {"visual", "ocr"} for record in answer_evidence)
     condition_total = len(states) + len(missing_active_ids)
     satisfied_count = sum(state.status == "satisfied" for state in states.values())
-    conflict_count = sum(state.status in {"contradicted", "refuted"} for state in states.values())
+    conflict_count = (
+        sum(state.status in {"contradicted", "refuted"} for state in states.values())
+        + len(conflicted_slot_ids)
+    )
     completion_ratio = satisfied_count / max(1, condition_total)
     strict_grounded = base_ready and not unresolved
     partial_grounded = bool(
@@ -2145,6 +2129,7 @@ def _apply_readiness_dashboard(
         "satisfied_condition_count": satisfied_count,
         "critical_condition_count": condition_total,
         "conflicted_condition_count": conflict_count,
+        "conflicted_structured_slot_ids": sorted(conflicted_slot_ids),
         "unresolved_critical_condition_ids": unresolved,
         "unsupported_claim_atom_ids": list(unresolved),
         "condition_states": {condition_id: to_jsonable(state) for condition_id, state in states.items()},
@@ -2666,8 +2651,14 @@ def _global_absence_gate(
         if not presence or not _target_matches_option(str(presence.get("target", "") or ""), option_text):
             continue
         status = str(presence.get("status", "") or "").casefold()
-        probes.append((record.evidence_id, status))
-    positive = [evidence_id for evidence_id, status in probes if status == "present"]
+        probes.append(
+            (
+                record.evidence_id,
+                status,
+                bool(record.operation_metadata.get("qualified_absence")),
+            )
+        )
+    positive = [evidence_id for evidence_id, status, _qualified in probes if status == "present"]
     if positive:
         return {
             "passed": False,
@@ -2676,7 +2667,11 @@ def _global_absence_gate(
             "missing_segment_ids": [],
         }
     cited_ids = {record.evidence_id for record in cited}
-    negative = [evidence_id for evidence_id, status in probes if status == "absent" and evidence_id in cited_ids]
+    negative = [
+        evidence_id
+        for evidence_id, status, qualified in probes
+        if status == "absent" and qualified and evidence_id in cited_ids
+    ]
     if not negative:
         return {
             "passed": False,
@@ -3378,7 +3373,12 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         conditions=tuple(value.get("conditions", ()) or ()),
         source_candidate_ids=tuple(value.get("source_candidate_ids", ()) or ()),
         inspection_intent=str(value.get("inspection_intent", "") or ""),
-        sampling_floor_fps=float(value.get("sampling_floor_fps", 0.5) or 0.5),
+        sampling_floor_fps=(
+            float(value.get("sampling_floor_fps") or 0.5)
+            if "sampling_floor_fps" in value and value.get("sampling_floor_fps") is not None
+            else None
+        ),
+        temporal_resolution_rationale=str(value.get("temporal_resolution_rationale", "") or ""),
     )
 
 
@@ -4102,6 +4102,7 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
                 "verification_reason": result.verification_reason,
                 "rounds": result.rounds,
                 "accepted_investigations": result.accepted_investigations,
+                "sampling_stability": _sampling_stability_summary(result.evidence),
                 "evidence": [
                     {
                         "evidence_id": item.evidence_id,
@@ -4131,3 +4132,38 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
         ),
         encoding="utf-8",
     )
+
+
+def _sampling_stability_summary(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]:
+    policies = [
+        dict(record.operation_metadata.get("sampling_policy", {}) or {})
+        for record in evidence
+        if record.modality == "visual"
+    ]
+    fps_histogram: dict[str, int] = {}
+    trigger_histogram: dict[str, int] = {}
+    upshift_count = 0
+    negative_to_positive = 0
+    conflicted_observations = 0
+    for record, policy in zip((item for item in evidence if item.modality == "visual"), policies):
+        fps_key = f"{float(record.sampling_fps):.1f}"
+        fps_histogram[fps_key] = fps_histogram.get(fps_key, 0) + 1
+        attempts = int(policy.get("adaptive_attempt_count", 1) or 1)
+        if attempts > 1:
+            upshift_count += attempts - 1
+        triggers = tuple(policy.get("adaptive_trigger_reasons", ()) or ())
+        for trigger in triggers:
+            key = str(trigger)
+            trigger_histogram[key] = trigger_histogram.get(key, 0) + 1
+        if "not_found" in triggers and record.observation_polarity == "positive":
+            negative_to_positive += 1
+        if record.operation_metadata.get("conflicted_slot_ids"):
+            conflicted_observations += 1
+    return {
+        "upshift_count": upshift_count,
+        "trigger_histogram": trigger_histogram,
+        "negative_to_positive_count": negative_to_positive,
+        "conflicted_observation_count": conflicted_observations,
+        "fps_histogram": fps_histogram,
+        "floor_unspecified_count": sum(bool(row.get("floor_unspecified")) for row in policies),
+    }

@@ -152,6 +152,11 @@ class VirtualVideoInvestigator:
                 continue
             if cached.evidence.sampling_fps + 1e-6 < float(required_fps):
                 continue
+            if cached.evidence.observation_polarity != "positive":
+                continue
+            evidence_state = str(cached.evidence.operation_metadata.get("evidence_state", "active") or "active")
+            if evidence_state in {"conflicted", "superseded"}:
+                continue
             if _lineage_iou(cached.source_lineage, lineage) >= 0.8:
                 return cached.evidence
         return None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from pathlib import Path
 from typing import Sequence
 
@@ -179,8 +180,8 @@ def test_query_compiler_emits_semantic_contracts_for_failure_families() -> None:
         InvestigationTask("q_summary", "Inspect this segment.", segment_id="seg_1"),
         synopsis,
     )
-    assert synopsis_task.modality_hint == ("visual", "asr")
-    assert "segment narrative thesis and role" in synopsis_task.expected_evidence
+    assert synopsis_task.modality_hint == ()
+    assert synopsis_task.expected_evidence == ""
     assert (progress.quantifier, progress.measurement_unit, progress.boundary_hint) == (
         "scalar_quantity",
         "task",
@@ -193,12 +194,6 @@ def test_query_compiler_emits_semantic_contracts_for_failure_families() -> None:
     )
     assert sequence_requirements["requires_temporal_sequence"] is True
     assert sequence_requirements["requires_state_tracking"] is True
-    transition_task = multiround._task_for_contract(
-        InvestigationTask("q_transition", "Inspect the change.", segment_id="seg_1"),
-        causal,
-    )
-    assert "motion" in transition_task.modality_hint
-    assert "before-transition-after" in transition_task.expected_evidence
     assert (outcome.required_scope, outcome.observation_target, outcome.aggregation) == (
         "multi_window",
         "event",
@@ -356,19 +351,97 @@ def test_readiness_allows_partial_grounding_with_supported_majority_and_no_confl
     assert status["ready_for_answer"] is True
 
 
-def test_contract_task_for_order_forces_dense_sampling() -> None:
+def test_readiness_blocks_conflicted_structured_slot() -> None:
+    evidence = EvidenceRecord(
+        evidence_id="ev_conflict", beat_id="", start_sec=1.0, end_sec=2.0,
+        modality="visual", pointer="virtual://conflict", verbatim="Conflicting observations.",
+        frame_refs=("frame.jpg",), observation_polarity="positive",
+        operation_metadata={"conflicted_slot_ids": ["jacket_color"]},
+    )
+    report = InvestigationReport(
+        query_id="q_conflict", status="satisfied", evidence=(evidence,), gap_id="gap_conflict",
+        condition_results=(ConditionResult("c1", "satisfied", "Target person is visible.", ("ev_conflict",)),),
+    )
+
+    status = multiround._apply_readiness_dashboard(
+        {"ready_for_answer": True}, (evidence,), (evidence,), (report,), "A", ("c1",)
+    )
+
+    assert status["ready_for_answer"] is False
+    assert status["conflicted_structured_slot_ids"] == ["slot:jacket_color"]
+
+
+def test_global_absence_requires_resolution_qualified_negative(tmp_path: Path) -> None:
+    base = _workspace(tmp_path)
+    workspace = VirtualVideoWorkspace.create(
+        tmp_path / "absence-case",
+        manifest=base.manifest,
+        case=VirtualVideoCase(
+            case_id="absence-case",
+            question="Which skill is absent?",
+            options={"A": "backflip skill", "B": "handstand skill"},
+            gold="A",
+            target_segment_id="seg_target",
+            target_virtual_interval=(0.0, 5.0),
+        ),
+    )
+
+    def negative(evidence_id: str, qualified: bool) -> EvidenceRecord:
+        return EvidenceRecord(
+            evidence_id=evidence_id, beat_id="", start_sec=0.0, end_sec=5.0,
+            modality="visual", pointer=f"virtual://{evidence_id}", verbatim="The backflip was not found.",
+            frame_refs=("frame.jpg",), observation_polarity="negative",
+            operation_metadata={
+                "target_presence": {"target": "backflip skill", "status": "absent", "confidence": 0.9},
+                "qualified_absence": qualified,
+                "absence_resolution_fps": 2.0 if qualified else 0.5,
+            },
+        )
+
+    weak = negative("ev_weak", False)
+    strong = negative("ev_strong", True)
+
+    weak_gate = multiround._global_absence_gate(workspace, "A. backflip skill", (weak,), (weak,))
+    strong_gate = multiround._global_absence_gate(workspace, "A. backflip skill", (strong,), (strong,))
+
+    assert weak_gate["reason"] == "option_specific_absence_evidence_missing"
+    assert strong_gate["reason"] == "global_absence_grounded"
+
+
+def test_contract_task_does_not_override_reasoner_sampling_plan() -> None:
     contract = multiround.compile_query_contract(
         "Who overtook the rider second?",
         {"A": "The rider in blue", "B": "The rider in black"},
     )
 
     task = multiround._task_for_contract(
-        InvestigationTask("q_order", "Inspect the overtaking order.", segment_id="seg_1"),
+        InvestigationTask(
+            "q_order",
+            "Inspect the overtaking order.",
+            segment_id="seg_1",
+            sampling_floor_fps=1.0,
+            temporal_resolution_rationale="The requested evidence is expected to remain visible for about two seconds.",
+        ),
         contract,
     )
 
     assert contract.aggregation == "order"
-    assert task.sampling_floor_fps == 2.0
+    assert task.sampling_floor_fps == 1.0
+    assert task.temporal_resolution_rationale.startswith("The requested evidence")
+    source = inspect.getsource(multiround._task_for_contract)
+    assert "contract." not in source
+
+
+def test_sampling_plan_tracks_unspecified_floor_and_downgrades_missing_rationale() -> None:
+    unspecified = InvestigationTask("q_default", "Inspect persistent evidence.")
+    incomplete = InvestigationTask(
+        "q_incomplete", "Inspect a brief event.", sampling_floor_fps=2.0, priority=1.0
+    )
+
+    assert unspecified.sampling_floor_fps == 0.5
+    assert unspecified.sampling_floor_specified is False
+    assert incomplete.sampling_floor_specified is True
+    assert incomplete.priority == 0.8
 
 
 def test_discriminative_audit_fails_closed_when_reason_is_missing() -> None:
@@ -1274,7 +1347,7 @@ def test_query_contract_marks_how_many_times_as_full_video_event_count() -> None
     assert contract.aggregation == "count"
 
 
-def test_total_count_contract_marks_tasks_for_event_enumeration() -> None:
+def test_contract_task_preserves_reasoner_selected_inspection_mode() -> None:
     contract = multiround.compile_query_contract("How many times does a title card appear in this video?")
     task = InvestigationTask(
         query_id="q_title_cards",
@@ -1282,6 +1355,7 @@ def test_total_count_contract_marks_tasks_for_event_enumeration() -> None:
         segment_id="seg_0001",
         modality_hint=("visual",),
         expected_evidence="timestamped title-card occurrences",
+        inspection_mode="enumerate_events",
     )
 
     compiled = multiround._task_for_contract(task, contract)

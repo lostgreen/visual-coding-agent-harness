@@ -22,9 +22,12 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 - Repeated rejected submissions are converted into coverage, event-enumeration, or contrastive repair tasks.
 - Verification: local full suite `285 passed`.
 - Follow-up iteration adds strict/partial grounding grades; partial requires >=60% satisfied critical conditions, >=75% scope coverage, visual retrieval, no contradiction, and the existing discriminative answer audit.
-- Identity/order tasks now force 2fps; count/comparison tasks force at least 1fps. Repeated fine-grained windows rerun at 2fps on a shifted sampling phase and receive prior-observation arbitration context.
+- Commit `896aa58` temporarily mapped identity/order/count contracts to fps floors; that design was rejected because it made the framework perform semantic sampling decisions.
 - Forced count choices now rank independent claim checks, countable entity witnesses, or canonical event candidates. Wrong-window positives do not count as target support; zero target-positive evidence deterministically penalizes stronger numerical assertions.
-- Current local verification: `PYTHONPATH=src:. pytest -q` -> `291 passed`.
+- Current follow-up removes every contract-to-fps mapping. Reasoner visual tasks now declare `sampling_floor_fps` plus `temporal_resolution_rationale` from expected evidence dynamics; missing declarations default to 0.5fps and are traced.
+- Investigator governance is contract-agnostic: explicit `not_found`, confidence below 0.7, or structured-slot conflict triggers a maximum three-attempt fps/phase ladder. Negative/conflicted observations are not reused as positive support, terminal absence is resolution-qualified, and unresolved slots block grounded readiness.
+- Sampling stability telemetry now reports fps, upshifts, trigger causes, negative-to-positive conversions, conflicts, and unspecified floors.
+- Current local verification: `PYTHONPATH=src:. pytest -q` -> `299 passed`.
 
 ## Current Run
 
@@ -41,8 +44,8 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 
 ## Next Actions
 
-1. Commit/push the follow-up iteration and sync KML.
-2. Run focused KML tests, then rerun errors10 in small batches with fresh output paths.
+1. Run the full local suite, commit/push the three-layer sampling iteration, and create a clean KML worktree because the existing remote checkout is dirty.
+2. Run focused KML tests, then rerun errors10 in small batches with fresh output paths and multiple seeds.
 3. Compare accuracy, grounded strict/partial counts, false-grounded count, sampling fps/phase use, and per-case investigation count against contract_v2.
 4. Inspect only compact fingerprints for 468-3, 521-2, and 445-3 before deciding another code change.
 5. Run regression50 only after the diagnostic regressions are resolved.
