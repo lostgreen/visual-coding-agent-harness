@@ -1,0 +1,295 @@
+{
+  "query": "VideoMME",
+  "categories": [
+    "cs.AI",
+    "cs.CV",
+    "cs.CL",
+    "cs.LG",
+    "cs.MM"
+  ],
+  "from": "2026-05-06",
+  "to": "2026-07-06",
+  "count": 13,
+  "papers": [
+    {
+      "arxiv_id": "2606.31326v1",
+      "title": "Bridging Video Understanding and Generation in a Unified Framework",
+      "authors": [
+        "Yuqi Wang",
+        "Runyi Li",
+        "Ruoyu Feng",
+        "Renjie Chen",
+        "Wenfeng Lin",
+        "Mingyu Guo"
+      ],
+      "summary": "Recently, unified image generation and understanding have been extensively explored. However, extending such unified modeling paradigms to the video domain remains largely underexplored. A central challenge is that video understanding favors compact, discriminative semantic representations, whereas video generation requires dense signals that preserve visual details and temporal coherence. Videos naturally capture both spatial semantics and temporal dynamics, making them a more suitable modality for unified multimodal modeling compared to static images. In this paper, we propose Vega, a unified framework that bridges video understanding and generation. Vega leverages a shared vocabulary to jointly model text and visual representations and employs a hybrid architecture combining autoregressive (AR) prediction with diffusion-based rendering. Specifically, the AR model focuses on predicting semantically meaningful visual tokens for keyframes, providing a structured representation that guides the diffusion module in rendering dense, high-resolution video frames. Extensive experiments demonstrate that Vega achieves strong performance on video generation benchmarks such as VBench and video understanding benchmarks like VideoMME.",
+      "published": "2026-06-30T08:29:29Z",
+      "updated": "2026-06-30T08:29:29Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.31326v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.31326v1"
+    },
+    {
+      "arxiv_id": "2606.30288v1",
+      "title": "VisReflect: Latent Visual Reflection for Fine-Grained Perception in Long Visual Context",
+      "authors": [
+        "Xiaoqian Shen",
+        "Mohamed Elhoseiny"
+      ],
+      "summary": "Large Vision Language Models (LVLMs) have achieved remarkable success on vision-language tasks, yet fine-grained perception over high-resolution images and long-context videos remains challenging. As the number of visual tokens increases, the visual attention sink phenomenon becomes increasingly severe, causing irrelevant tokens to absorb a disproportionate amount of attention mass. Recent approaches attempt to mitigate this issue by explicitly predicting bounding boxes or temporal spans and re-encoding the cropped visual regions. Such methods depend on unreliable numeric localization in the discrete token space and incur significant computational overhead due to additional forward passes. In this work, we propose **VisReflect**, a simple yet effective framework that improves fine-grained perception in long visual contexts through latent visual reflection. Instead of decoding intermediate predictions into discrete tokens, the model generates continuous visual reflection that represents question-relevant visual features in the latent space. These reflections selectively emphasize salient regions or frames, guiding attention towards relevant visual tokens within a single forward pass. We conduct comprehensive evaluations on challenging high-resolution image benchmarks, including BLINK, V*, and HRBench-4K/8K, as well as video understanding benchmarks such as MVBench, VideoMME, and MLVU. Our method consistently improves over strong baselines, achieving gains of 4.1% on image benchmarks and 1.8% on video benchmarks. Compared with zooming-based methods, our model achieves comparable performance while reducing inference time by roughly 44% on video understanding.",
+      "published": "2026-06-29T13:30:17Z",
+      "updated": "2026-06-29T13:30:17Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.30288v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.30288v1"
+    },
+    {
+      "arxiv_id": "2606.27922v3",
+      "title": "Reflect-R1: Evidence-Driven Reflection for Self-Correction in Long Video Understanding",
+      "authors": [
+        "Shuimu Chen",
+        "Yuteng Chen",
+        "Yuanshen Guan",
+        "Zebang Cheng",
+        "Zeyu Zhang",
+        "Shengqian Qin",
+        "Bin Xia",
+        "Jiaran Li",
+        "Wenming Yang",
+        "Fei Ma"
+      ],
+      "summary": "Current multimodal reflection mechanisms for long video understanding predominantly rely on closed-loop self-reflection within internal parameters. Lacking objective external evidence, models are frequently trapped in blind confidence and often fail to correct errors. Furthermore, applying reinforcement learning to multi-stage reflection pipelines introduces severe policy coupling, which is exacerbated by a critical scarcity of dedicated training data. To address these limitations, this work proposes Reflect-R1, the first Evidence-Driven self-correction framework for long video understanding. The framework constructs a three-stage pipeline consisting of intuition, verification, and arbitration. By dynamically retrieving objective visual evidence to verify initial intuitions and autonomously executing multiple temporal searches to resolve conflicts, it completely breaks the hallucination loop. To overcome policy coupling, we design a stage-decoupled reinforcement learning algorithm named SD-GRPO that independently computes advantage functions across different reasoning stages. Concurrently, we construct a dataset of 120K samples to bridge the training data gap. Extensive experiments on benchmarks such as VideoMME and LongVideoBench demonstrate that Reflect-R1 achieves state-of-the-art performance. Our method significantly improves the genuine rectification rate and enables authentic self-correction strictly grounded in objective evidence.",
+      "published": "2026-06-26T10:15:36Z",
+      "updated": "2026-06-30T06:57:21Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.27922v3",
+      "pdf_url": "https://arxiv.org/pdf/2606.27922v3"
+    },
+    {
+      "arxiv_id": "2606.22804v2",
+      "title": "CoVStream: Edge-Cloud Collaboration for Understanding of Long Video Streams",
+      "authors": [
+        "Xu Liu",
+        "Guikun Chen",
+        "Zihao Yan",
+        "Kanzhi Wu",
+        "Wenguan Wang"
+      ],
+      "summary": "Long, continuous video streams are an increasingly critical driver of multimedia intelligence. Existing efforts often handle long videos with a sample-encode-reason approach using large models. However, they overlook a crucial deployment fact: the stream is often produced by computationally constrained devices. This forces an untenable compromise: cloud offloading unlocks strong reasoning but incurs prohibitive bandwidth overhead, while on-device processing remains limited by edge hardware capacity. Therefore, we propose CoVStream, the first edge-cloud collaborative framework for understanding long video streams. The edge node distills raw video streams into compact visual features and semantic captions for transmission to the cloud, minimizing bandwidth costs, while the cloud server integrates this data into an entity graph and global visual context, activating the heavy reasoning model only when a user query arrives. Experiments on VideoMME-Long, LVBench, and RTV-Bench show that CoVStream reduces bandwidth usage by 87.6% while retaining 99.2% of the cloud baseline accuracy on LVBench.",
+      "published": "2026-06-22T03:29:45Z",
+      "updated": "2026-06-25T06:29:16Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.22804v2",
+      "pdf_url": "https://arxiv.org/pdf/2606.22804v2"
+    },
+    {
+      "arxiv_id": "2606.21734v1",
+      "title": "HPP: Hierarchical Programmatic Probing for Long Video Understanding by Decoupling Perception and Reasoning",
+      "authors": [
+        "Awais Rauf",
+        "Ahmed Hasssan",
+        "Greg Slabaugh"
+      ],
+      "summary": "Understanding long videos requires fine-grained perception and multi-step, higher-order reasoning over complex, long-range spatio-temporal dynamics. Vision-language models (VLMs) encode video frames into visual tokens and attempt to perform both perception and multi-step planning latently, within a single forward pass. This coupled formulation, however, is bottlenecked by the LLM's limited capacity to discover and execute multi-step strategies in its latent representations. To address this bottleneck, we propose Hierarchical Programmatic Probing (HPP), a framework that decouples semantic perception from higher-order temporal reasoning by reformulating long video understanding as iterative, programmatic exploration of a hierarchically segmented video. Specifically, a coding-capable LLM plans and executes a multi-step strategy in an interactive coding environment, probing the video for information and invoking a VLM for localized perception on demand. To make probing tractable over long videos, we introduce three components: information-density-aware hierarchical segmentation, late-interaction semantic retrieval, and structured probing functions for coarse-to-fine temporal localization. We validate HPP on LongVideoBench, which requires both fine-grained perception and long-range relational reasoning, and show that decoupling the two via iterative programmatic probing yields substantial gains. Further results on EgoSchema, VideoMME, and MLVU demonstrate the effectiveness of our approach across diverse long-video benchmarks.",
+      "published": "2026-06-19T20:43:49Z",
+      "updated": "2026-06-19T20:43:49Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.21734v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.21734v1"
+    },
+    {
+      "arxiv_id": "2606.19341v1",
+      "title": "Native Active Perception as Reasoning for Omni-Modal Understanding",
+      "authors": [
+        "Zhenghao Xing",
+        "Ruiyang Xu",
+        "Yuxuan Wang",
+        "Jinzheng He",
+        "Ziyang Ma",
+        "Qize Yang",
+        "Yunfei Chu",
+        "Jin Xu",
+        "Junyang Lin",
+        "Chi-Wing Fu",
+        "Pheng-Ann Heng"
+      ],
+      "summary": "Passive models for long video understanding typically rely on a \"watch-it-all\" paradigm, processing frames uniformly regardless of query difficulty, causing computational cost to grow with video duration. Although interactive frameworks have emerged, they often rely on global pre-scanning, and their context cost still scales with video length. We propose OmniAgent, the first native omni-modal agent that formulates video understanding as a POMDP-based iterative Observation-Thought-Action cycle. OmniAgent executes on-demand actions to selectively distill audio-visual cues into a persistent textual memory, effectively decoupling reasoning complexity from raw video duration. To operationalize this, we introduce (1) Agentic Supervised Fine-Tuning to bootstrap native active perception via best-of-N trajectory synthesis with dual-stage quality control, and (2) Agentic Reinforcement Learning with TAURA (Turn-aware Adaptive Uncertainty Rescaled Advantage), which leverages turn-level entropy to steer credit assignment toward pivotal discovery turns. Crucially, OmniAgent exhibits positive test-time scaling, where performance improves as the number of reasoning turns increases, validating the efficacy of active perception. Empirical results across ten benchmarks (e.g., VideoMME, LVBench) demonstrate that OmniAgent achieves state-of-the-art performance among open-source models. Notably, on LVBench, our 7B agent outperforms the 10$\\times$ larger Qwen2.5-VL-72B (50.5% vs. 47.3%).",
+      "published": "2026-06-17T17:59:56Z",
+      "updated": "2026-06-17T17:59:56Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL",
+        "cs.SD"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.19341v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.19341v1"
+    },
+    {
+      "arxiv_id": "2605.31075v1",
+      "title": "Task-Focused Memorization for Multimodal Agents",
+      "authors": [
+        "Tao Zou",
+        "Yichen He",
+        "Tian Qiu",
+        "Yuan Lin",
+        "Hang Li"
+      ],
+      "summary": "Long-term memory is essential for multimodal agents to build coherent experience, accumulate world knowledge, and achieve continual learning. However, constructing effective memory goes beyond memory module design and basic requirements such as accuracy and fidelity; the key challenge lies in determining what to memorize. Multimodal agents, such as embodied agents, continuously perceive, reason, and act in real or virtual environments, receiving an unbounded stream of multimodal observations. From this combinatorial explosion of information, an agent must selectively retain content that is relevant to its role in the environment and valuable for future tasks. To bridge this gap, we frame memory generation as a learnable memorization policy and introduce TaskMem (Task-focused Memorization Policy Learning), a reinforcement-learning-based framework that enables the policy to dynamically adjust its focus to the demands of real tasks encountered in the environment. TaskMem adopts a two-phase training paradigm: Phase One learns how to memorize by optimizing memory quality under fundamental fidelity requirements; Phase Two occurs after deployment, where the agent learns what to memorize by tuning an adapter on its base MLLM, using recent environment tasks to define a reward model that guides the memorization policy toward task-relevant content. To evaluate our approach, we reformulate VideoMME, EgoLife, and EgoTempo into streaming benchmarks that simulate a realistic setting in which an agent processes streaming observations and handles tasks arriving online. To isolate memory assessment, the questions must be answered using only the agent's memory, without access to raw video. Built on Qwen3-VL-30B-A3B, TaskMem improves VQA accuracy by 6.3%, 7.0%, and 5.3% on these benchmarks, respectively.",
+      "published": "2026-05-29T09:43:35Z",
+      "updated": "2026-05-29T09:43:35Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.31075v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.31075v1"
+    },
+    {
+      "arxiv_id": "2606.07577v1",
+      "title": "OmniMem: Perturbation-aware Memory Compression for Streaming Audio-Visual LLMs",
+      "authors": [
+        "Guangzhi Sun",
+        "Yixuan Li",
+        "Yudong Yang",
+        "Chao Zhang"
+      ],
+      "summary": "Audio-visual large language models (LLMs) hold strong promise for long-form video understanding, yet their long-video inference is fundamentally limited by the linear growth of video tokens and key-value (KV) caches. We present OmniMem, a memory-efficient streaming framework designed specifically for audio-visual LLMs. Unlike existing compression methods that treat all tokens uniformly, OmniMem introduces a modality-aware memory allocation strategy that separately manages visual and audio contexts, addressing the severe token imbalance between the two modalities. OmniMem further preserves informative and non-redundant KV states through perturbation-aware memory selection, enabling compact memory without sacrificing long-range understanding. To strengthen compression under realistic deployment constraints, we also explore budget-aware fine-tuning, which encourages the model to consolidate useful information into retained memory. Experiments on VideoMME Long, LVBench, and LVOmniBench with video-SALMONN 2+ and Qwen-2.5-Omni show that OmniMem consistently improves over strong training-free compression baselines by 2-4% absolute accuracy under the same memory budgets, with an additional 1-2% gain after fine-tuning.",
+      "published": "2026-05-26T19:12:13Z",
+      "updated": "2026-05-26T19:12:13Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CV",
+        "cs.SD",
+        "eess.AS"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.07577v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.07577v1"
+    },
+    {
+      "arxiv_id": "2605.26014v1",
+      "title": "STORM: Internalized Modeling for Spatial-Temporal Reasoning in Video-Language Models",
+      "authors": [
+        "Yiming Liang",
+        "Yixiao Chen",
+        "Yiyang Zhou",
+        "Yixuan Wang",
+        "Shoubin Yu",
+        "Andong Deng",
+        "Fuxiao Liu",
+        "Qin Zhang",
+        "Chen Chen",
+        "Mohit Bansal",
+        "Huaxiu Yao"
+      ],
+      "summary": "Many video reasoning tasks require tracking motion, temporal order, and evolving visual states across frames. Existing methods built on large vision-language models (LVLMs) often address this challenge by externalizing reasoning through textual chain-of-thought (CoT), keyframe selection, repeated frame reinsertion, or external tool use. While effective, such pipelines increase inference-time latency and engineering complexity, and they force temporal-visual evidence to be serialized into text or repeatedly re-encoded from frames. Inspired by the intuition that visual reasoning can occur implicitly before verbalization, we propose STORMS (Spatial-Temporal reasOning via inteRnalized Modeling), a two-stage framework that teaches LVLMs to reason through bounded continuous latent trajectories instead of explicit textual CoT. In Stage I, STORMS aligns latent tokens with thought-video representations derived from generated videos, grounding the latent states in dynamic visual evidence. In Stage II, the model is further trained with answer-only supervision, encouraging the reasoning process to be internalized without step-by-step annotations. Generated thought videos are used only during training; at inference, STORMS performs a bounded latent rollout without regenerating videos, reinserting frames, or invoking external visual tools. Experiments on VideoMME, MVBench, TempCompass, and MMVU show that STORMS improves video reasoning accuracy while substantially reducing inference overhead compared with tool or video-generation-based reasoning pipelines.",
+      "published": "2026-05-25T16:33:00Z",
+      "updated": "2026-05-25T16:33:00Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.26014v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.26014v1"
+    },
+    {
+      "arxiv_id": "2605.19322v1",
+      "title": "DynaTok: Temporally Adaptive and Positional Bias-Aware Token Compression for Video-LLMs",
+      "authors": [
+        "Minyoung Park",
+        "Taehun Kong",
+        "Sangjun Ahn"
+      ],
+      "summary": "Recent advances in Video Large Language Models (Video-LLMs) have greatly expanded multimodal reasoning capabilities. However, the massive number of visual tokens extracted from long video sequences incurs prohibitive computational costs, limiting their deployment in real-world scenarios. Existing training-free token compression methods select tokens based on attention magnitude as a proxy for semantic importance, but often overlook positional bias and rely only on short-term temporal locality, leading to redundant spatio-temporal coverage and inefficient token usage. We present DynaTok, a training-free, temporally adaptive and bias-aware token compression framework that allocates token budgets across both temporal and spatial dimensions. Through a lightweight exponential moving average (EMA) memory, the Temporal Budget Allocation (TBA) module dynamically assigns fewer tokens to redundant frames and more to novel frames, capturing long-term temporal variation. The Spatial Budget Allocation (SBA) module complements this by selecting spatially diverse and semantically important features using activation-based attention maps, while leveraging a spatial memory to reduce redundancy from previously selected regions and mitigate positional bias. DynaTok integrates seamlessly with existing Video-LLMs such as LLaVA-OneVision and LLaVA-Video without retraining, and effectively preserves semantic coverage under aggressive compression. Experiments on four representative VideoQA benchmarks-MVBench, LongVideoBench, MLVU, and VideoMME-show that DynaTok retains over 95% of baseline accuracy even with a 90% token reduction, surpassing recent training-free approaches. These results demonstrate that DynaTok provides a principled foundation for efficient and robust video reasoning, paving the way toward real-time streaming video understanding with future Video-LLMs.",
+      "published": "2026-05-19T04:02:01Z",
+      "updated": "2026-05-19T04:02:01Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.19322v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.19322v1"
+    },
+    {
+      "arxiv_id": "2605.12954v1",
+      "title": "AdaFocus: Adaptive Relevance-Diversity Sampling with Zero-Cache Look-back for Efficient Long Video Understanding",
+      "authors": [
+        "Xiao Yang",
+        "Yingzhe Ma",
+        "Haoxuan Yu",
+        "Zixin Li",
+        "Ning Qin"
+      ],
+      "summary": "Long video understanding is heavily bottlenecked by a rigid one-shot paradigm: existing methods either densely encode videos at prohibitive memory and latency costs, or aggressively compress them into sparse frame sets that irreversibly discard fine-grained evidence needed for downstream reasoning. Consequently, current models struggle to simultaneously balance temporal coverage, visual details, and computational efficiency. We propose AdaFocus, an efficient framework that rethinks long-video understanding as progressive evidence acquisition rather than one-pass encoding. AdaFocus relies on two tightly coupled components. First, a Query-Aware Adaptive Relevance-Diversity sampler (AdaRD) produces a compact yet informative video preview, adaptively switching to global clustering when the query lacks reliable local grounding. Second, instead of caching exhaustive frame sequences in memory, AdaFocus introduces an uncertainty-triggered refinement mechanism. It performs targeted look-back only when the model is not confident, retrieving high-resolution evidence directly from disk via a zero-cache I/O design. This turns discarded visual details from an irreversible loss into on-demand recoverable evidence without paying the cost of exhaustive preloading. Experiments on seven standard long-video benchmarks show that AdaFocus delivers a substantially better efficiency-accuracy trade-off than strong baselines. Compared with conventional dense encoding, AdaFocus achieves improved task performance (e.g., +2.59 accuracy on VideoMME, +8.39 mIoU on Charades-STA over single-pass inference) while reducing visual token consumption by ~33x and eliminating the need for in-memory frame pre-caching through its zero-cache disk retrieval design. These findings suggest that progressive preview combined with zero-cache evidence refinement is a highly effective paradigm for scalable multimedia reasoning.",
+      "published": "2026-05-13T03:40:21Z",
+      "updated": "2026-05-13T03:40:21Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.12954v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.12954v1"
+    },
+    {
+      "arxiv_id": "2605.09223v2",
+      "title": "CREST: Curvature-Regulated Event-Centric Sampling for Efficient Long-Video Understanding",
+      "authors": [
+        "Mehrajul Abadin Miraj",
+        "Abdul Mohaimen Al Radi",
+        "Shariful Islam Rayhan",
+        "Md. Tanvir Alam",
+        "Ismat Rahman",
+        "Yu Tian",
+        "Md Mosaddek Khan"
+      ],
+      "summary": "Selecting informative frames from long videos is a combinatorial problem that existing methods address either through efficient heuristics without explicit modeling of query-conditioned temporal structure, or through multi stage retrieval pipelines with substantial preprocessing cost. We propose \\textbf{CREST}, a training-free frame selection method grounded in the temporal geometry of query--frame relevance. CREST is based on the observation that relevance over time exhibits structured local variation: sharp curvature around salient events and flatter regions in redundant segments. By using local curvature to guide selection, CREST allocates a fixed frame budget more effectively across brief decisive events and slowly evolving evidence. Under a fixed backbone and frame budget, CREST achieves higher accuracy than AKS, a lightweight relevance--coverage baseline, on LongVideoBench and VideoMME, while retaining 93--95\\% of the accuracy of MIRA, a stronger multi-stage retrieval pipeline, at only 3--4\\% of its preprocessing cost.\\footnote{Code and implementation details are included in the supplementary material and will be released publicly upon acceptance.} On TempRel, our diagnostic benchmark for temporal frame selection, CREST achieves a 6.88\\% relative improvement over AKS. Pairwise LLM-as-a-judge evaluation further shows that CREST-selected frames yield more coherent frame-conditioned descriptions, with win rates of 60.58\\% and 54.50\\% on the two benchmarks. These results show that local temporal geometry provides a simple and efficient basis for long-video frame selection.",
+      "published": "2026-05-09T23:47:46Z",
+      "updated": "2026-05-24T20:57:02Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.09223v2",
+      "pdf_url": "https://arxiv.org/pdf/2605.09223v2"
+    },
+    {
+      "arxiv_id": "2605.05848v2",
+      "title": "VideoRouter: Query-Adaptive Dual Routing for Efficient Long-Video Understanding",
+      "authors": [
+        "Kuanwei Lin",
+        "Wenhao Zhang",
+        "Ge Li"
+      ],
+      "summary": "Video large multimodal models increasingly face a scalability bottleneck: long videos produce excessively long visual-token sequences, which sharply increase memory and latency during inference. While existing compression methods are effective in specific settings, most are either weakly query-aware or apply a fixed compression policy across frames, proving suboptimal when visual evidence is unevenly distributed over time. To address this, we present VideoRouter, a query-adaptive dual-router framework built on InternVL for budgeted evidence allocation. The Semantic Router predicts the dominant allocation policy, choosing between broad temporal coverage and adaptive high-resolution preservation, while the Image Router uses early LLM layers to score frame relevance. This enables aggressive compression on less relevant frames while preserving detail on critical evidence frames. To train both routers, we build Video-QTR-10K for allocation-policy supervision and Video-FLR-200K for frame-relevance supervision. Experiments on VideoMME, MLVU, and LongVideoBench show that VideoRouter consistently improves over the InternVL baseline under comparable or lower budgets, achieving up to a 67.9% token reduction.",
+      "published": "2026-05-07T08:23:27Z",
+      "updated": "2026-05-08T13:46:44Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.05848v2",
+      "pdf_url": "https://arxiv.org/pdf/2605.05848v2"
+    }
+  ]
+}

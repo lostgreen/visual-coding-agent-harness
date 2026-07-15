@@ -19,7 +19,7 @@ from vcah.memory import EvidenceStore
 from vcah.semantic_evidence import event_candidate_ledger as _event_candidate_ledger, semantic_repair_requests
 from vcah.types import ClaimContract, EvidenceRecord, is_path_only_visual_evidence, to_jsonable
 from vcah.virtual_index import build_workspace_overview
-from vcah.virtual_video import VirtualVideoWorkspace
+from vcah.virtual_video import VirtualVideoWorkspace, select_uniform_items
 
 
 @dataclass(frozen=True)
@@ -223,6 +223,25 @@ def compile_query_contract(
             measurement_unit="point",
             boundary_hint=boundary_hint,
         )
+    if _is_video_summary_question(text):
+        return ClaimContract(
+            required_scope="full_video",
+            quantifier="comparison",
+            observation_target="event",
+            aggregation="summarize",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+        )
+    if _is_temporal_label_question(text):
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="event",
+            aggregation="compare",
+            required_observability=("visual", "ocr", "asr"),
+            observability_mode="any",
+            boundary_hint=_temporal_event_hint(question),
+        )
     if _is_spatial_relation_question(text):
         return ClaimContract(
             required_scope="window",
@@ -241,14 +260,16 @@ def compile_query_contract(
             required_observability=("visual",),
             observability_mode="all",
         )
-    if re.search(r"\bwhich\s+episode\b", text):
+    if _is_completed_progress_question(text):
         return ClaimContract(
             required_scope="multi_window",
-            quantifier="comparison",
-            observation_target="event",
+            quantifier="scalar_quantity",
+            observation_target="attribute",
             aggregation="compare",
-            required_observability=("visual", "asr"),
+            required_observability=("visual", "ocr"),
             observability_mode="any",
+            measurement_unit="task",
+            boundary_hint=_progress_boundary_hint(question),
         )
     if measurement_unit and not is_occurrence_count and (
         bool(asked_measurement_unit) or "how much" in text or "what total" in text
@@ -282,6 +303,33 @@ def compile_query_contract(
             required_observability=("visual",),
             observability_mode="all",
         )
+    if _is_causal_relation_question(text):
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="relation",
+            aggregation="compare",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+        )
+    if _is_event_outcome_question(text):
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="event",
+            aggregation="compare",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+        )
+    if _is_agent_relation_question(text):
+        return ClaimContract(
+            required_scope="window",
+            quantifier="comparison",
+            observation_target="relation",
+            aggregation="compare",
+            required_observability=("visual",),
+            observability_mode="all",
+        )
     return ClaimContract(
         required_scope="window",
         quantifier="existential",
@@ -303,6 +351,7 @@ def _measurement_unit(text: str) -> str:
         (r"\b(?:light[ -]?years?|ly)\b", "light_year"),
         (r"\byears?\b", "year"),
         (r"\bpoints?\b", "point"),
+        (r"\btasks?\b", "task"),
     )
     normalized = str(text or "").casefold()
     anchor = re.search(r"\b(?:how many|how much|what total)\b", normalized)
@@ -375,6 +424,78 @@ def _is_spatial_relation_question(text: str) -> bool:
     )
 
 
+def _is_video_summary_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(r"\b(?:title|heading)\b.*\b(?:summari[sz]\w*|best)\b", normalized)
+        or re.search(r"\bbest\s+(?:title|summary)\b", normalized)
+        or re.search(r"\b(?:main|overall|central)\s+(?:topic|theme|idea|message)\b", normalized)
+        or re.search(r"\b(?:video|film|documentary)\s+(?:is\s+)?mainly\s+about\b", normalized)
+    )
+
+
+def _is_temporal_label_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(r"\b(?:at|around)\s+what\s+time\b", normalized)
+        or re.search(r"\bwhat\s+time\b", normalized)
+        or re.search(r"\bspecific\s+time\b", normalized)
+        or re.search(r"\bwhen\s+(?:does|did|is|was|were|will|would|can|could)\b", normalized)
+        or re.search(r"\bwhich\s+(?:episode|day|meal|period|quarter|stage|phase)\b", normalized)
+    )
+
+
+def _temporal_event_hint(question: str) -> str:
+    text = " ".join(str(question or "").split())
+    match = re.search(
+        r"\b(?:when|what time|specific time|which episode|which day|which meal|which period|which quarter|which stage|which phase)\b[^?]*",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return match.group(0).strip() if match else "event-to-time-label binding"
+
+
+def _is_completed_progress_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(
+            r"\bhow\s+many\s+(?:[a-z-]+\s+){0,2}(?:tasks?|challenges?|activities?)\b[^?]*"
+            r"\b(?:complete\w*|finish\w*|accomplish\w*)\b",
+            normalized,
+        )
+    )
+
+
+def _progress_boundary_hint(question: str) -> str:
+    text = " ".join(str(question or "").split())
+    leading = re.match(r"\s*(?:as|when|while)\s+([^,?]+)", text, flags=re.IGNORECASE)
+    return leading.group(0).strip() if leading else _boundary_hint(question) or "requested progress checkpoint"
+
+
+def _is_causal_relation_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(re.search(r"\bwhy\b|\b(?:cause|reason|motive|because)\b", normalized))
+
+
+def _is_event_outcome_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(r"\bhow\b[^?]{0,80}\b(?:unfold|end|ended|conclude|concluded|turn(?:ed)? out)\b", normalized)
+        or re.search(r"\bwhat\s+(?:happens?|happened)\s+to\b", normalized)
+    )
+
+
+def _is_agent_relation_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(
+            r"\bwho\s+(?:protects?|protected|helps?|helped|rescues?|rescued|saves?|saved|attacks?|attacked|"
+            r"defeats?|defeated|stops?|stopped|supports?|supported|causes?|caused)\b",
+            normalized,
+        )
+    )
+
+
 def _is_global_absence_question(text: str) -> bool:
     normalized = str(text or "").casefold()
     return bool(
@@ -394,6 +515,15 @@ def compile_query_requirements(question: str) -> dict[str, Any]:
     terms = _identity_anchor_terms(question)
     text = str(question or "").casefold()
     spatial = _is_spatial_relation_question(text)
+    contrastive_subject = bool(
+        re.search(r"\bone\s+(?:team|group|person)\b[^?]*\bthe\s+other\s+(?:team|group|person)\b", text)
+    )
+    temporal_sequence = bool(
+        re.search(r"\b(?:sequence|order|before|after|then|first|last|initially|ultimately)\b", text)
+    )
+    state_tracking = bool(
+        re.search(r"\b(?:change|changed|turn(?:ed)?|remain(?:ed)?|maintain(?:ed)?|overtak\w*|track\w*)\b", text)
+    )
     return {
         "requires_identity_link": bool(terms),
         "identity_anchor_terms": list(terms),
@@ -404,6 +534,18 @@ def compile_query_requirements(question: str) -> dict[str, Any]:
             if spatial and any(term in text for term in ("in relation to", "relative to"))
             else "viewer"
             if spatial
+            else ""
+        ),
+        "requires_contrastive_subject_binding": contrastive_subject,
+        "requires_temporal_sequence": temporal_sequence,
+        "requires_state_tracking": state_tracking,
+        "measurement_subject_role": (
+            "other_team"
+            if contrastive_subject and "team" in text
+            else "other_subject"
+            if contrastive_subject
+            else "anchored_subject"
+            if terms and bool(_measurement_unit(text))
             else ""
         ),
     }
@@ -429,6 +571,13 @@ def _identity_anchor_terms(question: str) -> tuple[str, ...]:
         "having",
         "dressed",
         "with",
+        "consumed",
+        "consume",
+        "ate",
+        "eaten",
+        "eating",
+        "bought",
+        "purchased",
     }
     if not attribute_markers.intersection(tokens):
         return ()
@@ -449,6 +598,13 @@ def _identity_anchor_terms(question: str) -> tuple[str, ...]:
         "carried",
         "having",
         "dressed",
+        "consumed",
+        "consume",
+        "ate",
+        "eaten",
+        "eating",
+        "bought",
+        "purchased",
         "in",
         "and",
         "the",
@@ -547,6 +703,7 @@ class VirtualVideoMultiRoundDriver:
         best_citations: tuple[str, ...] = ()
         best_verification_reason = ""
         best_support_rank = -1
+        option_states: dict[str, dict[str, Any]] = {}
         last_gate_reason = "answer_missing"
         gate_feedback: dict[str, Any] = {}
         rounds_run = 0
@@ -585,6 +742,7 @@ class VirtualVideoMultiRoundDriver:
                     stagnation_status=stagnation_status,
                     answer_gate_feedback=gate_feedback,
                     remaining_budget=remaining,
+                    pre_final_checkpoint=round_id == self.max_rounds,
                 )
             ))
             if decision.action == "investigate":
@@ -761,9 +919,15 @@ class VirtualVideoMultiRoundDriver:
                 gate = _apply_answer_audit(gate, decision)
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
-                gate_feedback = dict(gate)
-                support_rank = _answer_support_rank(decision)
-                if _candidate_can_be_forced(decision, evidence_store.records) and support_rank >= best_support_rank:
+                option_states = _record_option_state(
+                    option_states,
+                    decision,
+                    gate,
+                    workspace.case.options,
+                )
+                gate_feedback = {**dict(gate), "option_states": option_states}
+                support_rank = _candidate_gate_rank(decision, gate)
+                if _candidate_can_be_forced(decision, evidence_store.records) and support_rank > best_support_rank:
                     best_answer = decision.answer
                     best_citations = decision.citations
                     best_verification_reason = last_gate_reason
@@ -790,10 +954,31 @@ class VirtualVideoMultiRoundDriver:
                 continue
             if remaining <= 0:
                 break
-            requested_tasks = tuple(
-                _task_for_contract(task, query_contract)
-                for task in decision.tasks[: min(self.max_tasks_per_round, remaining)]
+            raw_tasks = decision.tasks[: min(self.max_tasks_per_round, remaining)]
+            resolved_tasks = _resolve_workspace_tasks(
+                workspace,
+                raw_tasks,
+                limit=min(self.max_tasks_per_round, remaining),
             )
+            if resolved_tasks != raw_tasks:
+                trace.append(
+                    {
+                        "type": "task_segment_resolution",
+                        "round": round_id,
+                        "requested_task_count": len(raw_tasks),
+                        "resolved_task_count": len(resolved_tasks),
+                        "requested_segment_ids": [task.segment_id for task in raw_tasks],
+                        "resolved_segment_ids": [task.segment_id for task in resolved_tasks],
+                    }
+                )
+            if not resolved_tasks:
+                resolved_tasks = _bootstrap_investigation_tasks(
+                    workspace,
+                    query_contract,
+                    round_id=round_id,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+            requested_tasks = tuple(_task_for_contract(task, query_contract) for task in resolved_tasks)
             tasks = _prefer_navigation_repairs(
                 requested_tasks,
                 evidence_store.records,
@@ -934,8 +1119,14 @@ class VirtualVideoMultiRoundDriver:
                     }
                 )
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
-                support_rank = _answer_support_rank(final_decision)
-                if _candidate_can_be_forced(final_decision, evidence_store.records) and support_rank >= best_support_rank:
+                option_states = _record_option_state(
+                    option_states,
+                    final_decision,
+                    gate,
+                    workspace.case.options,
+                )
+                support_rank = _candidate_gate_rank(final_decision, gate)
+                if _candidate_can_be_forced(final_decision, evidence_store.records) and support_rank > best_support_rank:
                     best_answer = final_decision.answer
                     best_citations = final_decision.citations
                     best_verification_reason = last_gate_reason
@@ -997,6 +1188,7 @@ class VirtualVideoMultiRoundDriver:
                 "verified": verified,
                 "verification_reason": verification_reason,
                 "best_effort": bool(final_answer and not verified and best_answer),
+                "option_states": option_states,
             }
         )
         result = MultiRoundResult(
@@ -1364,13 +1556,116 @@ def _windows_overlap(left: EvidenceRecord, right: EvidenceRecord) -> bool:
 
 
 def _task_for_contract(task: InvestigationTask, contract: ClaimContract) -> InvestigationTask:
+    if contract.aggregation == "summarize" and task.inspection_mode != "search_asr":
+        expected = str(task.expected_evidence or "").strip()
+        narrative = (
+            "segment narrative thesis and role (setup, example, process detail, comparison, or conclusion), "
+            "grounded in local ASR and kept separate from visually salient examples"
+        )
+        return replace(
+            task,
+            modality_hint=("visual", "asr"),
+            expected_evidence=f"{expected}; {narrative}" if expected else narrative,
+        )
     if (
         task.inspection_mode == "window"
         and contract.quantifier == "total_count"
         and contract.observation_target == "event"
     ):
         return replace(task, inspection_mode="enumerate_events")
+    if contract.required_scope == "multi_window" and contract.aggregation == "compare":
+        expected = str(task.expected_evidence or "").strip()
+        transition = (
+            "continuous before-transition-after evidence with ordered timestamps and stable subject/event identity"
+        )
+        return replace(
+            task,
+            modality_hint=tuple(dict.fromkeys((*task.modality_hint, "visual", "motion"))),
+            expected_evidence=f"{expected}; {transition}" if expected else transition,
+        )
     return task
+
+
+def _resolve_workspace_tasks(
+    workspace: VirtualVideoWorkspace,
+    tasks: Sequence[InvestigationTask],
+    *,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    task_limit = max(0, int(limit))
+    if task_limit <= 0:
+        return ()
+    segments = tuple(workspace.manifest.segments)
+    by_id = {segment.segment_id: segment for segment in segments}
+    global_aliases = {"all", "full", "full_video", "global", "seg_all", "seg_full", "workspace"}
+    task_groups: list[tuple[InvestigationTask, ...]] = []
+    for task in tasks:
+        if task.inspection_mode == "search_asr":
+            task_groups.append((task,))
+            continue
+        if task.time_range is not None:
+            start, end = (float(value) for value in task.time_range)
+            if end < start:
+                start, end = end, start
+            start = max(0.0, start)
+            end = min(float(workspace.manifest.duration_sec), end)
+            overlaps = tuple(
+                (segment, max(start, segment.virtual_start_sec), min(end, segment.virtual_end_sec))
+                for segment in segments
+                if min(end, segment.virtual_end_sec) > max(start, segment.virtual_start_sec)
+            )
+            if task.segment_id in by_id:
+                requested_segment = by_id[task.segment_id]
+                contained = (
+                    start >= requested_segment.virtual_start_sec - 1e-6
+                    and end <= requested_segment.virtual_end_sec + 1e-6
+                )
+                if contained and end > start:
+                    task_groups.append((replace(task, time_range=(start, end)),))
+                    continue
+            expanded = tuple(
+                replace(
+                    task,
+                    query_id=(
+                        task.query_id
+                        if len(overlaps) == 1
+                        else f"{task.query_id}_{segment.segment_id}_{index:02d}"
+                    ),
+                    segment_id=segment.segment_id,
+                    time_range=(overlap_start, overlap_end),
+                )
+                for index, (segment, overlap_start, overlap_end) in enumerate(overlaps, start=1)
+            )
+            if expanded:
+                task_groups.append(expanded)
+                continue
+        if task.segment_id in by_id:
+            task_groups.append((task,))
+            continue
+        if str(task.segment_id or "").casefold() not in global_aliases:
+            continue
+        task_groups.append(
+            tuple(
+                replace(
+                    task,
+                    query_id=f"{task.query_id}_{segment.segment_id}",
+                    segment_id=segment.segment_id,
+                    time_range=None,
+                )
+                for segment in select_uniform_items(segments, min(task_limit, len(segments)))
+            )
+        )
+
+    resolved: list[InvestigationTask] = []
+    depth = 0
+    while len(resolved) < task_limit and any(depth < len(group) for group in task_groups):
+        for group in task_groups:
+            if len(resolved) >= task_limit:
+                break
+            if depth < len(group):
+                resolved.append(group[depth])
+        depth += 1
+    return tuple(resolved)
 
 
 def _task_is_executable(task: InvestigationTask) -> bool:
@@ -1465,7 +1760,7 @@ def _apply_readiness_dashboard(
         for report in reports if not active_gap_id or report.gap_id == active_gap_id
         for condition_result in report.condition_results
     )
-    states = merge_condition_states(updates)
+    states = _apply_condition_scope(merge_condition_states(updates), result)
     unresolved = sorted(condition_id for condition_id, state in states.items() if state.status != "satisfied")
     grounded = bool(result.get("ready_for_answer")) and not unresolved
     result.update({
@@ -1478,6 +1773,32 @@ def _apply_readiness_dashboard(
         "condition_states": {condition_id: to_jsonable(state) for condition_id, state in states.items()},
     })
     result["ready_for_answer"] = grounded
+    return result
+
+
+def _apply_condition_scope(
+    states: Mapping[str, Any],
+    completion_status: Mapping[str, Any],
+) -> dict[str, Any]:
+    source_coverage = dict(completion_status.get("source_coverage", {}) or {})
+    adopted_source = str(completion_status.get("adopted_source_video_id", "") or "")
+    coverage_rows = [source_coverage[adopted_source]] if adopted_source in source_coverage else list(source_coverage.values())
+    coverage_ratio = max(
+        (
+            float(row.get("covered_count", 0) or 0) / max(1, int(row.get("required_count", 0) or 0))
+            for row in coverage_rows
+        ),
+        default=0.0,
+    )
+    result = {}
+    for condition_id, state in states.items():
+        if (
+            getattr(state, "scope", "window") == "full_video"
+            and state.status == "satisfied"
+            and coverage_ratio + 1e-9 < float(getattr(state, "required_coverage", 1.0) or 1.0)
+        ):
+            state = replace(state, status="unknown")
+        result[condition_id] = state
     return result
 
 
@@ -1654,7 +1975,13 @@ def _answer_completion_gate(
             cited,
             query_requirements=query_requirements,
         )
-    quantitative_gate = _quantitative_answer_gate(workspace, contract, answer, cited)
+    quantitative_gate = _quantitative_answer_gate(
+        workspace,
+        contract,
+        answer,
+        cited,
+        query_requirements=query_requirements,
+    )
     if quantitative_gate is not None:
         return quantitative_gate
     if contract.required_scope != "full_video":
@@ -2009,6 +2336,8 @@ def _quantitative_answer_gate(
     contract: ClaimContract,
     answer: str,
     cited: Sequence[EvidenceRecord],
+    *,
+    query_requirements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if contract.quantifier in {"distinct_count", "total_count"}:
         return None
@@ -2017,7 +2346,12 @@ def _quantitative_answer_gate(
     if contract.measurement_unit == "point" and contract.boundary_hint and _score_pair(option_text):
         return _boundary_score_gate(contract, option_text, cited)
     if contract.quantifier == "scalar_quantity":
-        return _scalar_quantity_gate(contract, option_text, cited)
+        return _scalar_quantity_gate(
+            contract,
+            option_text,
+            cited,
+            query_requirements=query_requirements,
+        )
     atoms = _quantitative_atoms(option_text)
     if not atoms:
         return None
@@ -2162,21 +2496,37 @@ def _scalar_quantity_gate(
     contract: ClaimContract,
     option_text: str,
     cited: Sequence[EvidenceRecord],
+    *,
+    query_requirements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     target = _quantity_value(option_text)
     if target is None:
         return {"passed": False, "reason": "scalar_option_value_missing", "missing_segment_ids": []}
     unit = canonical_unit(contract.measurement_unit)
-    facts = tuple(
+    unit_facts = tuple(
         fact
         for fact in _measurement_facts(cited)
         if fact.unit == unit and (not contract.boundary_hint or fact.boundary_relation in {"before", "at"})
     )
+    required_subject = str((query_requirements or {}).get("measurement_subject_role", "") or "")
+    facts = tuple(
+        fact
+        for fact in unit_facts
+        if not required_subject or _measurement_subject_matches(fact.subject_id, required_subject)
+    )
     if not facts:
         return {
             "passed": False,
-            "reason": "scalar_measurement_evidence_missing",
+            "reason": (
+                "scalar_measurement_subject_binding_missing"
+                if required_subject and unit_facts
+                else "scalar_measurement_evidence_missing"
+            ),
             "measurement_unit": unit,
+            "required_measurement_subject": required_subject,
+            "observed_measurement_subjects": sorted(
+                {fact.subject_id for fact in unit_facts if fact.subject_id}
+            ),
             "missing_segment_ids": [],
         }
 
@@ -2237,6 +2587,24 @@ def _scalar_quantity_gate(
         "observed_value": observed,
         "missing_segment_ids": [],
     }
+
+
+def _measurement_subject_matches(subject_id: str, required_role: str) -> bool:
+    subject = re.sub(r"[^a-z0-9]+", "_", str(subject_id or "").casefold()).strip("_")
+    required = re.sub(r"[^a-z0-9]+", "_", str(required_role or "").casefold()).strip("_")
+    if not subject or not required:
+        return False
+    aliases = {
+        "other_team": {"other_team", "opposing_team", "opponent_team", "non_pizza_team"},
+        "other_subject": {"other_subject", "other_group", "other_person", "counterpart"},
+        "anchored_subject": {
+            "anchored_subject",
+            "identified_subject",
+            "target_person",
+            "golden_burger_eater",
+        },
+    }
+    return subject == required or subject in aliases.get(required, set())
 
 
 def _measurement_facts(cited: Sequence[EvidenceRecord]) -> tuple[MeasurementFact, ...]:
@@ -2332,6 +2700,19 @@ def _identity_link_gate(
     if not terms:
         return None
     by_id = {record.evidence_id: record for record in cited}
+    required_subject = str((query_requirements or {}).get("measurement_subject_role", "") or "")
+    if required_subject == "anchored_subject":
+        has_anchor = any(_record_matches_identity_anchor(record, terms) for record in cited)
+        has_bound_measurement = any(
+            _measurement_subject_matches(fact.subject_id, required_subject)
+            for record in cited
+            for fact in normalize_measurements(
+                record.operation_metadata.get("measurements"),
+                evidence_id=record.evidence_id,
+            )
+        )
+        if has_anchor and has_bound_measurement:
+            return None
     for cluster in (_entity_cluster(item) for item in entity_clusters):
         cluster_records = tuple(by_id[evidence_id] for evidence_id in cluster["evidence_ids"] if evidence_id in by_id)
         if not cluster_records:
@@ -2654,6 +3035,10 @@ def _gap_condition(value: GapCondition | Mapping[str, Any] | str) -> GapConditio
             subject_role=str(value.get("subject_role", "") or ""),
             object_role=str(value.get("object_role", "") or ""),
             required_relation=str(value.get("required_relation", "") or ""),
+            scope=str(value.get("scope", "auto") or "auto"),
+            quantifier=str(value.get("quantifier", "auto") or "auto"),
+            required_coverage=float(value.get("required_coverage", 0.0) or 0.0),
+            aggregation=str(value.get("aggregation", "none") or "none"),
         )
     return GapCondition("", str(value or ""))
 
@@ -2730,10 +3115,59 @@ def _answer_support_rank(decision: ReasonerDecision) -> int:
     }.get(decision.support_status, 2)
 
 
+def _candidate_gate_rank(decision: ReasonerDecision, gate: Mapping[str, Any]) -> int:
+    if bool(gate.get("passed")):
+        return 4
+    reason = str(gate.get("reason", "") or "").casefold()
+    if decision.support_status == "contradicted" or reason == "answer_audit_contradicted":
+        return 0
+    if reason in {
+        "answer_audit_insufficient",
+        "event_count_answer_mismatch",
+        "entity_count_answer_mismatch",
+        "scalar_quantity_answer_mismatch",
+        "contract_completion_not_ready",
+    }:
+        return min(1, _answer_support_rank(decision))
+    return _answer_support_rank(decision)
+
+
+def _record_option_state(
+    states: Mapping[str, Mapping[str, Any]],
+    decision: ReasonerDecision,
+    gate: Mapping[str, Any],
+    options: Mapping[str, str],
+) -> dict[str, dict[str, Any]]:
+    result = {str(key): dict(value) for key, value in states.items()}
+    option = _letter(decision.answer) or _option_letter_from_answer(decision.answer, options)
+    if not option:
+        return result
+    rank = _candidate_gate_rank(decision, gate)
+    current = dict(result.get(option, {}))
+    current_rank = int(current.get("rank", -1) or -1)
+    direct_refutation = bool(
+        decision.support_status == "contradicted"
+        or str(gate.get("reason", "") or "").casefold() == "answer_audit_contradicted"
+    )
+    prior_status = str(current.get("status", "") or "")
+    status = "supported" if bool(gate.get("passed")) else "refuted" if direct_refutation else "unresolved"
+    if {prior_status, status} == {"supported", "refuted"}:
+        status = "conflicted"
+    if rank >= current_rank or status in {"refuted", "conflicted"}:
+        result[option] = {
+            "status": status,
+            "rank": max(rank, current_rank) if status == "conflicted" else rank,
+            "answer": decision.answer,
+            "reason": str(gate.get("reason", "") or "verification_failed"),
+            "support_reason": decision.support_reason,
+            "citation_ids": list(decision.citations),
+        }
+    return result
+
+
 def _candidate_can_be_forced(decision: ReasonerDecision, evidence: Sequence[EvidenceRecord]) -> bool:
     return (
         bool(decision.answer.strip())
-        and decision.support_status != "contradicted"
         and _citations_are_visual(decision.citations, evidence)
     )
 
@@ -2759,6 +3193,10 @@ def _evidence_digest(
                         {
                             "candidate_id": candidate.get("candidate_id"),
                             "event_key": candidate.get("signature"),
+                            "event_class": candidate.get("event_class"),
+                            "counting_unit": candidate.get("counting_unit"),
+                            "participant_ids": candidate.get("participant_ids", ()),
+                            "phases": candidate.get("phases", ()),
                             "supports_question_event": True,
                         }
                     ],

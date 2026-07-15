@@ -13,6 +13,7 @@ import pytest
 from vcah.direct_baseline import (
     align_direct_evidence_to_frames,
     annotate_uniform_frames,
+    bounded_uniform_frame_count,
     build_direct_prompt,
     format_timestamped_asr,
     materialize_uniform_frames,
@@ -43,6 +44,12 @@ _direct_runner = _load_direct_runner()
 
 def test_uniform_midpoint_times_cover_all_bins() -> None:
     assert uniform_midpoint_times(100.0, 4) == (12.5, 37.5, 62.5, 87.5)
+
+
+def test_bounded_uniform_frame_count_respects_frame_and_fps_limits() -> None:
+    assert bounded_uniform_frame_count(120.0, max_frames=512, max_fps=1.0) == 120
+    assert bounded_uniform_frame_count(900.5, max_frames=512, max_fps=1.0) == 512
+    assert bounded_uniform_frame_count(10.1, max_frames=512, max_fps=0.5) == 6
 
 
 def test_materialize_uniform_frames_writes_exact_manifest(tmp_path: Path) -> None:

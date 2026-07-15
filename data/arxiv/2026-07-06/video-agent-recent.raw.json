@@ -1,0 +1,185 @@
+{
+  "query": "video agent",
+  "categories": [
+    "cs.AI",
+    "cs.CV",
+    "cs.CL",
+    "cs.LG",
+    "cs.MM"
+  ],
+  "from": "2026-05-06",
+  "to": "2026-07-06",
+  "count": 7,
+  "papers": [
+    {
+      "arxiv_id": "2607.01469v1",
+      "title": "A Cost-Aware, Paired Protocol for Auditing Dynamic Tool Synthesis in Agentic Video Question Answering",
+      "authors": [
+        "Aseel Mohamed",
+        "Rama AlHamidi",
+        "Mohamed Rayan Barhdadi",
+        "Rasul Khanbayov",
+        "Erchin Serpedin",
+        "Hasan Kurban"
+      ],
+      "summary": "Agentic Video Question Answering (VideoQA) systems invoke tools during inference, but their tool libraries are fixed, so recurring procedures are rebuilt from primitives on every question. Synthesizing composite tools could remove this overhead, but whether such expansion helps is hard to assess: final-answer accuracy, the standard metric, ignores inference effort, so it cannot reveal how a system shifts cost. We propose a cost-aware, paired protocol for auditing tool-augmented video agents. The protocol pairs two complete systems on the same input for each question and reports their net difference across accuracy and cost jointly. For each question, it sorts the paired outcome into one of six groups defined by joint correctness and by the change in visible tool calls, separating accuracy-preserving efficiency gains from harmful regressions. Significance is reported with McNemar's test and paired bootstrap confidence intervals. We instantiate the protocol on Dynamic-SAGE, an agentic VideoQA framework that synthesizes, validates, and persistently registers executable composite tools for reuse on unseen questions, and evaluate it against the SAGE baseline on SAGE-Bench. The audit reveals a multi-axis profile that a scalar accuracy comparison would miss: Dynamic-SAGE improves accuracy by 7.5 points (p < 0.001) and reduces reasoning turns and visible tool calls by roughly 28%, while shifting rather than reducing inference cost, as token usage rises 34% and cost 26%. Gains are largest on visual and open-ended questions and neutral on verbal and multimodal ones, and residual failures concentrate on hard, open-ended questions where the pipeline does the most work. By measuring accuracy and cost jointly, the protocol shows where the pipeline-level difference is reliable and where it is not. The code is available at https://github.com/KurbanIntelligenceLab/Dynamic-SAGE.",
+      "published": "2026-07-01T21:01:57Z",
+      "updated": "2026-07-01T21:01:57Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2607.01469v1",
+      "pdf_url": "https://arxiv.org/pdf/2607.01469v1"
+    },
+    {
+      "arxiv_id": "2606.12195v1",
+      "title": "InternVideo3: Agentify Foundation Models with Multimodal Contextual Reasoning",
+      "authors": [
+        "Ziang Yan",
+        "Sheng Xia",
+        "Jiashuo Yu",
+        "Yue Wu",
+        "Tianxiang Jiang",
+        "Songze Li",
+        "Kanghui Tian",
+        "Yicheng Xu",
+        "Yinan He",
+        "Kai Chen",
+        "Limin Wang",
+        "Yu Qiao",
+        "Yi Wang"
+      ],
+      "summary": "Recent progress in foundation models has shifted toward agentic behavior involving multi-step reasoning and tool use. However, open-source efforts largely focus on text-dominant settings, leaving long-horizon multimodal tasks underexplored. This gap is evident in video tasks requiring sustained temporal understanding and iterative interaction. We present InternVideo3, a framework enhancing these capabilities via Multimodal Contextual Reasoning (MCR). MCR treats understanding as a closed-loop process over a shared, evolving context containing observations, instructions, reasoning, tool actions, and memory. This frames long-video understanding as evidence accumulation and verification. To ensure efficiency, we introduce Multimodal Multi-head Latent Attention (M^2LA), a token-preserving reparameterization compressing KV-cache states while retaining the full token stream. Our staged training includes continued pretraining, short-to-long supervised fine-tuning, rule-based reinforcement learning, and on-policy distillation. Experiments show InternVideo3 achieves strong performance on benchmarks like Video-MME, MLVU, and EgoSchema. We further instantiate the model as a video agent with retrieval tools, demonstrating robust evidence-grounded behavior. Our results suggest that efficient context handling and closed-loop reasoning are vital for adapting open multimodal models toward long-horizon visually grounded agency.",
+      "published": "2026-06-10T15:17:08Z",
+      "updated": "2026-06-10T15:17:08Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.12195v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.12195v1"
+    },
+    {
+      "arxiv_id": "2606.08091v1",
+      "title": "VideoWeaver: Evaluating and Evolving Skills for Agentic Long Video Generation",
+      "authors": [
+        "Jianhui Wei",
+        "Jie Tan",
+        "Hengchuan Zhu",
+        "Xiaotian Zhang",
+        "Yan Zhang",
+        "Ziyi Chen",
+        "Daoan Zhang",
+        "Wei Xu",
+        "Zuozhu Liu"
+      ],
+      "summary": "Recent agent frameworks such as Claude Code, Codex, and OpenClaw are strong at tool use and orchestration, but whether they can handle long video generation, a long-horizon multimodal task, remains underexplored. Unlike earlier video agents whose pipeline is handcrafted, these frameworks can build and refine their own workflows. We introduce VideoWeaver, an agent harness and benchmark that evaluates and evolves skills for long video generation, where an agent turns a single instruction into a long video by composing foundation skills into its own workflow rather than following a predefined pipeline. The benchmark has 16 task categories and 285 cases, with references spanning text, image, audio, video, and their combinations. Because errors can arise at any stage and not just in the final video, we propose an agent-as-judge that inspects both the execution trace and the final video, grounding its scores in evidence such as metadata and intermediate files. Using this feedback, we further design a skill evolution algorithm that refines and merges the agent's skills. Across multiple frameworks and models, we find that an explicit composition skill improves the generation process over using foundation skills alone, that skill evolution further improves output quality, and that performance varies notably across harness and model choices. The proposed agent-as-judge also aligns well with human judgments, especially on process metrics. Code and dataset is available at https://github.com/JianhuiWei7/VideoWeaver",
+      "published": "2026-06-06T10:35:28Z",
+      "updated": "2026-06-06T10:35:28Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.08091v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.08091v1"
+    },
+    {
+      "arxiv_id": "2606.03920v1",
+      "title": "Benchmarking Visual State Tracking in Multimodal Video Understanding",
+      "authors": [
+        "Sihyun Yu",
+        "Nanye Ma",
+        "Pinzhi Huang",
+        "Hyunseok Lee",
+        "Shusheng Yang",
+        "June Suk Choi",
+        "Ellis Brown",
+        "Oscar Michel",
+        "Boyang Zheng",
+        "Jinwoo Shin",
+        "Saining Xie"
+      ],
+      "summary": "Understanding a video requires more than recognizing isolated moments, as humans continuously track entities, states, and events over time. This capacity for visual state tracking is fundamental to video understanding, yet remains underexplored in current evaluations of Multimodal Large Language Models (MLLMs). We introduce Visual STAte Tracking benchmark (VSTAT), a video-based benchmark designed to diagnose visual state tracking in MLLMs. VSTAT consists of 834 clips drawn from both synthetic and real-world videos, paired with 1,500 questions that cannot be answered from any single frame or short segment, requiring continuous perception and integration of events across the entire video stream. Despite their strong performance on existing video benchmarks, we find that state-of-the-art MLLMs perform far below humans and only modestly above answer-prior baselines. To analyze this gap, we compare MLLMs' thinking traces with the underlying video stream to understand why and when MLLMs fail on VSTAT. We find that MLLMs reason and track correctly in text, but fail at visually perceiving the events they need to track. Finally, our preliminary evaluation suggests that recent agentic approaches, including MLLM-based video agents and coding agents, do not readily resolve these failures, still falling short on VSTAT.",
+      "published": "2026-06-02T17:12:05Z",
+      "updated": "2026-06-02T17:12:05Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.03920v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.03920v1"
+    },
+    {
+      "arxiv_id": "2605.13803v1",
+      "title": "EvoGround: Self-Evolving Video Agents for Video Temporal Grounding",
+      "authors": [
+        "Minjoon Jung",
+        "Byoung-Tak Zhang",
+        "Lorenzo Torresani"
+      ],
+      "summary": "Video temporal grounding (VTG) takes an untrimmed video and a natural-language query as input and localizes the temporal moment that best matches the query. Existing methods rely on large, task-specific datasets requiring costly manual annotation. We introduce EvoGround, a framework of two coupled self-evolving agents, a proposer and a solver, that learn temporal grounding from raw videos without any human-labeled data. The proposer generates query--moment pairs from raw videos, while the solver learns to ground them and feeds back signals that improve the proposer in return. Through this self-reinforcing reinforcement-learning loop, the two agents are initialized from the same backbone and mutually improve across iterations. Trained on 2.5K unlabeled videos, EvoGround matches or surpasses fully supervised models across multiple VTG benchmarks, while emerging as a state-of-the-art fine-grained video captioner without manual labels.",
+      "published": "2026-05-13T17:25:51Z",
+      "updated": "2026-05-13T17:25:51Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.13803v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.13803v1"
+    },
+    {
+      "arxiv_id": "2605.13228v1",
+      "title": "ReTool-Video: Recursive Tool-Using Video Agents with Meta-Augmented Tool Grounding",
+      "authors": [
+        "Xiao Liu",
+        "Nayu Liu",
+        "Junnan Zhu",
+        "Ruirui Chen",
+        "Guohui Xiang",
+        "Changjian Wang",
+        "Kaiwen Wei",
+        "Rongzhen Li",
+        "Jiang Zhong"
+      ],
+      "summary": "Video understanding requires active evidence seeking, motivating tool-augmented video agents for temporal reasoning, cross-modal understanding, and complex question answering. Existing video agents have improved video reasoning with retrieval, memory, frame inspection, and verifier tools, but they still face two limitations: (1) a coarse tool space that lacks fine-grained operations for compositional reasoning; and (2) a flat action space that forces high-level video intents into primitive executable tool calls. In this paper, we address these challenges with two complementary designs. First, we construct a MetaAug-Video Tool Library (MVTL), an extensible tool library with 134 registered tools, including 26 base tools for general multimodal signal processing and 108 meta tools for filtering, aggregation, reranking, formatting, and other intermediate-result operations. MVTL supports dual-level access to both structured video information and raw modal evidence, enabling diverse video reasoning scenarios. Second, we propose ReTool-Video, a recursive tool-using method that grounds high-level video intents into executable tool chains. In ReTool-Video, matched actions are executed directly, while unmatched intents are delegated to a resolver for parameter repair, tool substitution, or decomposition. This allows abstract actions such as temporal merging, cross-modal verification, or repeated-event aggregation to be progressively translated into concrete multimodal operations at runtime. Experiments on MVBench, MLVU, and Video-MME w/o sub. show that ReTool-Video consistently outperforms strong baselines. Further analysis demonstrates that recursive grounding and fine-grained meta tools improve the stability and effectiveness of complex video understanding.",
+      "published": "2026-05-13T09:19:22Z",
+      "updated": "2026-05-13T09:19:22Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.13228v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.13228v1"
+    },
+    {
+      "arxiv_id": "2605.10543v2",
+      "title": "TIE: Time Interval Encoding for Video Generation over Events",
+      "authors": [
+        "Zhilei Shu",
+        "Shangwen Zhu",
+        "Zihang Liang",
+        "Xiaofan Li",
+        "Qianyu Peng",
+        "Xinyu Cui",
+        "Bo Ye",
+        "Yiming Li",
+        "Fan Cheng",
+        "Jian Zhao",
+        "Yang Cao",
+        "Zheng-Jun Zha",
+        "Ruili Feng"
+      ],
+      "summary": "Director-style prompting, robotic action prediction, and interactive video agents demand temporal grounding over concurrent events -- a regime in which 68% of general clips and over 99% of robotics/gameplay clips contain overlapping events, yet existing multi-event generators rest on a single-active-prompt assumption. However, modern video generators, such as Diffusion Transformers (DiT), represent time as discrete points through point-wise positional encodings. This formulation creates a fundamental dimension mismatch: temporally extended intervals and overlapping events are mathematically unrepresentable to the attention mechanism. In this paper, we propose Time Interval Encoding (TIE), a principled, plug-and-play interval-aware generalization of rotary embeddings that elevates time intervals to first-class primitives inside DiT cross-attention. Rather than introducing another heuristic interval embedding, we show that, within RoPE-compatible bilinear attention, TIE is characterized by two basic principles: Temporal Integrability, which requires an event to aggregate positional evidence over its full duration, and Duration Invariance, which removes the trivial bias toward longer intervals. Under a uniform kernel, this characterization yields an efficient closed-form sinc-based solution that preserves the standard attention interface and naturally attenuates boundary noise through interval integration. Empirically, TIE preserves the visual quality of the base DiT model while substantially improving temporal controllability. In our experiments on the OmniEvents dataset, it improves human-verified Temporal Constraint Satisfaction Rate from 77.34% to 96.03% and reduces temporal boundary error from 0.261s to 0.073s, while also improving trajectory-level temporal alignment metrics. The code and dataset are available at https://github.com/MatrixTeam-AI/TIE.",
+      "published": "2026-05-11T13:23:14Z",
+      "updated": "2026-05-25T17:58:28Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.10543v2",
+      "pdf_url": "https://arxiv.org/pdf/2605.10543v2"
+    }
+  ]
+}

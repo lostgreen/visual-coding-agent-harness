@@ -1,0 +1,349 @@
+{
+  "group_id": "videomme_long_regression50_v1",
+  "description": "Fixed 50-case regression combining unseen20-v4, unseen20-v5, and hard-rotate-v3 after semantic evidence upgrades.",
+  "duration_category": "long",
+  "construction": "source_only",
+  "evaluation_role": "development_regression_not_held_out",
+  "components": [
+    "videomme_long_unseen20_v4",
+    "videomme_long_unseen20_v5",
+    "videomme-long-hard-rotate-v3"
+  ],
+  "cases": [
+    {
+      "case_id": "847-3",
+      "domain": "Life Record",
+      "task_type": "Spatial Perception"
+    },
+    {
+      "case_id": "684-2",
+      "domain": "Knowledge",
+      "task_type": "Spatial Perception"
+    },
+    {
+      "case_id": "757-3",
+      "domain": "Sports Competition",
+      "task_type": "Temporal Perception"
+    },
+    {
+      "case_id": "687-2",
+      "domain": "Knowledge",
+      "task_type": "Temporal Perception"
+    },
+    {
+      "case_id": "892-2",
+      "domain": "Multilingual",
+      "task_type": "OCR Problems"
+    },
+    {
+      "case_id": "709-1",
+      "domain": "Film & Television",
+      "task_type": "OCR Problems"
+    },
+    {
+      "case_id": "875-1",
+      "domain": "Life Record",
+      "task_type": "Spatial Reasoning"
+    },
+    {
+      "case_id": "762-1",
+      "domain": "Sports Competition",
+      "task_type": "Spatial Reasoning"
+    },
+    {
+      "case_id": "804-1",
+      "domain": "Artistic Performance",
+      "task_type": "Counting Problem"
+    },
+    {
+      "case_id": "820-1",
+      "domain": "Artistic Performance",
+      "task_type": "Counting Problem"
+    },
+    {
+      "case_id": "898-1",
+      "domain": "Multilingual",
+      "task_type": "Attribute Perception"
+    },
+    {
+      "case_id": "720-1",
+      "domain": "Film & Television",
+      "task_type": "Attribute Perception"
+    },
+    {
+      "case_id": "814-1",
+      "domain": "Artistic Performance",
+      "task_type": "Action Recognition"
+    },
+    {
+      "case_id": "773-2",
+      "domain": "Sports Competition",
+      "task_type": "Action Recognition"
+    },
+    {
+      "case_id": "605-2",
+      "domain": "Knowledge",
+      "task_type": "Object Recognition"
+    },
+    {
+      "case_id": "887-3",
+      "domain": "Life Record",
+      "task_type": "Temporal Reasoning"
+    },
+    {
+      "case_id": "697-1",
+      "domain": "Film & Television",
+      "task_type": "Action Reasoning"
+    },
+    {
+      "case_id": "891-1",
+      "domain": "Multilingual",
+      "task_type": "Object Reasoning"
+    },
+    {
+      "case_id": "843-2",
+      "domain": "Life Record",
+      "task_type": "Object Reasoning"
+    },
+    {
+      "case_id": "629-2",
+      "domain": "Knowledge",
+      "task_type": "Information Synopsis"
+    },
+    {
+      "case_id": "666-2",
+      "domain": "Knowledge",
+      "task_type": "Action Reasoning",
+      "source_video_id": "mzvHYBgD-tI"
+    },
+    {
+      "case_id": "732-3",
+      "domain": "Sports Competition",
+      "task_type": "Action Recognition",
+      "source_video_id": "xvQOEdwAgj0"
+    },
+    {
+      "case_id": "601-3",
+      "domain": "Knowledge",
+      "task_type": "Attribute Perception",
+      "source_video_id": "TGom0uiW130"
+    },
+    {
+      "case_id": "792-1",
+      "domain": "Artistic Performance",
+      "task_type": "Counting Problem",
+      "source_video_id": "0bwyCF0HteE"
+    },
+    {
+      "case_id": "828-3",
+      "domain": "Life Record",
+      "task_type": "Information Synopsis",
+      "source_video_id": "vv2EiRK0Lmg"
+    },
+    {
+      "case_id": "776-3",
+      "domain": "Sports Competition",
+      "task_type": "OCR Problems",
+      "source_video_id": "7tLtu3QT2OI"
+    },
+    {
+      "case_id": "650-3",
+      "domain": "Knowledge",
+      "task_type": "Object Reasoning",
+      "source_video_id": "55Jas5HrzcQ"
+    },
+    {
+      "case_id": "654-3",
+      "domain": "Knowledge",
+      "task_type": "Object Recognition",
+      "source_video_id": "HvKpnaXYUPU"
+    },
+    {
+      "case_id": "661-2",
+      "domain": "Knowledge",
+      "task_type": "Spatial Reasoning",
+      "source_video_id": "CoPfYGgzCkM"
+    },
+    {
+      "case_id": "831-2",
+      "domain": "Life Record",
+      "task_type": "Temporal Perception",
+      "source_video_id": "6Pt3-NDxzRk"
+    },
+    {
+      "case_id": "675-2",
+      "domain": "Knowledge",
+      "task_type": "Temporal Reasoning",
+      "source_video_id": "lVeNTofDB2k"
+    },
+    {
+      "case_id": "691-1",
+      "domain": "Film & Television",
+      "task_type": "Action Reasoning",
+      "source_video_id": "lMxFbRc3Luk"
+    },
+    {
+      "case_id": "893-1",
+      "domain": "Multilingual",
+      "task_type": "Information Synopsis",
+      "source_video_id": "WQn-c_4dVWs"
+    },
+    {
+      "case_id": "692-1",
+      "domain": "Film & Television",
+      "task_type": "Action Recognition",
+      "source_video_id": "TF9I1GxNdJQ"
+    },
+    {
+      "case_id": "781-1",
+      "domain": "Artistic Performance",
+      "task_type": "Counting Problem",
+      "source_video_id": "kDXerubF4I4"
+    },
+    {
+      "case_id": "894-2",
+      "domain": "Multilingual",
+      "task_type": "Object Reasoning",
+      "source_video_id": "tslKtm6Le1s"
+    },
+    {
+      "case_id": "699-2",
+      "domain": "Film & Television",
+      "task_type": "Object Recognition",
+      "source_video_id": "I2dv1jNM7gM"
+    },
+    {
+      "case_id": "744-3",
+      "domain": "Sports Competition",
+      "task_type": "Temporal Reasoning",
+      "source_video_id": "4od5mdtEp-E"
+    },
+    {
+      "case_id": "789-2",
+      "domain": "Artistic Performance",
+      "task_type": "Attribute Perception",
+      "source_video_id": "i7ivyMFsw-w"
+    },
+    {
+      "case_id": "840-3",
+      "domain": "Life Record",
+      "task_type": "OCR Problems",
+      "source_video_id": "y9Fne3oUwX4"
+    },
+    {
+      "case_id": "645-3",
+      "capability": "identity_linked_opinion_retrieval",
+      "task_type": "Object Recognition",
+      "scope": "identity_then_dialogue",
+      "modalities": [
+        "visual",
+        "asr"
+      ],
+      "source_duration_minutes": 44.44,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "648-3",
+      "capability": "numeric_ocr_fact",
+      "task_type": "OCR Problems",
+      "scope": "fact_localization",
+      "modalities": [
+        "ocr",
+        "visual",
+        "asr"
+      ],
+      "source_duration_minutes": 33.19,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "698-3",
+      "capability": "atomic_event_count",
+      "task_type": "Counting Problem",
+      "scope": "full_video",
+      "modalities": [
+        "visual"
+      ],
+      "source_duration_minutes": 50.5,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "702-1",
+      "capability": "identity_linked_action_reasoning",
+      "task_type": "Action Recognition",
+      "scope": "coarse_temporal_hint",
+      "modalities": [
+        "visual",
+        "asr"
+      ],
+      "source_duration_minutes": 35.08,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "727-2",
+      "capability": "distinct_interviewee_count",
+      "task_type": "Counting Problem",
+      "scope": "full_video",
+      "modalities": [
+        "visual",
+        "asr"
+      ],
+      "source_duration_minutes": 43.37,
+      "regression_status": "unresolved"
+    },
+    {
+      "case_id": "672-3",
+      "capability": "visual_transition_localization",
+      "task_type": "Temporal Perception",
+      "scope": "event_transition",
+      "modalities": [
+        "visual"
+      ],
+      "source_duration_minutes": 31.85
+    },
+    {
+      "case_id": "742-3",
+      "capability": "scoreboard_lead_change_localization",
+      "task_type": "Temporal Perception",
+      "scope": "multi_interval_comparison",
+      "modalities": [
+        "visual",
+        "ocr"
+      ],
+      "source_duration_minutes": 31.98
+    },
+    {
+      "case_id": "799-3",
+      "capability": "localized_comedic_action_recognition",
+      "task_type": "Action Recognition",
+      "scope": "event_localization",
+      "modalities": [
+        "visual",
+        "asr"
+      ],
+      "source_duration_minutes": 41.89
+    },
+    {
+      "case_id": "839-1",
+      "capability": "cumulative_calorie_ocr_tracking",
+      "task_type": "OCR Problems",
+      "scope": "identity_then_numeric_state",
+      "modalities": [
+        "visual",
+        "ocr",
+        "asr"
+      ],
+      "source_duration_minutes": 52.47
+    },
+    {
+      "case_id": "851-3",
+      "capability": "narrative_object_placement",
+      "task_type": "Spatial Perception",
+      "scope": "object_then_destination",
+      "modalities": [
+        "visual",
+        "asr"
+      ],
+      "source_duration_minutes": 32.83
+    }
+  ]
+}

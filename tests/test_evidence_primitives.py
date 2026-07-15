@@ -29,6 +29,27 @@ def test_condition_state_merge_is_monotonic_and_surfaces_conflict() -> None:
     assert conflicted["gap_c1"].refuting_evidence_ids == ("ev_no",)
 
 
+def test_global_enumeration_condition_infers_scope_and_preserves_it_in_results() -> None:
+    condition = GapCondition("gap_news_c1", "List each news segment appearance throughout the video.")
+    result = normalize_condition_results(
+        (
+            {
+                "condition_id": condition.condition_id,
+                "status": "satisfied",
+                "observation": "One news segment is visible in this window.",
+            },
+        ),
+        (condition,),
+        evidence_id="ev_news",
+    )[0]
+
+    assert condition.scope == "full_video"
+    assert condition.quantifier == "all_events"
+    assert condition.required_coverage == 1.0
+    assert result.scope == "full_video"
+    assert result.quantifier == "all_events"
+
+
 def test_read_condition_requires_visible_target_and_measurement() -> None:
     condition = GapCondition("gap_clock_c1", "read the displayed clock and score")
     raw = (

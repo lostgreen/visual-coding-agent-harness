@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
-from vcah.index import build_cold_index
+from vcah.index import ColdIndex, build_cold_index
 from vcah.memory import AgentMemory, EvidenceStore, TraceStore
 from vcah.model import ModelClient
 from vcah.tools import AgentTools
@@ -48,15 +48,16 @@ class VideoAgent:
         range_detector: Any = None,
         keyframe_sampler: Any = None,
         index_mode: str = "fast",
+        index_cache_dir: Path | None = None,
     ) -> Answer:
         run_dir = Path(run_dir)
         run_artifacts = run_dir / "run"
         run_artifacts.mkdir(parents=True, exist_ok=True)
         duration = float(duration_sec) if duration_sec is not None else probe_duration(video_path)
-        index = build_cold_index(
+        index, cache_hit = _load_or_build_index(
             video_path,
             duration_sec=duration,
-            run_dir=run_dir,
+            run_dir=Path(index_cache_dir) if index_cache_dir is not None else run_dir,
             model=self.model,
             asr_cues=asr_cues,
             ocr_lines=ocr_lines,
@@ -64,6 +65,8 @@ class VideoAgent:
             keyframe_sampler=keyframe_sampler,
             index_mode=index_mode,
         )
+        if index_cache_dir is not None:
+            _write_cold_index_ref(run_dir, Path(index_cache_dir), cache_hit=cache_hit)
         memory = AgentMemory.empty(run_artifacts / "memory.json")
         memory.last_query = question
         evidence = EvidenceStore.empty(run_artifacts / "evidence.jsonl")
@@ -122,6 +125,57 @@ class VideoAgent:
             encoding="utf-8",
         )
         return answer
+
+
+def _load_or_build_index(
+    video_path: str,
+    *,
+    duration_sec: float,
+    run_dir: Path,
+    model: ModelClient,
+    asr_cues: Sequence[Any],
+    ocr_lines: Sequence[Any],
+    range_detector: Any,
+    keyframe_sampler: Any,
+    index_mode: str,
+) -> tuple[ColdIndex, bool]:
+    cold_dir = Path(run_dir) / "cold_index"
+    if _cold_index_artifacts_exist(cold_dir):
+        try:
+            return ColdIndex.load(cold_dir, model=model), True
+        except Exception:
+            pass
+    return (
+        build_cold_index(
+            video_path,
+            duration_sec=duration_sec,
+            run_dir=run_dir,
+            model=model,
+            asr_cues=asr_cues,
+            ocr_lines=ocr_lines,
+            range_detector=range_detector,
+            keyframe_sampler=keyframe_sampler,
+            index_mode=index_mode,
+        ),
+        False,
+    )
+
+
+def _cold_index_artifacts_exist(cold_dir: Path) -> bool:
+    cold_dir = Path(cold_dir)
+    return all((cold_dir / name).exists() for name in ("index.json", "diagnostics.json", "visual_index.npz"))
+
+
+def _write_cold_index_ref(run_dir: Path, index_cache_dir: Path, *, cache_hit: bool) -> None:
+    payload = {
+        "cache_hit": bool(cache_hit),
+        "index_cache_dir": str(index_cache_dir),
+        "cold_index_dir": str(Path(index_cache_dir) / "cold_index"),
+    }
+    (Path(run_dir) / "cold_index_ref.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def _verify_answer_citations(

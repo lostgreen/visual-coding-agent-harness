@@ -49,6 +49,10 @@ def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, o
     return (Frame(frame_id="fr001", time_sec=start_sec, path=str(path)),)
 
 
+def _raising_sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
+    raise AssertionError("cached index should avoid sampling frames")
+
+
 def test_video_agent_answers_only_with_verified_evidence(tmp_path: Path) -> None:
     model = ColorModel(
         actions=[
@@ -73,6 +77,47 @@ def test_video_agent_answers_only_with_verified_evidence(tmp_path: Path) -> None
     assert answer.citations == ("ev_0001",)
     assert (tmp_path / "run" / "answer.json").exists()
     assert (tmp_path / "run" / "trace.jsonl").read_text(encoding="utf-8").count("\n") == 3
+
+
+def test_video_agent_reuses_cached_cold_index(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache" / "video_001"
+    first = VideoAgent(model=ColorModel(actions=[{"type": "search_text", "query": "blue sign"}]), max_steps=1)
+
+    first.ask(
+        "/videos/demo.mp4",
+        "Where is the blue sign?",
+        run_dir=tmp_path / "q1",
+        duration_sec=8.0,
+        asr_cues=({"start": 4.0, "end": 8.0, "text": "a blue sign appears"},),
+        range_detector=lambda _video_path, _duration: ((0.0, 4.0), (4.0, 8.0)),
+        keyframe_sampler=_sampler,
+        index_cache_dir=cache_dir,
+    )
+
+    second = VideoAgent(
+        model=ColorModel(
+            actions=[
+                {"type": "search_text", "query": "blue sign"},
+                {"type": "focus_clip", "modalities": ["asr"]},
+                {"type": "answer", "answer": "The blue sign appears near the end.", "citations": ["ev_0001"]},
+            ]
+        ),
+        max_steps=3,
+    )
+    answer = second.ask(
+        "/videos/demo.mp4",
+        "Where is the blue sign?",
+        run_dir=tmp_path / "q2",
+        duration_sec=8.0,
+        asr_cues=({"start": 4.0, "end": 8.0, "text": "a blue sign appears"},),
+        range_detector=lambda _video_path, _duration: ((0.0, 4.0), (4.0, 8.0)),
+        keyframe_sampler=_raising_sampler,
+        index_cache_dir=cache_dir,
+    )
+
+    assert answer.answer == "The blue sign appears near the end."
+    assert (cache_dir / "cold_index" / "index.json").exists()
+    assert json.loads((tmp_path / "q2" / "cold_index_ref.json").read_text(encoding="utf-8"))["cache_hit"] is True
 
 
 def test_video_agent_rejects_unverified_final_citation(tmp_path: Path) -> None:

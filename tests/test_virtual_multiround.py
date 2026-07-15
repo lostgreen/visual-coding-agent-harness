@@ -7,7 +7,7 @@ from typing import Sequence
 from PIL import Image
 
 import vcah.multiround as multiround
-from vcah.evidence_primitives import ConditionResult
+from vcah.evidence_primitives import ConditionResult, ConditionState
 from vcah.multiround import EvidenceGap, InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.types import CoverageSegment, EvidenceRecord, Frame
@@ -123,6 +123,21 @@ def test_query_compiler_emits_semantic_contracts_for_failure_families() -> None:
         {"A": "32 - 23", "B": "37 - 27"},
     )
     episode = multiround.compile_query_contract("In which episode do they get married?")
+    temporal = multiround.compile_query_contract(
+        "In the last gathering, at what time does the green model in the lower left appear?"
+    )
+    synopsis = multiround.compile_query_contract("What title best summarizes this video?")
+    progress = multiround.compile_query_contract(
+        "As one team enjoys pizza, how many tasks has the other team completed?"
+    )
+    causal = multiround.compile_query_contract(
+        "Which stated factor was not the cause of the split?"
+    )
+    outcome = multiround.compile_query_contract("How did the final battle unfold?")
+    agent_relation = multiround.compile_query_contract("Who protects the mermaid?")
+    sequence_requirements = multiround.compile_query_requirements(
+        "Which option correctly describes the sequence before and after the color changed?"
+    )
 
     assert (events.required_scope, events.quantifier, events.observation_target) == (
         "full_video",
@@ -147,6 +162,51 @@ def test_query_compiler_emits_semantic_contracts_for_failure_families() -> None:
     assert (episode.required_scope, episode.observation_target, episode.aggregation) == (
         "multi_window",
         "event",
+        "compare",
+    )
+    assert (temporal.required_scope, temporal.observation_target, temporal.aggregation) == (
+        "multi_window",
+        "event",
+        "compare",
+    )
+    assert temporal.boundary_hint
+    assert (synopsis.required_scope, synopsis.observation_target, synopsis.aggregation) == (
+        "full_video",
+        "event",
+        "summarize",
+    )
+    synopsis_task = multiround._task_for_contract(
+        InvestigationTask("q_summary", "Inspect this segment.", segment_id="seg_1"),
+        synopsis,
+    )
+    assert synopsis_task.modality_hint == ("visual", "asr")
+    assert "segment narrative thesis and role" in synopsis_task.expected_evidence
+    assert (progress.quantifier, progress.measurement_unit, progress.boundary_hint) == (
+        "scalar_quantity",
+        "task",
+        "As one team enjoys pizza",
+    )
+    assert (causal.required_scope, causal.observation_target, causal.aggregation) == (
+        "multi_window",
+        "relation",
+        "compare",
+    )
+    assert sequence_requirements["requires_temporal_sequence"] is True
+    assert sequence_requirements["requires_state_tracking"] is True
+    transition_task = multiround._task_for_contract(
+        InvestigationTask("q_transition", "Inspect the change.", segment_id="seg_1"),
+        causal,
+    )
+    assert "motion" in transition_task.modality_hint
+    assert "before-transition-after" in transition_task.expected_evidence
+    assert (outcome.required_scope, outcome.observation_target, outcome.aggregation) == (
+        "multi_window",
+        "event",
+        "compare",
+    )
+    assert (agent_relation.quantifier, agent_relation.observation_target, agent_relation.aggregation) == (
+        "comparison",
+        "relation",
         "compare",
     )
 
@@ -181,6 +241,51 @@ def test_investigation_task_validation_requires_executable_locator() -> None:
     assert multiround._task_is_executable(valid_window) is True
     assert multiround._task_is_executable(valid_search) is True
     assert multiround._task_is_executable(meta_task) is False
+
+
+def test_workspace_task_resolution_expands_global_alias_and_repairs_timed_segment(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    global_task = InvestigationTask("q_global", "Inspect the full source.", segment_id="seg_full")
+    timed_task = InvestigationTask(
+        "q_timed",
+        "Inspect the requested virtual interval.",
+        segment_id="invented_segment",
+        time_range=(10.5, 11.5),
+    )
+
+    global_resolved = multiround._resolve_workspace_tasks(workspace, (global_task,), limit=2)
+    timed_resolved = multiround._resolve_workspace_tasks(workspace, (timed_task,), limit=1)
+
+    assert [task.segment_id for task in global_resolved] == ["seg_target_a", "seg_target_b"]
+    assert all(task.query_id.startswith("q_global_seg_") for task in global_resolved)
+    assert timed_resolved[0].segment_id == "seg_target_b"
+
+
+def test_workspace_task_resolution_splits_cross_segment_time_range(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    task = InvestigationTask(
+        "q_broad",
+        "Inspect the full requested interval.",
+        segment_id="seg_target_a",
+        time_range=(0.0, 15.0),
+    )
+
+    resolved = multiround._resolve_workspace_tasks(workspace, (task,), limit=4)
+
+    assert [item.segment_id for item in resolved] == ["seg_target_a", "seg_noise", "seg_target_b"]
+    assert [item.time_range for item in resolved] == [(0.0, 5.0), (5.0, 10.0), (10.0, 15.0)]
+    assert len({item.query_id for item in resolved}) == 3
+
+
+def test_workspace_task_resolution_round_robins_across_parent_ranges(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    early = InvestigationTask("q_early", "Inspect the early range.", segment_id="seg_target_a", time_range=(0.0, 10.0))
+    late = InvestigationTask("q_late", "Inspect the late range.", segment_id="seg_target_b", time_range=(10.0, 15.0))
+
+    resolved = multiround._resolve_workspace_tasks(workspace, (early, late), limit=2)
+
+    assert [item.segment_id for item in resolved] == ["seg_target_a", "seg_target_b"]
+    assert [item.time_range for item in resolved] == [(0.0, 5.0), (10.0, 15.0)]
 
 
 def test_entity_candidate_repair_uses_witness_virtual_timestamp(tmp_path: Path) -> None:
@@ -394,6 +499,76 @@ def test_scalar_quantity_gate_uses_boundary_aware_measurement_derivation(tmp_pat
         derivation=gate["derivation"],
     )
     assert aggregate.operation_metadata["derivation"]["result"] == 700
+
+
+def test_contrastive_progress_measurement_requires_other_subject_binding(tmp_path: Path) -> None:
+    question = "As one team enjoys pizza, how many tasks has the other team completed?"
+    manifest = VirtualVideoManifest(
+        workspace_id="progress",
+        segments=(VirtualVideoSegment("seg_1", "source", "source.mp4", 0.0, 60.0, 0.0, 60.0),),
+    )
+    case = VirtualVideoCase(
+        case_id="progress",
+        question=question,
+        options={"A": "11", "B": "15"},
+        gold="A",
+        target_segment_id="seg_1",
+        target_virtual_interval=(0.0, 60.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "progress", manifest=manifest, case=case)
+
+    def evidence(evidence_id: str, value: int, subject_id: str) -> EvidenceRecord:
+        return EvidenceRecord(
+            evidence_id=evidence_id,
+            beat_id="",
+            start_sec=20.0,
+            end_sec=25.0,
+            modality="ocr",
+            pointer=f"virtual://{evidence_id}",
+            verbatim=f"A task counter reads {value}.",
+            frame_refs=(f"{evidence_id}.jpg",),
+            attestation_model="test-vlm",
+            operation_metadata={
+                "measurements": [
+                    {
+                        "value": value,
+                        "unit": "task",
+                        "measurement_semantics": "cumulative",
+                        "subject_id": subject_id,
+                        "boundary_relation": "at",
+                        "binding_status": "explicit" if subject_id else "contextual",
+                    }
+                ]
+            },
+        )
+
+    contract = multiround.compile_query_contract(question, case.options)
+    requirements = multiround.compile_query_requirements(question)
+    unbound = evidence("ev_unbound", 15, "")
+    bound = evidence("ev_bound", 11, "other_team")
+
+    blocked = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "B. 15",
+        (unbound.evidence_id,),
+        (),
+        (unbound,),
+        query_requirements=requirements,
+    )
+    passed = multiround._answer_completion_gate(
+        workspace,
+        contract,
+        "A. 11",
+        (bound.evidence_id,),
+        (),
+        (bound,),
+        query_requirements=requirements,
+    )
+
+    assert requirements["measurement_subject_role"] == "other_team"
+    assert blocked["reason"] == "scalar_measurement_subject_binding_missing"
+    assert passed["reason"] == "scalar_quantity_grounded"
 
 
 def test_repeated_partial_attempts_emit_soft_stagnation_warning() -> None:
@@ -770,6 +945,26 @@ def test_open_segment_returns_navigation_packet_and_inspect_window_returns_frame
     assert (workspace.root_dir / "observations" / "window_frame_manifest.jsonl").exists()
 
 
+def test_window_sampling_supports_a_512_frame_hard_cap(tmp_path: Path) -> None:
+    segment = VirtualVideoSegment("seg", "source", "/tmp/source.mp4", 0.0, 300.0, 0.0, 300.0, "content")
+    manifest = VirtualVideoManifest(workspace_id="cap", segments=(segment,))
+    case = VirtualVideoCase(
+        case_id="cap",
+        question="What happens?",
+        options={"A": "One", "B": "Two"},
+        gold="A",
+        target_segment_id="seg",
+        target_virtual_interval=(0.0, 300.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "cap", manifest=manifest, case=case)
+    investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
+
+    window = investigator.inspect_window(0.0, 300.0, fps=2.0, max_frames=999, query_id="cap")
+
+    assert window["sampling"]["max_frames"] == 512
+    assert window["sampling"]["actual_frames"] == 512
+
+
 def test_investigator_run_batch_uses_segment_task_and_reports_lineage(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
@@ -931,6 +1126,175 @@ def test_event_candidate_ledger_compacts_aliases_and_exposes_generic_windows() -
     ]
 
 
+def test_event_candidate_ledger_merges_named_audition_phases_with_variant_keys() -> None:
+    def record(
+        evidence_id: str,
+        key: str,
+        start: float,
+        end: float,
+        *,
+        from_previous: bool,
+        to_next: bool,
+    ) -> EvidenceRecord:
+        return EvidenceRecord(
+            evidence_id=evidence_id,
+            beat_id="",
+            start_sec=start,
+            end_sec=end,
+            modality="visual",
+            pointer=f"virtual://{evidence_id}",
+            verbatim="A phase of the Mayyas audition is visible.",
+            frame_refs=(f"{evidence_id}.jpg",),
+            attestation_model="test-vlm",
+            source_lineage=(
+                {
+                    "segment_id": "seg_1",
+                    "source_video_id": "source",
+                    "virtual_time_range": [start, end],
+                },
+            ),
+            operation_metadata={
+                "events": [
+                    {
+                        "local_id": "event_1",
+                        "event_key": key,
+                        "description": key,
+                        "start_sec": start,
+                        "end_sec": end,
+                        "supports_question_event": True,
+                        "continues_from_previous": from_previous,
+                        "continues_to_next": to_next,
+                    }
+                ]
+            },
+        )
+
+    ledger = multiround._event_candidate_ledger(
+        (
+            record(
+                "ev_performance",
+                "dance group audition: Mayyas",
+                0.0,
+                60.0,
+                from_previous=False,
+                to_next=True,
+            ),
+            record(
+                "ev_judging",
+                "judging: Mayyas",
+                60.0,
+                120.0,
+                from_previous=True,
+                to_next=False,
+            ),
+        )
+    )
+
+    assert ledger["confirmed_event_candidate_count"] == 1
+    assert ledger["confirmed_event_candidates"][0]["signature"] == "mayyas"
+    assert ledger["confirmed_event_candidates"][0]["evidence_ids"] == ["ev_performance", "ev_judging"]
+
+
+def test_event_candidate_ledger_uses_counting_unit_for_phase_merging() -> None:
+    def record(
+        evidence_id: str,
+        *,
+        key: str,
+        start: float,
+        end: float,
+        event_class: str,
+        counting_unit: str,
+        participant: str,
+        phase: str,
+    ) -> EvidenceRecord:
+        return EvidenceRecord(
+            evidence_id=evidence_id,
+            beat_id="",
+            start_sec=start,
+            end_sec=end,
+            modality="visual",
+            pointer=f"virtual://{evidence_id}",
+            verbatim=key,
+            frame_refs=(f"{evidence_id}.jpg",),
+            attestation_model="test-vlm",
+            source_lineage=(
+                {
+                    "segment_id": "seg_1",
+                    "source_video_id": "source",
+                    "virtual_time_range": [start, end],
+                },
+            ),
+            operation_metadata={
+                "events": [
+                    {
+                        "event_key": key,
+                        "event_class": event_class,
+                        "counting_unit": counting_unit,
+                        "participant_ids": [participant],
+                        "phase": phase,
+                        "description": key,
+                        "start_sec": start,
+                        "end_sec": end,
+                        "supports_question_event": True,
+                    }
+                ]
+            },
+        )
+
+    audition = multiround._event_candidate_ledger(
+        (
+            record(
+                "ev_intro",
+                key="Mayyas introduction",
+                start=0.0,
+                end=30.0,
+                event_class="audition",
+                counting_unit="audition_group",
+                participant="Mayyas",
+                phase="intro",
+            ),
+            record(
+                "ev_result",
+                key="Mayyas result",
+                start=90.0,
+                end=120.0,
+                event_class="audition",
+                counting_unit="audition_group",
+                participant="Mayyas dance group",
+                phase="result",
+            ),
+        )
+    )
+    news = multiround._event_candidate_ledger(
+        (
+            record(
+                "ev_news_1",
+                key="Daily news",
+                start=0.0,
+                end=10.0,
+                event_class="news_segment",
+                counting_unit="news_broadcast_appearance",
+                participant="Daily news",
+                phase="main",
+            ),
+            record(
+                "ev_news_2",
+                key="Daily news",
+                start=30.0,
+                end=40.0,
+                event_class="news_segment",
+                counting_unit="news_broadcast_appearance",
+                participant="Daily news",
+                phase="main",
+            ),
+        )
+    )
+
+    assert audition["confirmed_event_candidate_count"] == 1
+    assert audition["confirmed_event_candidates"][0]["phases"] == ["intro", "result"]
+    assert news["confirmed_event_candidate_count"] == 2
+
+
 def test_semantic_event_repair_targets_unresolved_window_once(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     contract = multiround.compile_query_contract("How many auditions are included in this video?")
@@ -959,6 +1323,67 @@ def test_semantic_event_repair_targets_unresolved_window_once(tmp_path: Path) ->
     assert len(tasks) == 1
     assert tasks[0].inspection_mode == "enumerate_events"
     assert tasks[0].time_range == (1.0, 4.0)
+
+
+def test_semantic_score_repair_scans_around_readable_non_boundary_checkpoint(tmp_path: Path) -> None:
+    manifest = VirtualVideoManifest(
+        workspace_id="score-context",
+        segments=(VirtualVideoSegment("seg_1", "source", "source.mp4", 0.0, 600.0, 0.0, 600.0),),
+    )
+    case = VirtualVideoCase(
+        case_id="score-context",
+        question="What was the halftime score?",
+        options={"A": "32 - 23", "B": "37 - 27"},
+        gold="A",
+        target_segment_id="seg_1",
+        target_virtual_interval=(0.0, 600.0),
+    )
+    workspace = VirtualVideoWorkspace.create(tmp_path / "score-context", manifest=manifest, case=case)
+    evidence = EvidenceRecord(
+        evidence_id="ev_live_score",
+        beat_id="",
+        start_sec=300.0,
+        end_sec=305.0,
+        modality="ocr",
+        pointer="virtual://score-context/live",
+        verbatim="A live scoreboard reads 37-27, but the phase is unknown.",
+        frame_refs=("score.jpg",),
+        attestation_model="test-vlm",
+        task_id="r1_score",
+        source_lineage=(
+            {"segment_id": "seg_1", "source_video_id": "source", "virtual_time_range": [300.0, 305.0]},
+        ),
+        operation_metadata={
+            "measurements": [
+                {
+                    "value": value,
+                    "unit": "point",
+                    "quantity_type": "score",
+                    "subject_id": subject,
+                    "event_id": "live_play",
+                    "boundary_relation": "unknown",
+                    "binding_status": "contextual",
+                }
+                for value, subject in ((37, "home"), (27, "guest"))
+            ]
+        },
+    )
+
+    reason, tasks = multiround._semantic_contract_repair_tasks(
+        workspace,
+        multiround.compile_query_contract(case.question, case.options),
+        {},
+        {"ready_for_answer": False},
+        (evidence,),
+        round_id=2,
+        limit=4,
+    )
+
+    assert reason == "boundary_score_context_missing"
+    assert len(tasks) == 1
+    assert tasks[0].query_id.startswith("semantic_score_context_")
+    assert tasks[0].segment_id == "seg_1"
+    assert tasks[0].time_range == (120.0, 335.0)
 
 
 def test_query_contract_generalizes_across_full_recording_paraphrases() -> None:
@@ -1024,6 +1449,18 @@ def test_identity_anchor_contract_supports_active_relative_clause_paraphrase() -
     requirements = multiround.compile_query_requirements(question)
 
     assert requirements["identity_anchor_terms"] == ["suitcase", "red", "hat"]
+
+
+def test_identity_anchor_contract_supports_consumption_defined_measurement_subject() -> None:
+    question = (
+        "How many calories has the person, who consumed a $100 golden burger, already eaten when he meets his teammate?"
+    )
+
+    requirements = multiround.compile_query_requirements(question)
+
+    assert requirements["requires_identity_link"] is True
+    assert requirements["identity_anchor_terms"] == ["100", "golden", "burger"]
+    assert requirements["measurement_subject_role"] == "anchored_subject"
 
 
 def test_identity_completion_respects_explicit_negative_anchor_attestation(tmp_path: Path) -> None:
@@ -1611,6 +2048,75 @@ def test_driver_keeps_stronger_supported_candidate_over_later_contradicted_answe
     assert result.answer == "B. 11"
     assert result.correct is True
     assert result.verified is False
+
+
+def test_contradicted_candidate_remains_available_only_for_ungated_best_effort() -> None:
+    evidence = EvidenceRecord(
+        evidence_id="ev_visual",
+        beat_id="",
+        start_sec=1.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://ev_visual",
+        verbatim="A directly observed but disputed scene.",
+        frame_refs=("frame.jpg",),
+        attestation_model="test-vlm",
+    )
+    decision = ReasonerDecision(
+        action="answer",
+        answer="B. Best effort",
+        citations=(evidence.evidence_id,),
+        support_status="contradicted",
+    )
+
+    assert multiround._candidate_can_be_forced(decision, (evidence,)) is True
+    assert multiround._answer_support_rank(decision) == 0
+
+
+def test_gate_rank_does_not_let_supported_audit_override_canonical_count_mismatch() -> None:
+    decision = ReasonerDecision(
+        action="answer",
+        answer="B. 8",
+        citations=("ev_visual",),
+        support_status="supported",
+    )
+
+    assert multiround._candidate_gate_rank(
+        decision,
+        {"passed": False, "reason": "event_count_answer_mismatch"},
+    ) == 1
+    assert multiround._candidate_gate_rank(
+        decision,
+        {"passed": True, "reason": "full_source_coverage_verified"},
+    ) == 4
+
+
+def test_full_video_condition_stays_unknown_until_source_coverage_is_complete() -> None:
+    state = ConditionState(
+        "gap_news_c1",
+        status="satisfied",
+        supporting_evidence_ids=("ev_news",),
+        scope="full_video",
+        quantifier="all_events",
+        required_coverage=1.0,
+    )
+    partial = multiround._apply_condition_scope(
+        {state.condition_id: state},
+        {
+            "adopted_source_video_id": "source",
+            "source_coverage": {"source": {"covered_count": 1, "required_count": 3}},
+        },
+    )
+    complete = multiround._apply_condition_scope(
+        {state.condition_id: state},
+        {
+            "adopted_source_video_id": "source",
+            "source_coverage": {"source": {"covered_count": 3, "required_count": 3}},
+        },
+    )
+
+    assert partial[state.condition_id].status == "unknown"
+    assert complete[state.condition_id].status == "satisfied"
 
 
 def test_driver_bootstraps_an_empty_investigation_decision(tmp_path: Path) -> None:

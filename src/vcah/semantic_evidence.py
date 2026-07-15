@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import re
 from typing import Any, Mapping, Sequence
 
-from vcah.evidence_primitives import normalize_relations
+from vcah.evidence_primitives import normalize_measurements, normalize_relations
 from vcah.types import ClaimContract, EvidenceRecord
 from vcah.virtual_video import VirtualVideoWorkspace
 
@@ -46,7 +46,12 @@ def semantic_repair_requests(
     if contract.measurement_unit == "point" and contract.boundary_hint:
         requests = _boundary_score_repairs(workspace, evidence, round_id, task_limit)
         if requests:
-            return "boundary_score_unvisited_segments", requests
+            reason = (
+                "boundary_score_context_missing"
+                if requests[0].query_id.startswith("semantic_score_context_")
+                else "boundary_score_unvisited_segments"
+            )
+            return reason, requests
     if contract.observation_target == "relation" and query_requirements.get("requires_spatial_relation"):
         requests = _spatial_repairs(
             workspace,
@@ -113,6 +118,43 @@ def _boundary_score_repairs(
     option_text = ", ".join(
         f"{label}={text}" for label, text in workspace.case.options.items() if _score_pair(str(text))
     )
+    if not any(str(record.task_id or "").startswith("semantic_score_context_") for record in evidence):
+        context_requests = []
+        context_windows = []
+        for record in reversed(tuple(evidence)):
+            facts = normalize_measurements(
+                record.operation_metadata.get("measurements"),
+                evidence_id=record.evidence_id,
+            )
+            if not any(fact.unit == "point" and fact.quantity_type == "score" for fact in facts):
+                continue
+            if record.start_sec is None or record.end_sec is None:
+                continue
+            segment = _segment_at(workspace, (float(record.start_sec) + float(record.end_sec)) / 2.0)
+            if segment is None:
+                continue
+            start = max(segment.virtual_start_sec, float(record.start_sec) - 180.0)
+            end = min(segment.virtual_end_sec, float(record.end_sec) + 30.0)
+            if end - start < 2.0 or any(min(end, right) > max(start, left) for left, right in context_windows):
+                continue
+            context_windows.append((start, end))
+            context_requests.append(
+                SemanticRepairRequest(
+                    query_id=f"semantic_score_context_r{round_id}_{len(context_requests) + 1:03d}",
+                    goal="Scan around this readable non-boundary scoreboard, especially backward, for the requested phase boundary.",
+                    segment_id=segment.segment_id,
+                    time_range=(start, end),
+                    modality_hint=("visual", "ocr"),
+                    expected_evidence=(
+                        f"same-frame boundary label or clock plus one score option from {option_text}; "
+                        "use the readable checkpoint only to navigate, not as the boundary answer"
+                    ),
+                )
+            )
+            if len(context_requests) >= limit:
+                break
+        if context_requests:
+            return tuple(context_requests)
     candidates = tuple(segment for segment in workspace.manifest.segments if segment.segment_id not in visited)
     return tuple(
         SemanticRepairRequest(
@@ -179,7 +221,8 @@ _GENERIC_EVENT_TOKENS = {
     "dance", "dancing", "event", "events", "got", "graphic", "group", "groups", "introduction",
     "introduced", "occurrence", "occurrences", "on", "one", "performance", "recap", "receives",
     "show", "stage", "start", "talent", "the", "title", "to", "world", "golden", "buzzer", "acrobatic",
-    "crew", "gymnastics",
+    "crew", "gymnastics", "celebrate", "celebrates", "celebration", "conclude", "concludes",
+    "feedback", "judge", "judges", "judging", "ovation", "reaction", "reactions", "vote", "votes",
 }
 
 
@@ -209,6 +252,16 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                 )
                 continue
             event_key = _normalize_key(event.get("event_key"))
+            event_class = _normalize_key(event.get("event_class"))
+            counting_unit = _normalize_key(event.get("counting_unit"))
+            participant_ids = tuple(
+                dict.fromkeys(
+                    _normalize_participant_id(value)
+                    for value in tuple(event.get("participant_ids", ()) or ())
+                    if _normalize_participant_id(value)
+                )
+            )
+            phase = _normalize_key(event.get("phase")) or "unknown"
             from_previous = _flag(event.get("continues_from_previous"))
             to_next = _flag(event.get("continues_to_next"))
             row = next(
@@ -216,9 +269,16 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                     item for item in confirmed
                     if item["source_video_id"] == source_id
                     and item["signature"] == signature
-                    and (
-                        _equivalent_interval(start, end, *item["virtual_time_range"])
-                        or _continuation(start, end, event_key, from_previous, to_next, item)
+                    and _same_counted_occurrence(
+                        start,
+                        end,
+                        event_key=event_key,
+                        event_class=event_class,
+                        counting_unit=counting_unit,
+                        participant_ids=participant_ids,
+                        from_previous=from_previous,
+                        to_next=to_next,
+                        existing=item,
                     )
                 ),
                 None,
@@ -232,6 +292,10 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                     "event_keys": [],
                     "descriptions": [],
                     "canonical_event_key": event_key,
+                    "event_class": event_class,
+                    "counting_unit": counting_unit,
+                    "participant_ids": list(participant_ids),
+                    "phases": [],
                     "continues_from_previous": from_previous,
                     "continues_to_next": to_next,
                 }
@@ -240,6 +304,7 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
             row["evidence_ids"].append(record.evidence_id)
             row["event_keys"].append(str(event.get("event_key", "") or ""))
             row["descriptions"].append(str(event.get("description", "") or ""))
+            row["phases"].append(phase)
             row["continues_from_previous"] = bool(row["continues_from_previous"] or from_previous)
             row["continues_to_next"] = bool(row["continues_to_next"] or to_next)
     public = []
@@ -253,6 +318,10 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                 "evidence_ids": list(dict.fromkeys(row["evidence_ids"]))[:12],
                 "event_keys": list(dict.fromkeys(row["event_keys"]))[:4],
                 "descriptions": list(dict.fromkeys(row["descriptions"]))[:3],
+                "event_class": row["event_class"],
+                "counting_unit": row["counting_unit"],
+                "participant_ids": list(row["participant_ids"]),
+                "phases": list(dict.fromkeys(row["phases"])),
             }
         )
     unresolved_rows = _merge_unresolved(unresolved)
@@ -265,10 +334,59 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
 
 
 def _event_signature(event: Mapping[str, Any]) -> str:
+    participants = tuple(
+        _normalize_participant_id(value)
+        for value in tuple(event.get("participant_ids", ()) or ())
+        if _normalize_participant_id(value)
+    )
+    if participants:
+        return " ".join(dict.fromkeys(participants))[:120]
     event_key = str(event.get("event_key", "") or "").strip()
     text = (event_key or str(event.get("description", "") or "")).casefold()
     tokens = [token for token in re.findall(r"[a-z0-9]+", text) if len(token) > 1 and token not in _GENERIC_EVENT_TOKENS]
     return " ".join(dict.fromkeys(tokens))[:120] if tokens else ""
+
+
+def _same_counted_occurrence(
+    start: float,
+    end: float,
+    *,
+    event_key: str,
+    event_class: str,
+    counting_unit: str,
+    participant_ids: Sequence[str],
+    from_previous: bool,
+    to_next: bool,
+    existing: Mapping[str, Any],
+) -> bool:
+    if _equivalent_interval(start, end, *existing["virtual_time_range"]):
+        return True
+    if _continuation(start, end, event_key, from_previous, to_next, existing):
+        return True
+    existing_participants = tuple(existing.get("participant_ids", ()) or ())
+    same_participants = bool(participant_ids and existing_participants and set(participant_ids) == set(existing_participants))
+    unit = counting_unit or str(existing.get("counting_unit", "") or "")
+    event_type = event_class or str(existing.get("event_class", "") or "")
+    gap = max(
+        0.0,
+        start - float(existing["virtual_time_range"][1]),
+        float(existing["virtual_time_range"][0]) - end,
+    )
+    if unit == "audition_group" or event_type == "audition":
+        return bool(same_participants and gap <= 300.0)
+    if unit == "news_broadcast_appearance" or event_type == "news_segment":
+        return bool(same_participants and gap <= 5.0)
+    return False
+
+
+def _normalize_participant_id(value: Any) -> str:
+    generic = {"dance", "group", "crew", "team", "performer", "performers", "act"}
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").casefold())
+        if token not in generic
+    ]
+    return " ".join(tokens)
 
 
 def _merge_unresolved(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -329,7 +447,7 @@ def _continuation(
     to_next: bool,
     existing: Mapping[str, Any],
 ) -> bool:
-    if not event_key or event_key != existing.get("canonical_event_key"):
+    if not event_key or not existing.get("canonical_event_key"):
         return False
     return bool(
         from_previous and existing.get("continues_to_next") and abs(start - existing["virtual_time_range"][1]) <= 2.0

@@ -18,6 +18,10 @@ class GapCondition:
     subject_role: str = ""
     object_role: str = ""
     required_relation: str = ""
+    scope: str = "auto"
+    quantifier: str = "auto"
+    required_coverage: float = 0.0
+    aggregation: str = "none"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "condition_id", str(self.condition_id or "").strip())
@@ -29,6 +33,27 @@ class GapCondition:
         for name in ("target_role", "quantity_type", "relation_type", "subject_role", "object_role", "required_relation"):
             object.__setattr__(self, name, str(getattr(self, name) or "").strip().casefold())
         object.__setattr__(self, "unit", canonical_unit(self.unit))
+        description = self.description.casefold()
+        scope = str(self.scope or "auto").strip().casefold()
+        if scope == "auto":
+            scope = "full_video" if _requires_global_scope(description) else "window"
+        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "full_video"} else "window")
+        quantifier = str(self.quantifier or "auto").strip().casefold()
+        if quantifier == "auto":
+            quantifier = "all_events" if _requires_event_union(description) else "all_segments" if scope == "full_video" else "exists"
+        object.__setattr__(
+            self,
+            "quantifier",
+            quantifier if quantifier in {"exists", "all_segments", "all_events"} else "exists",
+        )
+        required_coverage = max(0.0, min(1.0, float(self.required_coverage or 0.0)))
+        if scope == "full_video" and required_coverage == 0.0:
+            required_coverage = 1.0
+        object.__setattr__(self, "required_coverage", required_coverage)
+        aggregation = str(self.aggregation or "none").strip().casefold()
+        if aggregation == "none" and quantifier == "all_events":
+            aggregation = "event_union"
+        object.__setattr__(self, "aggregation", aggregation)
 
 
 @dataclass(frozen=True)
@@ -37,6 +62,9 @@ class ConditionResult:
     status: str
     observation: str = ""
     evidence_ids: tuple[str, ...] = ()
+    scope: str = "window"
+    quantifier: str = "exists"
+    required_coverage: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "condition_id", str(self.condition_id or "").strip())
@@ -50,6 +78,15 @@ class ConditionResult:
             "evidence_ids",
             tuple(dict.fromkeys(str(item).strip() for item in self.evidence_ids if str(item).strip())),
         )
+        scope = str(self.scope or "window").strip().casefold()
+        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "full_video"} else "window")
+        quantifier = str(self.quantifier or "exists").strip().casefold()
+        object.__setattr__(
+            self,
+            "quantifier",
+            quantifier if quantifier in {"exists", "all_segments", "all_events"} else "exists",
+        )
+        object.__setattr__(self, "required_coverage", max(0.0, min(1.0, float(self.required_coverage or 0.0))))
 
 
 @dataclass(frozen=True)
@@ -59,6 +96,9 @@ class ConditionState:
     supporting_evidence_ids: tuple[str, ...] = ()
     refuting_evidence_ids: tuple[str, ...] = ()
     updated_by_task_id: str | None = None
+    scope: str = "window"
+    quantifier: str = "exists"
+    required_coverage: float = 0.0
 
     def __post_init__(self) -> None:
         status = str(self.status or "unknown").strip().casefold()
@@ -68,6 +108,15 @@ class ConditionState:
         object.__setattr__(self, "refuting_evidence_ids", _unique_strings(self.refuting_evidence_ids))
         task_id = str(self.updated_by_task_id or "").strip()
         object.__setattr__(self, "updated_by_task_id", task_id or None)
+        scope = str(self.scope or "window").strip().casefold()
+        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "full_video"} else "window")
+        quantifier = str(self.quantifier or "exists").strip().casefold()
+        object.__setattr__(
+            self,
+            "quantifier",
+            quantifier if quantifier in {"exists", "all_segments", "all_events"} else "exists",
+        )
+        object.__setattr__(self, "required_coverage", max(0.0, min(1.0, float(self.required_coverage or 0.0))))
 
 
 def merge_condition_states(updates: Sequence[tuple[str, ConditionResult]]) -> dict[str, ConditionState]:
@@ -92,6 +141,9 @@ def merge_condition_states(updates: Sequence[tuple[str, ConditionResult]]) -> di
             supporting_ids,
             refuting_ids,
             updated_by,
+            "full_video" if "full_video" in {current.scope, result.scope} else result.scope or current.scope,
+            result.quantifier if result.quantifier != "exists" else current.quantifier,
+            max(current.required_coverage, result.required_coverage),
         )
     return states
 
@@ -343,6 +395,9 @@ def normalize_condition_results(
             evidence_ids=(evidence_id,)
             if evidence_id and status in {"satisfied", "resolved", "contradicted"}
             else (),
+            scope=condition.scope,
+            quantifier=condition.quantifier,
+            required_coverage=condition.required_coverage,
         )
         results.append(normalized)
     return tuple(results)
@@ -362,6 +417,27 @@ def derive_resolution(
     if any(result.status in {"satisfied", "contradicted"} for result in results):
         return "partial"
     return "unresolved"
+
+
+def _requires_global_scope(description: str) -> bool:
+    text = str(description or "").casefold()
+    return bool(
+        re.search(r"\b(?:throughout|entire|whole|full)\s+(?:source|video|film|workspace)\b", text)
+        or re.search(
+            r"\b(?:list|enumerate|catalog|count|find|verify|inspect)\b[^.]{0,80}"
+            r"\b(?:all|every|each|total)\b",
+            text,
+        )
+        or re.search(r"\b(?:all|every|each)\b[^.]{0,80}\b(?:appearance|event|occurrence|segment|audition)s?\b", text)
+    )
+
+
+def _requires_event_union(description: str) -> bool:
+    text = str(description or "").casefold()
+    return bool(
+        re.search(r"\b(?:list|enumerate|catalog|count)\b[^.]{0,100}\b(?:event|occurrence|appearance|audition|segment)s?\b", text)
+        or re.search(r"\b(?:all|every|each)\b[^.]{0,80}\b(?:event|occurrence|appearance|audition)s?\b", text)
+    )
 
 
 def canonical_unit(value: str) -> str:

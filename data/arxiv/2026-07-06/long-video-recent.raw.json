@@ -1,0 +1,670 @@
+{
+  "query": "long video",
+  "categories": [
+    "cs.AI",
+    "cs.CV",
+    "cs.CL",
+    "cs.LG",
+    "cs.MM"
+  ],
+  "from": "2026-05-06",
+  "to": "2026-07-06",
+  "count": 30,
+  "papers": [
+    {
+      "arxiv_id": "2607.01737v1",
+      "title": "ReQuest: Rethinking-based Question-Aware Frame Selection for Long-Form Video QA",
+      "authors": [
+        "Minkuk Kim",
+        "Suyong Yun",
+        "Young Tae Kim",
+        "Jinyoung Moon",
+        "Jinwoo Choi",
+        "Seong Tae Kim"
+      ],
+      "summary": "Recent multimodal large language models (MLLMs) have substantially advanced video understanding, yet long-form video QA remains challenging under fixed input token budgets, where uniform sampling can be inefficient for evidence localization. We propose ReQuest , an uncertainty-driven, question-adaptive keyframe selection pipeline that aligns question intent with relevant video content through selective computation. ReQuest integrates (i) a lightweight question-aware selector distilled from MLLM-generated supervision, (ii) Re-thinking Routing that triggers additional inference only when the model is uncertain with a length-adaptive criterion, and (iii) uncertainty-guided adaptive non-maximum suppression that selects temporally diverse frames while adjusting spacing based on question difficulty. As a plug-andplay method, ReQuest improves long-video QA without modifying or fine-tuning the underlying MLLM. Experiments on Video-MME, MLVU, and LongVideoBench demonstrate consistent accuracy gains with competitive computational cost, with particularly strong improvements in medium and long video regimes.",
+      "published": "2026-07-02T05:46:42Z",
+      "updated": "2026-07-02T05:46:42Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2607.01737v1",
+      "pdf_url": "https://arxiv.org/pdf/2607.01737v1"
+    },
+    {
+      "arxiv_id": "2607.00983v1",
+      "title": "QCA: Query- and Content-Aware Keyframe Selection for Long Video Understanding",
+      "authors": [
+        "Jun Peng",
+        "Baiyang Song",
+        "Jie Li",
+        "Hui Li",
+        "Yiyi Zhou",
+        "Rongrong Ji",
+        "Yonghong Tian"
+      ],
+      "summary": "Video understanding is often plagued by severe temporal redundancy, where processing dense frame sequences is both semantically inefficient and computationally expensive. This challenge is further amplified when only a small subset of frames is truly relevant to the given query. In this paper, we propose a Query- and Content-Aware (QCA) keyframe selection framework that can select a compact yet information-rich set of frames from long videos. QCA first partitions the video into temporal segments and estimates the information contribution of each segment by jointly modeling query relevance and content deviation, and dynamically allocates keyframe budget to each segment. Within each segment, QCA anchors on the most query-relevant frame and iteratively incorporates additional frames to maximize diversity while maintaining high semantic relevance to the query. Crucially, our method requires no additional training and can be seamlessly integrated into existing Video-LLMs. Extensive experiments across multiple long video understanding benchmarks demonstrate that our proposed approach achieves state-of-the-art performance and has strong generalization ability. For instance, QCA achieves 67.8\\% on LongVideoBench using 128 frames, while GPT-4o achieves 66.7\\% using 256 frames. Our codes are available in \\href{https://github.com/hktk07/QCA}{GitHub}.",
+      "published": "2026-07-01T14:19:24Z",
+      "updated": "2026-07-01T14:19:24Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2607.00983v1",
+      "pdf_url": "https://arxiv.org/pdf/2607.00983v1"
+    },
+    {
+      "arxiv_id": "2607.00867v1",
+      "title": "EFlow: Learning Evidence Flow for Long-Video Reasoning with Adaptive Reflection",
+      "authors": [
+        "Wenhao Zhang",
+        "Kuanwei Lin",
+        "Xuyi Yang",
+        "Wei Gao",
+        "Ge Li"
+      ],
+      "summary": "Long-video reasoning is fundamentally constrained by how models acquire and utilize visual evidence. Existing tool-augmented video frameworks often interleave temporal grounding and answer reasoning within a single trajectory, causing early semantic hypotheses to bias evidence localization. We term this failure mode premature semantic commitment, where biased grounding retrieves incomplete evidence and incomplete evidence further reinforces incorrect reasoning. To address this issue, we propose EFlow, an evidence-first video reasoning framework built upon Qwen3-VL. EFlow explicitly separates temporal grounding and logical reasoning through CoT for Temporal Grounding and CoT for Reasoning, enabling the model to retrieve relevant evidence before answer inference. In addition, EFlow introduces a confidence-aware reflection mechanism that re-evaluates the full video when retrieved evidence is potentially insufficient. We further construct dedicated trajectory datasets and train EFlow through supervised fine-tuning, reinforcement learning, and reinforcement fine-tuning. Extensive experiments across five video understanding benchmarks demonstrate that EFlow consistently improves long-video reasoning performance.",
+      "published": "2026-07-01T12:32:29Z",
+      "updated": "2026-07-01T12:32:29Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2607.00867v1",
+      "pdf_url": "https://arxiv.org/pdf/2607.00867v1"
+    },
+    {
+      "arxiv_id": "2607.00858v1",
+      "title": "MoVA: Learning Asymmetric Dual Projections for Modular Long Video-Text Alignment",
+      "authors": [
+        "Peiyuan Zhu",
+        "Shaoan Xie",
+        "Zijian Li",
+        "Yifan Shen",
+        "Namrata Deka",
+        "Harsh Shrivastava",
+        "Guangyi Chen",
+        "Kun Zhang"
+      ],
+      "summary": "Contrastive pre-training has propelled video-text alignment, yet models often inherit the critical limitations of their image-text predecessors like CLIP, resulting in entangled representations. These challenges are severely exacerbated by two fundamental properties in the video domain: Temporal Misalignment, where textual descriptions often correlate only to specific, constrained temporal windows, leaving other frames text-irrelevant; and Semantic Asymmetry, which dictates a sparse, bidirectional, and non-equivalent relevance between frame-level visual details and caption-level concepts. This failure persists whether captions are short and temporally disjoint, creating ambiguity, or long and detailed, fostering entanglement between static objects and their temporal evolution. In this paper, we establish theoretical conditions that enable flexible alignment between video and text representations across the temporal dimension and at varying levels of granularity. Building on these theoretical insights, we introduce MoVA, Modular Long Video-Text Alignment, which learns dual asymmetric projections: a text-side projection that adaptively selects frame-aware subspaces of the caption, and a video-side projection that disentangles text-relevant visual concepts. Our framework ensures that the model can preserve global cross-modal semantics while disentangling evolving, frame-specific concepts and scale naturally to long captions and videos. Empirical evaluations show that MoVA outperforms existing methods in multiple video-text alignment tasks, demonstrating the effectiveness of our method.",
+      "published": "2026-07-01T12:23:38Z",
+      "updated": "2026-07-01T12:23:38Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.LG"
+      ],
+      "abs_url": "http://arxiv.org/abs/2607.00858v1",
+      "pdf_url": "https://arxiv.org/pdf/2607.00858v1"
+    },
+    {
+      "arxiv_id": "2607.00712v1",
+      "title": "Towards Memory-Efficient Autoregressive Video Generation via Instance-Specific Parametric Absorption",
+      "authors": [
+        "Xiaomeng Fu",
+        "Jia Li",
+        "Yiming Hu",
+        "Yong Wang",
+        "Hayden Kwok-Hay So",
+        "Jiao Dai",
+        "Xiangxiang Chu",
+        "Jizhong Han"
+      ],
+      "summary": "Autoregressive (AR) streaming models have emerged as a powerful paradigm for long video generation. However, the linearly growing Key-Value (KV) cache poses a significant bottleneck, leading to memory overload and degraded inference throughput. A common compression method is to drop redundant KV tokens, which often breaks long-range dependencies, resulting in temporal flickering and identity loss. In this paper, we propose Instance-Specific Parametric Absorption (ISPA), a novel framework that shifts the KV cache compression from discarding to distilling. The core idea is to transit a subset of layers from Full-Attention (F-Layers) to memory-efficient Local-Attention (L-Layers) by \"absorbing\" historical context into the model's weights. Specifically, during a brief warmup phase, ISPA monitors the output discrepancy between global and local attention. At the transition point, we solve a closed-form least-squares problem to compute an instance-specific weight modulation that compensates for the missing history. Experiments across architectures (1.3B to 14B) demonstrate that ISPA can remove up to 50\\% of the KV cache with near-lossless visual quality. We hope this perspective encourages future work to explore parametric memory consolidation beyond external token-level cache management for streaming generative models.",
+      "published": "2026-07-01T09:59:28Z",
+      "updated": "2026-07-01T09:59:28Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.MM"
+      ],
+      "abs_url": "http://arxiv.org/abs/2607.00712v1",
+      "pdf_url": "https://arxiv.org/pdf/2607.00712v1"
+    },
+    {
+      "arxiv_id": "2607.00375v1",
+      "title": "LIST3R: Long-sequence Instance-aware 3D Reconstruction",
+      "authors": [
+        "Jing Gao",
+        "Wei Wang",
+        "Feiran Wang",
+        "Yan Yan"
+      ],
+      "summary": "We present LIST3R, an instance-aware framework for long-sequence 3D reconstruction inspired by the way humans organize spatial memory around stable and recognizable objects. LIST3R organizes long-sequence reconstruction around instance anchors, using them to reconnect fragmented subsequences and consolidate local observations into a coherent global 3D scene. Given a long video, our approach partitions it into overlapping subsequences and builds a structured local instance library for each partial reconstruction, maintaining persistent trackable anchors with semantic and geometric evidence. These anchors are matched across subsequences to recover revisited regions and provide object-aware constraints for fragment alignment, producing a consistent global reconstruction. During this process, the evolving geometric evidence updates the local instance libraries and progressively organizes them into a unified global 3D instance library. Experiments on long-sequence benchmarks show that our method produces more accurate trajectories and higher-quality 3D reconstructions, highlighting the effectiveness of persistent instance anchors for organizing long-horizon 3D reconstruction. Our code is available on the project page: https://yixn965.github.io/LIST3R/.",
+      "published": "2026-07-01T03:20:32Z",
+      "updated": "2026-07-01T03:20:32Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2607.00375v1",
+      "pdf_url": "https://arxiv.org/pdf/2607.00375v1"
+    },
+    {
+      "arxiv_id": "2606.31734v1",
+      "title": "MemLearner: Learning to Query Context memory for Video World Models",
+      "authors": [
+        "Jiwen Yu",
+        "Jianxiong Gao",
+        "Jianhong Bai",
+        "Yiran Qin",
+        "Kaiyi Huang",
+        "Quande Liu",
+        "Xintao Wang",
+        "Pengfei Wan",
+        "Kun Gai",
+        "Xihui Liu"
+      ],
+      "summary": "Video World Models are interactive video generation models that predict future world states based on user actions and history video frames. A critical challenge in video world models is the lack of memory, causing inconsistent generated scenes over extended durations. Previous methods explored rule-based context frame retrieval as memory, but they fail to generalize in scenarios with scene occlusions and dynamic objects. We propose MemLearner, a learning-based adaptive context query method using query tokens to bridge context and predicted tokens. By leveraging the video generation model itself for context querying, MemLearner exploits pre-trained visual priors without training additional modules from scratch, and incorporates efficient strategies for training and inference. We collect a dataset of long videos with scene occlusions and dynamic objects, paired with camera pose annotations, and propose a multi-dataset training strategy leveraging both annotated rendered and unannotated real-world videos. Extensive experiments demonstrate that MemLearner significantly outperforms prior video world models in terms of scene consistency and memory, particularly under challenging occlusion and dynamic scenarios.",
+      "published": "2026-06-30T14:31:32Z",
+      "updated": "2026-06-30T14:31:32Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.31734v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.31734v1"
+    },
+    {
+      "arxiv_id": "2606.31249v1",
+      "title": "Rethinking the Role of Feature Engineering and Learning Strategies in Few-Shot Hidden Emotion Recognition",
+      "authors": [
+        "Xiaochuan Guo",
+        "Jihao Gu",
+        "Haixu Liu",
+        "Yuxin Liu",
+        "Qi Wang",
+        "Yufei Wang",
+        "Fei Wang",
+        "Kun Li",
+        "Dan Guo"
+      ],
+      "summary": "In this paper, we present the solution developed by our team, XInsight Lab, which achieved first place in Track 3 of the 4th EI-MIGA-IJCAI Challenge with a test accuracy of 0.76923. To address the challenge of weak and sparse implicit emotion evidence in long videos, this paper extends the winning solution from the previous competition and proposes a compact multi-modal temporal modeling framework. The framework integrates and evaluates the effects of multi-source features, including 2D/3D skeletons, facial expression Blendshapes, DINOv2/v3 vision foundation models, X-CLIP video features, and Gemini semantic priors. Architecturally, we propose a cross-attention mechanism that utilizes static pose features, denoted as Base, as the Query and dynamic micro-motion differential features, denoted as Offset, as the Key and Value. By capturing local relative velocities, this mechanism eliminates static biases related to individual body shape and identity. Concurrently, an adaptive pooling method based on Multiple Instance Learning is employed to extract instantaneous emotions while suppressing background noise in long sequences. Finally, the paper reveals the representation collapse phenomenon of general vision foundation models in micro-dynamic tasks, and analyzes the underlying mechanisms where networks fall into public-leaderboard-driven pseudo-generalization due to shortcut learning and rote memorization.",
+      "published": "2026-06-30T07:25:13Z",
+      "updated": "2026-06-30T07:25:13Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.31249v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.31249v1"
+    },
+    {
+      "arxiv_id": "2606.29023v1",
+      "title": "Efficient Spatio-Temporal Grounding with Multimodal Large Models via Second-Level Tracking and RL Verification",
+      "authors": [
+        "Tianshu Zhang",
+        "Yan Wang",
+        "Ji Qi",
+        "Lijie Wen"
+      ],
+      "summary": "Spatio-temporal grounding in long videos requires precise temporal localization and robust object tracking conditioned on natural-language queries. While recent vision-language models (VLMs) show strong reasoning ability, directly applying frame-by-frame inference to long sequences is computationally expensive and unstable. We propose a practical pipeline that shifts from frame-level to second-level tracking and performs cross-second smoothing to preserve continuity while reducing sequence length. To improve reasoning supervision, we synthesize chain-of-thought style trajectories using advanced multimodal models for temporal localization and target selection, and replace generated spatio-temporal coordinates with ground-truth annotations to avoid noisy supervision. We further optimize the policy with reinforcement learning using a verifier based on $t\\_\\mathrm{IoU}+mv\\_\\mathrm{IoU}$. Experiments across multiple FPS settings show that our method achieves a strong trade-off between efficiency and localization quality.",
+      "published": "2026-06-27T17:42:32Z",
+      "updated": "2026-06-27T17:42:32Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.29023v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.29023v1"
+    },
+    {
+      "arxiv_id": "2606.28163v1",
+      "title": "Enhanced Neural Video Representation Compression across Extreme Complexity and Quality Scales",
+      "authors": [
+        "Ho Man Kwan",
+        "Tianhao Peng",
+        "Fan Zhang",
+        "Mike Nilsson",
+        "Andrew Gower",
+        "David Bull"
+      ],
+      "summary": "Implicit neural representations (INRs) have recently emerged as a promising approach to video compression, delivering competitive rate-distortion performance alongside rapid decoding. However, existing neural video codecs struggle to balance complexity and scalability. Lightweight models often suffer from degraded compression performance when scaled to different bitrate/quality levels, whereas high-performance models exhibit limited scalability, as their model complexity typically increases with quality. This lack of a unified architecture capable of maintaining consistent complexity across a wide range of bitrates severely limits their diverse real-world deployment. To address these challenges, we introduce NVRC++, a novel INR-based video codec that utilizes a lightweight INR with multiple high-resolution feature grids, providing high scalability at any given complexity level. This is paired with an optimization framework that enables efficient overfitting on high-resolution grids for long video sequences, thereby exploiting spatio-temporal redundancies without prohibitive computational or memory overhead. Additionally, an advanced entropy model is designed for efficiently compressing the high-dimensional grid parameters. As a result, NVRC++ provides four complexity levels (from 7kMACs/pixel to 360kMACs/pixel), each spanning wide bitrate and quality ranges while supporting real-time decoding. The experimental results show that NVRC++ offers a much faster decoding speed (up to 7.6x) compared to the SOTA INR-based video codec, NVRC, while delivering comparable performance.",
+      "published": "2026-06-26T14:58:09Z",
+      "updated": "2026-06-26T14:58:09Z",
+      "primary_category": "eess.IV",
+      "categories": [
+        "eess.IV",
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.28163v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.28163v1"
+    },
+    {
+      "arxiv_id": "2606.27922v3",
+      "title": "Reflect-R1: Evidence-Driven Reflection for Self-Correction in Long Video Understanding",
+      "authors": [
+        "Shuimu Chen",
+        "Yuteng Chen",
+        "Yuanshen Guan",
+        "Zebang Cheng",
+        "Zeyu Zhang",
+        "Shengqian Qin",
+        "Bin Xia",
+        "Jiaran Li",
+        "Wenming Yang",
+        "Fei Ma"
+      ],
+      "summary": "Current multimodal reflection mechanisms for long video understanding predominantly rely on closed-loop self-reflection within internal parameters. Lacking objective external evidence, models are frequently trapped in blind confidence and often fail to correct errors. Furthermore, applying reinforcement learning to multi-stage reflection pipelines introduces severe policy coupling, which is exacerbated by a critical scarcity of dedicated training data. To address these limitations, this work proposes Reflect-R1, the first Evidence-Driven self-correction framework for long video understanding. The framework constructs a three-stage pipeline consisting of intuition, verification, and arbitration. By dynamically retrieving objective visual evidence to verify initial intuitions and autonomously executing multiple temporal searches to resolve conflicts, it completely breaks the hallucination loop. To overcome policy coupling, we design a stage-decoupled reinforcement learning algorithm named SD-GRPO that independently computes advantage functions across different reasoning stages. Concurrently, we construct a dataset of 120K samples to bridge the training data gap. Extensive experiments on benchmarks such as VideoMME and LongVideoBench demonstrate that Reflect-R1 achieves state-of-the-art performance. Our method significantly improves the genuine rectification rate and enables authentic self-correction strictly grounded in objective evidence.",
+      "published": "2026-06-26T10:15:36Z",
+      "updated": "2026-06-30T06:57:21Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.27922v3",
+      "pdf_url": "https://arxiv.org/pdf/2606.27922v3"
+    },
+    {
+      "arxiv_id": "2606.26515v2",
+      "title": "Forget, Anticipate and Adapt: Test Time Training for Long Videos",
+      "authors": [
+        "Rajat Modi",
+        "Sebastian Noel",
+        "Xin Liang",
+        "Yogesh Singh Rawat"
+      ],
+      "summary": "Test Time Training (TTT) is a mechanism in which a model adapts to an incoming test-sample by performing some self-supervised (SSL) task and updating its weights even during inference. This procedure does not require labels at test-time. This paper focuses on TTT for long-videos. A major concern with existing approaches is: 1) they perform TTT updates using a sliding window containing frames in the past, whose compute increases linearly with the size of window. This becomes computationally intractable when the videos are hours long. 2) TTT is performed even when temporally close frames look similar, thereby consuming a lot of compute. We present the Frame Forgetting Network (FFN) that: 1) operates on only three frames within the sliding window, namely the frame that exits, the current frame and the frame after that. The model still manages to retain temporal context and work for hours long-videos; 2) mathematically define a surprise metric: how much new information the incoming frame contains with respect to the past seen frame. This facilitates determining how to modify the effective window size during TTT and constitutes the core mechanism of an adaptive windowing algorithm. Additionally, we curate a dataset EpicTours containing up to 3 hour long videos of walking city-tours, whereas earlier datasets on this problem were only 5 min long. We demonstrate FFNs empirical effectiveness on dense-segmentation, video classification tasks, generalization to depth-estimation, and multi-hour long videos.",
+      "published": "2026-06-25T01:40:10Z",
+      "updated": "2026-06-27T01:18:25Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.26515v2",
+      "pdf_url": "https://arxiv.org/pdf/2606.26515v2"
+    },
+    {
+      "arxiv_id": "2606.25842v2",
+      "title": "Graph it first! Enabling Reasoning on Long-form Egocentric Videos through Scene Graphs",
+      "authors": [
+        "Agnese Taluzzi",
+        "Riccardo Santambrogio",
+        "Simone Mentasti",
+        "Chiara Plizzari",
+        "Matteo Matteucci"
+      ],
+      "summary": "Existing multi-modal large language models (MLLMs) face significant challenges in processing long video sequences due to strict input token limitations. As a result, current video understanding approaches, especially in egocentric settings characterized by complex dynamics, frequent state changes, and moving cameras, are forced to massively subsample frames. This leads to severe loss of temporal and contextual information, constraining their ability to perform fine-grained video reasoning. In this work, we introduce a framework for egocentric video question answering (VQA) that overcomes these input constraints through Egocentric Scene Graphs (EgoSGs), i.e., temporally grounded, structured representations that capture objects, attributes, spatial relations, and interactions over time. By representing videos as compact, text-based scene graphs, our method preserves the essential visual and temporal information of the original video in a symbolic form that drastically reduces input length while maintaining semantic richness. Crucially, this enables MLLMs to reason efficiently over entire video sequences within their token budget. On HD-EPIC VQA, our method achieves state-of-the-art results, outperforming strong video-based baselines on multiple models and suggesting that structured, temporally grounded representations like EgoSGs can bridge long-form egocentric video understanding and the context limitations of today's MLLMs.",
+      "published": "2026-06-24T13:55:45Z",
+      "updated": "2026-07-02T12:05:36Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.25842v2",
+      "pdf_url": "https://arxiv.org/pdf/2606.25842v2"
+    },
+    {
+      "arxiv_id": "2606.25465v1",
+      "title": "EchoStyle: Unlocking High-Fidelity Video Stylization with Reverse Data Synthesis",
+      "authors": [
+        "Huaqiu Li",
+        "Jiahao Wang",
+        "Sijia Cai",
+        "Hualian Sheng",
+        "Bing Deng",
+        "Jieping Ye",
+        "Wenhan Luo"
+      ],
+      "summary": "While image stylization has been studied extensively, video stylization remains a critical and largely unsolved challenge in the field of intelligent content creation. Existing methods, usually utilizing a reference image as the style prior, suffer from content leakage, data scarcity and limited adaptability to long videos, leading to suboptimal results with severe style drift and motion distortion. For these issues, we present EchoStyle, a scalable text-driven framework to achieve high-quality stylization of videos with arbitrary lengths. To start with, we construct a video-to-video architecture to appropriately re-fuse the video content and the text style. To address data scarcity, we pioneer an automatic reverse-synthesis pipeline to establish V-Style20k, a large-scale stylization dataset of 20k high-quality video pairs. To facilitate long video stylization, we devise an init-follow-mode mechanism along with a sliding-window inference strategy. Extensive experiments demonstrate EchoStyle's excellent performance across a wide range of artistic styles, even comparable to leading closed-source solutions.",
+      "published": "2026-06-24T06:45:56Z",
+      "updated": "2026-06-24T06:45:56Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.25465v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.25465v1"
+    },
+    {
+      "arxiv_id": "2606.24187v2",
+      "title": "Towards Fast and Effective Long Video Understanding of Multimodal Large Language Models via Adaptive Quasi-Gaussian Sampling",
+      "authors": [
+        "Kun Zhang",
+        "Chenxin Fang",
+        "Tao Chen",
+        "Baiyang Song",
+        "Yunhang Shen",
+        "Yiyi Zhou",
+        "Rongrong Ji"
+      ],
+      "summary": "Long video understanding remains a daunting challenge for Multimodal Large Language Models (MLLMs) due to the excessive computation and memory footprint. Thus, keyframe selection is often adopted to mitigate this shortcoming, which however still suffers from low flexibility and high noise due to its hard sampling principle. In this paper, we define video frame selection as a problem of Quasi-Gaussian Sampling, and propose an adaptive and training-free approach termed AdaQ. Inspired by the 3-$σ$ rule of Gaussian distribution, the objective of AdaQ is to achieve the optimal 3-$σ$ interval for different examples, i.e., a smaller 3-$σ$ interval for the local query and a larger one for the global query, thereby facilitating robust and adaptive frame sampling. To validate AdaQ, we apply it to four MLLMs with three embedding models. The extensive experimental results not only show its obvious performance gains over the default MLLMs and the SOTA keyframe selection methods, e.g., helping Qwen3-VL-8B outperform GPT4o by 15.8% on average by using only 64 frames, but also confirm its superior robustness and high efficiency for long-video understanding, e.g., only 1 hyper-parameter needs to be set.",
+      "published": "2026-06-23T06:13:30Z",
+      "updated": "2026-06-24T04:06:43Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.24187v2",
+      "pdf_url": "https://arxiv.org/pdf/2606.24187v2"
+    },
+    {
+      "arxiv_id": "2606.23327v1",
+      "title": "VideoAgent: All-in-One Framework for Video Understanding and Editing",
+      "authors": [
+        "Hengji Zhou",
+        "Lingxuan Huang",
+        "Jian Wang",
+        "Bing Zhou",
+        "Si Wu",
+        "Lianghao Xia",
+        "Chao Huang"
+      ],
+      "summary": "Video editing has become essential in digital media creation, yet existing automated systems are restricted to short segment processing and domain-specific tasks. They face two critical limitations: i) inability to handle diverse video comprehension and editing operations, and ii) lack of long-video understanding for coherent narrative creation. We propose VideoAgent, an all-in-one agentic framework addressing these challenges through two key innovations. First, we develop automated video shot creation with shot planning agents for coherent narratives and cross-modal retrieval for aligned visual content. Second, we design a multi-agent orchestration framework integrating over thirty specialized editing agents. Intent parsing filters relevant tools while textual-gradient graph optimization assembles complex editing pipelines. Extensive experiments on our newly-proposed VideoEdit benchmark and public datasets demonstrate VideoAgent's superiority over existing multimodal LLMs and agentic systems. VideoAgent achieves 87-95% orchestration success rates while reducing API costs by 60%. Human evaluation across six video categories shows VideoAgent produces professional-quality content approaching human-level performance, with ratings only 4% below human-created videos. We release our code at https://github.com/HKUDS/VideoAgent.",
+      "published": "2026-06-22T13:37:08Z",
+      "updated": "2026-06-22T13:37:08Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.23327v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.23327v1"
+    },
+    {
+      "arxiv_id": "2606.22804v2",
+      "title": "CoVStream: Edge-Cloud Collaboration for Understanding of Long Video Streams",
+      "authors": [
+        "Xu Liu",
+        "Guikun Chen",
+        "Zihao Yan",
+        "Kanzhi Wu",
+        "Wenguan Wang"
+      ],
+      "summary": "Long, continuous video streams are an increasingly critical driver of multimedia intelligence. Existing efforts often handle long videos with a sample-encode-reason approach using large models. However, they overlook a crucial deployment fact: the stream is often produced by computationally constrained devices. This forces an untenable compromise: cloud offloading unlocks strong reasoning but incurs prohibitive bandwidth overhead, while on-device processing remains limited by edge hardware capacity. Therefore, we propose CoVStream, the first edge-cloud collaborative framework for understanding long video streams. The edge node distills raw video streams into compact visual features and semantic captions for transmission to the cloud, minimizing bandwidth costs, while the cloud server integrates this data into an entity graph and global visual context, activating the heavy reasoning model only when a user query arrives. Experiments on VideoMME-Long, LVBench, and RTV-Bench show that CoVStream reduces bandwidth usage by 87.6% while retaining 99.2% of the cloud baseline accuracy on LVBench.",
+      "published": "2026-06-22T03:29:45Z",
+      "updated": "2026-06-25T06:29:16Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.22804v2",
+      "pdf_url": "https://arxiv.org/pdf/2606.22804v2"
+    },
+    {
+      "arxiv_id": "2606.22718v1",
+      "title": "Generative Relightable Avatars",
+      "authors": [
+        "Kunwar Maheep Singh",
+        "Christian Theobalt",
+        "Rishabh Dabral"
+      ],
+      "summary": "We present Generative Relightable Avatars (GRA), a person-specific method for photorealistic free-view rendering and environment-map relighting of full-body humans. We postulate that modeling fine-grained appearance details is inherently a one-to-many problem that can benefit from a generative formulation. In contrast to fully regressive relightable avatar methods, GRA follows a hybrid approach that combines controllable, physics-grounded relighting with probabilistic refinement. Starting from a tracked animated mesh, we optimize material parameters in UV-space and render a coarse relit appearance under a target HDR environment map. Next, we refine the textures with a feed-forward model to capture pose-dependent texture dynamics and illumination effects beyond simplified reflectance assumptions. Finally, a fine-tuned video-to-video diffusion model transforms the physically grounded renderings into temporally coherent, high-detail videos while preserving 3D control, with an error-recycling strategy for generating long videos. Experimental evaluations demonstrate our method's improved perceptual quality over prior relightable avatar baselines. Project Page: https://vcai.mpi-inf.mpg.de/projects/GRA/",
+      "published": "2026-06-21T23:36:00Z",
+      "updated": "2026-06-21T23:36:00Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.22718v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.22718v1"
+    },
+    {
+      "arxiv_id": "2606.22370v1",
+      "title": "Towards Error-Free Long Video Generation",
+      "authors": [
+        "Shuning Chang",
+        "Weihua Chen",
+        "Jiasheng Tang",
+        "Hao Xu",
+        "Zeyu Zhang",
+        "Hangjie Yuan",
+        "Yu Lu",
+        "Ruigang Niu",
+        "Fan Wang",
+        "Bohan Zhuang",
+        "Yi Yang"
+      ],
+      "summary": "Recent advances in video generation have made minute-level synthesis possible; however, generating long videos remains challenging due to error accumulation, attribute drift, and the limited availability of long video data. In this paper, we introduce an infinite-length video generation framework that focusing on addressing these issues and produces high-quality, dynamic, and identity-consistent single-shot long videos. We first finetune a diffusion model as a video extension model on large-scale short video data to autoregressively generate temporally coherent clips. Inspired by the success of large language models (LLMs), we adopt causal attention computation between clips to further finetune this model on long video data. In this way, the tokens in one clip (short video) are computed by bidirectional attention while tokens among clips are computed by unidirectional attention. This design leverages the strengths of modern diffusion models while preserving long-term context information, effectively mitigating error accumulation and attribute drift. To achieve memory efficiency during inference, we adopt a key-value (KV) caching mechanism to maintain a constant KV memory. Furthermore, we introduce truncation-rectified flow (T-RFlow) technique to further suppress error accumulation. Experimental results demonstrate the effectiveness of our method. Our framework establishes a new benchmark for realistic and coherent minute-level video synthesis.",
+      "published": "2026-06-21T07:39:37Z",
+      "updated": "2026-06-21T07:39:37Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.22370v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.22370v1"
+    },
+    {
+      "arxiv_id": "2606.21734v1",
+      "title": "HPP: Hierarchical Programmatic Probing for Long Video Understanding by Decoupling Perception and Reasoning",
+      "authors": [
+        "Awais Rauf",
+        "Ahmed Hasssan",
+        "Greg Slabaugh"
+      ],
+      "summary": "Understanding long videos requires fine-grained perception and multi-step, higher-order reasoning over complex, long-range spatio-temporal dynamics. Vision-language models (VLMs) encode video frames into visual tokens and attempt to perform both perception and multi-step planning latently, within a single forward pass. This coupled formulation, however, is bottlenecked by the LLM's limited capacity to discover and execute multi-step strategies in its latent representations. To address this bottleneck, we propose Hierarchical Programmatic Probing (HPP), a framework that decouples semantic perception from higher-order temporal reasoning by reformulating long video understanding as iterative, programmatic exploration of a hierarchically segmented video. Specifically, a coding-capable LLM plans and executes a multi-step strategy in an interactive coding environment, probing the video for information and invoking a VLM for localized perception on demand. To make probing tractable over long videos, we introduce three components: information-density-aware hierarchical segmentation, late-interaction semantic retrieval, and structured probing functions for coarse-to-fine temporal localization. We validate HPP on LongVideoBench, which requires both fine-grained perception and long-range relational reasoning, and show that decoupling the two via iterative programmatic probing yields substantial gains. Further results on EgoSchema, VideoMME, and MLVU demonstrate the effectiveness of our approach across diverse long-video benchmarks.",
+      "published": "2026-06-19T20:43:49Z",
+      "updated": "2026-06-19T20:43:49Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.21734v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.21734v1"
+    },
+    {
+      "arxiv_id": "2606.20799v1",
+      "title": "GroundShot: Visually Consistent Multi-Shot Long Video Generation via Entity-Grounded Shot Scheduling",
+      "authors": [
+        "Yixuan Lai",
+        "Tianjia Shao",
+        "Kun Zhou",
+        "Weijia Dou",
+        "Siyu Zhu",
+        "Jingdong Wang"
+      ],
+      "summary": "Generating visually consistent multi-shot videos remains an open challenge. As videos span more shots, inconsistencies can accumulate across shots, causing entities that reappear across shots -- characters, objects, and locations -- to drift away from how they first appear. We observe that viewers judge consistency by comparing each later appearance of an entity with its first clear appearance; the visual quality of this initial appearance sets the consistency ceiling for all that follows. Motivated by this, we present \\textbf{GroundShot}, a training-free, model-agnostic agentic framework for entity-grounded multi-shot generation. GroundShot builds an entity-level visual memory online from accepted generated shots: it schedules shots' generation order by their expected usefulness as entity references, grounds entities from generated videos, verifies their reliability before adding them to memory, and retrieves suitable entity references from memory before each shot is generated. To evaluate this entity-centered view of consistency, we further introduce \\textbf{GroundBench}, a diagnostic benchmark that measures consistency at the entity level while isolating controlled challenge dimensions. Experiments show that GroundShot improves multi-shot consistency over existing methods while requiring no additional training or model modification.",
+      "published": "2026-06-18T18:00:03Z",
+      "updated": "2026-06-18T18:00:03Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.20799v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.20799v1"
+    },
+    {
+      "arxiv_id": "2606.20561v1",
+      "title": "TimeProVe: Propose, then Verify for Efficient Long Video Temporal Reasoning in Activities of Daily Living",
+      "authors": [
+        "Arkaprava Sinha",
+        "Dominick Reilly",
+        "Siddharth Krishnan",
+        "Hieu Le",
+        "Srijan Das"
+      ],
+      "summary": "Long Video Question Answering (LVQA) requires identifying sparse, query-relevant evidence within hours-long untrimmed videos. Existing approaches either process videos densely with large vision-language models (VLMs), incurring prohibitive computational cost, or rely on sparse caption-based reasoning, which often misses temporally localized and motion-centric evidence. We introduce TimeProVe, a cost-efficient hybrid framework for temporally grounded reasoning in long videos. TimeProVe first employs lightweight modules to generate action-grounded answer--evidence hypotheses and subsequently invokes an expensive VLM only for targeted verification. The core of our framework lies in the Action-based Candidate Evidence (ACE) module, which converts temporally localized actions into query-conditioned candidate answers and supporting evidence windows through lightweight LLM reasoning. We further introduce OpenTSUBench (OTB), an open-ended benchmark designed to evaluate temporally grounded reasoning in real-world Activities of Daily Living (ADL) scenarios. Experiments show that TimeProVe outperforms the strongest baseline on OTB by 7.3%, while reducing VLM calls by 75% and inference cost by 93%. Furthermore, without explicit temporal grounding training, TimeProVe achieves competitive performance on Charades-STA, and reaches state-of-the-art results when enhanced with grounding VLMs.",
+      "published": "2026-06-18T17:59:48Z",
+      "updated": "2026-06-18T17:59:48Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.20561v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.20561v1"
+    },
+    {
+      "arxiv_id": "2606.19706v1",
+      "title": "NEST: Narrative Event Structures in Time for Long Video Understanding",
+      "authors": [
+        "Ali Asgarov",
+        "Kaushik Narasimhan",
+        "Najibul Haque Sarker",
+        "Hani Alomari",
+        "Chia-Wei Tang",
+        "Anushka Sivakumar",
+        "Zaber Ibn Abdul Hakim",
+        "Shaurya Mallampati",
+        "Chris Thomas"
+      ],
+      "summary": "Recent progress in vision-language models has enabled the processing of increasingly long video sequences, but the ability to handle extended token streams does not translate to understanding of narrative structure in long videos. Existing long video benchmarks focus on needle-in-a-haystack retrieval rather than evaluating how low-level actions form events, how events interact across time, and how narratives progress, for example, whether a model can connect an early setback, such as a job loss to a later relationship breakup, despite long gaps, intervening scenes, or flashbacks that reframe what occurred. We introduce NEST (Narrative Event Structures in Time for Long Video Understanding), a dataset of 1005 full-length movies (avg. 98 minutes), each annotated with 102 multimodal narrative events grounded in visual content, dialogue, and audio. NEST captures multimodal narrative events with structured annotations grounded in visual content, dialogue, and audio, and links them through relations that reflect narrative structure, including temporal ordering, hierarchical composition, and long-range dependencies. We introduce baselines for event trigger detection (ETD), event localization (EL), event argument extraction (EAE), and event relation extraction (ERE). The benchmark is highly challenging for grounded event discovery, with ETD below 8%, EL under 6%, and EAE below 11%. In contrast, ERE is more tractable once events are given, reaching 35.45% F1 zero-shot and 44.42% F1 after fine-tuning.",
+      "published": "2026-06-18T02:05:14Z",
+      "updated": "2026-06-18T02:05:14Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.19706v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.19706v1"
+    },
+    {
+      "arxiv_id": "2606.19341v1",
+      "title": "Native Active Perception as Reasoning for Omni-Modal Understanding",
+      "authors": [
+        "Zhenghao Xing",
+        "Ruiyang Xu",
+        "Yuxuan Wang",
+        "Jinzheng He",
+        "Ziyang Ma",
+        "Qize Yang",
+        "Yunfei Chu",
+        "Jin Xu",
+        "Junyang Lin",
+        "Chi-Wing Fu",
+        "Pheng-Ann Heng"
+      ],
+      "summary": "Passive models for long video understanding typically rely on a \"watch-it-all\" paradigm, processing frames uniformly regardless of query difficulty, causing computational cost to grow with video duration. Although interactive frameworks have emerged, they often rely on global pre-scanning, and their context cost still scales with video length. We propose OmniAgent, the first native omni-modal agent that formulates video understanding as a POMDP-based iterative Observation-Thought-Action cycle. OmniAgent executes on-demand actions to selectively distill audio-visual cues into a persistent textual memory, effectively decoupling reasoning complexity from raw video duration. To operationalize this, we introduce (1) Agentic Supervised Fine-Tuning to bootstrap native active perception via best-of-N trajectory synthesis with dual-stage quality control, and (2) Agentic Reinforcement Learning with TAURA (Turn-aware Adaptive Uncertainty Rescaled Advantage), which leverages turn-level entropy to steer credit assignment toward pivotal discovery turns. Crucially, OmniAgent exhibits positive test-time scaling, where performance improves as the number of reasoning turns increases, validating the efficacy of active perception. Empirical results across ten benchmarks (e.g., VideoMME, LVBench) demonstrate that OmniAgent achieves state-of-the-art performance among open-source models. Notably, on LVBench, our 7B agent outperforms the 10$\\times$ larger Qwen2.5-VL-72B (50.5% vs. 47.3%).",
+      "published": "2026-06-17T17:59:56Z",
+      "updated": "2026-06-17T17:59:56Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL",
+        "cs.SD"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.19341v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.19341v1"
+    },
+    {
+      "arxiv_id": "2606.18702v1",
+      "title": "UniTemp: Unlocking Video Generation in Any Temporal Order via Bidirectional Distillation",
+      "authors": [
+        "Lin Zhang",
+        "Sicheng Mo",
+        "Zefan Cai",
+        "Jinhong Lin",
+        "Zihao Lin",
+        "Jiuxiang Gu",
+        "Krishna Kumar Singh",
+        "Yuheng Li",
+        "Yin Li"
+      ],
+      "summary": "Autoregressive video diffusion models have emerged as a promising approach for long video generation, achieving strong performance in streaming settings. However, existing methods are restricted to forward temporal generation, whereas practical video creation often requires flexible generation order, e.g., conditioning on future context to extend backward, or on both past and future context for inbetween generation. We bridge this gap by training an autoregressive model that supports generation in arbitrary temporal directions. A key technical challenge arises from the Causal 3D VAE widely used in video diffusion models, which encodes latents strictly conditioned on past context. While suited for forward generation, this causal structure causes inter-block discontinuities when generation proceeds backward. To address this, we introduce blockwise anchor latents, a set of auxiliary latents that restore the missing past context at block boundaries during backward generation. Built on this design, we propose UniTemp, a bidirectional distillation framework that trains a single autoregressive student model for any-direction video generation. At inference time, UniTemp conditions on arbitrary past and/or future frames, improving controllability for both bidirectional and inbetween generation. Experiments show that UniTemp maintains competitive performance on short and long video generation compared to forward-only methods, while enabling diverse workflows such as bidirectional video extension, inbetween generation, looping video generation, scene transition, and visual story generation. Project website: https://lzhangbj.github.io/projects/unitemp/",
+      "published": "2026-06-17T05:27:19Z",
+      "updated": "2026-06-17T05:27:19Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.18702v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.18702v1"
+    },
+    {
+      "arxiv_id": "2606.20726v1",
+      "title": "How Well Can Your Video Model Remember? Measuring Memory-Budget Trade-offs in Long Video Understanding",
+      "authors": [
+        "Yixian Tian"
+      ],
+      "summary": "We introduce a compact empirical model that quantifies how answer accuracy degrades as a function of frame budget B and temporal distance D in long video understanding -- analyzing performance when recalling content from D seconds in the past using a fraction B of total frames. Long-form models operate under strict budgets, yet no prior framework predicts how accuracy degrades as B shrinks and events recede. We fit a weighted least-squares model on ~155,000 binary predictions across ten models and three sampling strategies, deriving a law where logit-accuracy scales linearly in log-budget with a distance-dependent exponent that decays log-linearly with distance. This budget exponent α(D) captures the marginal value of extra frames at distance D. The law achieves cell-level weighted R^2 = 0.05-0.75 across models. Notably, budget effectiveness at D = 1000 s differs by \\approx 7.4\\times between the best streaming and base models. STREAMINGVLM achieves α(1000) = 1.26 (95% CI: [1.06, 1.58]), meaning a tenfold budget increase substantially improves long-distance accuracy, while the best Qwen3-VL base model reaches only α(1000) = 0.17 (CI: [0.04, 0.34]). In accuracy space, a 10\\times budget increase at D = 1000 s yields +29 percentage points for STREAMINGVLM versus +4 pp for the base model. Sampling strategies show model-dependent trade-offs: random sampling yields higher base sensitivity but steeper distance decay. We demonstrate how α(D) enables principled budget allocation, including a model-ranking reversal at long distance, and propose it as a diagnostic metric for streaming video models.",
+      "published": "2026-06-17T03:30:01Z",
+      "updated": "2026-06-17T03:30:01Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.20726v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.20726v1"
+    },
+    {
+      "arxiv_id": "2606.17590v1",
+      "title": "TivTok: Broadcasting Time-Invariant Tokens for Scalable Video Tokenization",
+      "authors": [
+        "Weiliang Chen",
+        "Yuanhui Huang",
+        "Xuebo Wang",
+        "Yueqi Duan"
+      ],
+      "summary": "Video tokenization is fundamental to scalable video generation, as the number of tokens directly determines the computational cost and the length of videos that can be modeled. Existing tokenizers mainly improve scalability by compressing videos into fewer tokens, but they often continue to represent persistent content, such as static backgrounds and consistent object appearances, repeatedly across frames and chunks. In this paper, we propose \\textbf{TivTok} (\\textit{Time-Invariant Tokenizer}), a reuse-aware video tokenizer that makes persistent information reusable across time. TivTok represents a clip with Time-Invariant (TIV) tokens that encode information shared across frames and Time-Variant (TV) tokens that encode frame-specific residuals. To obtain this factorization, we introduce Scope-Induced Factorization (SIF), which assigns different attention scopes to the two token groups: TIV tokens attend to the full clip, whereas each TV token only accesses its corresponding frame together with the TIV tokens. In the decoder, Invariant Broadcasting (IB) reuses the same TIV tokens across frames and chunks for parallel reconstruction and long-video tokenization. Experiments show that TivTok achieves an rFVD of 12.65 on the standard $16{\\times}256{\\times}256$ benchmark and improves compression efficiency by 2.91$\\times$ for 128-frame videos compared with the evaluated baselines, while using only 1.1\\% of the tokens required by downsample-based tokenizers in our evaluation.",
+      "published": "2026-06-16T06:52:52Z",
+      "updated": "2026-06-16T06:52:52Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.17590v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.17590v1"
+    },
+    {
+      "arxiv_id": "2606.16898v1",
+      "title": "Semantic Flip: Synthetic OOD Generation for Robust Refusal in Embodied Question Answering and Spatial Localization",
+      "authors": [
+        "Dongbin Na",
+        "Chanwoo Kim",
+        "Giyun Choi",
+        "Dooyoung Hong"
+      ],
+      "summary": "Detecting unanswerable user queries remains essential for the reliable deployment of real-world embodied agents. However, modern vision-language models (VLMs) often generate overly confident answers even when the available visual memory cannot support the query. Such overconfidence poses various task-dependent risks. The agent may provide misleading information to the user in Embodied Question Answering and select an arbitrary coordinate and physically guide the user there in spatial reasoning for navigation. Despite these high stakes, only a few prior studies directly address when and how an embodied VLM should respond with \"I do not know.\" This work proposes Semantic Flip, a simple yet effective framework that synthesizes auxiliary out-of-distribution (OOD) samples for embodied refusal without requiring external OOD annotations. The key idea is to independently transform the query and video memory to construct auxiliary OOD pairs that lack sufficient visual grounding. These synthesized pairs enable training a lightweight rejection module on top of a frozen pretrained VLM. The module attaches to any existing VLM-based pipeline without retraining the underlying model. Across two complementary benchmarks, Semantic Flip consistently outperforms strong prompting baselines. This work also introduces SpaceReject, a new refusal benchmark for spatial localization with deliberately unanswerable queries over long video memory, where Semantic Flip achieves an $F_1$ score of 0.9559. The source codes and datasets are publicly available at https://github.com/ndb796/SemanticFlip.",
+      "published": "2026-06-15T16:07:24Z",
+      "updated": "2026-06-15T16:07:24Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.16898v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.16898v1"
+    },
+    {
+      "arxiv_id": "2606.16278v1",
+      "title": "RealityBridge: Bridging Editable 3D Gaussian Splatting Driving Simulations and Real-World Videos",
+      "authors": [
+        "Zhenhua Wu",
+        "Yun Pang",
+        "Mingkun Chang",
+        "Yuwei Ning",
+        "Liangzhi Wang",
+        "Yi Xiao",
+        "Guanbin Li"
+      ],
+      "summary": "Long-tail hazardous scenarios are essential for safety-oriented autonomous driving, yet they are difficult to collect and reproduce at scale. Editable 3D Gaussian Splatting (3DGS) simulation offers a promising alternative by reconstructing real driving scenes and supporting controllable scene editing. However, edited 3DGS-rendered videos still suffer from a significant Sim-to-Real gap, including rendering artifacts, degraded foreground assets, inconsistent illumination, and temporal flickering. Existing restoration and video generation methods are insufficient for this task, as they often fail to jointly repair 3DGS-specific artifacts, improve visual realism, and ensure temporal consistency. To fill this gap, we propose RealityBridge, a structure-preserving and asset-aware Sim-to-Real framework for edited 3DGS driving videos. RealityBridge uses multimodal controls, including rendered videos, foreground masks, edge maps, and semantic masks, together with a lightweight GateNet for adaptive condition allocation across backbone layers. We further construct targeted training data and introduce autoregressive long-video training with reward-guided post-training to improve restoration quality, temporal stability, and hallucination suppression. Extensive experiments on internal and public driving datasets show that RealityBridge outperforms existing methods in artifact removal, illumination harmonization, and long-sequence temporal consistency.",
+      "published": "2026-06-15T06:33:13Z",
+      "updated": "2026-06-15T06:33:13Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.16278v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.16278v1"
+    },
+    {
+      "arxiv_id": "2606.16184v1",
+      "title": "Closed-Loop Triplet Synergistic Generation for Long-Form Video",
+      "authors": [
+        "Xinlei Yin",
+        "Xiulian Peng",
+        "Xiao Li",
+        "Zhiwei Xiong",
+        "Yan Lu"
+      ],
+      "summary": "Multi-shot long-form video generation remains challenging due to identity drift and compounding inconsistencies across shots. While storyboard-driven pipelines improve controllability, they are often executed in a feed-forward manner, with limited mechanisms to incorporate generated visual evidence back into subsequent conditioning. We propose CoTriSyGen, an agentic framework that formulates multi-shot long video generation as a closed-loop visual-text-memory synergy process, where planned intent, persistent memory, and generated visuals are jointly leveraged for iterative correction and long-range coherence. A vision-language-model-based analyzer reasons over this triplet and produces updates to both prompts and memory along two pathways: (i) intra-shot refinement, which triggers targeted regeneration when semantic or compositional violations are detected and refines image-to-video prompt for coherent motions; and (ii) inter-shot refinement, which rewrites subsequent-shot prompts to propagate newly manifested entities or attributes and improve prompt quality (e.g., compositional grounding and cinematic fluency) based on generated evidence. The loop is grounded in an entity-centric memory modeled as a mutable visual state that evolves as the story progresses, which is continuously updated by both the generator and the analyzer by adding new and evolved entities to reflect appearance changes, accumulated multi-view evidence, and multi-entity compositions. Experiments on our curated StoryBench benchmark demonstrate substantial improvements in cross-shot consistency, prompt adherence, and cinematic continuity over representative methods.",
+      "published": "2026-06-15T03:56:43Z",
+      "updated": "2026-06-15T03:56:43Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.MM"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.16184v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.16184v1"
+    }
+  ]
+}

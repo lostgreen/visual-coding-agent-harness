@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from dataclasses import replace
 import json
 from pathlib import Path
 import threading
@@ -362,6 +363,38 @@ def test_event_detail_prompt_accepts_prior_adjacent_events(tmp_path: Path) -> No
 
     assert "opening title card" in prompt
     assert "Prior adjacent-window ending events" in prompt
+    assert "introduction, performance, judging, and result" in prompt
+    assert "one exact group-based event_key" in prompt
+
+
+def test_general_investigator_prompt_exposes_options_only_as_observation_targets(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    prompt = _interactive._preview_prompt(
+        workspace,
+        InvestigationTask(query_id="q", goal="Inspect the board.", segment_id="seg_0001"),
+        {"segment_id": "seg_0001", "virtual_time_range": [0.0, 180.0], "beats": []},
+        {
+            "virtual_time_range": [40.0, 60.0],
+            "sampling": {"fps": 0.5},
+            "asr_cues": [],
+            "source_lineage": [],
+        },
+    )
+
+    assert "Candidate option predicates are observation targets" in prompt
+    assert '"A": "7"' in prompt
+    assert '"B": "9"' in prompt
+    assert "not an invitation to choose an answer" in prompt
+
+
+def test_summary_observation_semantics_separates_narration_from_visual_example() -> None:
+    instruction = _interactive._summary_observation_semantics("What title best summarizes this video?")
+
+    assert "Narrative thesis" in instruction
+    assert "Segment role" in instruction
+    assert "Visual example" in instruction
+    assert "another language" in instruction
+    assert _interactive._summary_observation_semantics("What number is on the board?") == ""
 
 
 def test_gemini_reasoner_can_request_global_lexical_asr_navigation(tmp_path: Path) -> None:
@@ -1131,7 +1164,164 @@ def test_gemini_reasoner_retries_empty_forced_answer_with_compact_evidence(tmp_p
     assert api.calls[2]["max_tokens"] == 4096
 
 
-def test_gemini_reasoner_adopts_directly_supported_revised_answer_from_audit(tmp_path: Path) -> None:
+def test_gpt5_followup_and_answer_audit_use_reasoning_safe_completion_budget(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {"action": "answer", "answer": "B. A direct motive.", "citations": ["ev_1"]},
+            {"verdict": "supported", "reason": "The cited dialogue directly states the motive."},
+        )
+    )
+    api.model = "gpt-5.5"
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="Why did the person perform the action?",
+        options={"A": "A later consequence", "B": "A direct motive"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": True},
+        temporal_navigation={},
+        remaining_budget=2,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "The person directly states the motive.",
+                "virtual_time_range": [10.0, 20.0],
+                "modality": "visual",
+                "source_lineage": [],
+            },
+        ),
+    )
+
+    assert decision.support_status == "supported"
+    assert [call["max_tokens"] for call in api.calls] == [4096, 4096]
+
+
+def test_gpt5_initial_investigation_uses_reasoning_safe_completion_budget(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            {
+                "action": "investigate",
+                "tasks": [{"query_id": "initial_q1", "goal": "Inspect the event.", "segment_id": "seg_1"}],
+            },
+        )
+    )
+    api.model = "gpt-5.5"
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="What happens to the computer?",
+        options={"A": "It restarts", "B": "It breaks"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": False},
+        temporal_navigation={},
+        remaining_budget=2,
+        evidence_digest=(),
+    )
+
+    assert decision.action == "investigate"
+    assert [call["max_tokens"] for call in api.calls] == [4096]
+
+
+def test_gpt5_json_repair_uses_reasoning_safe_completion_budget(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(
+        (
+            '{"action":"investigate","tasks":[',
+            {
+                "action": "investigate",
+                "tasks": [{"query_id": "repair_q1", "goal": "Inspect the event.", "segment_id": "seg_1"}],
+            },
+        )
+    )
+    api.model = "gpt-5.5"
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+
+    decision = reasoner.decide(
+        question="What happens to the computer?",
+        options={"A": "It restarts", "B": "It breaks"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": False},
+        temporal_navigation={},
+        remaining_budget=2,
+        evidence_digest=(
+            {
+                "evidence_id": "ev_1",
+                "summary": "A relevant scene was located, but its outcome remains unclear.",
+                "virtual_time_range": [10.0, 20.0],
+                "modality": "visual",
+                "source_lineage": [],
+            },
+        ),
+    )
+
+    assert decision.action == "investigate"
+    assert [call["max_tokens"] for call in api.calls] == [4096, 4096]
+
+
+def test_reasoner_trace_keeps_original_response_metadata_when_json_repair_runs(tmp_path: Path) -> None:
+    class MetadataClient:
+        model = "gpt-5.5"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.last_response_metadata: dict[str, Any] = {}
+
+        def chat(self, prompt: str, *, image_paths: Sequence[str] = (), max_tokens: int = 900) -> str:
+            del prompt, image_paths
+            self.calls += 1
+            if self.calls == 1:
+                self.last_response_metadata = {
+                    "finish_reason": "length",
+                    "completion_tokens": max_tokens,
+                    "reasoning_tokens": max_tokens,
+                    "content_chars": 0,
+                    "requested_completion_tokens": max_tokens,
+                }
+                return ""
+            payload = {
+                "action": "investigate",
+                "tasks": [{"query_id": "repair_q1", "goal": "Inspect the event.", "segment_id": "seg_1"}],
+            }
+            raw = json.dumps(payload)
+            self.last_response_metadata = {
+                "finish_reason": "stop",
+                "completion_tokens": 180,
+                "reasoning_tokens": 64,
+                "content_chars": len(raw),
+                "requested_completion_tokens": max_tokens,
+            }
+            return raw
+
+    trace_path = tmp_path / "interactions.jsonl"
+    reasoner = GeminiReasoner(MetadataClient(), trace_path=trace_path)
+
+    decision = reasoner.decide(
+        question="What happens to the computer?",
+        options={"A": "It restarts", "B": "It breaks"},
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={"ready_for_answer": False},
+        temporal_navigation={},
+        remaining_budget=2,
+        evidence_digest=(),
+    )
+    rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    rows_by_type = {row["type"]: row for row in rows}
+
+    assert decision.action == "investigate"
+    assert rows_by_type["reasoner_investigate"]["raw"] == ""
+    assert rows_by_type["reasoner_investigate"]["api_response"]["finish_reason"] == "length"
+    assert rows_by_type["reasoner_investigate"]["api_response"]["reasoning_tokens"] == 4096
+    assert rows_by_type["reasoner_json_repair"]["api_response"]["finish_reason"] == "stop"
+
+
+def test_gemini_reasoner_records_audit_revision_as_unadopted_challenge(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (
             {"action": "answer", "answer": "A. Five.", "citations": ["ev_1"]},
@@ -1164,9 +1354,13 @@ def test_gemini_reasoner_adopts_directly_supported_revised_answer_from_audit(tmp
     )
 
     assert decision.action == "answer"
-    assert decision.answer == "D. Six."
-    assert decision.citations == ("ev_1", "ev_2")
-    assert decision.support_status == "supported"
+    assert decision.answer == "A. Five."
+    assert decision.citations == ("ev_1",)
+    assert decision.support_status == "insufficient"
+    rows = [json.loads(line) for line in (tmp_path / "interactions.jsonl").read_text().splitlines()]
+    challenge = next(row for row in rows if row["type"] == "reasoner_answer_challenge")
+    assert challenge["parsed"]["proposed_answer"] == "D. Six."
+    assert challenge["parsed"]["adopted"] is False
 
 
 def test_gemini_reasoner_dispatches_independent_claim_verification_for_relation_answers(tmp_path: Path) -> None:
@@ -1411,6 +1605,28 @@ def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities
             "query_requirements": {},
         }
     )
+    for question in (
+        "Which factor was not the cause of the split?",
+        "In which episode do they get married?",
+        "At what time does the target appear?",
+        "What title best summarizes this video?",
+        "Who protects the mermaid?",
+        "How many tasks has the other team completed?",
+    ):
+        assert _should_audit_answer(
+            {
+                "question": question,
+                "query_contract": {"required_scope": "multi_window", "aggregation": "compare"},
+                "query_requirements": {},
+            }
+        )
+    assert _should_audit_answer(
+        {
+            "question": "Which way is red facing relative to green?",
+            "query_contract": {"required_scope": "window", "aggregation": "compare"},
+            "query_requirements": {"requires_spatial_relation": True},
+        }
+    )
     assert not _should_audit_answer(
         {
             "question": "What number is written on the scoreboard?",
@@ -1418,6 +1634,8 @@ def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities
             "query_requirements": {},
         }
     )
+
+
     assert not _should_audit_answer(
         {
             "question": "How many meters did they complete in 25 minutes?",
@@ -1605,6 +1823,8 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
                 "need_detail": True,
                 "detail_start_sec": 40.0,
                 "detail_end_sec": 60.0,
+                "requested_fps": 1.0,
+                "requested_max_frames": 32,
                 "reason": "read the board",
             },
             {
@@ -1643,17 +1863,52 @@ def test_model_investigator_uses_preview_then_narrow_uniform_detail(tmp_path: Pa
     assert len(preview_call["image_paths"]) == 16
     assert "frame_0.000.jpg" in preview_call["image_paths"][0]
     assert "frame_120.000.jpg" in preview_call["image_paths"][-1]
+    detail_call = api.calls[2]
+    assert len(detail_call["image_paths"]) == 20
     assert isinstance(report.evidence[0], EvidenceRecord)
     assert (report.evidence[0].start_sec, report.evidence[0].end_sec) == (40.0, 60.0)
-    assert report.evidence[0].sampling_fps == 2.0
+    assert report.evidence[0].sampling_fps == 1.0
     assert report.evidence[0].attestation_model
     assert report.evidence[0].source_lineage[0]["source_video_id"] == "source"
     assert report.evidence[0].evidence_kind == "event_observation"
     assert report.evidence[0].operation_metadata["supports_answer_event"] is True
     assert report.evidence[0].operation_metadata["entities"][0]["local_id"] == "person_1"
-    assert len(report.evidence[0].frame_refs) == 16
-    assert "frame_40.000.jpg" in report.evidence[0].frame_refs[0]
-    assert "frame_60.000.jpg" in report.evidence[0].frame_refs[-1]
+    assert len(report.evidence[0].frame_refs) == 20
+    assert "model_frames" in report.evidence[0].frame_refs[0]
+    assert report.evidence[0].frame_refs[0].endswith("frame_0001.jpg")
+    assert report.evidence[0].frame_refs[-1].endswith("frame_0020.jpg")
+
+
+def test_detail_sampling_request_is_model_selected_and_bounded() -> None:
+    assert _interactive._detail_sampling_request(
+        {"requested_fps": 1.0, "requested_max_frames": 240}
+    ) == (1.0, 240)
+    assert _interactive._detail_sampling_request(
+        {"requested_fps": 9.0, "requested_max_frames": 900}
+    ) == (2.0, 512)
+    assert _interactive._detail_sampling_request(
+        {"requested_fps": "bad", "requested_max_frames": "bad"},
+        default_fps=0.5,
+        default_max_frames=64,
+    ) == (0.5, 64)
+
+
+def test_model_frames_are_resized_without_reducing_frame_count(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    sources = []
+    for index in range(3):
+        path = tmp_path / f"source_{index}.jpg"
+        Image.new("RGB", (1280, 720), color=(20 + index, 40, 60)).save(path, quality=95)
+        sources.append({"path": str(path), "virtual_time_sec": float(index)})
+
+    rows = _interactive._materialize_model_frames(workspace, "obs_resize", sources)
+
+    assert len(rows) == len(sources)
+    assert all(Path(row["path"]).exists() for row in rows)
+    assert all(Path(row["path"]) != Path(row["parent_path"]) for row in rows)
+    for row in rows:
+        with Image.open(row["path"]) as image:
+            assert max(image.size) <= 512
 
 
 def test_detail_window_preserves_temporal_context_for_causal_action() -> None:
@@ -1863,6 +2118,16 @@ def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> No
         {
             "local_id": "event_1",
             "event_key": "",
+            "event_class": "",
+            "counting_unit": "",
+            "participant_ids": [],
+            "subject_id": "",
+            "object_id": "",
+            "state_before": "",
+            "transition": "",
+            "state_after": "",
+            "preconditions_met": None,
+            "phase": "unknown",
             "description": "The presenter points to the diagram.",
             "start_sec": 35.0,
             "end_sec": 36.0,
@@ -1959,14 +2224,7 @@ def test_model_investigator_enumerates_each_beat_within_one_event_count_task(tmp
     api = ScriptedVisionClient(
         (
             {
-                "summary": "No title card appears in the first minute.",
-                "confidence": 0.9,
-                "events": [],
-                "supports_answer_event": False,
-                "need_detail": False,
-            },
-            {
-                "summary": "A title card appears in the second minute.",
+                "summary": "One title card appears in the complete segment.",
                 "confidence": 0.95,
                 "events": [
                     {
@@ -1981,13 +2239,6 @@ def test_model_investigator_enumerates_each_beat_within_one_event_count_task(tmp
                     }
                 ],
                 "supports_answer_event": True,
-                "need_detail": False,
-            },
-            {
-                "summary": "No title card appears in the final minute.",
-                "confidence": 0.9,
-                "events": [],
-                "supports_answer_event": False,
                 "need_detail": False,
             },
         )
@@ -2005,19 +2256,19 @@ def test_model_investigator_enumerates_each_beat_within_one_event_count_task(tmp
 
     report = investigator.run_batch((task,))[0]
 
-    assert len(api.calls) == 3
+    assert len(api.calls) == 1
     assert '"entities"' not in api.calls[0]["prompt"]
     assert api.calls[0]["max_tokens"] >= 1000
-    assert "Prior adjacent-window ending events" in api.calls[2]["prompt"]
-    assert "opening title card" in api.calls[2]["prompt"]
-    assert len(report.evidence) == 3
-    assert [(record.start_sec, record.end_sec) for record in report.evidence] == [
-        (0.0, 60.0),
-        (60.0, 120.0),
-        (120.0, 180.0),
-    ]
+    assert len(report.evidence) == 1
+    assert [(record.start_sec, record.end_sec) for record in report.evidence] == [(0.0, 180.0)]
     assert sum(len(record.operation_metadata["events"]) for record in report.evidence) == 1
-    assert report.cost["beat_windows"] == 3
+    assert report.cost["beat_windows"] == 1
+
+    reused = investigator.run_batch((replace(task, query_id="q_title_cards_repeat"),))[0]
+
+    assert len(api.calls) == 1
+    assert reused.cost["reused"] is True
+    assert reused.cost["vlm_calls"] == 0
 
 
 def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> None:
@@ -2043,6 +2294,89 @@ def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> No
     assert len(api.calls) == 2
     assert report.evidence[0].sampling_fps == 0.5
     assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5")
+
+
+def test_model_investigator_does_not_force_detail_from_keywords(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        ({"summary": "The number is already readable.", "confidence": 0.95, "need_detail": False},)
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_number",
+        goal="Read the number and track the visible transition.",
+        segment_id="seg_0001",
+        time_range=(0.0, 30.0),
+        modality_hint=("visual", "ocr", "motion"),
+        expected_evidence="visible number and transition",
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert len(api.calls) == 1
+    assert report.cost["detail_frames"] == 0
+    assert report.evidence[0].sampling_fps == 0.5
+
+
+def test_conditional_event_requires_explicit_preconditions(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {
+                "summary": "Two visually similar passes occur, but only one follows the required lead state.",
+                "confidence": 0.9,
+                "need_detail": False,
+                "events": [
+                    {
+                        "local_id": "event_1",
+                        "event_key": "qualified pass",
+                        "subject_id": "camera racer",
+                        "object_id": "yellow racer",
+                        "state_before": "camera racer is leading",
+                        "transition": "yellow racer passes camera racer",
+                        "state_after": "camera racer is behind yellow racer",
+                        "preconditions_met": True,
+                        "description": "The yellow racer overtakes the leading camera racer.",
+                        "start_sec": 10.0,
+                        "end_sec": 12.0,
+                        "supports_question_event": True,
+                    },
+                    {
+                        "local_id": "event_2",
+                        "event_key": "nonqualifying pass",
+                        "subject_id": "camera racer",
+                        "object_id": "black racer",
+                        "state_before": "camera racer is already behind",
+                        "transition": "black racer passes camera racer",
+                        "state_after": "camera racer remains behind",
+                        "preconditions_met": False,
+                        "description": "A later pass occurs without the required lead state.",
+                        "start_sec": 20.0,
+                        "end_sec": 22.0,
+                        "supports_question_event": True,
+                    },
+                ],
+                "supports_answer_event": True,
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="q_conditional_count",
+        goal="Count overtakes after the tracked subject reaches the lead.",
+        segment_id="seg_0001",
+        modality_hint=("visual", "motion"),
+        inspection_mode="enumerate_events",
+    )
+
+    report = investigator.run_batch((task,))[0]
+    events = report.evidence[0].operation_metadata["events"]
+
+    assert len(events) == 1
+    assert events[0]["event_key"] == "qualified pass"
+    assert events[0]["preconditions_met"] is True
 
 
 def test_model_investigator_preserves_candidate_provenance(tmp_path: Path) -> None:
@@ -2198,7 +2532,8 @@ def test_model_investigator_reports_partial_gap_instead_of_frame_success(tmp_pat
     assert report.resolution == "partial"
     assert report.resolved_conditions == ("locate the final board",)
     assert report.unresolved_conditions == ("read the final value and unit",)
-    assert report.failure_reason == "text remains unreadable after detail inspection"
+    assert report.failure_reason == "text is too small"
+    assert len(api.calls) == 1
     assert report.evidence[0].operation_metadata["investigation"]["resolution"] == "partial"
     assert report.condition_results[0].condition_id == "gap_final_value_c1"
     assert report.goal_progress == ("condition_satisfied:gap_final_value_c1",)

@@ -25,6 +25,10 @@ HIGHFPS_KEYWORDS = {
     "written",
     "action",
     "motion",
+    "transition",
+    "change",
+    "overtake",
+    "track",
     "throw",
     "threw",
     "spatial",
@@ -120,7 +124,7 @@ class VirtualVideoInvestigator:
         self.workspace = workspace
         self.sampler = sampler
         self.highfps = float(highfps)
-        self.highfps_max_frames = min(64, int(highfps_max_frames))
+        self.highfps_max_frames = min(512, int(highfps_max_frames))
         self.ledger_path = self.workspace.root_dir / "exploration_ledger.jsonl"
         self._visit_count = 0
         self._observation_cache: list[_CachedObservation] = []
@@ -249,7 +253,7 @@ class VirtualVideoInvestigator:
         max_frames: int = 64,
         query_id: str = "manual",
     ) -> Mapping[str, Any]:
-        capped = min(64, max(1, int(max_frames)))
+        capped = min(512, max(1, int(max_frames)))
         frames = materialize_window_frames(
             self.workspace,
             float(start_sec),

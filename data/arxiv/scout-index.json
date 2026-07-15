@@ -1,0 +1,1489 @@
+{
+  "scans": [
+    {
+      "scan_id": "2026-07-06/video-agent-recent",
+      "scan_date": "2026-07-06",
+      "topic_slug": "video-agent-recent",
+      "query": "video agent",
+      "categories": [
+        "cs.AI",
+        "cs.CV",
+        "cs.CL",
+        "cs.LG",
+        "cs.MM"
+      ],
+      "from": "2026-05-06",
+      "to": "2026-07-06",
+      "raw_results": "data/arxiv/2026-07-06/video-agent-recent.raw.json",
+      "count": 7
+    },
+    {
+      "scan_id": "2026-07-06/long-video-recent",
+      "scan_date": "2026-07-06",
+      "topic_slug": "long-video-recent",
+      "query": "long video",
+      "categories": [
+        "cs.AI",
+        "cs.CV",
+        "cs.CL",
+        "cs.LG",
+        "cs.MM"
+      ],
+      "from": "2026-05-06",
+      "to": "2026-07-06",
+      "raw_results": "data/arxiv/2026-07-06/long-video-recent.raw.json",
+      "count": 30
+    },
+    {
+      "scan_id": "2026-07-06/video-qa-recent",
+      "scan_date": "2026-07-06",
+      "topic_slug": "video-qa-recent",
+      "query": "video question answering",
+      "categories": [
+        "cs.AI",
+        "cs.CV",
+        "cs.CL",
+        "cs.LG",
+        "cs.MM"
+      ],
+      "from": "2026-05-06",
+      "to": "2026-07-06",
+      "raw_results": "data/arxiv/2026-07-06/video-qa-recent.raw.json",
+      "count": 30
+    },
+    {
+      "scan_id": "2026-07-06/multimodal-agent-recent",
+      "scan_date": "2026-07-06",
+      "topic_slug": "multimodal-agent-recent",
+      "query": "multimodal agent",
+      "categories": [
+        "cs.AI",
+        "cs.CV",
+        "cs.CL",
+        "cs.LG",
+        "cs.MM"
+      ],
+      "from": "2026-05-06",
+      "to": "2026-07-06",
+      "raw_results": "data/arxiv/2026-07-06/multimodal-agent-recent.raw.json",
+      "count": 30
+    },
+    {
+      "scan_id": "2026-07-06/videomme-recent",
+      "scan_date": "2026-07-06",
+      "topic_slug": "videomme-recent",
+      "query": "VideoMME",
+      "categories": [
+        "cs.AI",
+        "cs.CV",
+        "cs.CL",
+        "cs.LG",
+        "cs.MM"
+      ],
+      "from": "2026-05-06",
+      "to": "2026-07-06",
+      "raw_results": "data/arxiv/2026-07-06/videomme-recent.raw.json",
+      "count": 13
+    }
+  ],
+  "papers": {
+    "2607.01469v1": {
+      "title": "A Cost-Aware, Paired Protocol for Auditing Dynamic Tool Synthesis in Agentic Video Question Answering",
+      "abs_url": "http://arxiv.org/abs/2607.01469v1",
+      "published": "2026-07-01T21:01:57Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-agent-recent",
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.12195v1": {
+      "title": "InternVideo3: Agentify Foundation Models with Multimodal Contextual Reasoning",
+      "abs_url": "http://arxiv.org/abs/2606.12195v1",
+      "published": "2026-06-10T15:17:08Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-agent-recent"
+      ]
+    },
+    "2606.08091v1": {
+      "title": "VideoWeaver: Evaluating and Evolving Skills for Agentic Long Video Generation",
+      "abs_url": "http://arxiv.org/abs/2606.08091v1",
+      "published": "2026-06-06T10:35:28Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-agent-recent"
+      ]
+    },
+    "2606.03920v1": {
+      "title": "Benchmarking Visual State Tracking in Multimodal Video Understanding",
+      "abs_url": "http://arxiv.org/abs/2606.03920v1",
+      "published": "2026-06-02T17:12:05Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-agent-recent"
+      ]
+    },
+    "2605.13803v1": {
+      "title": "EvoGround: Self-Evolving Video Agents for Video Temporal Grounding",
+      "abs_url": "http://arxiv.org/abs/2605.13803v1",
+      "published": "2026-05-13T17:25:51Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-agent-recent"
+      ]
+    },
+    "2605.13228v1": {
+      "title": "ReTool-Video: Recursive Tool-Using Video Agents with Meta-Augmented Tool Grounding",
+      "abs_url": "http://arxiv.org/abs/2605.13228v1",
+      "published": "2026-05-13T09:19:22Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-agent-recent"
+      ]
+    },
+    "2605.10543v2": {
+      "title": "TIE: Time Interval Encoding for Video Generation over Events",
+      "abs_url": "http://arxiv.org/abs/2605.10543v2",
+      "published": "2026-05-11T13:23:14Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-agent-recent"
+      ]
+    },
+    "2607.01737v1": {
+      "title": "ReQuest: Rethinking-based Question-Aware Frame Selection for Long-Form Video QA",
+      "abs_url": "http://arxiv.org/abs/2607.01737v1",
+      "published": "2026-07-02T05:46:42Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2607.00983v1": {
+      "title": "QCA: Query- and Content-Aware Keyframe Selection for Long Video Understanding",
+      "abs_url": "http://arxiv.org/abs/2607.00983v1",
+      "published": "2026-07-01T14:19:24Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2607.00867v1": {
+      "title": "EFlow: Learning Evidence Flow for Long-Video Reasoning with Adaptive Reflection",
+      "abs_url": "http://arxiv.org/abs/2607.00867v1",
+      "published": "2026-07-01T12:32:29Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2607.00858v1": {
+      "title": "MoVA: Learning Asymmetric Dual Projections for Modular Long Video-Text Alignment",
+      "abs_url": "http://arxiv.org/abs/2607.00858v1",
+      "published": "2026-07-01T12:23:38Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.LG"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2607.00712v1": {
+      "title": "Towards Memory-Efficient Autoregressive Video Generation via Instance-Specific Parametric Absorption",
+      "abs_url": "http://arxiv.org/abs/2607.00712v1",
+      "published": "2026-07-01T09:59:28Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.MM"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2607.00375v1": {
+      "title": "LIST3R: Long-sequence Instance-aware 3D Reconstruction",
+      "abs_url": "http://arxiv.org/abs/2607.00375v1",
+      "published": "2026-07-01T03:20:32Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.31734v1": {
+      "title": "MemLearner: Learning to Query Context memory for Video World Models",
+      "abs_url": "http://arxiv.org/abs/2606.31734v1",
+      "published": "2026-06-30T14:31:32Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.31249v1": {
+      "title": "Rethinking the Role of Feature Engineering and Learning Strategies in Few-Shot Hidden Emotion Recognition",
+      "abs_url": "http://arxiv.org/abs/2606.31249v1",
+      "published": "2026-06-30T07:25:13Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.29023v1": {
+      "title": "Efficient Spatio-Temporal Grounding with Multimodal Large Models via Second-Level Tracking and RL Verification",
+      "abs_url": "http://arxiv.org/abs/2606.29023v1",
+      "published": "2026-06-27T17:42:32Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.28163v1": {
+      "title": "Enhanced Neural Video Representation Compression across Extreme Complexity and Quality Scales",
+      "abs_url": "http://arxiv.org/abs/2606.28163v1",
+      "published": "2026-06-26T14:58:09Z",
+      "primary_category": "eess.IV",
+      "categories": [
+        "eess.IV",
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.27922v3": {
+      "title": "Reflect-R1: Evidence-Driven Reflection for Self-Correction in Long Video Understanding",
+      "abs_url": "http://arxiv.org/abs/2606.27922v3",
+      "published": "2026-06-26T10:15:36Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent",
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2606.26515v2": {
+      "title": "Forget, Anticipate and Adapt: Test Time Training for Long Videos",
+      "abs_url": "http://arxiv.org/abs/2606.26515v2",
+      "published": "2026-06-25T01:40:10Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.25842v2": {
+      "title": "Graph it first! Enabling Reasoning on Long-form Egocentric Videos through Scene Graphs",
+      "abs_url": "http://arxiv.org/abs/2606.25842v2",
+      "published": "2026-06-24T13:55:45Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent",
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.25465v1": {
+      "title": "EchoStyle: Unlocking High-Fidelity Video Stylization with Reverse Data Synthesis",
+      "abs_url": "http://arxiv.org/abs/2606.25465v1",
+      "published": "2026-06-24T06:45:56Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.24187v2": {
+      "title": "Towards Fast and Effective Long Video Understanding of Multimodal Large Language Models via Adaptive Quasi-Gaussian Sampling",
+      "abs_url": "http://arxiv.org/abs/2606.24187v2",
+      "published": "2026-06-23T06:13:30Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.23327v1": {
+      "title": "VideoAgent: All-in-One Framework for Video Understanding and Editing",
+      "abs_url": "http://arxiv.org/abs/2606.23327v1",
+      "published": "2026-06-22T13:37:08Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.22804v2": {
+      "title": "CoVStream: Edge-Cloud Collaboration for Understanding of Long Video Streams",
+      "abs_url": "http://arxiv.org/abs/2606.22804v2",
+      "published": "2026-06-22T03:29:45Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent",
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2606.22718v1": {
+      "title": "Generative Relightable Avatars",
+      "abs_url": "http://arxiv.org/abs/2606.22718v1",
+      "published": "2026-06-21T23:36:00Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.22370v1": {
+      "title": "Towards Error-Free Long Video Generation",
+      "abs_url": "http://arxiv.org/abs/2606.22370v1",
+      "published": "2026-06-21T07:39:37Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.21734v1": {
+      "title": "HPP: Hierarchical Programmatic Probing for Long Video Understanding by Decoupling Perception and Reasoning",
+      "abs_url": "http://arxiv.org/abs/2606.21734v1",
+      "published": "2026-06-19T20:43:49Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent",
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2606.20799v1": {
+      "title": "GroundShot: Visually Consistent Multi-Shot Long Video Generation via Entity-Grounded Shot Scheduling",
+      "abs_url": "http://arxiv.org/abs/2606.20799v1",
+      "published": "2026-06-18T18:00:03Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.20561v1": {
+      "title": "TimeProVe: Propose, then Verify for Efficient Long Video Temporal Reasoning in Activities of Daily Living",
+      "abs_url": "http://arxiv.org/abs/2606.20561v1",
+      "published": "2026-06-18T17:59:48Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent",
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.19706v1": {
+      "title": "NEST: Narrative Event Structures in Time for Long Video Understanding",
+      "abs_url": "http://arxiv.org/abs/2606.19706v1",
+      "published": "2026-06-18T02:05:14Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.19341v1": {
+      "title": "Native Active Perception as Reasoning for Omni-Modal Understanding",
+      "abs_url": "http://arxiv.org/abs/2606.19341v1",
+      "published": "2026-06-17T17:59:56Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL",
+        "cs.SD"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent",
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2606.18702v1": {
+      "title": "UniTemp: Unlocking Video Generation in Any Temporal Order via Bidirectional Distillation",
+      "abs_url": "http://arxiv.org/abs/2606.18702v1",
+      "published": "2026-06-17T05:27:19Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.20726v1": {
+      "title": "How Well Can Your Video Model Remember? Measuring Memory-Budget Trade-offs in Long Video Understanding",
+      "abs_url": "http://arxiv.org/abs/2606.20726v1",
+      "published": "2026-06-17T03:30:01Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.17590v1": {
+      "title": "TivTok: Broadcasting Time-Invariant Tokens for Scalable Video Tokenization",
+      "abs_url": "http://arxiv.org/abs/2606.17590v1",
+      "published": "2026-06-16T06:52:52Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.16898v1": {
+      "title": "Semantic Flip: Synthetic OOD Generation for Robust Refusal in Embodied Question Answering and Spatial Localization",
+      "abs_url": "http://arxiv.org/abs/2606.16898v1",
+      "published": "2026-06-15T16:07:24Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.16278v1": {
+      "title": "RealityBridge: Bridging Editable 3D Gaussian Splatting Driving Simulations and Real-World Videos",
+      "abs_url": "http://arxiv.org/abs/2606.16278v1",
+      "published": "2026-06-15T06:33:13Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.16184v1": {
+      "title": "Closed-Loop Triplet Synergistic Generation for Long-Form Video",
+      "abs_url": "http://arxiv.org/abs/2606.16184v1",
+      "published": "2026-06-15T03:56:43Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.MM"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/long-video-recent"
+      ]
+    },
+    "2606.30220v1": {
+      "title": "From Accuracy to Visual Dependence: Auditing and Filtering Modality Collapse in Traffic VideoQA",
+      "abs_url": "http://arxiv.org/abs/2606.30220v1",
+      "published": "2026-06-29T12:33:15Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.29445v1": {
+      "title": "Bridging VideoQA and Video-Guided Agentic Tasks via Generalized Keyframe Extraction",
+      "abs_url": "http://arxiv.org/abs/2606.29445v1",
+      "published": "2026-06-28T15:11:19Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.29350v1": {
+      "title": "Fast Enough to Act: Spatio-Temporal Visual Token Merging for Low-Latency Robotic VLMs and VLAs",
+      "abs_url": "http://arxiv.org/abs/2606.29350v1",
+      "published": "2026-06-28T11:42:55Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.25206v1": {
+      "title": "RAVEN: Long-Horizon Reasoning & Navigation with a Visuo-Spatio-Temporal Memory",
+      "abs_url": "http://arxiv.org/abs/2606.25206v1",
+      "published": "2026-06-23T21:56:41Z",
+      "primary_category": "cs.RO",
+      "categories": [
+        "cs.RO",
+        "cs.AI",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.24797v1": {
+      "title": "EG-VQA: Benchmarking Verifiable Video Question Answering with Grounded Temporal Evidence",
+      "abs_url": "http://arxiv.org/abs/2606.24797v1",
+      "published": "2026-06-23T16:49:28Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.22870v1": {
+      "title": "VideoLatent: Video-Language Learning via Latent Self-Forcing",
+      "abs_url": "http://arxiv.org/abs/2606.22870v1",
+      "published": "2026-06-22T05:29:30Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.22862v1": {
+      "title": "Chains That See, Answers That Don't: A Multi-Aspect Evaluation Recipe for Forced Chain-of-Thought on Video-MME",
+      "abs_url": "http://arxiv.org/abs/2606.22862v1",
+      "published": "2026-06-22T05:10:03Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.LG"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.20970v1": {
+      "title": "CogniRoute: Learning to Route Social Evidence in Omni-Modal Models",
+      "abs_url": "http://arxiv.org/abs/2606.20970v1",
+      "published": "2026-06-18T22:17:18Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.17279v1": {
+      "title": "Training LLMs with Reinforcement Learning over Digital Twin Representations for Reasoning-Intensive Surgical VideoQA",
+      "abs_url": "http://arxiv.org/abs/2606.17279v1",
+      "published": "2026-06-15T20:40:45Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.14972v1": {
+      "title": "ReGenHuman: Re-Generating Human Appearances for Realistic Full-Body Video Anonymization",
+      "abs_url": "http://arxiv.org/abs/2606.14972v1",
+      "published": "2026-06-12T21:47:10Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.06338v1": {
+      "title": "StoryVideoQA: Scaling Deep Video Understanding with a Large-Scale, Multi-Genre and Auto-Generated Dataset",
+      "abs_url": "http://arxiv.org/abs/2606.06338v1",
+      "published": "2026-06-04T16:12:43Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.05917v1": {
+      "title": "MemoryCard: Topic-Aware Multi-Modal Clue Compression for Long-Video Question Answering",
+      "abs_url": "http://arxiv.org/abs/2606.05917v1",
+      "published": "2026-06-04T09:23:31Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.06532v1": {
+      "title": "GOPAgen: Motion-Aware and Efficient Agentic Long-Video Understanding with Structural Memory and Hierarchical Reasoning",
+      "abs_url": "http://arxiv.org/abs/2606.06532v1",
+      "published": "2026-06-03T17:47:49Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.04351v2": {
+      "title": "Frames2LoRA: Parametric Video Internalization for Vision-Language Models",
+      "abs_url": "http://arxiv.org/abs/2606.04351v2",
+      "published": "2026-06-03T02:07:35Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.04323v1": {
+      "title": "Answer Self-Consistency with Margin-Triggered Question Re-Arbitration for the CVPR 2026 VidLLMs Challenge",
+      "abs_url": "http://arxiv.org/abs/2606.04323v1",
+      "published": "2026-06-03T00:51:55Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.03788v2": {
+      "title": "SLU-2K: A Question-Based Benchmark for Semantic Evaluation of Sign Language Translation",
+      "abs_url": "http://arxiv.org/abs/2606.03788v2",
+      "published": "2026-06-02T15:39:33Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.01631v1": {
+      "title": "TimeLogic Challenge @ CVPR 2026: Strong MLLMs Meet Evidence-Seeking Agents for Temporal-Logic Video Question Answering",
+      "abs_url": "http://arxiv.org/abs/2606.01631v1",
+      "published": "2026-06-01T03:31:42Z",
+      "primary_category": "cs.MM",
+      "categories": [
+        "cs.MM"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.01591v1": {
+      "title": "TLG: Temporal-Logic Grounding for Video Question Answering via Source-Annotation Reconstruction and Category-Targeted Reasoning",
+      "abs_url": "http://arxiv.org/abs/2606.01591v1",
+      "published": "2026-06-01T02:40:25Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.LG"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.01485v1": {
+      "title": "Perception First: A Frontier Native-Video Model with Self-Consistency for Implicit Video Question Answering",
+      "abs_url": "http://arxiv.org/abs/2606.01485v1",
+      "published": "2026-05-31T23:00:17Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.LG"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.01106v1": {
+      "title": "Temporal Evidence Routing with Structured Visual Evidence for TimeLogicQA",
+      "abs_url": "http://arxiv.org/abs/2606.01106v1",
+      "published": "2026-05-31T08:49:04Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.01104v1": {
+      "title": "Adaptive Dense Evidence Refinement for Video Relational Reasoning for VRR-QA Challenge",
+      "abs_url": "http://arxiv.org/abs/2606.01104v1",
+      "published": "2026-05-31T08:45:06Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.14723v1": {
+      "title": "Disagreement-Based Cross-Model Routing for Implicit Video Question Answering",
+      "abs_url": "http://arxiv.org/abs/2606.14723v1",
+      "published": "2026-05-31T05:56:27Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.00829v1": {
+      "title": "The Right Inference Strategy Is All You Need: Nearly Training-Free Domain-Wise Inference for EgoCross Challenge",
+      "abs_url": "http://arxiv.org/abs/2606.00829v1",
+      "published": "2026-05-30T17:55:15Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.00712v1": {
+      "title": "CASTLE2026 Team WDL Technical Report",
+      "abs_url": "http://arxiv.org/abs/2606.00712v1",
+      "published": "2026-05-30T12:41:52Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2605.31069v1": {
+      "title": "Towards Effective Long-Video Event Prediction via Multi-Level Event Semantics Mining",
+      "abs_url": "http://arxiv.org/abs/2605.31069v1",
+      "published": "2026-05-29T09:38:43Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2605.29402v1": {
+      "title": "Semantic and Visual Evidence for Efficient Long-Video Reasoning: A Solution for the HD-EPIC VQA Challenge",
+      "abs_url": "http://arxiv.org/abs/2605.29402v1",
+      "published": "2026-05-28T05:53:34Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2605.27885v1": {
+      "title": "Reflective Dialogue between Teacher and Solver Agents for Video Question Answering",
+      "abs_url": "http://arxiv.org/abs/2605.27885v1",
+      "published": "2026-05-27T03:08:12Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/video-qa-recent"
+      ]
+    },
+    "2606.31966v1": {
+      "title": "MECoBench: A Systematic Study of Multimodal Agent Collaboration in Embodied Environments",
+      "abs_url": "http://arxiv.org/abs/2606.31966v1",
+      "published": "2026-06-30T17:07:53Z",
+      "primary_category": "cs.MA",
+      "categories": [
+        "cs.MA",
+        "cs.AI",
+        "cs.CL",
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.31613v1": {
+      "title": "Robust Autonomous UAV Landing on Maritime Platforms via Multimodal Agentic AI and Active Wave Compensation",
+      "abs_url": "http://arxiv.org/abs/2606.31613v1",
+      "published": "2026-06-30T13:03:45Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.RO"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.31504v1": {
+      "title": "SimpleSearch-VL: A Simple Recipe for Multimodal Agentic Deep Search",
+      "abs_url": "http://arxiv.org/abs/2606.31504v1",
+      "published": "2026-06-30T11:22:24Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.30296v2": {
+      "title": "ManimAgent: Self-Evolving Multimodal Agents for Visual Education",
+      "abs_url": "http://arxiv.org/abs/2606.30296v2",
+      "published": "2026-06-29T13:37:56Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.29788v1": {
+      "title": "MemLeak: Diagnosing Information Leaks in Multimodal Agent Memory",
+      "abs_url": "http://arxiv.org/abs/2606.29788v1",
+      "published": "2026-06-29T05:07:02Z",
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.28514v1": {
+      "title": "GPTNT: Benchmarking Real-Time Collaboration Between Multimodal Agents on Keep Talking And Nobody Explodes",
+      "abs_url": "http://arxiv.org/abs/2606.28514v1",
+      "published": "2026-06-26T18:09:36Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.27499v1": {
+      "title": "DMV-Bench: Diagnosing Long-Horizon Multimodal Agents' Visual Memory with Incidental Cue Injection",
+      "abs_url": "http://arxiv.org/abs/2606.27499v1",
+      "published": "2026-06-25T19:34:25Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.26793v1": {
+      "title": "MIRROR: Novelty-Constrained Memory-Guided MCTS Red-Teaming for Agentic RAG",
+      "abs_url": "http://arxiv.org/abs/2606.26793v1",
+      "published": "2026-06-25T09:26:49Z",
+      "primary_category": "cs.CR",
+      "categories": [
+        "cs.CR",
+        "cs.AI",
+        "cs.LG"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.23581v1": {
+      "title": "Kamera: Unified Position-Invariant Multimodal KV Cache for Training-Free Reuse",
+      "abs_url": "http://arxiv.org/abs/2606.23581v1",
+      "published": "2026-06-22T16:47:00Z",
+      "primary_category": "cs.DC",
+      "categories": [
+        "cs.DC",
+        "cs.AI",
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.22948v1": {
+      "title": "ENVS: Environment-Native Verified Search for Long-Horizon GUI Agents",
+      "abs_url": "http://arxiv.org/abs/2606.22948v1",
+      "published": "2026-06-22T07:28:55Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.21963v1": {
+      "title": "Holmes: Multimodal Agentic Diagnosis for Mixed-Language Mobile Crashes at Industrial Scale",
+      "abs_url": "http://arxiv.org/abs/2606.21963v1",
+      "published": "2026-06-20T09:31:26Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.SE"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.21401v2": {
+      "title": "SwarmX: Agentic Scheduling for Low-Latency Agentic Systems",
+      "abs_url": "http://arxiv.org/abs/2606.21401v2",
+      "published": "2026-06-19T13:11:15Z",
+      "primary_category": "cs.DC",
+      "categories": [
+        "cs.DC",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.18198v1": {
+      "title": "Seeing Is Not Screening: Multimodal Hidden Instruction Attacks on Agent Skill Scanners",
+      "abs_url": "http://arxiv.org/abs/2606.18198v1",
+      "published": "2026-06-16T17:29:11Z",
+      "primary_category": "cs.CR",
+      "categories": [
+        "cs.CR",
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.16295v1": {
+      "title": "VisualClaw: A Real-Time, Personalized Agent for the Physical World",
+      "abs_url": "http://arxiv.org/abs/2606.16295v1",
+      "published": "2026-06-15T06:58:22Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.15231v1": {
+      "title": "Visual-Seeker: Towards Visual-Native Multimodal Agentic Search via Active Visual Reasoning",
+      "abs_url": "http://arxiv.org/abs/2606.15231v1",
+      "published": "2026-06-13T10:07:32Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.15152v1": {
+      "title": "Can Agents Read the Room? Benchmarking Visual Social Intelligence in Multimodal Simulation",
+      "abs_url": "http://arxiv.org/abs/2606.15152v1",
+      "published": "2026-06-13T06:44:31Z",
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.13368v2": {
+      "title": "IterCAD: An Iterative Multimodal Agent for Visually-Grounded CAD Generation and Editing",
+      "abs_url": "http://arxiv.org/abs/2606.13368v2",
+      "published": "2026-06-11T13:53:21Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.12666v2": {
+      "title": "CAPED: Context-Aware Privacy Exposure Defense for Mobile GUI Agents",
+      "abs_url": "http://arxiv.org/abs/2606.12666v2",
+      "published": "2026-06-10T20:48:39Z",
+      "primary_category": "cs.CR",
+      "categories": [
+        "cs.CR",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.11652v1": {
+      "title": "IAPO: Input Attribution-Aware Policy Optimization for Tool Use in Small Multimodal Agents",
+      "abs_url": "http://arxiv.org/abs/2606.11652v1",
+      "published": "2026-06-10T04:30:37Z",
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.10651v1": {
+      "title": "Kwai Keye-VL-2.0 Technical Report",
+      "abs_url": "http://arxiv.org/abs/2606.10651v1",
+      "published": "2026-06-09T09:58:08Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.28357v1": {
+      "title": "ReasonRec: A Reasoning-Augmented Multimodal Agent for Unified Recommendation",
+      "abs_url": "http://arxiv.org/abs/2606.28357v1",
+      "published": "2026-06-08T22:40:35Z",
+      "primary_category": "cs.IR",
+      "categories": [
+        "cs.IR",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.09669v2": {
+      "title": "SpatialWorld: Benchmarking Interactive Spatial Reasoning of Multimodal Agents in Real-World Tasks",
+      "abs_url": "http://arxiv.org/abs/2606.09669v2",
+      "published": "2026-06-08T15:51:51Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.08081v1": {
+      "title": "Aligned but Not Partner-Specific: Distinguishing How Multimodal LLM Agents Succeed in Reference Games Without Human-Like Conventions",
+      "abs_url": "http://arxiv.org/abs/2606.08081v1",
+      "published": "2026-06-06T10:05:49Z",
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.03890v1": {
+      "title": "OVO-S-Bench: A Hierarchical Benchmark for Streaming Spatial Intelligence in Multimodal LLMs",
+      "abs_url": "http://arxiv.org/abs/2606.03890v1",
+      "published": "2026-06-02T16:51:32Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.02449v1": {
+      "title": "HLL: Can Agents Cross Humanity's Last Line of Verification?",
+      "abs_url": "http://arxiv.org/abs/2606.02449v1",
+      "published": "2026-06-01T16:20:45Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CL",
+        "cs.CV",
+        "cs.LG",
+        "cs.MM"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.02357v1": {
+      "title": "Do Multimodal Agents Really Benefit from Tool Use? A Systematic Study of Capability Gains",
+      "abs_url": "http://arxiv.org/abs/2606.02357v1",
+      "published": "2026-06-01T15:04:25Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.01613v2": {
+      "title": "TechRAG: Evidence-Gated Multimodal Agentic RAG for Technical Literature Reasoning",
+      "abs_url": "http://arxiv.org/abs/2606.01613v2",
+      "published": "2026-06-01T03:01:51Z",
+      "primary_category": "cs.IR",
+      "categories": [
+        "cs.IR",
+        "cs.AI",
+        "cs.MA"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.01414v1": {
+      "title": "Agent Skills Should Go Beyond Text: The Case for Visual Skills",
+      "abs_url": "http://arxiv.org/abs/2606.01414v1",
+      "published": "2026-05-31T19:22:43Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2606.00579v1": {
+      "title": "Sandboxed Coding Agents are Competitive Omni-modal Task Solvers",
+      "abs_url": "http://arxiv.org/abs/2606.00579v1",
+      "published": "2026-05-30T07:04:27Z",
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL",
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent"
+      ]
+    },
+    "2605.31075v1": {
+      "title": "Task-Focused Memorization for Multimodal Agents",
+      "abs_url": "http://arxiv.org/abs/2605.31075v1",
+      "published": "2026-05-29T09:43:35Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/multimodal-agent-recent",
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2606.31326v1": {
+      "title": "Bridging Video Understanding and Generation in a Unified Framework",
+      "abs_url": "http://arxiv.org/abs/2606.31326v1",
+      "published": "2026-06-30T08:29:29Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2606.30288v1": {
+      "title": "VisReflect: Latent Visual Reflection for Fine-Grained Perception in Long Visual Context",
+      "abs_url": "http://arxiv.org/abs/2606.30288v1",
+      "published": "2026-06-29T13:30:17Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2606.07577v1": {
+      "title": "OmniMem: Perturbation-aware Memory Compression for Streaming Audio-Visual LLMs",
+      "abs_url": "http://arxiv.org/abs/2606.07577v1",
+      "published": "2026-05-26T19:12:13Z",
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CV",
+        "cs.SD",
+        "eess.AS"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2605.26014v1": {
+      "title": "STORM: Internalized Modeling for Spatial-Temporal Reasoning in Video-Language Models",
+      "abs_url": "http://arxiv.org/abs/2605.26014v1",
+      "published": "2026-05-25T16:33:00Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2605.19322v1": {
+      "title": "DynaTok: Temporally Adaptive and Positional Bias-Aware Token Compression for Video-LLMs",
+      "abs_url": "http://arxiv.org/abs/2605.19322v1",
+      "published": "2026-05-19T04:02:01Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2605.12954v1": {
+      "title": "AdaFocus: Adaptive Relevance-Diversity Sampling with Zero-Cache Look-back for Efficient Long Video Understanding",
+      "abs_url": "http://arxiv.org/abs/2605.12954v1",
+      "published": "2026-05-13T03:40:21Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2605.09223v2": {
+      "title": "CREST: Curvature-Regulated Event-Centric Sampling for Efficient Long-Video Understanding",
+      "abs_url": "http://arxiv.org/abs/2605.09223v2",
+      "published": "2026-05-09T23:47:46Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/videomme-recent"
+      ]
+    },
+    "2605.05848v2": {
+      "title": "VideoRouter: Query-Adaptive Dual Routing for Efficient Long-Video Understanding",
+      "abs_url": "http://arxiv.org/abs/2605.05848v2",
+      "published": "2026-05-07T08:23:27Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "status": "seen",
+      "scans": [
+        "2026-07-06/videomme-recent"
+      ]
+    }
+  }
+}

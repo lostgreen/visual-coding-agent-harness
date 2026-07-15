@@ -373,7 +373,7 @@ def materialize_window_frames(
     requested_fps = float(fps)
     if requested_fps not in {0.5, 1.0, 2.0}:
         raise ValueError("inspect_window fps must be one of 0.5, 1.0, or 2.0")
-    cap = max(1, min(64, int(max_frames)))
+    cap = max(1, min(512, int(max_frames)))
     cached = tuple(
         frame
         for frame in workspace.read_frame_manifest()

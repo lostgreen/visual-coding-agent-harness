@@ -1,0 +1,42 @@
+{
+  "group_id": "videomme_v2_diverse20_v1",
+  "dataset": "VideoMME-v2",
+  "evaluation_role": "frozen_development_comparison",
+  "description": "Five complete four-question VideoMME-v2 groups selected without inspecting answers.",
+  "selection_policy": {
+    "seed": 20260713,
+    "unit": "complete_four_question_video_group",
+    "duration_preference_sec": [900, 1500],
+    "selection": "stable hash within five predeclared capability strata; longest available group used when a stratum has no 900s candidate",
+    "answer_blind": true
+  },
+  "video_groups": [
+    {"video_id": "441", "duration_sec": 927.9, "group_type": "logic", "task_type": "Narrative Cloze Inference"},
+    {"video_id": "445", "duration_sec": 813.512, "group_type": "logic", "task_type": "Entity Persistence Tracking"},
+    {"video_id": "468", "duration_sec": 907.158, "group_type": "relevance", "task_type": "Entity Attribute Change Detection"},
+    {"video_id": "521", "duration_sec": 921.3, "group_type": "relevance", "task_type": "Basic Counting"},
+    {"video_id": "744", "duration_sec": 902.1, "group_type": "relevance", "task_type": "Event Sequence Ordering"}
+  ],
+  "cases": [
+    {"case_id": "441-1", "video_id": "441", "task_type": "Narrative Cloze Inference"},
+    {"case_id": "441-2", "video_id": "441", "task_type": "Narrative Cloze Inference"},
+    {"case_id": "441-3", "video_id": "441", "task_type": "Narrative Cloze Inference"},
+    {"case_id": "441-4", "video_id": "441", "task_type": "Narrative Cloze Inference"},
+    {"case_id": "445-1", "video_id": "445", "task_type": "Entity Persistence Tracking"},
+    {"case_id": "445-2", "video_id": "445", "task_type": "Entity Persistence Tracking"},
+    {"case_id": "445-3", "video_id": "445", "task_type": "Entity Persistence Tracking"},
+    {"case_id": "445-4", "video_id": "445", "task_type": "Entity Persistence Tracking"},
+    {"case_id": "468-1", "video_id": "468", "task_type": "Entity Attribute Change Detection"},
+    {"case_id": "468-2", "video_id": "468", "task_type": "Entity Attribute Change Detection"},
+    {"case_id": "468-3", "video_id": "468", "task_type": "Entity Attribute Change Detection"},
+    {"case_id": "468-4", "video_id": "468", "task_type": "Entity Attribute Change Detection"},
+    {"case_id": "521-1", "video_id": "521", "task_type": "Basic Counting"},
+    {"case_id": "521-2", "video_id": "521", "task_type": "Basic Counting"},
+    {"case_id": "521-3", "video_id": "521", "task_type": "Basic Counting"},
+    {"case_id": "521-4", "video_id": "521", "task_type": "Basic Counting"},
+    {"case_id": "744-1", "video_id": "744", "task_type": "Event Sequence Ordering"},
+    {"case_id": "744-2", "video_id": "744", "task_type": "Event Sequence Ordering"},
+    {"case_id": "744-3", "video_id": "744", "task_type": "Event Sequence Ordering"},
+    {"case_id": "744-4", "video_id": "744", "task_type": "Event Sequence Ordering"}
+  ]
+}

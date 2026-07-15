@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import random
 import re
+import threading
 import time
 from typing import Any, Callable, Mapping, Sequence
 
@@ -34,7 +35,6 @@ from vcah.investigator import (
     InvestigationReport,
     VirtualVideoInvestigator,
     _choose_window_from_segment_packet,
-    _needs_highfps,
     _task_terms,
 )
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
@@ -350,7 +350,7 @@ class OpenAICompatibleVisionClient:
         self.retry_base_sec = max(0.0, float(planner.get("retry_base_sec", 1.0)))
         self.retry_max_sec = max(self.retry_base_sec, float(planner.get("retry_max_sec", 30.0)))
         self.retry_jitter = max(0.0, min(1.0, float(planner.get("retry_jitter", 0.2))))
-        self.last_response_metadata: dict[str, Any] = {}
+        self._thread_state = threading.local()
         for key, value in (planner.get("proxy_env") or {}).items():
             os.environ[str(key)] = str(value)
 
@@ -415,6 +415,14 @@ class OpenAICompatibleVisionClient:
             raise RuntimeError(f"HTTP {response.status_code}: {snippet}")
         raise RuntimeError("API retry loop exhausted")
 
+    @property
+    def last_response_metadata(self) -> dict[str, Any]:
+        return dict(getattr(self._thread_state, "last_response_metadata", {}) or {})
+
+    @last_response_metadata.setter
+    def last_response_metadata(self, value: Mapping[str, Any]) -> None:
+        self._thread_state.last_response_metadata = dict(value)
+
     def _headers(self) -> dict[str, str]:
         base = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.api_type in {"gemini_gateway", "kuaishou_gateway"}:
@@ -462,7 +470,8 @@ class GeminiReasoner:
         if evidence_digest:
             image_paths, visual_manifest = self._visual_context(kwargs)
             prompt = _followup_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
-            raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
+            raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=self._completion_budget(1400))
+            api_response = self._response_metadata()
             parsed = _normalize_reasoner_payload(self._parse_or_repair(raw, kwargs), round_id=self.calls)
             action = str(parsed.get("action") or "answer")
             self._trace(
@@ -472,6 +481,7 @@ class GeminiReasoner:
                 parsed,
                 image_paths=image_paths,
                 visual_manifest=visual_manifest,
+                api_response=api_response,
             )
             if action == "investigate":
                 if kwargs.get("force_finalize") and self._last_candidate is not None:
@@ -553,7 +563,12 @@ class GeminiReasoner:
                 evidence_digest,
                 visual_manifest=visual_manifest,
             )
-            audit_raw = self.api.chat(audit_prompt, image_paths=image_paths, max_tokens=1400)
+            audit_raw = self.api.chat(
+                audit_prompt,
+                image_paths=image_paths,
+                max_tokens=self._completion_budget(1400),
+            )
+            audit_api_response = self._response_metadata()
             audit = _parse_answer_audit(audit_raw)
             self._trace(
                 "reasoner_answer_audit",
@@ -562,6 +577,7 @@ class GeminiReasoner:
                 audit,
                 image_paths=image_paths,
                 visual_manifest=visual_manifest,
+                api_response=audit_api_response,
             )
             verdict = str(audit.get("verdict", "unknown") or "unknown").strip().casefold()
             audit_reason = str(audit.get("reason", "") or "")
@@ -571,27 +587,31 @@ class GeminiReasoner:
                 kwargs.get("options") or {},
             )
             if revised_answer and _valid_option_answer(revised_answer, kwargs.get("options") or {}):
-                candidate = ReasonerDecision(
-                    action="answer",
-                    answer=revised_answer,
-                    citations=tuple(audit.get("revised_citations") or revised_nested_citations or candidate.citations),
-                    entity_clusters=tuple(audit.get("revised_entity_clusters") or ()),
+                challenge = {
+                    "original_answer": candidate.answer,
+                    "proposed_answer": revised_answer,
+                    "proposed_citations": list(
+                        audit.get("revised_citations") or revised_nested_citations or candidate.citations
+                    ),
+                    "proposed_support_status": str(
+                        audit.get("revised_support_status", "insufficient") or "insufficient"
+                    ).casefold(),
+                    "reason": audit_reason,
+                    "adopted": False,
+                }
+                self._trace(
+                    "reasoner_answer_challenge",
+                    audit_prompt,
+                    audit_raw,
+                    challenge,
+                    image_paths=image_paths,
+                    visual_manifest=visual_manifest,
+                    api_response=audit_api_response,
                 )
-                self._last_candidate = candidate
-                revised_status = str(audit.get("revised_support_status", "insufficient") or "insufficient").casefold()
-                if revised_status == "supported":
-                    return self._maybe_verify_claim(
-                        kwargs,
-                        evidence_digest,
-                        ReasonerDecision(
-                            action="answer",
-                            answer=candidate.answer,
-                            citations=candidate.citations,
-                            entity_clusters=candidate.entity_clusters,
-                            support_status="supported",
-                            support_reason=audit_reason,
-                        ),
-                    )
+                audit_reason = (
+                    f"{audit_reason} Audit proposed {revised_answer}, but audit revisions are advisory and were not "
+                    "adopted without a new Reasoner decision."
+                ).strip()
             audit_tasks = tuple(audit.get("tasks") or ())[:2]
             if (
                 verdict in {"insufficient", "contradicted"}
@@ -605,13 +625,14 @@ class GeminiReasoner:
                 answer=candidate.answer,
                 citations=candidate.citations,
                 entity_clusters=candidate.entity_clusters,
-                support_status=verdict,
+                support_status="insufficient" if revised_answer else verdict,
                 support_reason=audit_reason,
             )
             return self._maybe_verify_claim(kwargs, evidence_digest, decision) if verdict == "supported" else decision
         image_paths, visual_manifest = self._visual_context(kwargs)
         prompt = _investigate_prompt(kwargs, visual_manifest=visual_manifest)
-        raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=1400)
+        raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=self._completion_budget(1400))
+        api_response = self._response_metadata()
         parsed = _normalize_reasoner_payload(self._parse_or_repair(raw, kwargs), round_id=self.calls)
         self._trace(
             "reasoner_investigate",
@@ -620,6 +641,7 @@ class GeminiReasoner:
             parsed,
             image_paths=image_paths,
             visual_manifest=visual_manifest,
+            api_response=api_response,
         )
         tasks = parsed.get("tasks") or []
         return ReasonerDecision(
@@ -636,6 +658,7 @@ class GeminiReasoner:
         image_paths, visual_manifest = self._visual_context(kwargs)
         prompt = _forced_answer_prompt(kwargs, evidence_digest, visual_manifest=visual_manifest)
         raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=4096)
+        api_response = self._response_metadata()
         parsed = _parse_json(raw)
         self._trace(
             "reasoner_forced_answer",
@@ -644,12 +667,20 @@ class GeminiReasoner:
             parsed,
             image_paths=image_paths,
             visual_manifest=visual_manifest,
+            api_response=api_response,
         )
         if not parsed:
             retry_prompt = _compact_forced_answer_prompt(kwargs, evidence_digest)
             retry_raw = self.api.chat(retry_prompt, max_tokens=4096)
+            retry_api_response = self._response_metadata()
             retry_parsed = _parse_json(retry_raw)
-            self._trace("reasoner_forced_answer_retry", retry_prompt, retry_raw, retry_parsed)
+            self._trace(
+                "reasoner_forced_answer_retry",
+                retry_prompt,
+                retry_raw,
+                retry_parsed,
+                api_response=retry_api_response,
+            )
             if retry_parsed:
                 raw = retry_raw
                 parsed = retry_parsed
@@ -692,9 +723,16 @@ class GeminiReasoner:
             f"Workspace overview: {json.dumps(kwargs.get('workspace_overview') or {}, ensure_ascii=False)[:3500]}\n"
             f"Truncated response: {str(raw or '')[:6000]}"
         )
-        repaired_raw = self.api.chat(repair_prompt, max_tokens=1100)
+        repaired_raw = self.api.chat(repair_prompt, max_tokens=self._completion_budget(1100))
+        repaired_api_response = self._response_metadata()
         repaired = _parse_json(repaired_raw)
-        self._trace("reasoner_json_repair", repair_prompt, repaired_raw, repaired)
+        self._trace(
+            "reasoner_json_repair",
+            repair_prompt,
+            repaired_raw,
+            repaired,
+            api_response=repaired_api_response,
+        )
         return repaired
 
     def _repair_invalid_answer(
@@ -716,6 +754,13 @@ class GeminiReasoner:
             return candidate
         label, text = matches[0]
         return replace(candidate, answer=f"{label}. {text}")
+
+    def _completion_budget(self, default: int) -> int:
+        model = str(getattr(self.api, "model", "") or "").casefold()
+        return max(int(default), 4096) if "gpt-5" in model else int(default)
+
+    def _response_metadata(self) -> dict[str, Any]:
+        return dict(getattr(self.api, "last_response_metadata", {}) or {})
 
     def _maybe_verify_claim(
         self,
@@ -755,6 +800,7 @@ class GeminiReasoner:
         *,
         image_paths: Sequence[str] = (),
         visual_manifest: Sequence[Mapping[str, Any]] = (),
+        api_response: Mapping[str, Any] | None = None,
     ) -> None:
         _append_jsonl(
             self.trace_path,
@@ -769,7 +815,7 @@ class GeminiReasoner:
                 "visual_manifest": [dict(item) for item in visual_manifest],
                 "raw": raw,
                 "parsed": dict(parsed),
-                "api_response": dict(getattr(self.api, "last_response_metadata", {}) or {}),
+                "api_response": dict(api_response) if api_response is not None else self._response_metadata(),
                 "time": time.time(),
             },
         )
@@ -789,6 +835,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         self.api = api
         self.trace_path = trace_path
         self._query_calls: dict[str, int] = {}
+        self._event_segment_cache: dict[str, InvestigationReport] = {}
+
+    def reset_run_state(self) -> None:
+        super().reset_run_state()
+        self._query_calls.clear()
+        self._event_segment_cache.clear()
 
     def _parse_structured_observation(
         self,
@@ -844,7 +896,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         else:
             window = float(requested_window[0]), float(requested_window[1])
 
-        required_fps = self.highfps if _needs_highfps(task) else 0.5
+        required_fps = 0.5
         cached = self._find_reusable_evidence(task, window[0], window[1], required_fps=required_fps)
         if cached is not None:
             return self._reuse_report(
@@ -909,20 +961,45 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         tool_trace = ["open_segment", "inspect_window:0.5"]
         vlm_calls = (1 if requested_window is not None else 2) + parse_repair_calls
 
-        if _needs_highfps(task) or _truthy(preview.get("need_detail")) or region_box is not None:
-            selected_window = _select_detail_window(preview, window, task, segment_packet)
+        if _truthy(preview.get("need_detail")) or region_box is not None:
+            detail_fps, detail_max_frames = _detail_sampling_request(
+                preview,
+                default_fps=self.highfps,
+                default_max_frames=self.highfps_max_frames,
+            )
+            selected_window = _select_detail_window(
+                preview,
+                window,
+                task,
+                segment_packet,
+                max_detail_sec=detail_max_frames / detail_fps,
+            )
             detail_query_id = f"{observation_id}_detail"
             selected_packet = self.inspect_window(
                 selected_window[0],
                 selected_window[1],
-                fps=self.highfps,
-                max_frames=self.highfps_max_frames,
+                fps=detail_fps,
+                max_frames=detail_max_frames,
                 query_id=detail_query_id,
             )
-            selected_frames = select_uniform_items(tuple(selected_packet["frames"]), 16)
+            source_detail_frames = tuple(selected_packet["frames"])
+            selected_frames = _materialize_model_frames(
+                self.workspace,
+                observation_id,
+                source_detail_frames,
+            )
             detail_paths = tuple(str(row["path"]) for row in selected_frames)
+            selected_packet = {
+                **selected_packet,
+                "frames": [dict(row) for row in selected_frames],
+                "model_frame_preprocessing": {
+                    "frame_count": len(selected_frames),
+                    "total_bytes": sum(Path(str(row["path"])).stat().st_size for row in selected_frames),
+                    "max_total_bytes": 18_000_000,
+                },
+            }
             if region_box is not None:
-                context_frames = select_uniform_items(selected_frames, min(4, len(selected_frames)))
+                context_frames = select_uniform_items(source_detail_frames, min(4, len(source_detail_frames)))
                 context_paths = tuple(str(row["path"]) for row in context_frames)
                 model_box_rows = _materialize_region_crops(
                     self.workspace,
@@ -954,6 +1031,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 region_rows = (*model_box_rows, *coarse_rows)
                 region_frame_paths = tuple(str(row["path"]) for row in region_rows)
                 model_image_paths = (*context_paths, *region_frame_paths)
+                selected_frames = context_frames
                 selected_packet = {
                     **selected_packet,
                     "region_observation": {
@@ -999,7 +1077,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 prompt=final_prompt,
                 image_paths=model_image_paths,
             )
-            tool_trace.append(f"inspect_window:{self.highfps:.1f}")
+            tool_trace.append(f"inspect_window:{detail_fps:.1f}:{len(selected_frames)}")
             vlm_calls += 1 + detail_repair_calls
 
         parsed, fallback_used = _with_explicit_measurement_fallback(
@@ -1285,6 +1363,24 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         )
 
     def _investigate_event_beats(self, task: Any, segment_packet: Mapping[str, Any]) -> InvestigationReport:
+        segment_id = str(getattr(task, "segment_id", "") or "")
+        cached = self._event_segment_cache.get(segment_id)
+        if cached is not None:
+            return replace(
+                cached,
+                query_id=str(getattr(task, "query_id", "") or cached.query_id),
+                cost={
+                    "beat_windows": 0,
+                    "tool_trace": ("reuse_segment_event_observation",),
+                    "preview_frames": 0,
+                    "detail_frames": 0,
+                    "frames": 0,
+                    "vlm_calls": 0,
+                    "reused": True,
+                },
+                progress_flags=tuple(dict.fromkeys((*cached.progress_flags, "segment_event_observation_reused"))),
+                coverage_delta=(),
+            )
         windows = _event_enumeration_windows(segment_packet)
         reports = []
         prior_events: tuple[Mapping[str, Any], ...] = ()
@@ -1317,7 +1413,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             for result in condition_results
             if result.status in {"satisfied", "contradicted"}
         )
-        return InvestigationReport(
+        combined = InvestigationReport(
             query_id=str(getattr(task, "query_id", "") or ""),
             status="satisfied" if evidence else "empty",
             evidence=evidence,
@@ -1356,6 +1452,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             condition_results=condition_results,
             goal_progress=goal_progress,
         )
+        self._event_segment_cache[segment_id] = combined
+        return combined
 
     def _next_observation_id(self, query_id: str) -> str:
         call_index = self._query_calls.get(query_id, 0) + 1
@@ -1411,23 +1509,9 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
 
 def _event_enumeration_windows(
     segment_packet: Mapping[str, Any],
-    *,
-    max_windows: int = 12,
 ) -> tuple[tuple[float, float], ...]:
-    beats = tuple(segment_packet.get("beats", ()) or ())
-    if not beats:
-        start, end = segment_packet["virtual_time_range"]
-        return ((float(start), float(end)),)
-    limit = max(1, int(max_windows))
-    group_size = max(1, (len(beats) + limit - 1) // limit)
-    windows = []
-    for index in range(0, len(beats), group_size):
-        group = beats[index : index + group_size]
-        start = float(group[0]["virtual_time_range"][0])
-        end = float(group[-1]["virtual_time_range"][1])
-        if end > start:
-            windows.append((start, end))
-    return tuple(windows)
+    start, end = segment_packet["virtual_time_range"]
+    return ((float(start), float(end)),) if float(end) > float(start) else ()
 
 
 def _ending_event_context(
@@ -1493,6 +1577,25 @@ def _select_detail_window(
     return round(start, 3), round(end, 3)
 
 
+def _detail_sampling_request(
+    preview: Mapping[str, Any],
+    *,
+    default_fps: float = 2.0,
+    default_max_frames: int = 64,
+) -> tuple[float, int]:
+    allowed_fps = (0.5, 1.0, 2.0)
+    try:
+        requested_fps = float(preview.get("requested_fps", default_fps))
+    except (TypeError, ValueError):
+        requested_fps = float(default_fps)
+    fps = min(allowed_fps, key=lambda candidate: abs(candidate - requested_fps))
+    try:
+        requested_max_frames = int(preview.get("requested_max_frames", default_max_frames))
+    except (TypeError, ValueError):
+        requested_max_frames = int(default_max_frames)
+    return float(fps), max(1, min(512, requested_max_frames))
+
+
 def _normalized_region_box(value: Any) -> tuple[float, float, float, float] | None:
     if isinstance(value, Mapping):
         raw = (value.get("x1"), value.get("y1"), value.get("x2"), value.get("y2"))
@@ -1556,6 +1659,43 @@ def _materialize_region_crops(
             }
         )
     return tuple(rows)
+
+
+def _materialize_model_frames(
+    workspace: VirtualVideoWorkspace,
+    observation_id: str,
+    frames: Sequence[Mapping[str, Any]],
+    *,
+    max_total_bytes: int = 18_000_000,
+) -> tuple[dict[str, Any], ...]:
+    source_rows = tuple(dict(frame) for frame in frames)
+    if not source_rows:
+        return ()
+    output_dir = workspace.root_dir / "observations" / "model_frames" / observation_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    profiles = ((512, 82), (448, 76), (384, 70), (320, 64))
+    rendered: tuple[dict[str, Any], ...] = ()
+    for max_edge, quality in profiles:
+        rows = []
+        for index, frame in enumerate(source_rows, start=1):
+            source = Path(str(frame.get("path", "") or ""))
+            if not source.exists():
+                continue
+            output_path = output_dir / f"frame_{index:04d}.jpg"
+            with Image.open(source) as opened:
+                image = opened.convert("RGB")
+                scale = min(1.0, float(max_edge) / max(1, max(image.size)))
+                if scale < 1.0:
+                    image = image.resize(
+                        (max(1, int(round(image.width * scale))), max(1, int(round(image.height * scale)))),
+                        Image.Resampling.LANCZOS,
+                    )
+                image.save(output_path, format="JPEG", quality=quality, optimize=True)
+            rows.append({**frame, "path": str(output_path), "parent_path": str(source)})
+        rendered = tuple(rows)
+        if sum(Path(str(row["path"])).stat().st_size for row in rendered) <= int(max_total_bytes):
+            return rendered
+    return rendered
 
 
 def _normalize_investigation_outcome(
@@ -1792,6 +1932,8 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
     for index, item in enumerate(value, start=1):
         if not isinstance(item, Mapping):
             continue
+        if "preconditions_met" in item and not _truthy(item.get("preconditions_met")):
+            continue
         description = str(item.get("description", "") or "").strip()
         if not description or not _truthy(item.get("supports_question_event")):
             continue
@@ -1806,10 +1948,36 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
             continue
         start = max(window_start, start)
         end = min(window_end, end)
+        subject_id = " ".join(str(item.get("subject_id", "") or "").strip().casefold().split())
+        object_id = " ".join(str(item.get("object_id", "") or "").strip().casefold().split())
+        participant_ids = list(
+            dict.fromkeys(
+                value
+                for value in (
+                    *(
+                        " ".join(str(value or "").strip().casefold().split())
+                        for value in tuple(item.get("participant_ids", ()) or ())
+                    ),
+                    subject_id,
+                    object_id,
+                )
+                if value
+            )
+        )[:8]
         rows.append(
             {
                 "local_id": str(item.get("local_id", "") or f"event_{index}"),
                 "event_key": " ".join(str(item.get("event_key", "") or "").strip().casefold().split()),
+                "event_class": " ".join(str(item.get("event_class", "") or "").strip().casefold().split()),
+                "counting_unit": " ".join(str(item.get("counting_unit", "") or "").strip().casefold().split()),
+                "participant_ids": participant_ids,
+                "subject_id": subject_id,
+                "object_id": object_id,
+                "state_before": str(item.get("state_before", "") or "").strip(),
+                "transition": str(item.get("transition", "") or "").strip(),
+                "state_after": str(item.get("state_after", "") or "").strip(),
+                "preconditions_met": _truthy(item.get("preconditions_met")) if "preconditions_met" in item else None,
+                "phase": " ".join(str(item.get("phase", "unknown") or "unknown").strip().casefold().split()),
                 "description": description,
                 "start_sec": round(start, 3),
                 "end_sec": round(end, 3),
@@ -2196,12 +2364,22 @@ def _investigate_prompt(
         "person to explicit frame witnesses and stable appearance attributes.\n"
         "For total event-count questions, dispatch segment tasks that enumerate atomic event occurrences with timestamps.\n"
         "For scalar_quantity questions, inspect each relevant displayed operand or checkpoint and ask for its unit, delta or cumulative "
-        "semantics, and relation to the stated boundary. Do not infer a quantity from answer options.\n"
+        "semantics, subject binding, and relation to the stated boundary. If the question contrasts one participant with the other, "
+        "the counter must be visibly bound to the requested participant. Do not infer a quantity from answer options.\n"
+        "For summarize questions, inspect opening/closing framing plus representative early, middle, and late segments. A visually "
+        "salient local process is not the full-video topic unless the narration and repeated structure support it.\n"
+        "For temporal-label questions, first witness the target event, then bind it to the requested episode, day/meal, period, or "
+        "relative video position using nearby captions, narration, or timeline context. A virtual timestamp alone is not an option label.\n"
+        "For front/middle/back options, compare the witnessed event time with workspace_duration_sec; do not infer position from the "
+        "segment number or from how late the event was discovered.\n"
+        "For causal, agent-relation, and event-outcome questions, request evidence for the exact predicate in each plausible option, "
+        "including the transition or interaction that distinguishes outcome from a nearby but non-answer event.\n"
         "For source-relative minute questions, prioritize the supplied temporal_navigation candidate segments.\n"
         "For identity-anchor questions, first locate evidence matching every identity_anchor_term before investigating the later event.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
+        f"workspace_duration_sec: {float(kwargs.get('workspace_duration_sec', 0.0) or 0.0)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}"
         f"{_visual_manifest_prompt(visual_manifest)}"
@@ -2217,6 +2395,8 @@ def _followup_prompt(
     finalization_instruction = (
         "No investigation budget remains. Return action=answer using the best grounded evidence now; do not return tasks.\n"
         if kwargs.get("force_finalize")
+        else "This is the last repairable round. Propose the best candidate now when possible so the answer audit can issue a targeted repair; avoid broad exploration.\n"
+        if kwargs.get("pre_final_checkpoint")
         else ""
     )
     return (
@@ -2255,9 +2435,16 @@ def _followup_prompt(
         "around those timestamps to promote or reject them.\n"
         "For total event-count questions, use confirmed_event_candidates in completion_status and matching event_candidate evidence rows. "
         "Count one per stable candidate_id, cite at least one supporting visual evidence_id per adopted candidate, investigate every "
-        "unresolved_event_window before claiming grounded completion, and never use entity_clusters for events.\n"
+        "unresolved_event_window before claiming grounded completion, and never use entity_clusters for events. The completion_status "
+        "event ledger is the only count state: do not independently recount a sampled prose digest. If it appears over-split or "
+        "over-merged, request candidate reconciliation instead of revising to a prose-derived total.\n"
         "For scalar_quantity questions, use only structured measurement facts with the requested unit. Distinguish delta or cumulative "
-        "measurements, exclude observations after the stated boundary, and cite every operand used in the derivation.\n"
+        "measurements, bind the value to the requested subject, exclude observations after the stated boundary, and cite every operand "
+        "used in the derivation. An unbound overlay cannot answer a one-team-versus-other-team question.\n"
+        "For summarize questions, require representative full-video coverage and explicit narrative framing; do not promote the best "
+        "documented local subtopic into the global title. For temporal-label questions, require both the target event and its label/context "
+        "binding. For front/middle/back labels, normalize the event time by workspace_duration_sec rather than segment order. For causal, "
+        "agent-relation, and event-outcome questions, compare the exact option predicates rather than topical overlap.\n"
         "For identity-anchor questions, do not answer while missing_identity_anchor_terms is non-empty. "
         "The final entity cluster must cite both anchor evidence and the later event evidence for the same person.\n"
         "Treat independent claim_assessment evidence as a direct check of the proposed relation. If it refutes a candidate, "
@@ -2267,6 +2454,7 @@ def _followup_prompt(
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
+        f"workspace_duration_sec: {float(kwargs.get('workspace_duration_sec', 0.0) or 0.0)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}\n"
@@ -2283,19 +2471,28 @@ def _should_audit_answer(kwargs: Mapping[str, Any]) -> bool:
     question = str(kwargs.get("question", "") or "").casefold()
     contract = dict(kwargs.get("query_contract") or {})
     requirements = dict(kwargs.get("query_requirements") or {})
-    if requirements.get("requires_identity_link"):
+    if requirements.get("requires_identity_link") or requirements.get("requires_spatial_relation"):
         return True
     if str(contract.get("required_scope", "") or "") == "full_video":
         return True
-    relation_patterns = (
+    high_risk_patterns = (
         r"\bwhy\b",
+        r"\b(?:cause|reason|motive|because)\b",
         r"\bhow\s+(?:did|does|do|was|were)\b",
+        r"\bwhat\s+(?:happens?|happened|did|does|was|were)\b",
+        r"\bwho\b",
+        r"\bwhen\b",
+        r"\b(?:at\s+)?what\s+time\b",
+        r"\bspecific\s+time\b",
+        r"\bwhich\s+(?:episode|day|meal|period|quarter|stage|phase)\b",
         r"\b(?:before|after)\b",
         r"\bnot\s+(?:true|correct)\b",
         r"\brelationship\b",
         r"\b(?:view|opinion|believ\w*)\b",
+        r"\b(?:title|summary|summari[sz]\w*)\b",
+        r"\bhow\s+many\b.*\b(?:tasks?|steps?|actions?|items?)\b.*\b(?:complete\w*|finish\w*)\b",
     )
-    return any(re.search(pattern, question) for pattern in relation_patterns)
+    return any(re.search(pattern, question) for pattern in high_risk_patterns)
 
 
 def _requires_independent_claim_verification(kwargs: Mapping[str, Any]) -> bool:
@@ -2567,7 +2764,15 @@ def _answer_audit_prompt(
         "or mere co-occurrence. For identity-linked questions, require evidence that links the same visible entity across the "
         "anchor and answer event. For distinct counts, audit every entity cluster against its entity_observation_ids: each adopted "
         "observation must have countable=true, a direct frame witness, a stable visual signature, and a verified question relation. "
-        "Free-text local counts and candidate-only entities are not count evidence. Do not use answer-option plausibility as evidence. "
+        "Free-text local counts and candidate-only entities are not count evidence. For summarize claims, require representative "
+        "full-video coverage and narrative framing; a locally dominant visual process is not enough. For temporal labels, require a "
+        "witnessed target event that satisfies every identifying qualifier plus explicit nearby episode/day/meal/period or relative-position binding; normalize front/middle/back "
+        "against workspace_duration_sec. For event outcomes and agent "
+        "relations, require the exact option predicate, not a nearby action involving the same objects. Do not use answer-option "
+        "plausibility as evidence. For contrastive measurements, require the value to be explicitly bound to the participant "
+        "named by the question; a visible but subject-unbound counter is insufficient. For event counts, use "
+        "completion_status.confirmed_event_candidates as the canonical ledger. Do not replace its count by recounting a sampled "
+        "evidence digest; when candidate identity is disputed, return insufficient with a reconciliation task. "
         f"{task_instruction}\n"
         "Identify the single strongest_alternative after comparing every option internally. If that alternative is directly "
         "supported, provide revised_answer and its citations. Do not revise based only on plausibility or elimination. Keep the "
@@ -2582,6 +2787,8 @@ def _answer_audit_prompt(
         "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":[0.0,60.0],"
         "\"modality_hint\":[\"visual\",\"asr\"],\"expected_evidence\":\"...\"}]}.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
+        f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
+        f"workspace_duration_sec: {float(kwargs.get('workspace_duration_sec', 0.0) or 0.0)}\n"
         f"Proposed answer: {candidate.answer}\nCitations: {json.dumps(list(candidate.citations), ensure_ascii=False)}\n"
         f"OptionClaimContract: {json.dumps(claim_contract, ensure_ascii=False)}\n"
         f"Evidence context: {json.dumps(context, ensure_ascii=False)}\n"
@@ -2722,6 +2929,9 @@ def _resolution_prompt(task: Any, *, question: str = "") -> str:
         "reference_frame explicitly, and set same_frame=true only when both are jointly visible. "
         "For every same_frame relation, list one or more 0-based witness_frame_indices where both bound entities are visible in that "
         "single supplied image; if no such image exists, set same_frame=false and status=unknown. "
+        "For a completed-task progress checkpoint, emit the visible completed value as unit=task, measurement_semantics=cumulative, "
+        "boundary_relation=at, and binding_status=explicit only when the checkpoint event and counter belong to the same scene. "
+        f"{_measurement_subject_semantics(question)}"
         f"{_spatial_reference_semantics(question)}"
         "The driver derives overall resolution, so do not self-declare it. Return empty measurement/relation arrays when unsupported. "
         f"Stable conditions: {json.dumps(to_jsonable(conditions), ensure_ascii=False)}\n"
@@ -2747,6 +2957,39 @@ def _spatial_reference_semantics(question: str) -> str:
     )
 
 
+def _measurement_subject_semantics(question: str) -> str:
+    text = str(question or "").casefold()
+    if re.search(r"\bone\s+(?:team|group|person)\b[^?]*\bthe\s+other\s+(?:team|group|person)\b", text):
+        return (
+            "For a one-participant-versus-other-participant measurement, set subject_id=other_team (or other_subject) only when "
+            "the counter is visibly or explicitly linked to the requested counterpart. A counter overlaid while the boundary team is "
+            "on screen remains unbound unless the video establishes whose progress it represents; do not assign it by proximity. "
+        )
+    if re.search(r"\bwho\s+(?:consum\w*|ate|eaten|eating|bought|purchased)\b", text):
+        return (
+            "The measured subject is defined by an earlier identity anchor in the question. Set subject_id=anchored_subject only "
+            "when the observation links the measured person to that earlier anchor; otherwise leave subject_id empty and "
+            "binding_status=unbound. The cumulative value must also be at or before the named boundary event. "
+        )
+    return ""
+
+
+def _summary_observation_semantics(question: str) -> str:
+    text = str(question or "").casefold()
+    if not (
+        re.search(r"\b(?:title|heading)\b.*\b(?:summari[sz]\w*|best)\b", text)
+        or re.search(r"\b(?:main|overall|central)\s+(?:topic|theme|idea|message)\b", text)
+        or "mainly about" in text
+    ):
+        return ""
+    return (
+        "For a title or synopsis question, preserve the local narration even when it is in another language. Format summary as "
+        "'Narrative thesis: ...; Segment role: setup|example|process detail|comparison|conclusion; Visual example: ...'. "
+        "Translate the ASR meaning semantically when needed. Do not let a long factory, cooking, sports, or demonstration sequence "
+        "replace the broader narrated topic merely because it occupies more frames. "
+    )
+
+
 def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet: Mapping[str, Any], window: Mapping[str, Any]) -> str:
     return (
         "You are the Investigator. Inspect the low-fps preview frames and local ASR without choosing an answer option. "
@@ -2755,10 +2998,15 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "\"visual_signature\":\"stable face, hair, clothing, and accessories\",\"frame_indices\":[0],"
         "\"role\":\"visible role or unknown\",\"question_relation\":\"directly observed relation or unknown\","
         "\"supports_question_relation\":true|false}],"
-        "\"events\":[{\"local_id\":\"event_1\",\"description\":\"one atomic occurrence relevant to the question\","
+        "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable occurrence identity\","
+        "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
+        "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
+        "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
+        "\"description\":\"one atomic occurrence relevant to the question\","
         "\"start_sec\":float,\"end_sec\":float,\"supports_question_event\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false,"
-        "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\","
+        "\"need_detail\":true|false,\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,"
+        "\"requested_fps\":0.5|1.0|2.0,\"requested_max_frames\":1-512,\"reason\":\"...\","
         "\"region_hint\":\"scoreboard/text/object or empty\",\"region_box\":[x1,y1,x2,y2]|null}. "
         "Region coordinates are normalized 0-1.\n"
         "List each visible person separately using stable appearance attributes. Every entity must cite one or more 0-based "
@@ -2766,14 +3014,22 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "those frames. The summary must not introduce a person absent from entities. Do not estimate a segment-level or "
         "video-level count. The same person may recur in later chunks. A window longer than 120 seconds is candidate discovery "
         "only: request a narrower detail window before treating any identity as countable.\n"
-        "Enumerate every distinct question-relevant event occurrence visible in this inspected window. "
+        "Enumerate every distinct question-relevant event occurrence visible in this inspected window. For a conditional event "
+        "such as an action after a prior state, supports_question_event may be true only when the named subject, required prior "
+        "state, transition, and after-state are all established; otherwise set preconditions_met=false. "
         "Use virtual timestamps from the window metadata, one row per occurrence, and return an empty events list when none is supported.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
         "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
         "Request detail only when motion, OCR, identity, or a small visual attribute remains unresolved. "
-        "Any detail window must be inside the preview window and narrower than it.\n"
+        "Choose the smallest sufficient sampling request: 0.5 fps for scene/state inspection, 1 fps for ordinary actions, "
+        "and 2 fps for fast motion, transitions, OCR, or fine temporal order. requested_max_frames is a hard cost budget up "
+        "to 512. A detail request may cover the full preview window when complete segment coverage is required. Ensure "
+        "duration * requested_fps does not exceed the requested frame budget.\n"
+        f"{_summary_observation_semantics(workspace.case.question)}"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
+        "Candidate option predicates are observation targets, not an invitation to choose an answer. Test and report the exact "
+        f"visible predicates when relevant: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
         f"Preview window metadata: {json.dumps({k: window[k] for k in ['virtual_time_range','sampling','asr_cues','source_lineage']}, ensure_ascii=False)[:5000]}"
@@ -2797,9 +3053,12 @@ def _claim_preview_prompt(
         "\"relation_type\":\"direct|causal_chain|consequence_only|cooccurrence_only|identity_mismatch|unclear\","
         "\"candidate_role\":\"decision_motive|initiating_cause|mechanism|stated_use|downstream_consequence|after_state|unclear\","
         "\"strongest_alternative\":\"B. ...|none\",\"reason\":\"...\",\"need_detail\":true|false,"
-        "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null}.\n"
+        "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"requested_fps\":0.5|1.0|2.0,"
+        "\"requested_max_frames\":1-512}.\n"
         "Use supports only when the exact candidate relation is directly established. The fact that candidate-related objects, "
-        "people, or words appear is not enough. Request a narrower detail window when motion or text remains unresolved.\n"
+        "people, or words appear is not enough. Request a narrower detail window when motion or text remains unresolved. "
+        "Use 0.5 fps for stable scenes, 1 fps for ordinary actions, and 2 fps for fast motion, OCR, or exact temporal order, "
+        "with at most 512 frames.\n"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
@@ -2821,17 +3080,35 @@ def _event_preview_prompt(
     return (
         "You are the Investigator. Enumerate atomic question-relevant event occurrences in this low-fps window. "
         "Return concise JSON only: {\"summary\":\"brief window observation\",\"confidence\":0.0-1.0,"
-        "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable topic/title signature\","
+        "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable occurrence identity\","
+        "\"event_class\":\"audition|news_segment|other\",\"counting_unit\":\"question-defined unit\","
+        "\"participant_ids\":[\"stable named group or participant\"],\"phase\":\"intro|main|judging|result|replay|unknown\","
+        "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
+        "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
+        "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
         "\"description\":\"one occurrence\",\"start_sec\":float,\"end_sec\":float,"
         "\"supports_question_event\":true|false,\"continues_from_previous\":true|false,"
         "\"continues_to_next\":true|false}],"
         "\"supports_answer_event\":true|false,\"need_detail\":true|false,"
-        "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"reason\":\"...\"}.\n"
+        "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"requested_fps\":0.5|1.0|2.0,"
+        "\"requested_max_frames\":1-512,\"reason\":\"...\"}.\n"
         "List every distinct supported occurrence, use virtual timestamps inside this window, and return an empty events list when none. "
+        "For conditional counts, count only events whose named subject and required prior state are visibly established; set "
+        "preconditions_met=false and supports_question_event=false for visually similar events that fail the condition. "
         "event_key must identify this occurrence by topic, title, or visible anchor; never use only the generic event class. "
+        "The counted unit is defined by the question. For audition counts, a named group's introduction, performance, judging, "
+        "and result are phases of one audition: use counting_unit=audition_group, preserve the same participant_ids and exact "
+        "group-based event_key, and do not emit feedback, applause, "
+        "or a buzzer as additional occurrences. If no stable title, name, or visual signature distinguishes a candidate, set "
+        "supports_question_event=false instead of using event_key='one occurrence'. "
+        "For news-segment appearance counts, use counting_unit=news_broadcast_appearance. A teaser, replay, phone feed, or headline "
+        "is not a counted news segment unless it visibly functions as a distinct broadcast segment. "
         "Compare against the prior adjacent-window events below. Reuse an exact event_key and set continues_from_previous=true "
         "only when the same occurrence visibly continues across the boundary. "
-        "Do not list people or infer a video-level count. Request a narrower detail window only when an occurrence boundary is unclear.\n"
+        "Do not list people or infer a video-level count. The preview covers one complete segment exactly once. Choose a detail "
+        "fps that covers the full segment when exhaustive enumeration is required, or request one narrower interval when only a "
+        "specific fast boundary is unresolved. Use 0.5 fps for stable scenes, 1 fps for ordinary actions, and 2 fps for fast "
+        "boundaries, with at most 512 frames.\n"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
@@ -2857,18 +3134,27 @@ def _evidence_prompt(
         "\"visual_signature\":\"stable face, hair, clothing, and accessories\",\"frame_indices\":[0],"
         "\"role\":\"visible role or unknown\",\"question_relation\":\"directly observed relation or unknown\","
         "\"supports_question_relation\":true|false}],"
-        "\"events\":[{\"local_id\":\"event_1\",\"description\":\"one atomic occurrence relevant to the question\","
+        "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable occurrence identity\","
+        "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
+        "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
+        "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
+        "\"description\":\"one atomic occurrence relevant to the question\","
         "\"start_sec\":float,\"end_sec\":float,\"supports_question_event\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false}.\n"
         "List visible people separately and give every entity one or more 0-based frame_indices from the supplied images. "
         "Omit any person not directly visible in a cited frame, and never introduce additional people only in summary text. "
         "Do not infer a count across frames or chunks.\n"
-        "Enumerate every distinct question-relevant event occurrence visible in this inspected window. "
+        "Enumerate every distinct question-relevant event occurrence visible in this inspected window. Conditional events count "
+        "only when the named subject and required prior state are established; otherwise set preconditions_met=false and "
+        "supports_question_event=false. "
         "Use virtual timestamps from the window metadata, one row per occurrence, and return an empty events list when none is supported.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
         "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
+        f"{_summary_observation_semantics(workspace.case.question)}"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
+        "Candidate option predicates are observation targets, not an invitation to choose an answer. Test and report the exact "
+        f"visible predicates when relevant: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
@@ -2888,14 +3174,25 @@ def _event_evidence_prompt(
     return (
         "You are the Investigator. Verify atomic question-relevant event occurrences in this detail window. "
         "Return concise JSON only: {\"summary\":\"brief verified observation\",\"confidence\":0.0-1.0,"
-        "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable topic/title signature\","
+        "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable occurrence identity\","
+        "\"event_class\":\"audition|news_segment|other\",\"counting_unit\":\"question-defined unit\","
+        "\"participant_ids\":[\"stable named group or participant\"],\"phase\":\"intro|main|judging|result|replay|unknown\","
+        "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
+        "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
+        "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
         "\"description\":\"one occurrence\",\"start_sec\":float,\"end_sec\":float,"
         "\"supports_question_event\":true|false,\"continues_from_previous\":true|false,"
         "\"continues_to_next\":true|false}],"
         "\"supports_answer_event\":true|false}.\n"
-        "List every distinct supported occurrence with virtual timestamps. event_key must identify the occurrence by topic, "
-        "title, or visible anchor, not only its generic class. Compare against the prior adjacent-window events below; reuse "
+        "List every distinct supported occurrence with virtual timestamps. For conditional event counts, supports_question_event "
+        "may be true only when the named subject, required state_before, transition, and state_after are all established. "
+        "event_key must identify the occurrence by topic, "
+        "title, or visible anchor, not only its generic class. Preserve the question's counted unit across phases. For audition "
+        "counts, introduction, performance, judging, and result for one named group use counting_unit=audition_group, the same "
+        "participant_ids, and one exact group-based event_key; applause, feedback, and buzzer moments are not extra "
+        "auditions. Mark an unidentifiable candidate supports_question_event=false rather than keying it as 'one occurrence'. Reuse "
         "an exact event_key and set continues_from_previous=true only for the same continuing occurrence. "
+        "For news counts use counting_unit=news_broadcast_appearance and exclude teasers, replays, phone feeds, and incidental headlines. "
         "Do not list people or infer a video-level count.\n"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"

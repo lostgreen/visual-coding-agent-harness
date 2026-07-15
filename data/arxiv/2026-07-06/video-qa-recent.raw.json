@@ -1,0 +1,629 @@
+{
+  "query": "video question answering",
+  "categories": [
+    "cs.AI",
+    "cs.CV",
+    "cs.CL",
+    "cs.LG",
+    "cs.MM"
+  ],
+  "from": "2026-05-06",
+  "to": "2026-07-06",
+  "count": 30,
+  "papers": [
+    {
+      "arxiv_id": "2607.01469v1",
+      "title": "A Cost-Aware, Paired Protocol for Auditing Dynamic Tool Synthesis in Agentic Video Question Answering",
+      "authors": [
+        "Aseel Mohamed",
+        "Rama AlHamidi",
+        "Mohamed Rayan Barhdadi",
+        "Rasul Khanbayov",
+        "Erchin Serpedin",
+        "Hasan Kurban"
+      ],
+      "summary": "Agentic Video Question Answering (VideoQA) systems invoke tools during inference, but their tool libraries are fixed, so recurring procedures are rebuilt from primitives on every question. Synthesizing composite tools could remove this overhead, but whether such expansion helps is hard to assess: final-answer accuracy, the standard metric, ignores inference effort, so it cannot reveal how a system shifts cost. We propose a cost-aware, paired protocol for auditing tool-augmented video agents. The protocol pairs two complete systems on the same input for each question and reports their net difference across accuracy and cost jointly. For each question, it sorts the paired outcome into one of six groups defined by joint correctness and by the change in visible tool calls, separating accuracy-preserving efficiency gains from harmful regressions. Significance is reported with McNemar's test and paired bootstrap confidence intervals. We instantiate the protocol on Dynamic-SAGE, an agentic VideoQA framework that synthesizes, validates, and persistently registers executable composite tools for reuse on unseen questions, and evaluate it against the SAGE baseline on SAGE-Bench. The audit reveals a multi-axis profile that a scalar accuracy comparison would miss: Dynamic-SAGE improves accuracy by 7.5 points (p < 0.001) and reduces reasoning turns and visible tool calls by roughly 28%, while shifting rather than reducing inference cost, as token usage rises 34% and cost 26%. Gains are largest on visual and open-ended questions and neutral on verbal and multimodal ones, and residual failures concentrate on hard, open-ended questions where the pipeline does the most work. By measuring accuracy and cost jointly, the protocol shows where the pipeline-level difference is reliable and where it is not. The code is available at https://github.com/KurbanIntelligenceLab/Dynamic-SAGE.",
+      "published": "2026-07-01T21:01:57Z",
+      "updated": "2026-07-01T21:01:57Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2607.01469v1",
+      "pdf_url": "https://arxiv.org/pdf/2607.01469v1"
+    },
+    {
+      "arxiv_id": "2606.30220v1",
+      "title": "From Accuracy to Visual Dependence: Auditing and Filtering Modality Collapse in Traffic VideoQA",
+      "authors": [
+        "Sena Korkut",
+        "María Alejandra Bravo Sarmiento",
+        "Sanghwan Kim",
+        "Zeynep Akata"
+      ],
+      "summary": "High benchmark accuracy does not guarantee genuine use of visual evidence. We study this problem in traffic accident Video Question Answering (VideoQA), where correct answers should depend on scene-specific visual evidence but may instead be inferred from textual shortcuts. Through an audit of four public benchmarks, we find that several recent open-weight Vision-Language Models (VLMs) perform competitively, and sometimes better, without video input. On the MM-AU benchmark, removing video consistently improves accuracy, and adding more frames further degrades performance. To quantify visual dependence, we introduce two dataset-level diagnostics: Blind Gap, measuring above-chance text-only performance, and Visual Gain, measuring the marginal benefit of adding video. We further propose an instance-level Shortcut Score that combines text-only confidence with visual necessity signals, enabling continuous, training-free filtering of shortcut-prone questions. The resulting subsets reduce shortcut bias and improve visual grounding. Our findings reveal large differences in grounding quality across benchmarks and show that visually grounded evaluation, not just high accuracy, is essential in safety-critical VideoQA.",
+      "published": "2026-06-29T12:33:15Z",
+      "updated": "2026-06-29T12:33:15Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.30220v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.30220v1"
+    },
+    {
+      "arxiv_id": "2606.29445v1",
+      "title": "Bridging VideoQA and Video-Guided Agentic Tasks via Generalized Keyframe Extraction",
+      "authors": [
+        "Sunqi Fan",
+        "Qingle Liu",
+        "Runqi Yin",
+        "Meng-Hao Guo",
+        "Shuojin Yang"
+      ],
+      "summary": "Video understanding is a fundamental capability for multimodal intelligence, and recent Multimodal Large Language Models (MLLMs) have achieved remarkable performance on Video Question Answering (VideoQA) benchmarks. However, existing benchmarks primarily evaluate whether models can perceive shallow visual cues, while rarely examining whether MLLMs can learn deeper knowledge or procedural skills from video tutorials and generalize them to downstream long-horizon agentic tasks. To address this gap, we introduce VG-GUIBench (Video-Guided GUI Benchmark), a new benchmark designed to evaluate whether MLLM-based GUI agents can follow video tutorials to complete corresponding GUI interactive tasks. Furthermore, we observe that the performance of models on both VideoQA and video-guided agentic tasks critically depends on effective keyframe extraction. Based on this observation, we propose TASKER (Task-driven And Scene-aware Keyframe searchER), a keyframe extraction algorithm that jointly considers task relevance and scene dynamics to identify informative frames. Experimental results demonstrate that TASKER achieves significant performance improvements on both VideoQA and video-guided agentic task benchmarks, outperforming the best baseline by 2.0% on the EgoSchema fullset and 1.8% on the NExT-QA dataset, respectively. These results further highlight the potential of generalized keyframe extraction methods for video understanding tasks. Our code and data are available at https://github.com/VG-GUI-TASKER/VG-GUI-TASKER.",
+      "published": "2026-06-28T15:11:19Z",
+      "updated": "2026-06-28T15:11:19Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.29445v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.29445v1"
+    },
+    {
+      "arxiv_id": "2606.29350v1",
+      "title": "Fast Enough to Act: Spatio-Temporal Visual Token Merging for Low-Latency Robotic VLMs and VLAs",
+      "authors": [
+        "Junzhou Chen",
+        "Jindong Wang",
+        "Gang Zhou"
+      ],
+      "summary": "Vision-language models and vision-language action models endow the robot with unprecedented capabilities. However, the input of video and high-resolution images yields a massive number of visual tokens, leading to extremely high inference latency and severely hindering the robot's real-time control. To break through this computational bottleneck, we propose ST-Merge, a plug-and-play, training-free framework that efficiently fuses redundant tokens directly during the visual encoding phase. By explicitly constructing 3D spatiotemporal coordinates, it employs a multi-queue parallel matching and weighted aggregation mechanism to achieve efficient and geometrically consistent fusion of redundant tokens across frames. In addition, we introduce a post-merge positional correction mechanism that effectively eliminates spatial deviation caused by merging by dynamically re-evaluating the rotational position code of the weighted centroid of the vision token, thereby ensuring the high-precision spatial awareness required for dexterous operation. In the Video Question Answering task on the mainstream VLM, Qwen2.5-VL, ST-Merge achieves a 2$\\times$ inference speedup with only a tiny 1\\% loss in precision. When deployed on the $π_{0.5}$ VLA policy, ST-Merge achieves an 8.3$\\times$ speedup at 1024 $\\times$ 1024 resolution and matches the baseline success rate at this high-resolution setting. At lower resolutions, it introduces a small drop in accuracy.",
+      "published": "2026-06-28T11:42:55Z",
+      "updated": "2026-06-28T11:42:55Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.29350v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.29350v1"
+    },
+    {
+      "arxiv_id": "2606.25842v2",
+      "title": "Graph it first! Enabling Reasoning on Long-form Egocentric Videos through Scene Graphs",
+      "authors": [
+        "Agnese Taluzzi",
+        "Riccardo Santambrogio",
+        "Simone Mentasti",
+        "Chiara Plizzari",
+        "Matteo Matteucci"
+      ],
+      "summary": "Existing multi-modal large language models (MLLMs) face significant challenges in processing long video sequences due to strict input token limitations. As a result, current video understanding approaches, especially in egocentric settings characterized by complex dynamics, frequent state changes, and moving cameras, are forced to massively subsample frames. This leads to severe loss of temporal and contextual information, constraining their ability to perform fine-grained video reasoning. In this work, we introduce a framework for egocentric video question answering (VQA) that overcomes these input constraints through Egocentric Scene Graphs (EgoSGs), i.e., temporally grounded, structured representations that capture objects, attributes, spatial relations, and interactions over time. By representing videos as compact, text-based scene graphs, our method preserves the essential visual and temporal information of the original video in a symbolic form that drastically reduces input length while maintaining semantic richness. Crucially, this enables MLLMs to reason efficiently over entire video sequences within their token budget. On HD-EPIC VQA, our method achieves state-of-the-art results, outperforming strong video-based baselines on multiple models and suggesting that structured, temporally grounded representations like EgoSGs can bridge long-form egocentric video understanding and the context limitations of today's MLLMs.",
+      "published": "2026-06-24T13:55:45Z",
+      "updated": "2026-07-02T12:05:36Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.25842v2",
+      "pdf_url": "https://arxiv.org/pdf/2606.25842v2"
+    },
+    {
+      "arxiv_id": "2606.25206v1",
+      "title": "RAVEN: Long-Horizon Reasoning & Navigation with a Visuo-Spatio-Temporal Memory",
+      "authors": [
+        "Yixun Hu",
+        "Zhicheng Zheng",
+        "Lihan Zha",
+        "Chunwei Xing",
+        "Rajdeep Singh",
+        "Omar Hossain",
+        "Antonio Loquercio",
+        "Dhruv Shah"
+      ],
+      "summary": "Long-term robot deployment requires a compact and scalable memory that preserves fine-grained visual semantics, grounds observations in space and time, and enables efficient storage and retrieval. In this paper, we propose RAVEN, an agentic memory system for long-horizon robotic question answering and navigation. RAVEN stores visual embeddings with pose and time in a vector database, and grounds retrieval in a spatial map to answer queries and navigate to goals. By operating directly on visual embeddings, RAVEN avoids lossy image-to-text captioning and enables accurate semantic, spatial, and temporal retrieval at scale. Across several simulated and real-world video question-answering benchmarks, RAVEN consistently surpasses caption-based memory systems and matches frontier VLMs on long-horizon tasks at 10$\\times$ lower retrieval cost. Finally, we instantiate RAVEN on a Unitree Go1 robot for the task of long-horizon navigation for natural language goal-reaching, and show successful deployment over several large indoor environments.",
+      "published": "2026-06-23T21:56:41Z",
+      "updated": "2026-06-23T21:56:41Z",
+      "primary_category": "cs.RO",
+      "categories": [
+        "cs.RO",
+        "cs.AI",
+        "cs.CL"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.25206v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.25206v1"
+    },
+    {
+      "arxiv_id": "2606.24797v1",
+      "title": "EG-VQA: Benchmarking Verifiable Video Question Answering with Grounded Temporal Evidence",
+      "authors": [
+        "Linpeng Huang",
+        "Weixing Chen",
+        "Zexin Chen",
+        "Yang Liu",
+        "Liang Lin"
+      ],
+      "summary": "Recent advances in Video Large Language Models (Video-LLMs) have yielded promising performance on video question answering (VideoQA). Nevertheless, existing benchmarks are predominantly evaluated through answer correctness, while the grounding of predictions in relevant video evidence remains largely unexamined. This disconnect between answer generation and evidence understanding motivates the construction of the Evidence-Grounded Video Question Answering Benchmark (EG-VQA), an open-ended evaluation protocol in which each QA pair is explicitly annotated with supporting temporal evidence, thereby requiring joint reasoning and precise evidence localization. EG-VQA is comprised of 2,067 videos and 11,838 QA pairs with fine-grained evidence annotations. To evaluate predicted evidence, Evidence-Grounded F1 (EG-F1) is introduced as a unified metric in which temporal alignment and semantic consistency against ground-truth evidence are jointly measured. Experimental evaluation reveals that even strong proprietary models struggle to accurately ground their predictions, exposing a fundamental discrepancy between answer correctness and faithful evidence localization. To bridge this gap, EG-Reasoner, an evidence-grounded reasoning model trained with explicit supervision, is proposed. State-of-the-art performance is achieved among open-source models, with results competitive against proprietary systems, particularly pronounced gains are observed on reasoning-intensive tasks such as counterfactual questions. These findings demonstrate that scaling alone is insufficient for robust video understanding and that structured evidence supervision is essential for the development of more reliable and interpretable VideoQA systems.",
+      "published": "2026-06-23T16:49:28Z",
+      "updated": "2026-06-23T16:49:28Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.24797v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.24797v1"
+    },
+    {
+      "arxiv_id": "2606.22870v1",
+      "title": "VideoLatent: Video-Language Learning via Latent Self-Forcing",
+      "authors": [
+        "Zi-Yuan Hu",
+        "Zicong Tang",
+        "Shijia Huang",
+        "Yanyang Li",
+        "Michael R. Lyu",
+        "Liwei Wang"
+      ],
+      "summary": "Recent advancements in chain-of-thought (CoT) reasoning have shown promise in enhancing video understanding and reasoning capabilities of multimodal large language models (MLLMs). However, existing CoT-based MLLMs require labor-intensive CoT annotations and incur substantial training and inference overhead. While visual latent reasoning has emerged as a more efficient alternative, existing methods primarily focus on image tasks and heavily rely on additional supervision signals for visual latent generation (e.g., CoT traces, auxiliary images, or fine-grained annotations), limiting their scalability and transferability to video tasks. To bridge this gap, we introduce VideoLatent, a novel MLLM equipped with a latent injection module tailored for video understanding and reasoning. Specifically, VideoLatent learns to perform visual latent reasoning using a new latent self-forcing training paradigm, which comprises latent alignment and latent diversity objectives, and relies solely on standard video-question-answer triplets. Extensive experiments across 14 benchmarks demonstrate that our model consistently outperforms existing standard and latent MLLMs on general video understanding and complex video reasoning. Compared with Video-R1, our VideoLatent achieves superior computational efficiency, reducing training/inference overhead by $\\sim$6$\\times$/$\\sim$68$\\times$. Moreover, experiments demonstrate that our method has strong generalizability to different MLLM backbones and different model scales.",
+      "published": "2026-06-22T05:29:30Z",
+      "updated": "2026-06-22T05:29:30Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.22870v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.22870v1"
+    },
+    {
+      "arxiv_id": "2606.22862v1",
+      "title": "Chains That See, Answers That Don't: A Multi-Aspect Evaluation Recipe for Forced Chain-of-Thought on Video-MME",
+      "authors": [
+        "Zhichao Fan",
+        "Yanhang Li",
+        "Zexin Zhuang"
+      ],
+      "summary": "Forced chain-of-thought (CoT) is widely assumed to make vision-language models more reliable on video question answering. We propose a small three-probe evaluation recipe to test that assumption: paired accuracy across direct, CoT, answer-first, and no-video conditions; a counterfactual video-swap diagnostic over the CoT chains; and a four-rung visual-degradation ladder. Each probe is reported under both a strict and a permissive regex scorer, with multiplicity correction over a manuscript-declared primary family. Applied to Qwen2.5-VL on Video-MME subsets, the recipe returns a two-part finding. The CoT chains are strongly video-conditioned: swapping the input video collapses chain overlap and flips most final letters, the opposite of what a \"boilerplate-chain\" null would predict. Yet on the same data, forced CoT does not improve MCQ accuracy, and on the smaller 7B model it produces a small but statistically supported drop under a post-hoc primary scorer choice. We do not claim this generalizes beyond the Qwen2.5-VL / Video-MME instantiation; the raw responses and a single recomputation script will be released with the supplementary material so every number can be re-derived.",
+      "published": "2026-06-22T05:10:03Z",
+      "updated": "2026-06-22T05:10:03Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.LG"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.22862v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.22862v1"
+    },
+    {
+      "arxiv_id": "2606.20970v1",
+      "title": "CogniRoute: Learning to Route Social Evidence in Omni-Modal Models",
+      "authors": [
+        "Yifan Shen",
+        "Pei Tian",
+        "Xinzhuo Li",
+        "Bowen Fang",
+        "Shujun Xia",
+        "Bingxuan Li",
+        "Ana Jojic",
+        "Wenming Ye",
+        "Xu Cao",
+        "James Matthew Rehg",
+        "Ismini Lourentzou"
+      ],
+      "summary": "Omni-modal models can ingest video, audio, and text, but unified access to multiple modalities does not guarantee that a model uses the right evidence. This gap is especially pronounced in social video question answering, where the answer may hinge on a gesture, vocal tone, temporal cue, or mismatch between what is said and what is visually expressed. We introduce CogniRoute, a schema-guided Mixture-of-Experts framework for social omni reasoning. CogniRoute uses a training-only cognitive schema that factorizes each example by cross-modal relation, reasoning demand, and temporal scope, and aligns global routing signatures with this structure during supervised fine-tuning. We further introduce route-aware reinforcement learning, which jointly optimizes token generation and expert allocation using rewards for answer correctness, modality-consistent reasoning, and cognitive temporal grounding. To support training and evaluation, we construct OmniSocialBench, a diagnostic social video QA resource with 118K structured training examples, grounded reasoning traces, schema labels, temporal evidence spans, and a manually verified evaluation split. CogniRoute achieves 59.38\\% average accuracy on OmniSocialBench, improving over the strongest proprietary baseline by 15.33 percentage points and the strongest open-source omni baseline by 26.77 points, with the largest gains on questions requiring audio-visual coordination, conflict resolution, and temporally grounded social inference.",
+      "published": "2026-06-18T22:17:18Z",
+      "updated": "2026-06-18T22:17:18Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.20970v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.20970v1"
+    },
+    {
+      "arxiv_id": "2606.20561v1",
+      "title": "TimeProVe: Propose, then Verify for Efficient Long Video Temporal Reasoning in Activities of Daily Living",
+      "authors": [
+        "Arkaprava Sinha",
+        "Dominick Reilly",
+        "Siddharth Krishnan",
+        "Hieu Le",
+        "Srijan Das"
+      ],
+      "summary": "Long Video Question Answering (LVQA) requires identifying sparse, query-relevant evidence within hours-long untrimmed videos. Existing approaches either process videos densely with large vision-language models (VLMs), incurring prohibitive computational cost, or rely on sparse caption-based reasoning, which often misses temporally localized and motion-centric evidence. We introduce TimeProVe, a cost-efficient hybrid framework for temporally grounded reasoning in long videos. TimeProVe first employs lightweight modules to generate action-grounded answer--evidence hypotheses and subsequently invokes an expensive VLM only for targeted verification. The core of our framework lies in the Action-based Candidate Evidence (ACE) module, which converts temporally localized actions into query-conditioned candidate answers and supporting evidence windows through lightweight LLM reasoning. We further introduce OpenTSUBench (OTB), an open-ended benchmark designed to evaluate temporally grounded reasoning in real-world Activities of Daily Living (ADL) scenarios. Experiments show that TimeProVe outperforms the strongest baseline on OTB by 7.3%, while reducing VLM calls by 75% and inference cost by 93%. Furthermore, without explicit temporal grounding training, TimeProVe achieves competitive performance on Charades-STA, and reaches state-of-the-art results when enhanced with grounding VLMs.",
+      "published": "2026-06-18T17:59:48Z",
+      "updated": "2026-06-18T17:59:48Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.20561v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.20561v1"
+    },
+    {
+      "arxiv_id": "2606.17279v1",
+      "title": "Training LLMs with Reinforcement Learning over Digital Twin Representations for Reasoning-Intensive Surgical VideoQA",
+      "authors": [
+        "Yiqing Shen",
+        "Han Zhang",
+        "Mathias Unberath"
+      ],
+      "summary": "Surgical video question answering requires multi-step reasoning across semantic, spatial, and temporal dimensions. Existing methods architecturally compress videos into discrete token representations and couple visual perception with reasoning. This approach fragments continuous spatial-temporal relationships and has been shown to restrict multi-step reasoning capabilities. We introduce a reinforcement learning (RL) framework that trains large language models (LLMs) to decouple perception from reasoning by operating over digital twin representations constructed from surgical foundation models. Additionally, we introduce hierarchical representations across frame, temporal window, and procedure levels with probabilistic uncertainty estimates. Finally, we propose a novel reward that combines format validation with accuracy assessment through clinical plausibility evaluation and uncertainty-aware calibration for training. To demonstrate the capabilities of this approach, we introduce REAL-Colon-Reason, a colonoscopic benchmark with 2000 question-answer pairs across three complexity levels. We achieve state-of-the-art performance on REAL-Colon-Reason and two existing surgical VideoQA benchmarks REAL-Colon-VQA and EndoVis18-VQA.",
+      "published": "2026-06-15T20:40:45Z",
+      "updated": "2026-06-15T20:40:45Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.17279v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.17279v1"
+    },
+    {
+      "arxiv_id": "2606.14972v1",
+      "title": "ReGenHuman: Re-Generating Human Appearances for Realistic Full-Body Video Anonymization",
+      "authors": [
+        "Adam Sun",
+        "Eshaan Barkataki",
+        "Arnold Milstein",
+        "Gordon Wetzstein",
+        "Ehsan Adeli"
+      ],
+      "summary": "Anonymizing human-centric video data is an understudied problem. Prior anonymization techniques either blur or redact pixels at the cost of realism and downstream utility, or generate frame-by-frame at the cost of temporal coherence. We introduce ReGenHuman, the first full-body video anonymization pipeline that is simultaneously realistic, temporally consistent, and anonymous by construction. Contrary to past approaches which redact or edit the inputs directly, we propose a regenerate, don't edit paradigm. Our approach composites 2D pose, segmentation, and monocular depth into two complementary conditioning streams - StructAll and StructHuman, which are used to fine-tune a video-to-video diffusion backbone on in-the-wild human videos, synthesizing the human regions entirely from identity-free structural cues. We evaluate our model on privacy, quality, and utility, and show that our ReGenHuman achieves the best tradeoff across all three axes against current baselines. We further show that our anonymized videos remain effective for downstream tasks, including video question answering.",
+      "published": "2026-06-12T21:47:10Z",
+      "updated": "2026-06-12T21:47:10Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.14972v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.14972v1"
+    },
+    {
+      "arxiv_id": "2606.06338v1",
+      "title": "StoryVideoQA: Scaling Deep Video Understanding with a Large-Scale, Multi-Genre and Auto-Generated Dataset",
+      "authors": [
+        "Zhengqian Wu",
+        "Zhixian Liu",
+        "Aodong Chen",
+        "Jingyang Zhang",
+        "Ruizhe Li",
+        "Hanlin Ge",
+        "Zhongyuan Wang",
+        "Chunxia Xiao",
+        "Chao Liang"
+      ],
+      "summary": "Video question answering (VideoQA) aims to answer questions about given videos. While existing approaches excel on factoid VideoQA, they struggle with deep video understanding (DVU), which requires the comprehension of complex storylines. This challenge arises from the inherent long-range video content, multi-faceted question types, and instance-level story elements, all of which constrain the scale and diversity of manually constructed DVU datasets. These difficulties constrain the scale and diversity of manually-constructed DVU dataset. To address these, we previously introduced StoryMind to automatically construct DVU datasets with balanced fine-grained topics. Though it can generate high-quality question-answer pairs (QAs) for TV series, it suffers significant performance degradation when handling longer and more complex movies. In this paper, we further design StoryMindv2, an enhanced multi-agent collaboration framework to generate high-quality DVU datasets for both TV series and movies. By integrating a novel supervisor-guided generation mechanism and a refined multi-reviewer voting strategy, the framework is utilized to construct StoryVideoQA, the largest DVU dataset to date, featuring over 363K QAs on 393.2 hours diverse story videos including TV series (avg. 1,635 seconds) and movies (avg. 7,878 seconds). Comprehensive evaluations of 20 state-of-the-art VideoQA methods on this large-scale benchmark reveal that they cannot fully maintain long-range character associations or construct a coherent understanding of complex storylines. To bridge this gap, we propose PlotTree, a novel video understanding agent, re-organizing long-range video content into a hierarchical plot structure, enabling efficient storyline reasoning on StoryVideoQA. Project page: https://github.com/nercms-mmap/StoryVideoQA/",
+      "published": "2026-06-04T16:12:43Z",
+      "updated": "2026-06-04T16:12:43Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.06338v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.06338v1"
+    },
+    {
+      "arxiv_id": "2606.05917v1",
+      "title": "MemoryCard: Topic-Aware Multi-Modal Clue Compression for Long-Video Question Answering",
+      "authors": [
+        "Qing Yang",
+        "Pengcheng Huang",
+        "Xinze Li",
+        "Zhenghao Liu",
+        "Yukun Yan",
+        "Yu Gu",
+        "Ge Yu",
+        "Gang Li",
+        "Maosong Sun"
+      ],
+      "summary": "Long-video question answering remains challenging for Vision-Language Models (VLMs), as answer-relevant evidence is often sparse, transient, and temporally dispersed across lengthy video contexts. Existing frame-centric approaches improve efficiency through uniform sampling, query-aware frame selection, visual-token compression, and adaptive resolution strategies. However, they still rely on isolated and fragmented frames as the fundamental evidence units, limiting VLMs' ability to effectively capture coherent event-level semantics. To address this limitation, we propose MemoryCard, a video-memory-based augmentation framework that organizes long videos into self-contained Memory Cards. Specifically, MemoryCard first performs a self-reading process over videos and aligned utterances to segment the video into semantically coherent units, each corresponding to a distinct topic or event. For each unit, it generates an event-level video gist and selects representative visual moments, which are then rendered into unified Memory Cards for retrieval and question answering. Experimental results demonstrate that MemoryCard consistently improves long-video QA performance under comparable visual-token budgets, achieving up to a 21.8% relative improvement in accuracy. All code is available at https://github.com/NEUIR/MemoryCard.",
+      "published": "2026-06-04T09:23:31Z",
+      "updated": "2026-06-04T09:23:31Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.05917v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.05917v1"
+    },
+    {
+      "arxiv_id": "2606.06532v1",
+      "title": "GOPAgen: Motion-Aware and Efficient Agentic Long-Video Understanding with Structural Memory and Hierarchical Reasoning",
+      "authors": [
+        "Haozhe Chi",
+        "Yang Jin",
+        "Yadong Mu"
+      ],
+      "summary": "Despite significant progress in agentic long video understanding, existing methods still lack detailed motion comprehension coupled with an efficient memory architecture. In this paper, we propose GOPAgen, a novel approach that first integrates video codec into the video understanding framework via a meticulously designed motion agent trained on Groups of Pictures (GOPs) from video codec. We further develop a GOP tree reasoning algorithm, which is naturally aligned with video codec and enhances the model's ability to understand local detailed motions in videos. Additionally, we carefully design a structural memory mechanism that integrates local motion information with detailed captions in structural pages, and propose an efficient coarse-to-fine zoom-in algorithm to fully exploit the structural memory. Furthermore, we incorporate a motion vector database into the framework to enable efficient retrieval of motion vectors at different granularities. Overall, our method achieves superior Video Question Answering (VQA) performance on various video understanding benchmarks, including MotionBench and Egoschema, thereby demonstrating the superiority of our proposed framework.",
+      "published": "2026-06-03T17:47:49Z",
+      "updated": "2026-06-03T17:47:49Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.06532v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.06532v1"
+    },
+    {
+      "arxiv_id": "2606.04351v2",
+      "title": "Frames2LoRA: Parametric Video Internalization for Vision-Language Models",
+      "authors": [
+        "Manan Suri",
+        "Sarvesh Baskar",
+        "Dinesh Manocha"
+      ],
+      "summary": "Processing video in vision-language models is expensive: each frame occupies hundreds of tokens, and inference cost scales with every frame and every repeated query. We introduce Frames2LoRA, a method for parametric video internalization. A perceiver hypernetwork reads the intermediate representations produced layer-by-layer as a frozen VLM encodes a video, and generates a Low-Rank Adaptation (LoRA) adapter in a single forward pass. Unlike standard LoRA fine-tuning, which requires iterative gradient updates, Frames2LoRA predicts these weights directly from the video. Trained for SmolVLM2 500M and 2.2B on video summarization and captioning, Frames2LoRA enables the same frozen VLM to answer queries from the adapter alone, with zero visual tokens in its context at query time. Frames2LoRA is statistically non-inferior and equivalent to direct video-in-context inference across all five captioning benchmarks at both model scales, and across seven of eight video question answering benchmark-scale pairings. Although trained only on 12 frames at 384px, it remains stable up to 1,024 frames and 1024px, where direct video-in-context inference often degenerates. Across this sweep, it reduces answer-time visual-token load by up to 1,500x and query TTFT by 6-80x, while preserving video-faithful outputs. We also find that independently generated adapters for non-overlapping video segments can compose in rank space, suggesting a path toward chunked long-video internalization.",
+      "published": "2026-06-03T02:07:35Z",
+      "updated": "2026-06-10T09:50:06Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.04351v2",
+      "pdf_url": "https://arxiv.org/pdf/2606.04351v2"
+    },
+    {
+      "arxiv_id": "2606.04323v1",
+      "title": "Answer Self-Consistency with Margin-Triggered Question Re-Arbitration for the CVPR 2026 VidLLMs Challenge",
+      "authors": [
+        "Tomoya Miyazawa",
+        "Hiroyasu Okuno"
+      ],
+      "summary": "In this report, we present our solution for Track 2 of the CVPR 2026 VidLLMs Challenge. This track evaluates visual relational reasoning in videos, where models must infer relations that are not always explicitly visible. We propose Answer Self-Consistency with Margin-Triggered Question Re-Arbitration (ASC-MQRA), a training-free test-time reasoning framework built on a multimodal reasoning model. The core ASC component performs multiple stochastic video question-answering runs and aggregates their answer choices through answer-level self-consistency. This substantially improves over single-pass inference and forms our final test submission. We further study MQRA, a conditional re-arbitration module for low-margin examples where the first-stage vote distribution indicates uncertainty. Our vote-margin analysis shows that low-margin examples often retain the ground-truth answer among the top candidates, motivating MQRA to narrow the candidate set and re-watch the video only over the retained candidates. On validation, MQRA further improves over ASC, indicating that low-margin vote distributions can provide a useful uncertainty signal. On test, however, MQRA slightly degrades performance relative to ASC, suggesting that re-arbitration is sensitive to the size and category distribution of the triggered subset. Our final test submission therefore uses ASC without re-arbitration, achieving 72.73 average accuracy and 78.34 category-wise macro average accuracy on validation, and 81.16 average accuracy and 80.91 category-wise macro average accuracy on test. This report details our prompting strategy, implementation setup, ablation studies, and diagnostic analyses. The code is available at https://github.com/data-analytics-labo/ASC-MQRA",
+      "published": "2026-06-03T00:51:55Z",
+      "updated": "2026-06-03T00:51:55Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.04323v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.04323v1"
+    },
+    {
+      "arxiv_id": "2606.03788v2",
+      "title": "SLU-2K: A Question-Based Benchmark for Semantic Evaluation of Sign Language Translation",
+      "authors": [
+        "Zeno Testa",
+        "Antonino Furnari",
+        "Lorenzo Baraldi",
+        "Natalia Díaz-Rodríguez"
+      ],
+      "summary": "Sign Language Translation (SLT) is typically evaluated with surface-form metrics such as BLEU and ROUGE, which reward lexical overlap but do not directly measure whether a translation preserves the meaning of the source sign sequence. This is in contrast with the final objective of integrating SLT in assistive technology. In this work, we shift the focus from Sign Language Translation (SLT) to Sign Language Understanding (SLU), with particular emphasis on semantic understanding. Specifically, we evaluate systems based on their ability to correctly recover, from the input video, key semantic aspects of the original sentence, such as actions taking place and facts about people and objects. To enable this evaluation systematically, we propose SLU-2K, a dataset of 2,350 closed-ended video question-answer pairs based on the popular PHOENIX-2014T and CSL-Daily datasets. To obtain SLU-2K, we propose and extensively evaluate an automated data generation pipeline which produces questions across 7 categories, namely actions, locations, numbers, objects, people, time, and weather conditions. We show the potential of SLU-2K by evaluating popular Multimodal Large Language Models (MLLMs) and two representative state-of-the-art systems, MMSTL and SpaMo. Our results show that MLLMs reach near-random performance, highlighting the need for a more systematic integration of SLU in current AI systems. Furthermore, state-of-the-art translation systems carefully fine-tuned on in-domain data still exhibit a substantial semantic gap, with results ranging from 56.7% to 75.2%. These findings suggest that current SLT evaluation protocols overestimate true understanding and that future progress should be measured not only by fluency and n-gram overlap, but also by semantic correctness. Code, prompts, and benchmark files are available at https://github.com/ZenoTsT/SLU-2K",
+      "published": "2026-06-02T15:39:33Z",
+      "updated": "2026-06-13T13:50:41Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.03788v2",
+      "pdf_url": "https://arxiv.org/pdf/2606.03788v2"
+    },
+    {
+      "arxiv_id": "2606.01631v1",
+      "title": "TimeLogic Challenge @ CVPR 2026: Strong MLLMs Meet Evidence-Seeking Agents for Temporal-Logic Video Question Answering",
+      "authors": [
+        "Zhaoyang Xu",
+        "Xusheng He",
+        "Wei Liu",
+        "Zhenyang Li",
+        "Jianlong Wu"
+      ],
+      "summary": "Temporal-logic video question answering requires a model to reason about when actions occur relative to one another, such as before, after, until, since, overlap, and multi-event chains, rather than merely what is present in a video. Standard vision-language models typically answer such questions in a single pass over a fixed, uniformly sampled set of frames, which is poorly matched to evidence that is often localized to narrow action boundaries or dispersed across several distant events. We present an evidence-seeking agent that treats temporal-logic VideoQA as active exploration. The agent follows a Think-Act-Observe loop driven by a multi-granular sampling toolkit, where every observation is interleaved with its absolute timestamp so that temporal relations reduce to numerical comparisons on a shared time axis. Its behavior is shaped by benchmark structure: a lightweight classifier routes each question to a temporal category, each with a tailored policy, iteration depth, and prompt, while sampling budgets adapt to corpus characteristics and clip length. The resulting training-free system couples Gemini 3.1 Pro with a temporal-reasoning policy and achieves 77.13 AvgAcc on the official TimeLogic test set.",
+      "published": "2026-06-01T03:31:42Z",
+      "updated": "2026-06-01T03:31:42Z",
+      "primary_category": "cs.MM",
+      "categories": [
+        "cs.MM"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.01631v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.01631v1"
+    },
+    {
+      "arxiv_id": "2606.01591v1",
+      "title": "TLG: Temporal-Logic Grounding for Video Question Answering via Source-Annotation Reconstruction and Category-Targeted Reasoning",
+      "authors": [
+        "Ali Alavi"
+      ],
+      "summary": "The TimeLogic Challenge evaluates formal temporal-logic reasoning over video - 16 operators (before, after, until, since, always, co-occur, ordering, ...) in boolean and 4-way multiple-choice form. End-to-end video-language models (VLMs) hover near chance on this task because they treat video as a bag of frames and cannot localize when actions occur. We present TLG (Temporal-Logic Grounding), a three-tier system that (i) reconstructs each video's action timeline from the public source-dataset annotations the benchmark was generated from, parses every question into a temporal-logic program, and executes it deterministically; (ii) falls back to a strong open VLM where no annotation exists; and (iii) routes only the question categories where the VLM is empirically weakest to a frontier reasoning model. TLG raises test accuracy from a 46.9% VLM baseline to 71.37%, a +24.5 absolute gain, reaching within 3 points of the leaderboard top. We report extensive ablations, including three model-based timeline-reconstruction variants that all underperform a holistic VLM, isolating temporal grounding as the irreducible bottleneck and showing that real annotations - not larger models - drive accuracy.",
+      "published": "2026-06-01T02:40:25Z",
+      "updated": "2026-06-01T02:40:25Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.LG"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.01591v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.01591v1"
+    },
+    {
+      "arxiv_id": "2606.01485v1",
+      "title": "Perception First: A Frontier Native-Video Model with Self-Consistency for Implicit Video Question Answering",
+      "authors": [
+        "Ali Alavi"
+      ],
+      "summary": "We describe our submission to the VRR Challenge @ CVPR 2026, built on the \\emph{ImplicitQA} / \\emph{VRR-QA} benchmark~\\cite{implicitqa}: multiple-choice video question answering in which answers are deliberately \\emph{not} observable in any single frame and must be inferred from spatial layout, motion, depth, viewpoint, causality, and social context across discontinuous frames of creative video. We conduct a systematic, training-free study spanning open-source Video-LMMs (Qwen2.5-VL~\\cite{qwen25vl}, Qwen3-VL~\\cite{qwen3vl}, InternVL3, Gemma-3, and the RL-tuned video reasoners Video-R1~\\cite{videor1} and VideoChat-R1.5~\\cite{videochatr15}) and a battery of inference-time strategies (chain-of-thought, question decomposition, describe-then-reason cascades, audio transcripts, spatial state prompting, self-consistency~\\cite{selfconsistency}, multi-model ensembling, and category routing). Our central finding is that this benchmark is \\emph{perception-bound rather than reasoning-bound}: reasoning-side augmentations are neutral-to-harmful, whereas base-model perceptual capability and lightweight test-time denoising are the only reliable levers. A per-category error analysis localizes the difficulty to low-level perception -- relative depth, viewpoint, and counting are the hardest categories, while causal and social reasoning are nearly solved -- and a prompt that explicitly injects monocular depth cues to attack the weakest category \\emph{lowers} test accuracy by $5.8$ points, confirming that the model needs a better \\emph{percept}, not a better \\emph{procedure}.",
+      "published": "2026-05-31T23:00:17Z",
+      "updated": "2026-05-31T23:00:17Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.LG"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.01485v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.01485v1"
+    },
+    {
+      "arxiv_id": "2606.01106v1",
+      "title": "Temporal Evidence Routing with Structured Visual Evidence for TimeLogicQA",
+      "authors": [
+        "Yuyang Sun",
+        "Yongliang Wu",
+        "Xingyu Zhu",
+        "Yuxia Chen",
+        "Zhenxiang Jiang",
+        "Yangguang Ji",
+        "Wenbo Zhu",
+        "Yanxi Shi",
+        "Jay Wu",
+        "Shuo Wang",
+        "Xu Yang"
+      ],
+      "summary": "TimeLogicQA evaluates whether video question answering systems can reason over temporal relations such as event existence, ordering, persistence, boundary conditions, and overlap. We address this task with a visual evidence routing pipeline that separates perception from symbolic temporal reasoning. The system first parses each question into event targets, answer mode, candidate options, and temporal operators. It then routes videos according to duration and operator difficulty, using ordered full-frame evidence for short clips and event-focused candidate windows for long videos. A multimodal large language model produces structured visual evidence for the relevant events, while programmatic verifiers recover dense action intervals and a deterministic reducer applies operator-specific temporal rules to produce the final answer. Conservative fusion accepts an answer only when the visual evidence, temporal program, and confidence checks agree, reducing noisy answer flips. On the official test evaluation, our final system achieves an AvgAcc of 81.8.",
+      "published": "2026-05-31T08:49:04Z",
+      "updated": "2026-05-31T08:49:04Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.01106v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.01106v1"
+    },
+    {
+      "arxiv_id": "2606.01104v1",
+      "title": "Adaptive Dense Evidence Refinement for Video Relational Reasoning for VRR-QA Challenge",
+      "authors": [
+        "Yuyang Sun",
+        "Yongliang Wu",
+        "Xingyu Zhu",
+        "Yuxia Chen",
+        "Zhenxiang Jiang",
+        "Yangguang Ji",
+        "Wenbo Zhu",
+        "Yanxi Shi",
+        "Jay Wu",
+        "Shuo Wang",
+        "Xu Yang"
+      ],
+      "summary": "VRR-QA evaluates whether video-language systems can infer spatial, temporal, viewpoint, depth, and visibility relations that are not always resolved by a single frame. We present an inference-only system built around adaptive test-time computation. The system first answers each question with a direct video-language model pass, then uses multiple lightweight views to find unstable questions. Only these difficult questions are routed to a high-budget dense evidence module that constructs timestamped frame observations, relation-specific probes, candidate verification, and conservative temporal aggregation. This design separates two problems that are often confused in video question answering: finding plausible alternative answers and deciding when a current answer should actually be changed. On the test split, the final system obtains 90.07 average accuracy and 87.81 macro average accuracy. The report focuses on the final test system and the implementation settings required to reproduce the adaptive dense verifier.",
+      "published": "2026-05-31T08:45:06Z",
+      "updated": "2026-05-31T08:45:06Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.01104v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.01104v1"
+    },
+    {
+      "arxiv_id": "2606.14723v1",
+      "title": "Disagreement-Based Cross-Model Routing for Implicit Video Question Answering",
+      "authors": [
+        "Durga Sandeep Saluru"
+      ],
+      "summary": "We study multiple-choice video question answering on the ImplicitQA benchmark, where the correct answer is never explicitly shown but must be inferred from off-screen events, line-of-sight cues, causal structure, and cross-shot spatial layout. On this benchmark a single frontier video LLM already operates near its accuracy ceiling, and we observe that conventional self-consistency strategies -- majority voting across repeated samples of the same model -- can hurt rather than help, because the model's errors on hard questions are correlated. We propose disagreement-based cross-model routing, a pure inference-time procedure that requires no labels and no training. We triple-sample a native-video model (Gemini 3.1 Pro Preview) at temperature zero, exploit the genuine sample-to-sample variance of its video-processing pipeline to identify the roughly 20% subset of questions where the three samples disagree, and route only that subset to a second model from a different family (Claude Opus 4.8) that consumes uniformly sampled frames with adaptive thinking. On the 1001-question validation set with public ground truth -- our main evaluation -- the method improves AvgAcc by +1.43 over the best single sample of the primary model, with per-category gains concentrated on Motion & Trajectory (+5.49), Inferred Counting (+3.45), and Vertical Spatial Reasoning (+1.82) -- the categories most dependent on cross-shot reference resolution. The same pipeline applied to the held-out 172-question CVPR 2026 ImplicitQA challenge test set achieves 82.03 AvgAcc / 79.71 MacroAvgAcc (+1.81 over the best single sample of the primary model), confirming the validation result on an independent split.",
+      "published": "2026-05-31T05:56:27Z",
+      "updated": "2026-05-31T05:56:27Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.14723v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.14723v1"
+    },
+    {
+      "arxiv_id": "2606.00829v1",
+      "title": "The Right Inference Strategy Is All You Need: Nearly Training-Free Domain-Wise Inference for EgoCross Challenge",
+      "authors": [
+        "Leyi Wu",
+        "Yifan Zhao",
+        "Jinjie Zhang",
+        "Yinchuan Li",
+        "Ying-Cong Chen"
+      ],
+      "summary": "EgoCross evaluates multimodal large language models on egocentric video question answering under substantial domain shift, where test videos come from surgery, industrial assembly, extreme sports, and animal-mounted cameras rather than ordinary daily-life scenes. In the source-limited track, the base model is fixed to Qwen3-VL-4B, while the official task-specific support set contains only 20 training samples. This setting makes the challenge less about model scaling and more about exposing the right visual, temporal, and answer-selection cues to a constrained model. Our key observation is that the frozen baseline model is not simply incapable of these rare scenarios; rather, it often fails to transfer its existing visual-language knowledge to the new task format without an appropriate interface. We therefore use a domain-wise inference strategy that treats the four target domains separately and designs different input, prompting, and answer-mapping procedures according to each domain's task characteristics. These strategies make the rare egocentric scenes more interpretable to the VLM by emphasizing the cues that matter for each domain. The resulting system is nearly training-free: surgery, and animal questions are answered with the base Qwen3-VL-4B model, while XSports and industry use only the official SFT checkpoint trained for two epochs on the provided 20 training samples. On the final evaluation, this simple strategy reaches 66.98\\% overall accuracy, suggesting that careful domain-aware inference can compensate for limited base-model strength and recover much of the ability already present in the baseline model.",
+      "published": "2026-05-30T17:55:15Z",
+      "updated": "2026-05-30T17:55:15Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.00829v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.00829v1"
+    },
+    {
+      "arxiv_id": "2606.00712v1",
+      "title": "CASTLE2026 Team WDL Technical Report",
+      "authors": [
+        "Zhengyang Li",
+        "Zhenglin Du",
+        "Yi Wen",
+        "Fang Liu",
+        "Shuo Li",
+        "Xu Liu"
+      ],
+      "summary": "The CASTLE Challenge @ EgoVis 2026 evaluates long-form egocentric video question answering over 600+ hours of multi-perspective recordings. Each four-choice question requires evidence from videos, transcripts, auxiliary photos, people, days, rooms, and temporal context. We propose an evidence-aware multimodal reasoning pipeline based on Qwen. Our system parses question hints, retrieves ASR chunks, attaches auxiliary images, samples candidate video frames, and routes questions into static visual, speech/text, temporal, and mixed types with specialized prompts. Multiple inference passes are aggregated by confidence-weighted voting and converted into the official Codabench format. In ablation, LoRA improves the score from 0.21 to 0.50, and more sampled frames further raise it to 0.58. Our final system ranks first in the CASTLE Challenge @ EgoVis 2026.",
+      "published": "2026-05-30T12:41:52Z",
+      "updated": "2026-05-30T12:41:52Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2606.00712v1",
+      "pdf_url": "https://arxiv.org/pdf/2606.00712v1"
+    },
+    {
+      "arxiv_id": "2605.31069v1",
+      "title": "Towards Effective Long-Video Event Prediction via Multi-Level Event Semantics Mining",
+      "authors": [
+        "Bo Peng",
+        "YuanJie Lyu",
+        "PengGang Qin",
+        "Tong Xu"
+      ],
+      "summary": "Accurately predicting future events is fundamental to content understanding and decision-making across various domains. While prior research has primarily focused on text or short-video scenarios, long-video event prediction, characterized by vast multimodal context and more complex narratives, remains underexplored. Meanwhile, although recent Long-Video Language Models (LVLMs), built on Large Language Models (LLMs) and Vision-Language Models (VLMs), have shown promise in long-video question answering and summarization, they struggle to generalize to event prediction, as they can neither precisely extract event-related details nor perform fine-grained analysis of event development. To address this gap, we propose VISTA, a multi-level event semantics mining framework for long-video event prediction. Initially, VISTA applies a character-centric visual prompt to precisely extract event-related visual details, enhancing detail-level semantics; subsequently, it employs a knowledge-enhanced iterative retrieval strategy, guiding the LLM to progressively construct logically coherent event chains, thereby improving event-level narratives; ultimately, VISTA adopts a human-like propose-then-retrieve strategy to generate diverse future-oriented proposals and integrate multi-level clues, producing robust and accurate predictions. Extensive experiments on real-world datasets validate the effectiveness of VISTA for long-video event prediction.",
+      "published": "2026-05-29T09:38:43Z",
+      "updated": "2026-05-29T09:38:43Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.CL"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.31069v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.31069v1"
+    },
+    {
+      "arxiv_id": "2605.29402v1",
+      "title": "Semantic and Visual Evidence for Efficient Long-Video Reasoning: A Solution for the HD-EPIC VQA Challenge",
+      "authors": [
+        "Yinsong Xu",
+        "Wei Jing",
+        "Liuxin Zhang",
+        "Wanjun Lv",
+        "Hui Li"
+      ],
+      "summary": "Understanding long-form egocentric videos remains challenging for multimodal large language models (MLLMs) due to limited context length and insufficient grounding of fine-grained visual details. The recently proposed HD-EPIC benchmark highlights these limitations: even strong long-context models achieve relatively low performance across diverse video question answering tasks. In this paper, we propose a unified framework that decouples long-video reasoning into two complementary forms of evidence: semantic evidence and visual evidence. Semantic evidence captures global procedural structure through a coarse-to-fine extraction pipeline, while object-centric visual evidence preserves fine-grained grounding through bounding boxes and visual embeddings. During inference, we formulate reasoning as a query-conditioned evidence retrieval and integration process, dynamically selecting relevant information from both sources. Our approach achieves competitive performance in the HD-EPIC-VQA Challenge across multiple task categories. More broadly, our results demonstrate that explicitly structuring, retrieving, and integrating semantic and visual evidence is critical for effective long-video understanding with MLLMs.",
+      "published": "2026-05-28T05:53:34Z",
+      "updated": "2026-05-28T05:53:34Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.29402v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.29402v1"
+    },
+    {
+      "arxiv_id": "2605.27885v1",
+      "title": "Reflective Dialogue between Teacher and Solver Agents for Video Question Answering",
+      "authors": [
+        "Takuya Murakawa",
+        "Toru Tamaki"
+      ],
+      "summary": "Various approaches have been proposed to adapt Vision-Language Models (VLMs) to specialized domains for Video Question Answering, including fine-tuning and in-context learning. However, acquiring task-specific knowledge at the inference phase from only a small labeled support set without fine-tuning remains a challenge. In this paper, we propose a method that achieves adaptation solely through inference-time context injection. Our method first constructs a Reflective Dialogue (RD) -- a multi-turn conversation between two agents, in which Teacher poses each support question and delivers correctness feedback, and Solver answers and provides visual grounding explanations (or reflections) for both correct and incorrect answers. This dialogue history is then used as context at the inference phase. Experiments on the EgoCross benchmark demonstrate that our method outperforms both a baseline zero-shot setting and a standard in-context learning approach that passes support set examples directly, achieving 3rd place in the Open-source Track of the 1st Cross-Domain EgoCross Challenge at the CVPR 2026 EgoVis Workshop, for which this paper also serves as a technical report.",
+      "published": "2026-05-27T03:08:12Z",
+      "updated": "2026-05-27T03:08:12Z",
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV"
+      ],
+      "abs_url": "http://arxiv.org/abs/2605.27885v1",
+      "pdf_url": "https://arxiv.org/pdf/2605.27885v1"
+    }
+  ]
+}

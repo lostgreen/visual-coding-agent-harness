@@ -2,12 +2,31 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+
+def bounded_uniform_frame_count(
+    duration_sec: float,
+    *,
+    max_frames: int = 512,
+    max_fps: float = 1.0,
+) -> int:
+    duration = float(duration_sec)
+    frame_limit = int(max_frames)
+    fps_limit = float(max_fps)
+    if duration <= 0:
+        raise ValueError("duration_sec must be positive")
+    if frame_limit <= 0:
+        raise ValueError("max_frames must be positive")
+    if fps_limit <= 0:
+        raise ValueError("max_fps must be positive")
+    return min(frame_limit, max(1, int(math.ceil(duration * fps_limit))))
 
 
 def uniform_midpoint_times(duration_sec: float, frame_count: int) -> tuple[float, ...]:
