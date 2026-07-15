@@ -211,6 +211,135 @@ def test_query_compiler_emits_semantic_contracts_for_failure_families() -> None:
     )
 
 
+def test_query_compiler_covers_errors10_global_and_cross_window_contracts() -> None:
+    overtake_count = multiround.compile_query_contract(
+        "How many times was the video recorder overtaken after reaching 1st place and failing to maintain it?"
+    )
+    food_sequence = multiround.compile_query_contract(
+        "According to the video, which option correctly describes the sequence of the protagonist's eating-related events?",
+        {"A": "Breakfast -> yogurt -> dinner", "B": "Yogurt -> breakfast -> dinner"},
+    )
+    final_position = multiround.compile_query_contract(
+        "In that same last instance, what final position did the second person who overtook the video recorder ultimately finish in?"
+    )
+    second_overtaker = multiround.compile_query_contract(
+        "In the last instance where the recorder reached 1st place, who was the second person to overtake them?"
+    )
+    final_decision = multiround.compile_query_contract(
+        "After confronting his parents at the door, did Joe ultimately stick to his original idea?"
+    )
+    narrative_gap = multiround.compile_query_contract(
+        "During this narrative gap between scenes, which option best represents Joe's internal monologue?"
+    )
+    uncertain_caller = multiround.compile_query_contract(
+        "Who had called the police?",
+        {"A": "Joe called.", "B": "It's uncertain, but it's not Joe's family."},
+    )
+    color_change = multiround.compile_query_contract(
+        "What color change occurs when the red sauce is mixed with the white batter?"
+    )
+
+    assert (overtake_count.required_scope, overtake_count.quantifier, overtake_count.aggregation) == (
+        "full_video",
+        "total_count",
+        "count",
+    )
+    assert (food_sequence.required_scope, food_sequence.quantifier, food_sequence.aggregation) == (
+        "full_video",
+        "order",
+        "order",
+    )
+    assert (final_position.required_scope, final_position.observation_target) == ("multi_window", "entity")
+    assert (second_overtaker.required_scope, second_overtaker.observation_target) == ("multi_window", "entity")
+    assert (final_decision.required_scope, final_decision.aggregation) == ("multi_window", "compare")
+    assert (narrative_gap.required_scope, narrative_gap.aggregation) == ("multi_window", "compare")
+    assert (uncertain_caller.required_scope, uncertain_caller.aggregation) == ("multi_window", "compare")
+    assert "elimination" in uncertain_caller.boundary_hint
+    assert (color_change.required_scope, color_change.aggregation) == ("multi_window", "compare")
+
+
+def test_query_compiler_keeps_explicitly_bounded_event_count_local() -> None:
+    contract = multiround.compile_query_contract(
+        "How many times does the title card appear in the first 5 minutes?"
+    )
+
+    assert contract.required_scope == "multi_window"
+    assert contract.quantifier == "total_count"
+
+
+def test_condition_alignment_reuses_semantic_ids_across_reasoner_rounds() -> None:
+    first = ReasonerDecision(
+        action="investigate",
+        primary_gap=EvidenceGap(
+            "gap_r1",
+            "count cylinders",
+            success_conditions=(
+                "Count all visible cylinders",
+                "Confirm exterior factory setting",
+                "Confirm side-by-side layout",
+            ),
+        ),
+    )
+    second = ReasonerDecision(
+        action="investigate",
+        primary_gap=EvidenceGap(
+            "gap_r2",
+            "verify the same count",
+            success_conditions=(
+                "Two green cylinders are countable",
+                "Factory exterior context is visible",
+                "Objects are side by side",
+            ),
+        ),
+    )
+
+    aligned_first, registry = multiround._align_decision_conditions(first, ())
+    aligned_second, registry = multiround._align_decision_conditions(second, registry)
+
+    assert [item.condition_id for item in aligned_second.primary_gap.conditions] == [
+        item.condition_id for item in aligned_first.primary_gap.conditions
+    ]
+    assert len(registry) == 3
+
+
+def test_readiness_fails_closed_when_active_condition_has_no_result() -> None:
+    status = multiround._apply_readiness_dashboard(
+        {"ready_for_answer": True},
+        (),
+        (),
+        (),
+        "A",
+        ("stable_condition_1",),
+    )
+
+    assert status["ready_for_answer"] is False
+    assert status["unresolved_critical_condition_ids"] == ["stable_condition_1"]
+
+
+def test_discriminative_audit_fails_closed_when_reason_is_missing() -> None:
+    gate = {"passed": True, "reason": "verified_window_evidence"}
+
+    missing = multiround._apply_answer_audit(
+        gate,
+        ReasonerDecision(action="answer", answer="A", support_status="supported"),
+        required=True,
+    )
+    supported = multiround._apply_answer_audit(
+        gate,
+        ReasonerDecision(
+            action="answer",
+            answer="A",
+            support_status="supported",
+            support_reason="Witnessed before and after states distinguish A from B.",
+        ),
+        required=True,
+    )
+
+    assert missing["passed"] is False
+    assert missing["reason"] == "answer_audit_missing"
+    assert supported["passed"] is True
+
+
 def test_new_coverage_does_not_count_as_goal_progress() -> None:
     condition = ConditionResult("gap_clock_c1", "unknown", "The scoreboard is too small.")
     report = InvestigationReport(
@@ -856,6 +985,44 @@ def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     workspace.write_asr_virtual_cues(({"start": 0.5, "end": 1.5, "text": "number written on jersey", "segment_id": "seg_target"},))
     build_virtual_beat_index(workspace, frames, model=TinyModel(), beat_sec=3.0)
     return VirtualVideoWorkspace.load(workspace.root_dir)
+
+
+def test_rejected_answer_repair_reobserves_cited_window_contrastively(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    evidence = EvidenceRecord(
+        evidence_id="ev_candidate",
+        beat_id="",
+        start_sec=1.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://candidate",
+        verbatim="A jersey number is visible but ambiguous.",
+        frame_refs=("frame.jpg",),
+        attestation_model="test-vlm",
+    )
+    decision = ReasonerDecision(
+        action="answer",
+        answer="A. 7",
+        citations=(evidence.evidence_id,),
+        support_status="insufficient",
+        support_reason="The frame does not distinguish 7 from 11.",
+    )
+
+    tasks = multiround._rejected_answer_repair_tasks(
+        workspace,
+        multiround.compile_query_contract(workspace.case.question, workspace.case.options),
+        decision,
+        (evidence,),
+        {"reason": "answer_audit_insufficient"},
+        round_id=2,
+        limit=1,
+    )
+
+    assert len(tasks) == 1
+    assert tasks[0].inspection_mode == "verify_claim"
+    assert tasks[0].claim_to_verify == "7"
+    assert tasks[0].alternative_answers == ("11",)
+    assert tasks[0].time_range == (0.0, 5.0)
 
 
 def _two_chunk_workspace(tmp_path: Path) -> VirtualVideoWorkspace:

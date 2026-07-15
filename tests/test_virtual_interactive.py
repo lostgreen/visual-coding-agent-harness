@@ -45,6 +45,7 @@ _event_evidence_prompt = _interactive._event_evidence_prompt
 _load_existing_case_summary = _interactive._load_existing_case_summary
 _run_case_batch = _interactive._run_case_batch
 _should_audit_answer = _interactive._should_audit_answer
+_requires_independent_claim_verification = _interactive._requires_independent_claim_verification
 _matching_claim_assessment = _interactive._matching_claim_assessment
 _followup_prompt = _interactive._followup_prompt
 _compile_option_claim_contract = _interactive._compile_option_claim_contract
@@ -1399,6 +1400,26 @@ def test_gemini_reasoner_dispatches_independent_claim_verification_for_relation_
     assert decision.tasks[0].claim_relation == "decision_motive"
     assert decision.tasks[0].segment_id == "seg_0002"
     assert decision.tasks[0].time_range == (0.0, 300.0)
+
+
+def test_comparison_and_sequence_contracts_require_independent_claim_verification() -> None:
+    comparison = _requires_independent_claim_verification(
+        {
+            "question": "What color change occurred?",
+            "query_contract": {"aggregation": "compare", "quantifier": "comparison"},
+            "query_requirements": {},
+        }
+    )
+    sequence = _requires_independent_claim_verification(
+        {
+            "question": "Which sequence is correct?",
+            "query_contract": {"aggregation": "order", "quantifier": "order"},
+            "query_requirements": {"requires_temporal_sequence": True},
+        }
+    )
+
+    assert comparison is True
+    assert sequence is True
 
 
 def test_matching_claim_assessment_treats_option_label_as_candidate_identity() -> None:

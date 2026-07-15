@@ -2498,7 +2498,14 @@ def _should_audit_answer(kwargs: Mapping[str, Any]) -> bool:
 def _requires_independent_claim_verification(kwargs: Mapping[str, Any]) -> bool:
     question = str(kwargs.get("question", "") or "").casefold()
     requirements = dict(kwargs.get("query_requirements") or {})
-    if requirements.get("requires_identity_link"):
+    contract = dict(kwargs.get("query_contract") or {})
+    if (
+        requirements.get("requires_identity_link")
+        or requirements.get("requires_temporal_sequence")
+        or requirements.get("requires_state_tracking")
+        or str(contract.get("aggregation", "") or "") in {"compare", "order"}
+        or str(contract.get("quantifier", "") or "") in {"comparison", "order"}
+    ):
         return True
     relation_patterns = (
         r"\bwhy\b",

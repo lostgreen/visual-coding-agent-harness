@@ -210,6 +210,12 @@ def compile_query_contract(
         or re.search(r"\bfrom\s+(?:this|the)\s+(?:video|film|recording)\b", text)
         or re.search(r"\bover the course of\s+(?:this|the)\s+(?:video|film|recording)\b", text)
     )
+    bounded_interval = _has_bounded_time_interval(text)
+    temporal_sequence = _is_temporal_sequence_question(text, options or {})
+    cross_window_identity = _is_cross_window_identity_question(text)
+    state_outcome = _is_state_outcome_question(text)
+    epistemic_options = _has_epistemic_answer_option(options or {})
+    attribute_transition = _is_attribute_transition_question(text)
     language_action = any(term in text for term in ("comment", "say", "speak", "discuss", "mention"))
     identity_anchor_terms = _identity_anchor_terms(question)
     if _is_boundary_score_question(text, options or {}, boundary_hint):
@@ -241,6 +247,36 @@ def compile_query_contract(
             required_observability=("visual", "ocr", "asr"),
             observability_mode="any",
             boundary_hint=_temporal_event_hint(question),
+        )
+    if temporal_sequence:
+        return ClaimContract(
+            required_scope="full_video" if not bounded_interval else "multi_window",
+            quantifier="order",
+            observation_target="event",
+            aggregation="order",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+            boundary_hint=_temporal_event_hint(question),
+        )
+    if epistemic_options:
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="attribute",
+            aggregation="compare",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+            boundary_hint="closed candidate elimination with explicit uncertainty",
+        )
+    if attribute_transition:
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="attribute",
+            aggregation="compare",
+            required_observability=("visual",),
+            observability_mode="all",
+            boundary_hint="before state to after state",
         )
     if _is_spatial_relation_question(text):
         return ClaimContract(
@@ -287,12 +323,36 @@ def compile_query_contract(
         )
     if is_count:
         return ClaimContract(
-            required_scope="full_video" if full_video else "multi_window",
+            required_scope=(
+                "full_video"
+                if full_video or (is_occurrence_count and not bounded_interval)
+                else "multi_window"
+            ),
             quantifier="total_count" if is_occurrence_count else "distinct_count",
             observation_target="event" if is_occurrence_count else "entity",
             aggregation="count" if is_occurrence_count else "deduplicate",
             required_observability=("visual", "asr") if language_action else ("visual",),
             observability_mode="all",
+        )
+    if cross_window_identity:
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="entity",
+            aggregation="compare",
+            required_observability=("visual",),
+            observability_mode="all",
+            boundary_hint="referenced event participant to later outcome",
+        )
+    if _is_narrative_inference_question(text):
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="event",
+            aggregation="compare",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+            boundary_hint="narrative setup to implied outcome",
         )
     if identity_anchor_terms:
         return ClaimContract(
@@ -320,6 +380,16 @@ def compile_query_contract(
             aggregation="compare",
             required_observability=("visual", "asr"),
             observability_mode="any",
+        )
+    if state_outcome:
+        return ClaimContract(
+            required_scope="multi_window",
+            quantifier="comparison",
+            observation_target="event",
+            aggregation="compare",
+            required_observability=("visual", "asr"),
+            observability_mode="any",
+            boundary_hint="initial state to final outcome",
         )
     if _is_agent_relation_question(text):
         return ClaimContract(
@@ -443,6 +513,77 @@ def _is_temporal_label_question(text: str) -> bool:
         or re.search(r"\bwhen\s+(?:does|did|is|was|were|will|would|can|could)\b", normalized)
         or re.search(r"\bwhich\s+(?:episode|day|meal|period|quarter|stage|phase)\b", normalized)
     )
+
+
+def _has_bounded_time_interval(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(r"\b(?:first|last)\s+\d+(?:\.\d+)?\s+(?:seconds?|minutes?|hours?)\b", normalized)
+        or re.search(r"\bbetween\s+\d+(?::\d+)?\s+(?:and|to)\s+\d+(?::\d+)?\b", normalized)
+        or re.search(r"\bfrom\s+\d+(?::\d+)?\s+(?:to|until|through)\s+\d+(?::\d+)?\b", normalized)
+    )
+
+
+def _is_temporal_sequence_question(text: str, options: Mapping[str, str]) -> bool:
+    normalized = str(text or "").casefold()
+    explicit = bool(
+        re.search(r"\b(?:sequence|chronological order|correct order|in what order)\b", normalized)
+    )
+    option_sequences = sum(
+        bool(re.search(r"(?:→|->| then | followed by )", str(option).casefold()))
+        for option in options.values()
+    )
+    return explicit or option_sequences >= 2
+
+
+def _is_cross_window_identity_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(r"\b(?:that|the)\s+same\s+(?:last\s+)?instance\b", normalized)
+        or (
+            re.search(r"\blast\s+instance\b", normalized)
+            and re.search(r"\b(?:first|second|third|last)\s+(?:person|player|rider|competitor)\b", normalized)
+        )
+        or (
+            re.search(r"\b(?:first|second|third|last)\s+(?:person|player|rider|competitor)\b", normalized)
+            and re.search(r"\b(?:ultimately|finally|final|finish(?:ed)?)\b", normalized)
+        )
+    )
+
+
+def _is_state_outcome_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(r"\b(?:initial|original|earlier)\s+(?:idea|plan|intention|state|position)\b", normalized)
+        and re.search(r"\b(?:ultimately|finally|in the end|stick|maintain|remain)\b", normalized)
+    )
+
+
+def _is_narrative_inference_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        re.search(r"\b(?:internal monologue|narrative gap|best represents?|best explains?)\b", normalized)
+    )
+
+
+def _has_epistemic_answer_option(options: Mapping[str, str]) -> bool:
+    return any(
+        re.search(
+            r"\b(?:uncertain|unknown|cannot (?:be )?determin(?:e|ed)|can't (?:be )?determin(?:e|ed)|"
+            r"not (?:shown|stated|specified|known)|none of (?:the )?(?:above|options))\b",
+            str(option or "").casefold(),
+        )
+        for option in options.values()
+    )
+
+
+def _is_attribute_transition_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    attribute = bool(re.search(r"\b(?:color|colour|appearance|shape|texture|state)\b", normalized))
+    transition = bool(
+        re.search(r"\b(?:change|changed|changes|turn|turned|become|became|mixed|mixing|compared to)\b", normalized)
+    )
+    return attribute and transition
 
 
 def _temporal_event_hint(question: str) -> str:
@@ -706,6 +847,9 @@ class VirtualVideoMultiRoundDriver:
         option_states: dict[str, dict[str, Any]] = {}
         last_gate_reason = "answer_missing"
         gate_feedback: dict[str, Any] = {}
+        condition_registry: tuple[GapCondition, ...] = ()
+        active_condition_ids: tuple[str, ...] = ()
+        last_rejected_submission: tuple[str, tuple[str, ...], tuple[str, ...]] | None = None
         rounds_run = 0
 
         for round_id in range(1, self.max_rounds + 1):
@@ -718,10 +862,11 @@ class VirtualVideoMultiRoundDriver:
                 query_requirements=query_requirements,
                 reports=reports,
                 best_choice=best_answer,
+                active_condition_ids=active_condition_ids,
             )
             navigation_candidates = _navigation_candidates(evidence_store.records, workspace.case.options)
             stagnation_status = _stagnation_status(reports)
-            decision = _bind_gap_to_tasks(_decision(
+            decision, condition_registry = _align_decision_conditions(_decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
                     options=dict(workspace.case.options),
@@ -744,7 +889,8 @@ class VirtualVideoMultiRoundDriver:
                     remaining_budget=remaining,
                     pre_final_checkpoint=round_id == self.max_rounds,
                 )
-            ))
+            ), condition_registry)
+            decision = _bind_gap_to_tasks(decision)
             if decision.action == "investigate":
                 executable_tasks = tuple(task for task in decision.tasks if _task_is_executable(task))
                 if executable_tasks != decision.tasks:
@@ -881,6 +1027,33 @@ class VirtualVideoMultiRoundDriver:
                         }
                     )
                     decision = ReasonerDecision(action="investigate", tasks=bootstrap_tasks)
+            submission_fingerprint = _submission_fingerprint(decision, evidence_store.records)
+            if (
+                decision.action == "answer"
+                and remaining > 0
+                and last_rejected_submission is not None
+                and submission_fingerprint == last_rejected_submission
+            ):
+                repair_tasks = _rejected_answer_repair_tasks(
+                    workspace,
+                    query_contract,
+                    decision,
+                    evidence_store.records,
+                    gate_feedback,
+                    round_id=round_id,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+                if repair_tasks:
+                    trace.append(
+                        {
+                            "type": "repair_override",
+                            "round": round_id,
+                            "reason": "repeated_rejected_submission",
+                            "previous_gate_reason": str(gate_feedback.get("reason", "") or ""),
+                            "task_count": len(repair_tasks),
+                        }
+                    )
+                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
             trace.append(
                 {
                     "type": "reasoner_decision",
@@ -916,7 +1089,11 @@ class VirtualVideoMultiRoundDriver:
                     query_requirements=query_requirements,
                     completion_status=completion_status,
                 )
-                gate = _apply_answer_audit(gate, decision)
+                gate = _apply_answer_audit(
+                    gate,
+                    decision,
+                    required=_requires_discriminative_audit(query_contract, query_requirements),
+                )
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
                 option_states = _record_option_state(
@@ -926,6 +1103,8 @@ class VirtualVideoMultiRoundDriver:
                     workspace.case.options,
                 )
                 gate_feedback = {**dict(gate), "option_states": option_states}
+                if not gate["passed"]:
+                    last_rejected_submission = _submission_fingerprint(decision, evidence_store.records)
                 support_rank = _candidate_gate_rank(decision, gate)
                 if _candidate_can_be_forced(decision, evidence_store.records) and support_rank > best_support_rank:
                     best_answer = decision.answer
@@ -999,6 +1178,16 @@ class VirtualVideoMultiRoundDriver:
                         ),
                     }
                 )
+            task_condition_ids = tuple(
+                dict.fromkeys(
+                    condition.condition_id
+                    for task in tasks
+                    for condition in task.conditions
+                    if condition.condition_id
+                )
+            )
+            if task_condition_ids:
+                active_condition_ids = task_condition_ids
             accepted += len(tasks)
             batch = _annotate_batch_progress(investigator.run_batch(tasks), reports)
             reports.extend(batch)
@@ -1052,8 +1241,9 @@ class VirtualVideoMultiRoundDriver:
                 query_requirements=query_requirements,
                 reports=reports,
                 best_choice=best_answer,
+                active_condition_ids=active_condition_ids,
             )
-            final_decision = _bind_gap_to_tasks(_decision(
+            final_decision, condition_registry = _align_decision_conditions(_decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
                     options=dict(workspace.case.options),
@@ -1076,7 +1266,8 @@ class VirtualVideoMultiRoundDriver:
                     remaining_budget=0,
                     force_finalize=True,
                 )
-            ))
+            ), condition_registry)
+            final_decision = _bind_gap_to_tasks(final_decision)
             filtered_citations = _answer_citations(final_decision.citations, evidence_store.records)
             if filtered_citations != final_decision.citations:
                 trace.append(
@@ -1109,7 +1300,11 @@ class VirtualVideoMultiRoundDriver:
                     query_requirements=query_requirements,
                     completion_status=completion_status,
                 )
-                gate = _apply_answer_audit(gate, final_decision)
+                gate = _apply_answer_audit(
+                    gate,
+                    final_decision,
+                    required=_requires_discriminative_audit(query_contract, query_requirements),
+                )
                 trace.append(
                     {
                         "type": "completion_gate",
@@ -1304,6 +1499,98 @@ def _semantic_contract_repair_tasks(
         )
         for request in requests
     )
+
+
+def _submission_fingerprint(
+    decision: ReasonerDecision,
+    evidence: Sequence[EvidenceRecord],
+) -> tuple[str, tuple[str, ...], tuple[str, ...]] | None:
+    if decision.action != "answer":
+        return None
+    option = _letter(decision.answer) or str(decision.answer or "").strip().casefold()
+    return (
+        option,
+        tuple(sorted(set(decision.citations))),
+        tuple(record.evidence_id for record in evidence),
+    )
+
+
+def _rejected_answer_repair_tasks(
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    decision: ReasonerDecision,
+    evidence: Sequence[EvidenceRecord],
+    gate_feedback: Mapping[str, Any],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    task_limit = max(0, int(limit))
+    if task_limit <= 0:
+        return ()
+    missing_segments = tuple(gate_feedback.get("missing_segment_ids", ()) or ())
+    if missing_segments:
+        return _coverage_repair_tasks(round_id, missing_segments, contract, limit=task_limit)
+    if contract.quantifier == "total_count" and contract.observation_target == "event":
+        return tuple(
+            InvestigationTask(
+                query_id=f"rejected_event_r{round_id}_{index:03d}",
+                goal="Enumerate every question-relevant event occurrence in this segment before resubmitting a total.",
+                segment_id=segment.segment_id,
+                modality_hint=tuple(contract.required_observability or ("visual",)),
+                expected_evidence="timestamped atomic occurrences with stable event keys and continuation flags",
+                inspection_mode="enumerate_events",
+                priority=1.0,
+            )
+            for index, segment in enumerate(tuple(workspace.manifest.segments)[:task_limit], start=1)
+        )
+    by_id = {record.evidence_id: record for record in evidence}
+    cited = tuple(by_id[item] for item in decision.citations if item in by_id)
+    selected = _letter(decision.answer) or _option_letter_from_answer(decision.answer, workspace.case.options)
+    selected_text = str(workspace.case.options.get(selected, decision.answer) or decision.answer)
+    alternatives = tuple(
+        str(text)
+        for label, text in workspace.case.options.items()
+        if str(label) != selected
+    )
+    tasks = []
+    for record in cited:
+        if record.start_sec is None or record.end_sec is None:
+            continue
+        midpoint = (float(record.start_sec) + float(record.end_sec)) / 2.0
+        segment = next(
+            (
+                item
+                for item in workspace.manifest.segments
+                if item.virtual_start_sec <= midpoint <= item.virtual_end_sec
+            ),
+            None,
+        )
+        if segment is None:
+            continue
+        tasks.append(
+            InvestigationTask(
+                query_id=f"discriminate_r{round_id}_{len(tasks) + 1:03d}",
+                goal="Re-observe this window and identify the visual fact that distinguishes the proposed answer from its closest alternatives.",
+                segment_id=segment.segment_id,
+                time_range=(
+                    max(segment.virtual_start_sec, float(record.start_sec) - 5.0),
+                    min(segment.virtual_end_sec, float(record.end_sec) + 5.0),
+                ),
+                modality_hint=("visual", "motion"),
+                expected_evidence="per-hypothesis verdicts tied to witnessed frames; report indistinguishable when the frames do not decide",
+                inspection_mode="verify_claim",
+                claim_to_verify=selected_text,
+                claim_relation="supports",
+                alternative_answers=alternatives,
+                priority=1.0,
+            )
+        )
+        if len(tasks) >= task_limit:
+            break
+    if tasks:
+        return tuple(tasks)
+    return _bootstrap_investigation_tasks(workspace, contract, round_id=round_id, limit=task_limit)
 
 
 def _identity_repair_tasks(
@@ -1684,6 +1971,7 @@ def _completion_status(
     query_requirements: Mapping[str, Any] | None = None,
     reports: Sequence[InvestigationReport] = (),
     best_choice: str = "",
+    active_condition_ids: Sequence[str] = (),
 ) -> dict[str, Any]:
     answer_evidence = tuple(record for record in evidence if record.evidence_kind != "navigation_hint")
     navigation_evidence = tuple(record for record in evidence if record.evidence_kind == "navigation_hint")
@@ -1706,7 +1994,14 @@ def _completion_status(
         )
         base = _apply_entity_completion(base, contract, answer_evidence)
         base = _apply_event_completion(base, contract, answer_evidence)
-        return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
+        return _apply_readiness_dashboard(
+            base,
+            answer_evidence,
+            navigation_evidence,
+            reports,
+            best_choice,
+            active_condition_ids,
+        )
     if not coverage:
         base = _apply_identity_completion(
             {
@@ -1721,7 +2016,14 @@ def _completion_status(
         )
         base = _apply_entity_completion(base, contract, answer_evidence)
         base = _apply_event_completion(base, contract, answer_evidence)
-        return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
+        return _apply_readiness_dashboard(
+            base,
+            answer_evidence,
+            navigation_evidence,
+            reports,
+            best_choice,
+            active_condition_ids,
+        )
     adopted_source = max(
         coverage,
         key=lambda source_id: (
@@ -1743,7 +2045,14 @@ def _completion_status(
     )
     base = _apply_entity_completion(base, contract, answer_evidence)
     base = _apply_event_completion(base, contract, answer_evidence)
-    return _apply_readiness_dashboard(base, answer_evidence, navigation_evidence, reports, best_choice)
+    return _apply_readiness_dashboard(
+        base,
+        answer_evidence,
+        navigation_evidence,
+        reports,
+        best_choice,
+        active_condition_ids,
+    )
 
 
 def _apply_readiness_dashboard(
@@ -1752,16 +2061,34 @@ def _apply_readiness_dashboard(
     navigation_evidence: Sequence[EvidenceRecord],
     reports: Sequence[InvestigationReport],
     best_choice: str,
+    active_condition_ids: Sequence[str] = (),
 ) -> dict[str, Any]:
     result = dict(status)
-    active_gap_id = next((report.gap_id for report in reversed(reports) if report.gap_id), "")
     updates = tuple(
         (report.query_id, condition_result)
-        for report in reports if not active_gap_id or report.gap_id == active_gap_id
+        for report in reports
         for condition_result in report.condition_results
     )
     states = _apply_condition_scope(merge_condition_states(updates), result)
-    unresolved = sorted(condition_id for condition_id, state in states.items() if state.status != "satisfied")
+    active_ids = {str(item) for item in active_condition_ids if str(item)}
+    missing_active_ids: set[str] = set()
+    if active_ids:
+        missing_active_ids = active_ids.difference(states)
+        states = {condition_id: state for condition_id, state in states.items() if condition_id in active_ids}
+    else:
+        active_gap_id = next((report.gap_id for report in reversed(reports) if report.gap_id), "")
+        if active_gap_id:
+            gap_ids = {
+                result.condition_id
+                for report in reports
+                if report.gap_id == active_gap_id
+                for result in report.condition_results
+            }
+            states = {condition_id: state for condition_id, state in states.items() if condition_id in gap_ids}
+    unresolved = sorted(
+        missing_active_ids
+        | {condition_id for condition_id, state in states.items() if state.status != "satisfied"}
+    )
     grounded = bool(result.get("ready_for_answer")) and not unresolved
     result.update({
         "candidate_available": any(record.observation_polarity == "positive" for record in navigation_evidence),
@@ -3052,11 +3379,133 @@ def _bind_gap_to_tasks(decision: ReasonerDecision) -> ReasonerDecision:
             task,
             gap_id=task.gap_id or gap.gap_id,
             success_conditions=task.success_conditions or gap.success_conditions,
-            conditions=task.conditions or gap.conditions,
+            conditions=gap.conditions or task.conditions,
         )
         for task in decision.tasks
     )
     return replace(decision, tasks=tasks)
+
+
+def _align_decision_conditions(
+    decision: ReasonerDecision,
+    registry: Sequence[GapCondition],
+) -> tuple[ReasonerDecision, tuple[GapCondition, ...]]:
+    gap = decision.primary_gap
+    if gap is None or not gap.conditions:
+        return decision, tuple(registry)
+    known = list(registry)
+    aligned = []
+    for condition in gap.conditions:
+        match = _matching_condition(condition, known)
+        if match is None:
+            aligned_condition = condition
+            known.append(condition)
+        else:
+            aligned_condition = replace(condition, condition_id=match.condition_id)
+        aligned.append(aligned_condition)
+    updated_gap = replace(gap, conditions=tuple(aligned))
+    return replace(decision, primary_gap=updated_gap), tuple(known)
+
+
+def _matching_condition(
+    candidate: GapCondition,
+    registry: Sequence[GapCondition],
+) -> GapCondition | None:
+    candidate_family, candidate_tokens = _condition_semantics(candidate)
+    best: tuple[float, GapCondition] | None = None
+    for known in registry:
+        known_family, known_tokens = _condition_semantics(known)
+        if candidate_family != known_family:
+            continue
+        structured = (
+            candidate.condition_type,
+            candidate.target_role,
+            candidate.quantity_type,
+            candidate.unit,
+            candidate.relation_type,
+            candidate.subject_role,
+            candidate.object_role,
+            candidate.required_relation,
+            candidate.aggregation,
+        )
+        known_structured = (
+            known.condition_type,
+            known.target_role,
+            known.quantity_type,
+            known.unit,
+            known.relation_type,
+            known.subject_role,
+            known.object_role,
+            known.required_relation,
+            known.aggregation,
+        )
+        if structured != known_structured:
+            continue
+        union = candidate_tokens | known_tokens
+        similarity = len(candidate_tokens & known_tokens) / max(1, len(union))
+        if similarity >= 0.5 and (best is None or similarity > best[0]):
+            best = (similarity, known)
+    return best[1] if best is not None else None
+
+
+def _condition_semantics(condition: GapCondition) -> tuple[str, set[str]]:
+    text = str(condition.description or "").casefold()
+    normalized = re.sub(r"\bside[ -]by[ -]side\b", " side_by_side ", text)
+    tokens = set(re.findall(r"[a-z][a-z0-9_]*", normalized))
+    aliases = {
+        "countable": "count",
+        "counted": "count",
+        "counting": "count",
+        "outside": "exterior",
+        "external": "exterior",
+        "witnessed": "witness",
+        "witnesses": "witness",
+        "identified": "identify",
+        "confirmed": "confirm",
+        "visible": "visual",
+        "visibly": "visual",
+        "cylinders": "cylinder",
+        "objects": "object",
+        "events": "event",
+    }
+    tokens = {aliases.get(token, token) for token in tokens}
+    family = (
+        "count"
+        if tokens.intersection({"count", "number", "deduplicate"})
+        else "relation"
+        if "side_by_side" in tokens or tokens.intersection({"layout", "arrangement", "relation"})
+        else "context"
+        if tokens.intersection({"exterior", "factory", "setting", "context"})
+        else "order"
+        if tokens.intersection({"order", "sequence", "chronological", "before", "after"})
+        else "identity"
+        if tokens.intersection({"identity", "same", "person", "rider", "player"})
+        else "witness"
+        if tokens.intersection({"witness", "frame"})
+        else condition.condition_type
+    )
+    ignored = {
+        "a",
+        "all",
+        "are",
+        "be",
+        "confirm",
+        "each",
+        "find",
+        "frame",
+        "identify",
+        "is",
+        "layout",
+        "arrangement",
+        "object",
+        "provide",
+        "shot",
+        "the",
+        "visual",
+        "witness",
+    }
+    content = {token for token in tokens if token not in ignored}
+    return family, content or {family}
 
 
 def _entity_cluster(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -3086,12 +3535,43 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
     )
 
 
-def _apply_answer_audit(gate: Mapping[str, Any], decision: ReasonerDecision) -> dict[str, Any]:
+def _requires_discriminative_audit(
+    contract: ClaimContract,
+    query_requirements: Mapping[str, Any] | None,
+) -> bool:
+    requirements = dict(query_requirements or {})
+    return bool(
+        contract.aggregation in {"order", "compare"}
+        or contract.quantifier in {"order", "comparison"}
+        or requirements.get("requires_temporal_sequence")
+        or requirements.get("requires_state_tracking")
+        or requirements.get("requires_identity_link")
+    )
+
+
+def _apply_answer_audit(
+    gate: Mapping[str, Any],
+    decision: ReasonerDecision,
+    *,
+    required: bool = False,
+) -> dict[str, Any]:
     result = dict(gate)
     status = str(decision.support_status or "").strip().casefold()
     if status:
         result["answer_audit_status"] = status
         result["audit_reason"] = decision.support_reason
+    if required and bool(gate.get("passed")) and (status != "supported" or not decision.support_reason):
+        result.update(
+            {
+                "base_gate_passed": True,
+                "base_gate_reason": str(gate.get("reason", "") or ""),
+                "passed": False,
+                "reason": "answer_audit_missing",
+                "answer_audit_status": status or "missing",
+                "audit_reason": decision.support_reason,
+            }
+        )
+        return result
     if status not in {"insufficient", "contradicted"}:
         return result
     result.update(
@@ -3364,26 +3844,48 @@ def _uncovered_duration(
 
 def _stagnation_status(reports: Sequence[InvestigationReport]) -> dict[str, Any]:
     ordered = tuple(reports)
-    last_gap = ordered[-1].gap_id if ordered else ""
-    trailing = []
-    for report in reversed(ordered):
-        if report.gap_id != last_gap:
-            break
-        trailing.append(report)
-        if len(trailing) >= 3:
-            break
-    recent = tuple(trailing)
+    recent = ordered[-3:]
     if len(recent) < 2:
         return {"stagnant": False, "gap_id": "", "reason": ""}
-    gap_ids = {report.gap_id for report in recent if report.gap_id}
-    if len(gap_ids) != 1:
-        return {"stagnant": False, "gap_id": "", "reason": ""}
+    recent_condition_ids = {
+        result.condition_id
+        for report in recent
+        for result in report.condition_results
+        if result.condition_id
+    }
+    if not recent_condition_ids:
+        gap_ids = {report.gap_id for report in recent if report.gap_id}
+        unresolved = all(report.resolution in {"partial", "unresolved"} for report in recent)
+        no_goal_progress = not any(report.goal_progress for report in recent)
+        no_coverage_progress = not any(report.coverage_progress for report in recent)
+        stagnant = len(gap_ids) == 1 and unresolved and no_goal_progress and no_coverage_progress
+        gap_id = next(iter(gap_ids)) if stagnant else ""
+        return {
+            "stagnant": stagnant,
+            "gap_id": gap_id,
+            "low_yield_coverage": False,
+            "reason": "no_goal_or_frontier_progress" if stagnant else "",
+            "required_shift": "change range, direction, modality, or region focus" if stagnant else "",
+        }
+    prefix = ordered[: -len(recent)]
+    previously_satisfied = {
+        result.condition_id
+        for report in prefix
+        for result in report.condition_results
+        if result.status == "satisfied"
+    }
+    new_satisfied = set()
+    for report in recent:
+        for result in report.condition_results:
+            if result.status == "satisfied" and result.condition_id not in previously_satisfied:
+                new_satisfied.add(result.condition_id)
+        previously_satisfied.update(new_satisfied)
     unresolved = all(report.resolution in {"partial", "unresolved"} for report in recent)
-    no_goal_progress = not any(report.goal_progress for report in recent)
+    no_goal_progress = not new_satisfied
     no_coverage_progress = not any(report.coverage_progress for report in recent)
     stagnant = unresolved and no_goal_progress and no_coverage_progress
     low_yield_coverage = len(recent) >= 3 and unresolved and no_goal_progress and not no_coverage_progress
-    gap_id = next(iter(gap_ids)) if stagnant or low_yield_coverage else ""
+    gap_id = next((report.gap_id for report in reversed(recent) if report.gap_id), "") if stagnant or low_yield_coverage else ""
     return {
         "stagnant": stagnant,
         "gap_id": gap_id,
