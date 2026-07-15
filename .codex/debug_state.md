@@ -11,6 +11,7 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 - Contract compilation previously classified 445-2 as multi-window rather than full-video and 744-1 as a window-level existential claim.
 - Model-driven Investigator reports already emit structured per-condition results; the unconditional partial behavior is limited to deterministic or cached reuse paths.
 - Existing repair infrastructure already covers source coverage, event candidates, identity anchors, entity candidates, scores, and spatial relations; the missing link was contract activation and rejected-answer control flow.
+- Post-change KML errors10: accuracy stayed 2/10, false-grounded fell 4 -> 0, grounded coverage fell 5/10 -> 0, and average investigations rose 11.1 -> 16.9.
 
 ## Latest Change
 
@@ -22,8 +23,10 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 
 ## Current Run
 
-- No post-change remote VLM run has been executed yet.
-- Diagnostic group: `videomme_v2_errors10_dynamic_v1`.
+- Completed KML diagnostic group: `videomme_v2_errors10_dynamic_v1`.
+- Output: `/m2v_intern/xuboshen/zgw/VideoAgent/videomme_v2_errors10_contract_v2_86118df`.
+- Improvements: 441-3 and 468-3 became correct; all four baseline false-grounded cases became forced choice.
+- Regressions: 445-3 and 521-2 became incorrect; no case remained grounded.
 - Disjoint guard group: `videomme_long_regression50_v1`.
 
 ## Stale Evidence
@@ -32,7 +35,8 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 
 ## Next Actions
 
-1. Review and commit the local framework changes.
-2. Rerun errors10 in a fresh output root and compare false-grounded, correct-but-forced, repeated submissions, and cost.
-3. Run the disjoint regression50 group and report accuracy plus grounded coverage/precision.
-4. Add tracklet-based identity linking only if 445-4 remains blocked after the stricter contract and independent verification path.
+1. Recover grounded recall without weakening the fail-closed audit.
+2. Separate localized distinct-object counts from full-video event enumeration and recheck 521-2.
+3. Preserve strong earlier candidates across repair rounds and recheck 445-3.
+4. Improve event discovery for 445-2, then rerun errors10.
+5. Run regression50 only after the diagnostic regressions are resolved.
