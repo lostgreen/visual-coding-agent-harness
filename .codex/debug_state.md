@@ -31,10 +31,12 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 
 ## Current Run
 
-- Completed KML diagnostic group: `videomme_v2_errors10_dynamic_v1`.
-- Output: `/m2v_intern/xuboshen/zgw/VideoAgent/videomme_v2_errors10_contract_v2_86118df`.
-- Improvements: 441-3 and 468-3 became correct; all four baseline false-grounded cases became forced choice.
-- Regressions: 445-3 and 521-2 became incorrect; no case remained grounded.
+- Completed KML diagnostic group at `aef2161`: `videomme_v2_errors10_dynamic_v1`.
+- Valid output: `/m2v_intern/xuboshen/zgw/VideoAgent/videomme_v2_errors10_three_layer_aef2161_seed20260707`.
+- Accuracy remained 2/10; 441-3 and 521-2 are correct. 521-2 recovered from wrong forced E to correct partial-grounded F; false-grounded stayed zero.
+- 468-3 regressed from correct G to wrong D. 445-3 remains wrong and unstable.
+- Average investigations improved 16.9 -> 15.1, but 48 negative triggers caused 103 upshifts with only 2 negative-to-positive conversions.
+- Two similarly named `errors10_three_layer_aef2161_seed20260707_batch1/2` directories are invalid legacy Video-MME runs caused by case-ID collisions and must not be used.
 - Disjoint guard group: `videomme_long_regression50_v1`.
 
 ## Stale Evidence
@@ -44,8 +46,8 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 
 ## Next Actions
 
-1. Run the full local suite, commit/push the three-layer sampling iteration, and create a clean KML worktree because the existing remote checkout is dirty.
-2. Run focused KML tests, then rerun errors10 in small batches with fresh output paths and multiple seeds.
-3. Compare accuracy, grounded strict/partial counts, false-grounded count, sampling fps/phase use, and per-case investigation count against contract_v2.
-4. Inspect only compact fingerprints for 468-3, 521-2, and 445-3 before deciding another code change.
-5. Run regression50 only after the diagnostic regressions are resolved.
+1. Run focused additional seeds for 468-3, 521-2, and 445-3 using the VideoMME-v2 runner.
+2. Aggregate option flip rate, negative-to-positive conversion, and Reasoner floor declaration coverage.
+3. Improve terminal qualified-absence planning and phase selection before increasing adaptive retry budget.
+4. Investigate identity/order evidence reconciliation for 445-3 separately from sampling control.
+5. Run regression50 only after the focused stability regressions are resolved.
