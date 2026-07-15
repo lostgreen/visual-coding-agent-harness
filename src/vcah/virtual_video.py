@@ -369,6 +369,7 @@ def materialize_window_frames(
     fps: float = 0.5,
     max_frames: int = 64,
     sampler: FrameSampler | None = None,
+    phase_offset_sec: float = 0.0,
 ) -> tuple[VirtualFrameRef, ...]:
     requested_fps = float(fps)
     if requested_fps not in {0.5, 1.0, 2.0}:
@@ -380,10 +381,11 @@ def materialize_window_frames(
         if float(start_sec) <= frame.virtual_time_sec <= float(end_sec) and frame.fps_level == "low"
     )
     cache_fps = cached[0].sampling_fps if cached else 0.0
-    if cached and abs(cache_fps - requested_fps) < 1e-6:
+    phase_offset = max(0.0, float(phase_offset_sec or 0.0))
+    if not phase_offset and cached and abs(cache_fps - requested_fps) < 1e-6:
         return _select_frame_refs(cached, cap)
 
-    observed = _reusable_window_frames(
+    observed = () if phase_offset else _reusable_window_frames(
         workspace,
         float(start_sec),
         float(end_sec),
@@ -396,7 +398,16 @@ def materialize_window_frames(
     observations = workspace.root_dir / "observations"
     rows: list[VirtualFrameRef] = []
     failures: list[dict[str, Any]] = []
-    for frame_index, virtual_time in enumerate(_uniform_times(float(start_sec), float(end_sec), requested_fps, cap), start=1):
+    for frame_index, virtual_time in enumerate(
+        _uniform_times(
+            float(start_sec),
+            float(end_sec),
+            requested_fps,
+            cap,
+            phase_offset_sec=phase_offset,
+        ),
+        start=1,
+    ):
         window = _source_window_for_time(workspace.manifest, virtual_time)
         if window is None:
             continue
@@ -484,8 +495,25 @@ def _sample_window_frame_with_tail_backoff(
     raise RuntimeError("Frame sampler returned no decodable frame")
 
 
-def _uniform_times(start_sec: float, end_sec: float, fps: float, max_frames: int) -> tuple[float, ...]:
+def _uniform_times(
+    start_sec: float,
+    end_sec: float,
+    fps: float,
+    max_frames: int,
+    *,
+    phase_offset_sec: float = 0.0,
+) -> tuple[float, ...]:
     duration = max(0.0, end_sec - start_sec)
+    phase = max(0.0, float(phase_offset_sec or 0.0))
+    if phase:
+        step = 1.0 / max(float(fps), 1e-6)
+        shifted = tuple(
+            round(start_sec + phase + index * step, 3)
+            for index in range(max(1, int(duration * fps) + 1))
+            if start_sec + phase + index * step <= end_sec + 1e-9
+        )
+        if shifted:
+            return select_uniform_items(shifted, max_frames)
     count = min(max(1, int(duration * fps)), max(1, int(max_frames)))
     if count == 1:
         return (round((start_sec + end_sec) / 2.0, 3),)

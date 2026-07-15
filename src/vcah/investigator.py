@@ -252,6 +252,7 @@ class VirtualVideoInvestigator:
         fps: float = 0.5,
         max_frames: int = 64,
         query_id: str = "manual",
+        phase_offset_sec: float = 0.0,
     ) -> Mapping[str, Any]:
         capped = min(512, max(1, int(max_frames)))
         frames = materialize_window_frames(
@@ -262,6 +263,7 @@ class VirtualVideoInvestigator:
             fps=float(fps),
             max_frames=capped,
             sampler=self.sampler,
+            phase_offset_sec=float(phase_offset_sec),
         )
         return {
             "virtual_time_range": [float(start_sec), float(end_sec)],
@@ -270,6 +272,7 @@ class VirtualVideoInvestigator:
                 "max_frames": capped,
                 "actual_frames": len(frames),
                 "sampling": "uniform",
+                "phase_offset_sec": float(phase_offset_sec),
             },
             "frames": [_frame_payload(frame) for frame in frames],
             "asr_cues": _asr_cues_in_window(self.workspace, float(start_sec), float(end_sec)),

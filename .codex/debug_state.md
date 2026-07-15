@@ -12,6 +12,7 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 - Model-driven Investigator reports already emit structured per-condition results; the unconditional partial behavior is limited to deterministic or cached reuse paths.
 - Existing repair infrastructure already covers source coverage, event candidates, identity anchors, entity candidates, scores, and spatial relations; the missing link was contract activation and rejected-answer control flow.
 - Post-change KML errors10: accuracy stayed 2/10, false-grounded fell 4 -> 0, grounded coverage fell 5/10 -> 0, and average investigations rose 11.1 -> 16.9.
+- Root-cause review of that run found grounded readiness was all-or-nothing, fine-grained contracts stayed on a fixed 0.5fps grid, repeated-window contradictions were not arbitrated, and forced choice had no evidence-strength calibration.
 
 ## Latest Change
 
@@ -20,6 +21,10 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 - Discriminative questions fail closed on missing answer audits and require independent `verify_claim` evidence.
 - Repeated rejected submissions are converted into coverage, event-enumeration, or contrastive repair tasks.
 - Verification: local full suite `285 passed`.
+- Follow-up iteration adds strict/partial grounding grades; partial requires >=60% satisfied critical conditions, >=75% scope coverage, visual retrieval, no contradiction, and the existing discriminative answer audit.
+- Identity/order tasks now force 2fps; count/comparison tasks force at least 1fps. Repeated fine-grained windows rerun at 2fps on a shifted sampling phase and receive prior-observation arbitration context.
+- Forced count choices now rank independent claim checks, countable entity witnesses, or canonical event candidates. Wrong-window positives do not count as target support; zero target-positive evidence deterministically penalizes stronger numerical assertions.
+- Current local verification: `PYTHONPATH=src:. pytest -q` -> `291 passed`.
 
 ## Current Run
 
@@ -32,11 +37,12 @@ Improve the general multi-round Agent architecture using the errors10 failure tr
 ## Stale Evidence
 
 - Pre-change errors10 results remain valid as the baseline only; they do not measure the upgraded code.
+- `/m2v_intern/xuboshen/zgw/VideoAgent/videomme_v2_errors10_contract_v2_86118df` is also stale for the new graded-grounding/sampling/calibration iteration.
 
 ## Next Actions
 
-1. Recover grounded recall without weakening the fail-closed audit.
-2. Separate localized distinct-object counts from full-video event enumeration and recheck 521-2.
-3. Preserve strong earlier candidates across repair rounds and recheck 445-3.
-4. Improve event discovery for 445-2, then rerun errors10.
+1. Commit/push the follow-up iteration and sync KML.
+2. Run focused KML tests, then rerun errors10 in small batches with fresh output paths.
+3. Compare accuracy, grounded strict/partial counts, false-grounded count, sampling fps/phase use, and per-case investigation count against contract_v2.
+4. Inspect only compact fingerprints for 468-3, 521-2, and 445-3 before deciding another code change.
 5. Run regression50 only after the diagnostic regressions are resolved.

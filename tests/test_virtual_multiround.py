@@ -316,6 +316,61 @@ def test_readiness_fails_closed_when_active_condition_has_no_result() -> None:
     assert status["unresolved_critical_condition_ids"] == ["stable_condition_1"]
 
 
+def test_readiness_allows_partial_grounding_with_supported_majority_and_no_conflict() -> None:
+    evidence = EvidenceRecord(
+        evidence_id="ev_direct",
+        beat_id="",
+        start_sec=1.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://direct",
+        verbatim="Direct visual support for the discriminative claim.",
+        frame_refs=("direct.jpg",),
+        observation_polarity="positive",
+    )
+    report = InvestigationReport(
+        query_id="q_direct",
+        status="satisfied",
+        evidence=(evidence,),
+        gap_id="gap_direct",
+        resolution="partial",
+        condition_results=(
+            ConditionResult("c1", "satisfied", "First key atom is visible.", ("ev_direct",)),
+            ConditionResult("c2", "satisfied", "Second key atom is visible.", ("ev_direct",)),
+            ConditionResult("c3", "unknown", "Background atom remains uncertain."),
+        ),
+    )
+
+    status = multiround._apply_readiness_dashboard(
+        {"ready_for_answer": True},
+        (evidence,),
+        (evidence,),
+        (report,),
+        "B. supported option",
+        ("c1", "c2", "c3"),
+    )
+
+    assert status["grounded_ready"] is False
+    assert status["partial_grounded_ready"] is True
+    assert status["grounding_level_ready"] == "partial"
+    assert status["ready_for_answer"] is True
+
+
+def test_contract_task_for_order_forces_dense_sampling() -> None:
+    contract = multiround.compile_query_contract(
+        "Who overtook the rider second?",
+        {"A": "The rider in blue", "B": "The rider in black"},
+    )
+
+    task = multiround._task_for_contract(
+        InvestigationTask("q_order", "Inspect the overtaking order.", segment_id="seg_1"),
+        contract,
+    )
+
+    assert contract.aggregation == "order"
+    assert task.sampling_floor_fps == 2.0
+
+
 def test_discriminative_audit_fails_closed_when_reason_is_missing() -> None:
     gate = {"passed": True, "reason": "verified_window_evidence"}
 
@@ -1682,7 +1737,8 @@ def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(
     assert result.forced_answer == "B. Three"
     assert result.selected_option == "B"
     assert result.answer_mode == "grounded"
-    assert result.grounding_status == "verified"
+    assert result.grounding_status == "verified_strict"
+    assert result.grounding_level == "strict"
     assert result.retrieval_status == "sufficient"
     assert result.verification_reason == "full_source_coverage_verified"
     assert reasoner.calls == 3

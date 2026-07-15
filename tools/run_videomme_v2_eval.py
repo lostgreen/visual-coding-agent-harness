@@ -335,6 +335,7 @@ def _run_agent_case(
         "verified": result.verified,
         "answer_mode": result.answer_mode,
         "grounding_status": result.grounding_status,
+        "grounding_level": result.grounding_level,
         "retrieval_status": result.retrieval_status,
         "verification_reason": result.verification_reason,
         "rounds": result.rounds,

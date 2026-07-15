@@ -105,6 +105,7 @@ def _load_existing_case_summary(workspace_root: Path) -> dict[str, Any] | None:
         "selected_option": str(payload.get("selected_option", "") or ""),
         "answer_mode": str(payload.get("answer_mode", "") or ""),
         "grounding_status": str(payload.get("grounding_status", "") or ""),
+        "grounding_level": str(payload.get("grounding_level", "none") or "none"),
         "retrieval_status": str(payload.get("retrieval_status", "") or ""),
         "citations": list(payload.get("citations", ()) or ()),
         "correct": bool(payload.get("correct")),
@@ -180,6 +181,7 @@ def main() -> None:
             "selected_option": result.selected_option,
             "answer_mode": result.answer_mode,
             "grounding_status": result.grounding_status,
+            "grounding_level": result.grounding_level,
             "retrieval_status": result.retrieval_status,
             "citations": list(result.citations),
             "correct": result.correct,
@@ -693,6 +695,7 @@ class GeminiReasoner:
             support_status="insufficient",
             support_reason="Best-effort answer produced after the investigation budget was exhausted.",
         )
+        decision = _calibrate_forced_decision(kwargs, evidence_digest, decision)
         if decision.answer and _valid_option_answer(decision.answer, kwargs.get("options") or {}):
             self._last_candidate = decision
         elif self._last_candidate is not None:
@@ -836,11 +839,13 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         self.trace_path = trace_path
         self._query_calls: dict[str, int] = {}
         self._event_segment_cache: dict[str, InvestigationReport] = {}
+        self._window_observation_history: dict[tuple[str, float, float, str], list[str]] = {}
 
     def reset_run_state(self) -> None:
         super().reset_run_state()
         self._query_calls.clear()
         self._event_segment_cache.clear()
+        self._window_observation_history.clear()
 
     def _parse_structured_observation(
         self,
@@ -896,8 +901,24 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         else:
             window = float(requested_window[0]), float(requested_window[1])
 
-        required_fps = 0.5
-        cached = self._find_reusable_evidence(task, window[0], window[1], required_fps=required_fps)
+        window_key = (
+            str(getattr(task, "segment_id", "") or ""),
+            round(float(window[0]), 1),
+            round(float(window[1]), 1),
+            str(getattr(task, "inspection_mode", "window") or "window"),
+        )
+        prior_window_observations = tuple(self._window_observation_history.get(window_key, ()))
+        attempt = len(prior_window_observations)
+        requested_floor = float(getattr(task, "sampling_floor_fps", 0.5) or 0.5)
+        required_fps = max(requested_floor, 2.0 if attempt > 0 and requested_floor >= 1.0 else requested_floor)
+        arbitration_retry = attempt > 0 and requested_floor >= 1.0
+        phase_offset_sec = 0.5 / required_fps if arbitration_retry else 0.0
+        cached = None if arbitration_retry else self._find_reusable_evidence(
+            task,
+            window[0],
+            window[1],
+            required_fps=required_fps,
+        )
         if cached is not None:
             return self._reuse_report(
                 task,
@@ -907,17 +928,48 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             )
 
         preview_query_id = f"{observation_id}_preview"
-        low = self.inspect_window(window[0], window[1], fps=0.5, max_frames=64, query_id=preview_query_id)
-        preview_frames = select_uniform_items(tuple(low["frames"]), 16)
+        preview_max_frames = min(
+            512,
+            max(64, int(max(0.0, float(window[1]) - float(window[0])) * required_fps + 0.999)),
+        )
+        low = self.inspect_window(
+            window[0],
+            window[1],
+            fps=required_fps,
+            max_frames=preview_max_frames,
+            query_id=preview_query_id,
+            phase_offset_sec=phase_offset_sec,
+        )
+        preview_frame_limit = 16 if required_fps <= 0.5 else 32 if required_fps <= 1.0 else 64
+        preview_frames = select_uniform_items(tuple(low["frames"]), preview_frame_limit)
         preview_paths = tuple(str(row["path"]) for row in preview_frames)
         event_window = str(getattr(task, "inspection_mode", "window")) == "event_window"
         claim_window = str(getattr(task, "inspection_mode", "window")) == "verify_claim"
         if event_window:
-            preview_prompt = _event_preview_prompt(self.workspace, task, segment_packet, low, prior_events=prior_events)
+            preview_prompt = _event_preview_prompt(
+                self.workspace,
+                task,
+                segment_packet,
+                low,
+                prior_events=prior_events,
+                prior_observations=prior_window_observations,
+            )
         elif claim_window:
-            preview_prompt = _claim_preview_prompt(self.workspace, task, segment_packet, low)
+            preview_prompt = _claim_preview_prompt(
+                self.workspace,
+                task,
+                segment_packet,
+                low,
+                prior_observations=prior_window_observations,
+            )
         else:
-            preview_prompt = _preview_prompt(self.workspace, task, segment_packet, low)
+            preview_prompt = _preview_prompt(
+                self.workspace,
+                task,
+                segment_packet,
+                low,
+                prior_observations=prior_window_observations,
+            )
         preview_raw = self.api.chat(
             preview_prompt,
             image_paths=preview_paths,
@@ -958,7 +1010,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         raw = preview_raw
         final_prompt = preview_prompt
         detail_query_id = ""
-        tool_trace = ["open_segment", "inspect_window:0.5"]
+        inspection_trace = f"inspect_window:{required_fps:.1f}"
+        if phase_offset_sec:
+            inspection_trace += f":phase={phase_offset_sec:.3f}"
+        tool_trace = ["open_segment", inspection_trace]
         vlm_calls = (1 if requested_window is not None else 2) + parse_repair_calls
 
         if _truthy(preview.get("need_detail")) or region_box is not None:
@@ -967,6 +1022,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 default_fps=self.highfps,
                 default_max_frames=self.highfps_max_frames,
             )
+            detail_fps = max(detail_fps, required_fps)
             selected_window = _select_detail_window(
                 preview,
                 window,
@@ -975,12 +1031,20 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 max_detail_sec=detail_max_frames / detail_fps,
             )
             detail_query_id = f"{observation_id}_detail"
+            detail_max_frames = min(
+                512,
+                max(
+                    detail_max_frames,
+                    int(max(0.0, selected_window[1] - selected_window[0]) * detail_fps + 0.999),
+                ),
+            )
             selected_packet = self.inspect_window(
                 selected_window[0],
                 selected_window[1],
                 fps=detail_fps,
                 max_frames=detail_max_frames,
                 query_id=detail_query_id,
+                phase_offset_sec=phase_offset_sec,
             )
             source_detail_frames = tuple(selected_packet["frames"])
             selected_frames = _materialize_model_frames(
@@ -1088,6 +1152,9 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         )
         if fallback_used:
             parse_status = "fallback_extracted"
+        observation_summary = str(parsed.get("summary") or raw or "").strip()[:800]
+        if observation_summary:
+            self._window_observation_history.setdefault(window_key, []).append(observation_summary)
 
         frame_paths = tuple(model_image_paths)
         frame_time_by_path = {
@@ -1196,6 +1263,13 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "supports_identity_anchor": supports_identity_anchor,
                 "supports_answer_event": supports_answer_event,
                 "investigation": outcome,
+                "sampling_policy": {
+                    "floor_fps": requested_floor,
+                    "effective_fps": required_fps,
+                    "phase_offset_sec": phase_offset_sec,
+                    "same_window_attempt": attempt + 1,
+                    "arbitration_prior_observations": list(prior_window_observations[-3:]),
+                },
                 "region_observation": {
                     "hint": str(getattr(task, "region_hint", "") or preview.get("region_hint", "") or ""),
                     "normalized_box": list(region_box) if region_box is not None else [],
@@ -2865,6 +2939,7 @@ def _forced_answer_prompt(
         }
         for row in rows
     ]
+    option_support = _forced_option_support_dashboard(kwargs, evidence_digest)
     return (
         "The investigation budget is exhausted. You must choose one best option using the evidence dashboard; "
         "do not return investigate, abstain, or an empty answer. This is a best-effort answer and may remain unverified. "
@@ -2872,9 +2947,11 @@ def _forced_answer_prompt(
         "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"...\","
         "\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"observation:person_1\"]}]}. "
         "For distinct counts, use only countable entity observations; candidate-only summaries may inform the best effort but "
-        "must not be presented as grounded identity evidence.\n"
+        "must not be presented as grounded identity evidence. Select the highest-ranked option_support row. When its policy is "
+        "zero_positive_conservative, do not select a stronger numerical assertion than the recommended option.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
+        f"Option support: {json.dumps(option_support, ensure_ascii=False)}\n"
         f"Evidence dashboard: {json.dumps(dashboard, ensure_ascii=False)}"
         f"{_visual_manifest_prompt(visual_manifest)}"
     )
@@ -2901,13 +2978,137 @@ def _compact_forced_answer_prompt(
                 "entities": entities,
             }
         )
+    option_support = _forced_option_support_dashboard(kwargs, evidence_digest)
     return (
         "Choose the single best multiple-choice answer from the compact verified evidence. Do not request more investigation. "
         "For distinct counts, merge repeated people by visual signature and count only countable entities. Return compact JSON "
         "only: {\"answer\":\"A. option text\",\"citations\":[\"ev_...\"],\"entity_clusters\":[{\"entity_id\":"
         "\"entity_1\",\"description\":\"...\",\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"obs:person_1\"]}]}.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
+        f"Option support: {json.dumps(option_support, ensure_ascii=False)}\n"
         f"Evidence: {json.dumps(rows, ensure_ascii=False)}"
+    )
+
+
+def _forced_option_support_dashboard(
+    kwargs: Mapping[str, Any],
+    evidence_digest: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    options = {str(key): str(value) for key, value in dict(kwargs.get("options") or {}).items()}
+    scores = {key: 0 for key in options}
+    reasons: dict[str, list[str]] = {key: [] for key in options}
+    authoritative = False
+    policy = "evidence_ranked"
+    positive_signal = False
+    contract = dict(kwargs.get("query_contract") or {})
+    quantifier = str(contract.get("quantifier", "") or "")
+    count_contract = quantifier in {"distinct_count", "total_count"}
+
+    for row in evidence_digest:
+        target_status = str(dict(row.get("target_presence", {}) or {}).get("status", "") or "").casefold()
+        if target_status == "present" or (
+            not count_contract
+            and str(row.get("observation_polarity", "") or "").casefold() == "positive"
+        ):
+            positive_signal = True
+        assessment = row.get("claim_assessment")
+        if not isinstance(assessment, Mapping):
+            continue
+        key = _answer_candidate_key(str(assessment.get("candidate_answer", "") or ""))
+        label = key.split(":", 1)[1] if key.startswith("option:") else ""
+        verdict = str(assessment.get("verdict", "") or "").casefold()
+        if label not in scores or verdict not in {"supports", "refutes"}:
+            continue
+        delta = 100 if verdict == "supports" else -100
+        scores[label] += delta
+        reasons[label].append(f"independent_claim_{verdict}")
+        authoritative = True
+        positive_signal = positive_signal or verdict == "supports"
+
+    option_counts = {key: _forced_option_count(text) for key, text in options.items()}
+    numeric_options = bool(options) and all(value is not None for value in option_counts.values())
+    countable_ids = {
+        str(entity.get("entity_observation_id", "") or f"anon:{row_index}:{entity_index}")
+        for row_index, row in enumerate(evidence_digest)
+        for entity_index, entity in enumerate(tuple(row.get("entities", ()) or ()))
+        if isinstance(entity, Mapping)
+        and bool(entity.get("countable"))
+        and bool(entity.get("supports_question_relation", True))
+    }
+    confirmed_event_ids = {
+        str(event.get("candidate_id", "") or event.get("event_key", "") or f"event:{row_index}:{event_index}")
+        for row_index, row in enumerate(evidence_digest)
+        for event_index, event in enumerate(tuple(row.get("events", ()) or ()))
+        if isinstance(event, Mapping)
+        and bool(event.get("supports_question_event", True))
+        and str(row.get("evidence_kind", "") or "") != "event_candidate_unresolved"
+    }
+    witnessed_ids = confirmed_event_ids if quantifier == "total_count" else countable_ids
+    if count_contract and numeric_options and witnessed_ids:
+        observed_count = len(witnessed_ids)
+        for key, value in option_counts.items():
+            if value == observed_count:
+                scores[key] += 80
+                reasons[key].append(f"matches_{observed_count}_countable_witnesses")
+        authoritative = observed_count in option_counts.values()
+        positive_signal = True
+        policy = "canonical_event_match" if quantifier == "total_count" else "countable_witness_match"
+    elif count_contract and numeric_options and not positive_signal:
+        minimum = min(int(value) for value in option_counts.values() if value is not None)
+        for key, value in option_counts.items():
+            assertion_penalty = int(value) - minimum if value is not None else 0
+            scores[key] -= 10 * assertion_penalty
+            reasons[key].append("zero_positive_evidence_assertion_penalty")
+        authoritative = True
+        policy = "zero_positive_conservative"
+
+    ranked = sorted(options, key=lambda key: (-scores[key], key))
+    return {
+        "policy": policy,
+        "authoritative": authoritative,
+        "recommended_option": ranked[0] if ranked else "",
+        "positive_signal": positive_signal,
+        "options": [
+            {"option": key, "score": scores[key], "reasons": reasons[key]}
+            for key in ranked
+        ],
+    }
+
+
+def _forced_option_count(text: str) -> int | None:
+    match = re.search(r"\b(\d+)\b", str(text or ""))
+    if match:
+        return int(match.group(1))
+    words = {
+        "zero": 0, "none": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+        "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    }
+    normalized = str(text or "").casefold()
+    return next((value for word, value in words.items() if re.search(rf"\b{word}\b", normalized)), None)
+
+
+def _calibrate_forced_decision(
+    kwargs: Mapping[str, Any],
+    evidence_digest: Sequence[Mapping[str, Any]],
+    decision: ReasonerDecision,
+) -> ReasonerDecision:
+    dashboard = _forced_option_support_dashboard(kwargs, evidence_digest)
+    recommended = str(dashboard.get("recommended_option", "") or "")
+    if not dashboard.get("authoritative") or not recommended:
+        return decision
+    current = _answer_candidate_key(decision.answer)
+    if current == f"option:{recommended}":
+        return decision
+    options = dict(kwargs.get("options") or {})
+    if recommended not in options:
+        return decision
+    return replace(
+        decision,
+        answer=f"{recommended}. {options[recommended]}",
+        support_reason=(
+            "Best-effort option calibrated by the evidence support dashboard "
+            f"({dashboard.get('policy', 'evidence_ranked')})."
+        ),
     )
 
 
@@ -2997,7 +3198,26 @@ def _summary_observation_semantics(question: str) -> str:
     )
 
 
-def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet: Mapping[str, Any], window: Mapping[str, Any]) -> str:
+def _prior_observation_arbitration(rows: Sequence[str]) -> str:
+    prior = tuple(str(item).strip() for item in rows if str(item).strip())[-3:]
+    if not prior:
+        return ""
+    return (
+        "This is a denser, phase-shifted arbitration pass over a previously inspected window. "
+        "Do not repeat the most recent description by default. Compare the new frames against every prior observation, "
+        "state which claims remain visually supported, and mark unresolved when they conflict. "
+        f"Prior observations: {json.dumps(prior, ensure_ascii=False)}\n"
+    )
+
+
+def _preview_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+    *,
+    prior_observations: Sequence[str] = (),
+) -> str:
     return (
         "You are the Investigator. Inspect the low-fps preview frames and local ASR without choosing an answer option. "
         "Return JSON only: {\"summary\":\"atomic observation\",\"confidence\":0.0-1.0,"
@@ -3033,6 +3253,7 @@ def _preview_prompt(workspace: VirtualVideoWorkspace, task: Any, segment_packet:
         "to 512. A detail request may cover the full preview window when complete segment coverage is required. Ensure "
         "duration * requested_fps does not exceed the requested frame budget.\n"
         f"{_summary_observation_semantics(workspace.case.question)}"
+        f"{_prior_observation_arbitration(prior_observations)}"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
         "Candidate option predicates are observation targets, not an invitation to choose an answer. Test and report the exact "
@@ -3048,6 +3269,8 @@ def _claim_preview_prompt(
     task: Any,
     segment_packet: Mapping[str, Any],
     window: Mapping[str, Any],
+    *,
+    prior_observations: Sequence[str] = (),
 ) -> str:
     return (
         "You are an independent claim verifier, not the Reasoner who proposed the answer. Re-observe the frames and local ASR, "
@@ -3066,6 +3289,7 @@ def _claim_preview_prompt(
         "people, or words appear is not enough. Request a narrower detail window when motion or text remains unresolved. "
         "Use 0.5 fps for stable scenes, 1 fps for ordinary actions, and 2 fps for fast motion, OCR, or exact temporal order, "
         "with at most 512 frames.\n"
+        f"{_prior_observation_arbitration(prior_observations)}"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\nOptions: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
         f"Candidate claim: {getattr(task, 'claim_to_verify', '')}\n"
@@ -3083,6 +3307,7 @@ def _event_preview_prompt(
     window: Mapping[str, Any],
     *,
     prior_events: Sequence[Mapping[str, Any]] = (),
+    prior_observations: Sequence[str] = (),
 ) -> str:
     return (
         "You are the Investigator. Enumerate atomic question-relevant event occurrences in this low-fps window. "
@@ -3116,6 +3341,7 @@ def _event_preview_prompt(
         "fps that covers the full segment when exhaustive enumeration is required, or request one narrower interval when only a "
         "specific fast boundary is unresolved. Use 0.5 fps for stable scenes, 1 fps for ordinary actions, and 2 fps for fast "
         "boundaries, with at most 512 frames.\n"
+        f"{_prior_observation_arbitration(prior_observations)}"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
         f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"

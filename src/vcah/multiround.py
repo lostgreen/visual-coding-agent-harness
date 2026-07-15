@@ -78,6 +78,7 @@ class InvestigationTask:
     conditions: tuple[GapCondition, ...] = ()
     source_candidate_ids: tuple[str, ...] = ()
     inspection_intent: str = ""
+    sampling_floor_fps: float = 0.5
 
     def __post_init__(self) -> None:
         if self.time_range is not None:
@@ -104,6 +105,8 @@ class InvestigationTask:
         object.__setattr__(self, "conditions", conditions)
         object.__setattr__(self, "source_candidate_ids", tuple(dict.fromkeys(str(item) for item in self.source_candidate_ids if str(item))))
         object.__setattr__(self, "inspection_intent", str(self.inspection_intent or "").strip())
+        floor_fps = float(self.sampling_floor_fps or 0.5)
+        object.__setattr__(self, "sampling_floor_fps", min(2.0, max(0.5, floor_fps)))
         object.__setattr__(
             self,
             "search_terms",
@@ -154,6 +157,7 @@ class MultiRoundResult:
     selected_option: str = ""
     answer_mode: str = "insufficient"
     grounding_status: str = "insufficient"
+    grounding_level: str = "none"
     retrieval_status: str = "failed"
 
 
@@ -248,7 +252,7 @@ def compile_query_contract(
             observability_mode="any",
             boundary_hint=_temporal_event_hint(question),
         )
-    if temporal_sequence:
+    if temporal_sequence and not cross_window_identity:
         return ClaimContract(
             required_scope="full_video" if not bounded_interval else "multi_window",
             quantifier="order",
@@ -528,6 +532,14 @@ def _is_temporal_sequence_question(text: str, options: Mapping[str, str]) -> boo
     normalized = str(text or "").casefold()
     explicit = bool(
         re.search(r"\b(?:sequence|chronological order|correct order|in what order)\b", normalized)
+        or (
+            re.search(r"\b(?:who|which)\b", normalized)
+            and re.search(r"\b(?:first|second|third|fourth|last)\b", normalized)
+            and re.search(
+                r"\b(?:overt(?:ake|akes|aken|aking|ook)|pass\w*|arriv\w*|appear\w*|finish\w*|cross\w*)\b",
+                normalized,
+            )
+        )
     )
     option_sequences = sum(
         bool(re.search(r"(?:→|->| then | followed by )", str(option).casefold()))
@@ -839,6 +851,7 @@ class VirtualVideoMultiRoundDriver:
         answer = ""
         citations: tuple[str, ...] = ()
         verified = False
+        grounding_level = "none"
         verification_reason = ""
         best_answer = ""
         best_citations: tuple[str, ...] = ()
@@ -1089,6 +1102,7 @@ class VirtualVideoMultiRoundDriver:
                     query_requirements=query_requirements,
                     completion_status=completion_status,
                 )
+                gate = _annotate_grounding_level(gate, completion_status)
                 gate = _apply_answer_audit(
                     gate,
                     decision,
@@ -1114,6 +1128,7 @@ class VirtualVideoMultiRoundDriver:
                 if gate["passed"]:
                     answer = decision.answer
                     verified = True
+                    grounding_level = str(gate.get("grounding_level", "strict") or "strict")
                     verification_reason = last_gate_reason
                     if query_contract.aggregation != "none":
                         aggregate = _derived_answer_evidence(
@@ -1300,6 +1315,7 @@ class VirtualVideoMultiRoundDriver:
                     query_requirements=query_requirements,
                     completion_status=completion_status,
                 )
+                gate = _annotate_grounding_level(gate, completion_status)
                 gate = _apply_answer_audit(
                     gate,
                     final_decision,
@@ -1329,6 +1345,7 @@ class VirtualVideoMultiRoundDriver:
                 if gate["passed"]:
                     answer = final_decision.answer
                     verified = True
+                    grounding_level = str(gate.get("grounding_level", "strict") or "strict")
                     verification_reason = last_gate_reason
                     if query_contract.aggregation != "none":
                         aggregate = _derived_answer_evidence(
@@ -1351,7 +1368,7 @@ class VirtualVideoMultiRoundDriver:
             grounded_answer = answer
             forced_answer = answer
             answer_mode = "grounded"
-            grounding_status = "verified"
+            grounding_status = f"verified_{grounding_level}"
         elif best_answer:
             final_answer = best_answer
             final_citations = best_citations
@@ -1379,6 +1396,7 @@ class VirtualVideoMultiRoundDriver:
                 "selected_option": selected_option,
                 "answer_mode": answer_mode,
                 "grounding_status": grounding_status,
+                "grounding_level": grounding_level,
                 "retrieval_status": retrieval_status,
                 "verified": verified,
                 "verification_reason": verification_reason,
@@ -1403,6 +1421,7 @@ class VirtualVideoMultiRoundDriver:
             selected_option=selected_option,
             answer_mode=answer_mode,
             grounding_status=grounding_status,
+            grounding_level=grounding_level,
             retrieval_status=retrieval_status,
         )
         _write_run_summary(workspace, result)
@@ -1843,6 +1862,17 @@ def _windows_overlap(left: EvidenceRecord, right: EvidenceRecord) -> bool:
 
 
 def _task_for_contract(task: InvestigationTask, contract: ClaimContract) -> InvestigationTask:
+    sampling_floor = max(
+        float(task.sampling_floor_fps),
+        2.0
+        if contract.aggregation == "order"
+        or (contract.observation_target == "entity" and contract.aggregation == "compare")
+        else 1.0
+        if contract.quantifier in {"distinct_count", "total_count"}
+        or contract.aggregation == "compare"
+        else 0.5,
+    )
+    task = replace(task, sampling_floor_fps=sampling_floor)
     if contract.aggregation == "summarize" and task.inspection_mode != "search_asr":
         expected = str(task.expected_evidence or "").strip()
         narrative = (
@@ -2089,18 +2119,53 @@ def _apply_readiness_dashboard(
         missing_active_ids
         | {condition_id for condition_id, state in states.items() if state.status != "satisfied"}
     )
-    grounded = bool(result.get("ready_for_answer")) and not unresolved
+    base_ready = bool(result.get("ready_for_answer"))
+    retrieval_ready = any(record.modality in {"visual", "ocr"} for record in answer_evidence)
+    condition_total = len(states) + len(missing_active_ids)
+    satisfied_count = sum(state.status == "satisfied" for state in states.values())
+    conflict_count = sum(state.status in {"contradicted", "refuted"} for state in states.values())
+    completion_ratio = satisfied_count / max(1, condition_total)
+    strict_grounded = base_ready and not unresolved
+    partial_grounded = bool(
+        not strict_grounded
+        and retrieval_ready
+        and condition_total
+        and conflict_count == 0
+        and completion_ratio >= 0.6
+        and _completion_scope_ratio(result) >= 0.75
+    )
     result.update({
         "candidate_available": any(record.observation_polarity == "positive" for record in navigation_evidence),
-        "retrieval_ready": any(record.modality in {"visual", "ocr"} for record in answer_evidence),
+        "retrieval_ready": retrieval_ready,
         "choice_ready": bool(str(best_choice or "").strip()),
-        "grounded_ready": grounded,
+        "grounded_ready": strict_grounded,
+        "partial_grounded_ready": partial_grounded,
+        "grounding_level_ready": "strict" if strict_grounded else "partial" if partial_grounded else "none",
+        "condition_completion_ratio": completion_ratio,
+        "satisfied_condition_count": satisfied_count,
+        "critical_condition_count": condition_total,
+        "conflicted_condition_count": conflict_count,
         "unresolved_critical_condition_ids": unresolved,
         "unsupported_claim_atom_ids": list(unresolved),
         "condition_states": {condition_id: to_jsonable(state) for condition_id, state in states.items()},
     })
-    result["ready_for_answer"] = grounded
+    result["ready_for_answer"] = strict_grounded or partial_grounded
     return result
+
+
+def _completion_scope_ratio(status: Mapping[str, Any]) -> float:
+    source_coverage = dict(status.get("source_coverage", {}) or {})
+    adopted_source = str(status.get("adopted_source_video_id", "") or "")
+    rows = [source_coverage[adopted_source]] if adopted_source in source_coverage else list(source_coverage.values())
+    if not rows:
+        return 1.0 if bool(status.get("ready_for_answer")) else 0.0
+    return max(
+        (
+            float(row.get("covered_count", 0) or 0) / max(1, int(row.get("required_count", 0) or 0))
+            for row in rows
+        ),
+        default=0.0,
+    )
 
 
 def _apply_condition_scope(
@@ -3313,6 +3378,7 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         conditions=tuple(value.get("conditions", ()) or ()),
         source_candidate_ids=tuple(value.get("source_candidate_ids", ()) or ()),
         inspection_intent=str(value.get("inspection_intent", "") or ""),
+        sampling_floor_fps=float(value.get("sampling_floor_fps", 0.5) or 0.5),
     )
 
 
@@ -3582,6 +3648,23 @@ def _apply_answer_audit(
             "reason": f"answer_audit_{status}",
         }
     )
+    return result
+
+
+def _annotate_grounding_level(
+    gate: Mapping[str, Any],
+    completion_status: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    result = dict(gate)
+    if not bool(result.get("passed")):
+        return result
+    status = dict(completion_status or {})
+    if bool(status.get("grounded_ready")):
+        result["grounding_level"] = "strict"
+    elif bool(status.get("partial_grounded_ready")):
+        result["grounding_level"] = "partial"
+    else:
+        result["grounding_level"] = "strict"
     return result
 
 
@@ -4011,6 +4094,7 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
                 "selected_option": result.selected_option,
                 "answer_mode": result.answer_mode,
                 "grounding_status": result.grounding_status,
+                "grounding_level": result.grounding_level,
                 "retrieval_status": result.retrieval_status,
                 "citations": list(result.citations),
                 "correct": result.correct,

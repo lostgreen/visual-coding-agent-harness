@@ -10,6 +10,7 @@ from PIL import Image
 import pytest
 
 import vcah.video as video
+from vcah import virtual_video
 from vcah.types import Frame
 from vcah.investigator import VirtualVideoInvestigator
 from vcah.multiround import InvestigationTask
@@ -47,6 +48,15 @@ class ColorModel:
             text = query.casefold()
             rows.append([0.0, 0.0, 1.0] if "blue" in text else [1.0, 0.0, 0.0])
         return np.asarray(rows, dtype=np.float32)
+
+
+def test_phase_shifted_uniform_times_changes_the_sampling_grid() -> None:
+    base = virtual_video._uniform_times(10.0, 14.0, 2.0, 8)
+    shifted = virtual_video._uniform_times(10.0, 14.0, 2.0, 8, phase_offset_sec=0.25)
+
+    assert base != shifted
+    assert shifted[0] == 10.25
+    assert all(10.0 <= value <= 14.0 for value in shifted)
 
 
 def test_ffmpeg_frame_extraction_uses_concurrency_guard_and_timeout(monkeypatch, tmp_path: Path) -> None:
