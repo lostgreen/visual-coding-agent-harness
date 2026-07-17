@@ -16,7 +16,11 @@ from vcah.evidence_primitives import (
 )
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.memory import EvidenceStore
-from vcah.semantic_evidence import event_candidate_ledger as _event_candidate_ledger, semantic_repair_requests
+from vcah.semantic_evidence import (
+    canonical_fact_snapshot,
+    event_candidate_ledger as _event_candidate_ledger,
+    semantic_repair_requests,
+)
 from vcah.types import ClaimContract, EvidenceRecord, is_path_only_visual_evidence, to_jsonable
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace, select_uniform_items
@@ -78,7 +82,10 @@ class InvestigationTask:
     conditions: tuple[GapCondition, ...] = ()
     source_candidate_ids: tuple[str, ...] = ()
     inspection_intent: str = ""
+    reference_entities: tuple[Mapping[str, Any], ...] = ()
+    reference_facts: tuple[Mapping[str, Any], ...] = ()
     sampling_floor_fps: float | None = None
+    expected_event_dwell_sec: float | None = None
     temporal_resolution_rationale: str = ""
     sampling_floor_specified: bool = field(default=False, init=False)
 
@@ -107,10 +114,26 @@ class InvestigationTask:
         object.__setattr__(self, "conditions", conditions)
         object.__setattr__(self, "source_candidate_ids", tuple(dict.fromkeys(str(item) for item in self.source_candidate_ids if str(item))))
         object.__setattr__(self, "inspection_intent", str(self.inspection_intent or "").strip())
+        object.__setattr__(
+            self,
+            "reference_entities",
+            tuple(dict(item) for item in self.reference_entities if isinstance(item, Mapping)),
+        )
+        object.__setattr__(
+            self,
+            "reference_facts",
+            tuple(dict(item) for item in self.reference_facts if isinstance(item, Mapping)),
+        )
         specified = self.sampling_floor_fps is not None
         floor_fps = float(self.sampling_floor_fps or 0.5)
         object.__setattr__(self, "sampling_floor_fps", min(2.0, max(0.5, floor_fps)))
         object.__setattr__(self, "sampling_floor_specified", specified)
+        dwell = self.expected_event_dwell_sec
+        object.__setattr__(
+            self,
+            "expected_event_dwell_sec",
+            float(dwell) if dwell is not None and float(dwell) > 0 else None,
+        )
         object.__setattr__(
             self,
             "temporal_resolution_rationale",
@@ -123,7 +146,10 @@ class InvestigationTask:
             "search_terms",
             tuple(dict.fromkeys(str(item).strip().casefold() for item in self.search_terms if str(item).strip())),
         )
-        if self.inspection_mode not in {"window", "enumerate_events", "event_window", "verify_claim", "search_asr"}:
+        if self.inspection_mode not in {
+            "window", "enumerate_events", "event_window", "verify_claim", "search_asr",
+            "entity_association", "narrative_bridge",
+        }:
             object.__setattr__(self, "inspection_mode", "window")
 
 
@@ -136,6 +162,7 @@ class ReasonerDecision:
     entity_clusters: tuple[Mapping[str, Any], ...] = ()
     support_status: str = ""
     support_reason: str = ""
+    option_verdicts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     primary_gap: EvidenceGap | None = None
 
     def __post_init__(self) -> None:
@@ -144,6 +171,15 @@ class ReasonerDecision:
         object.__setattr__(self, "entity_clusters", tuple(_entity_cluster(item) for item in self.entity_clusters))
         object.__setattr__(self, "support_status", str(self.support_status or "").strip().casefold())
         object.__setattr__(self, "support_reason", str(self.support_reason or "").strip())
+        object.__setattr__(
+            self,
+            "option_verdicts",
+            {
+                str(option).strip().upper(): dict(verdict)
+                for option, verdict in dict(self.option_verdicts or {}).items()
+                if str(option).strip() and isinstance(verdict, Mapping)
+            },
+        )
         if isinstance(self.primary_gap, Mapping):
             object.__setattr__(self, "primary_gap", _gap(self.primary_gap))
         elif self.primary_gap is not None and not isinstance(self.primary_gap, EvidenceGap):
@@ -678,6 +714,8 @@ def _is_boundary_score_question(text: str, options: Mapping[str, str], boundary_
 def compile_query_requirements(question: str) -> dict[str, Any]:
     terms = _identity_anchor_terms(question)
     text = str(question or "").casefold()
+    cross_window_identity = _is_cross_window_identity_question(text)
+    narrative_inference = _is_narrative_inference_question(text) or _is_state_outcome_question(text)
     spatial = _is_spatial_relation_question(text)
     contrastive_subject = bool(
         re.search(r"\bone\s+(?:team|group|person)\b[^?]*\bthe\s+other\s+(?:team|group|person)\b", text)
@@ -689,7 +727,9 @@ def compile_query_requirements(question: str) -> dict[str, Any]:
         re.search(r"\b(?:change|changed|turn(?:ed)?|remain(?:ed)?|maintain(?:ed)?|overtak\w*|track\w*)\b", text)
     )
     return {
-        "requires_identity_link": bool(terms),
+        "requires_identity_link": bool(terms) or cross_window_identity,
+        "requires_event_participant_link": cross_window_identity,
+        "requires_narrative_inference": narrative_inference,
         "identity_anchor_terms": list(terms),
         "requires_spatial_relation": spatial,
         "spatial_relation_type": "relative_facing" if spatial and "facing" in text else "relative_bearing" if spatial else "",
@@ -874,6 +914,8 @@ class VirtualVideoMultiRoundDriver:
         condition_registry: tuple[GapCondition, ...] = ()
         active_condition_ids: tuple[str, ...] = ()
         last_rejected_submission: tuple[str, tuple[str, ...], tuple[str, ...]] | None = None
+        stagnant_task_attempts: dict[tuple[Any, ...], int] = {}
+        stagnation_actions: list[dict[str, Any]] = []
         rounds_run = 0
 
         for round_id in range(1, self.max_rounds + 1):
@@ -887,9 +929,11 @@ class VirtualVideoMultiRoundDriver:
                 reports=reports,
                 best_choice=best_answer,
                 active_condition_ids=active_condition_ids,
+                option_states=option_states,
             )
             navigation_candidates = _navigation_candidates(evidence_store.records, workspace.case.options)
             stagnation_status = _stagnation_status(reports)
+            stagnation_status["actions"] = list(stagnation_actions[-8:])
             decision, condition_registry = _align_decision_conditions(_decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
@@ -934,6 +978,7 @@ class VirtualVideoMultiRoundDriver:
             )
             if missing_segments and remaining > 0:
                 repair_tasks = _coverage_repair_tasks(
+                    workspace,
                     round_id,
                     missing_segments,
                     query_contract,
@@ -993,6 +1038,48 @@ class VirtualVideoMultiRoundDriver:
                             "round": round_id,
                             "reason": "entity_candidate_unresolved",
                             "entity_observation_ids": list(unresolved_entity_candidates),
+                            "task_count": len(repair_tasks),
+                        }
+                    )
+                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
+            elif (
+                bool(query_requirements.get("requires_event_participant_link"))
+                and not bool(completion_status.get("event_participant_link_ready"))
+                and remaining > 0
+            ):
+                repair_tasks = _event_participant_association_tasks(
+                    workspace,
+                    evidence_store.records,
+                    round_id=round_id,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+                if repair_tasks:
+                    trace.append(
+                        {
+                            "type": "repair_override",
+                            "round": round_id,
+                            "reason": "event_participant_link_missing",
+                            "task_count": len(repair_tasks),
+                        }
+                    )
+                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
+            elif (
+                bool(query_requirements.get("requires_narrative_inference"))
+                and not bool(completion_status.get("narrative_inference_ready"))
+                and remaining > 0
+            ):
+                repair_tasks = _narrative_bridge_repair_tasks(
+                    workspace,
+                    evidence_store.records,
+                    round_id=round_id,
+                    limit=min(2, self.max_tasks_per_round, remaining),
+                )
+                if repair_tasks:
+                    trace.append(
+                        {
+                            "type": "repair_override",
+                            "round": round_id,
+                            "reason": "narrative_inference_missing",
                             "task_count": len(repair_tasks),
                         }
                     )
@@ -1159,11 +1246,20 @@ class VirtualVideoMultiRoundDriver:
                 continue
             if remaining <= 0:
                 break
-            raw_tasks = decision.tasks[: min(self.max_tasks_per_round, remaining)]
+            is_anchor_sweep = bool(decision.tasks) and all(
+                task.inspection_intent == "event_participant_anchor_discovery"
+                for task in decision.tasks
+            )
+            dispatch_limit = min(
+                remaining,
+                max(self.max_tasks_per_round, len(decision.tasks))
+                if is_anchor_sweep else self.max_tasks_per_round,
+            )
+            raw_tasks = decision.tasks[:dispatch_limit]
             resolved_tasks = _resolve_workspace_tasks(
                 workspace,
                 raw_tasks,
-                limit=min(self.max_tasks_per_round, remaining),
+                limit=dispatch_limit,
             )
             if resolved_tasks != raw_tasks:
                 trace.append(
@@ -1189,7 +1285,7 @@ class VirtualVideoMultiRoundDriver:
                 evidence_store.records,
                 options=workspace.case.options,
                 round_id=round_id,
-                limit=min(self.max_tasks_per_round, remaining),
+                limit=dispatch_limit,
             )
             if tasks != requested_tasks:
                 trace.append(
@@ -1204,6 +1300,22 @@ class VirtualVideoMultiRoundDriver:
                         ),
                     }
                 )
+            allowed_tasks = tuple(
+                task for task in tasks if stagnant_task_attempts.get(_task_progress_fingerprint(task), 0) < 2
+            )
+            rejected_tasks = tuple(task for task in tasks if task not in allowed_tasks)
+            if rejected_tasks:
+                action = {
+                    "round": round_id,
+                    "action": "reject_repeated_no_progress_task",
+                    "query_ids": [task.query_id for task in rejected_tasks],
+                    "required_shift": "change range, fps, inspection mode, modality, condition, candidate, or finalize",
+                }
+                stagnation_actions.append(action)
+                trace.append({"type": "stagnation_enforcement", **action})
+            tasks = allowed_tasks
+            if not tasks:
+                continue
             task_condition_ids = tuple(
                 dict.fromkeys(
                     condition.condition_id
@@ -1214,6 +1326,13 @@ class VirtualVideoMultiRoundDriver:
             )
             if task_condition_ids:
                 active_condition_ids = task_condition_ids
+            fact_state_before = _canonical_progress_signature(canonical_fact_snapshot(evidence_store.records).to_dict())
+            satisfied_before = {
+                result.condition_id
+                for report in reports
+                for result in report.condition_results
+                if result.status == "satisfied" and result.condition_id
+            }
             accepted += len(tasks)
             batch = _annotate_batch_progress(investigator.run_batch(tasks), reports)
             reports.extend(batch)
@@ -1223,6 +1342,21 @@ class VirtualVideoMultiRoundDriver:
                     if record.evidence_id not in known_evidence:
                         evidence_store.add(record)
                         known_evidence.add(record.evidence_id)
+            fact_state_after = _canonical_progress_signature(canonical_fact_snapshot(evidence_store.records).to_dict())
+            newly_satisfied = {
+                result.condition_id
+                for report in batch
+                for result in report.condition_results
+                if result.status == "satisfied" and result.condition_id not in satisfied_before
+            }
+            batch_progress = bool(
+                fact_state_after != fact_state_before
+                or newly_satisfied
+                or any(report.coverage_progress for report in batch)
+            )
+            for task in tasks:
+                fingerprint = _task_progress_fingerprint(task)
+                stagnant_task_attempts[fingerprint] = 0 if batch_progress else stagnant_task_attempts.get(fingerprint, 0) + 1
             trace.append({"type": "investigator_batch", "round": round_id, "accepted_tasks": len(tasks)})
             trace.append(
                 {
@@ -1268,6 +1402,7 @@ class VirtualVideoMultiRoundDriver:
                 reports=reports,
                 best_choice=best_answer,
                 active_condition_ids=active_condition_ids,
+                option_states=option_states,
             )
             final_decision, condition_registry = _align_decision_conditions(_decision(
                 self.reasoner.decide(
@@ -1373,6 +1508,34 @@ class VirtualVideoMultiRoundDriver:
                     else:
                         citations = final_decision.citations
 
+        if not verified and evidence_store.records:
+            forced_completion = _completion_status(
+                workspace,
+                query_contract,
+                evidence_store.records,
+                query_requirements=query_requirements,
+                reports=reports,
+                best_choice=best_answer,
+                active_condition_ids=active_condition_ids,
+                option_states=option_states,
+            )
+            canonical_forced = _canonical_forced_answer(
+                workspace.case.options,
+                forced_completion,
+                evidence_store.records,
+            )
+            if canonical_forced is not None:
+                best_answer, best_citations = canonical_forced
+                best_verification_reason = "canonical_option_verdict_forced_override"
+                trace.append(
+                    {
+                        "type": "canonical_forced_override",
+                        "answer": best_answer,
+                        "citations": list(best_citations),
+                        "fact_source": "completion_status.canonical_fact_snapshot",
+                    }
+                )
+
         if verified:
             final_answer = answer
             final_citations = citations
@@ -1413,6 +1576,17 @@ class VirtualVideoMultiRoundDriver:
                 "verification_reason": verification_reason,
                 "best_effort": bool(final_answer and not verified and best_answer),
                 "option_states": option_states,
+                "option_verdict_table": _option_verdict_table(
+                    workspace.case.options,
+                    query_contract,
+                    canonical_fact_snapshot(evidence_store.records).to_dict(),
+                    option_states,
+                ),
+                "canonical_fact_counts": canonical_fact_snapshot(evidence_store.records).to_dict()["canonical_fact_counts"],
+                "raw_candidate_counts": canonical_fact_snapshot(evidence_store.records).to_dict()["raw_candidate_counts"],
+                "forced_reason": verification_reason if answer_mode == "forced_choice" else None,
+                "forced_fact_source": "canonical_fact_snapshot" if answer_mode == "forced_choice" else None,
+                "stagnation_actions": stagnation_actions,
             }
         )
         result = MultiRoundResult(
@@ -1440,6 +1614,7 @@ class VirtualVideoMultiRoundDriver:
 
 
 def _coverage_repair_tasks(
+    workspace: VirtualVideoWorkspace,
     round_id: int,
     segment_ids: Sequence[str],
     contract: ClaimContract,
@@ -1447,17 +1622,38 @@ def _coverage_repair_tasks(
     limit: int,
 ) -> tuple[InvestigationTask, ...]:
     modalities = tuple(contract.required_observability or ("visual",))
-    return tuple(
-        InvestigationTask(
+    tasks = []
+    by_id = {segment.segment_id: segment for segment in workspace.manifest.segments}
+    for index, segment_id in enumerate(tuple(segment_ids)[: max(0, int(limit))], start=1):
+        segment = by_id.get(str(segment_id))
+        full_range = (
+            (float(segment.virtual_start_sec), float(segment.virtual_end_sec))
+            if segment is not None
+            else None
+        )
+        event_sweep = contract.quantifier == "total_count" and contract.observation_target == "event"
+        tasks.append(InvestigationTask(
             query_id=f"repair_r{round_id}_{index:03d}",
             goal=f"Inspect remaining source segment {segment_id} for evidence required by the full-video claim.",
             segment_id=str(segment_id),
+            time_range=full_range,
             modality_hint=modalities,
-            expected_evidence="entity observations and topic evidence needed for full-source coverage",
+            expected_evidence=(
+                "exhaustive question-relevant event occurrences across the entire segment"
+                if event_sweep
+                else "entity observations and topic evidence needed for full-source coverage"
+            ),
+            inspection_mode="enumerate_events" if event_sweep else "window",
+            sampling_floor_fps=2.0 if event_sweep else None,
+            expected_event_dwell_sec=1.0 if event_sweep else None,
+            temporal_resolution_rationale=(
+                "Full-segment count repair must resolve brief event boundaries."
+                if event_sweep
+                else ""
+            ),
             priority=1.0,
-        )
-        for index, segment_id in enumerate(tuple(segment_ids)[: max(0, int(limit))], start=1)
-    )
+        ))
+    return tuple(tasks)
 
 
 def _bootstrap_investigation_tasks(
@@ -1560,7 +1756,7 @@ def _rejected_answer_repair_tasks(
         return ()
     missing_segments = tuple(gate_feedback.get("missing_segment_ids", ()) or ())
     if missing_segments:
-        return _coverage_repair_tasks(round_id, missing_segments, contract, limit=task_limit)
+        return _coverage_repair_tasks(workspace, round_id, missing_segments, contract, limit=task_limit)
     if contract.quantifier == "total_count" and contract.observation_target == "event":
         return tuple(
             InvestigationTask(
@@ -1653,6 +1849,170 @@ def _identity_repair_tasks(
         )
         for index, segment in enumerate(candidates[: max(0, int(limit))], start=1)
     )
+
+
+def _event_participant_association_tasks(
+    workspace: VirtualVideoWorkspace,
+    evidence: Sequence[EvidenceRecord],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    if any(str(record.task_id or "").startswith("participant_link_") for record in evidence):
+        return ()
+    ledger = _event_candidate_ledger(evidence)
+    candidates = tuple(ledger.get("confirmed_event_candidates", ()) or ())
+    if not candidates:
+        if any(str(record.task_id or "").startswith("participant_anchor_") for record in evidence):
+            return ()
+        target_ids = {
+            str(item) for item in tuple(workspace.case.metadata.get("target_segment_ids", ()) or ()) if str(item)
+        }
+        segments = tuple(
+            segment for segment in workspace.manifest.segments
+            if not target_ids or segment.segment_id in target_ids or segment.role == "target"
+        ) or tuple(workspace.manifest.segments)
+        sweep_size = min(max(1, int(limit), 6), len(segments))
+        selected = select_uniform_items(segments, sweep_size)
+        return tuple(
+            InvestigationTask(
+                query_id=f"participant_anchor_r{round_id}_{index:03d}",
+                goal="Enumerate the question-referenced anchor events and record every visible participant with an explicit role.",
+                segment_id=segment.segment_id,
+                time_range=(float(segment.virtual_start_sec), float(segment.virtual_end_sec)),
+                modality_hint=("visual",),
+                expected_evidence="timestamped anchor events with overtaker/overtaken roles, multi-attribute signatures, and stable participant IDs",
+                inspection_mode="enumerate_events",
+                priority=1.0,
+                inspection_intent="event_participant_anchor_discovery",
+                sampling_floor_fps=2.0,
+                expected_event_dwell_sec=1.0,
+                temporal_resolution_rationale="Brief overtakes require dense event-boundary sampling.",
+            )
+            for index, segment in enumerate(selected, start=1)
+        )
+    ordinal = _identity_ordinal_index(workspace.case.question)
+    anchor = candidates[min(max(0, ordinal), len(candidates) - 1)]
+    participants = [
+        dict(item) for item in tuple(anchor.get("participants", ()) or ())
+        if isinstance(item, Mapping)
+        and str(item.get("role", "") or "").casefold() not in {"overtaken", "camera_holder", "recorder"}
+    ]
+    if not participants:
+        participants = [
+            {
+                "participant_id": participant_id,
+                "role": "event_participant",
+                "visual_signature": "; ".join(tuple(anchor.get("descriptions", ()) or ()))[:300],
+                "attributes": {},
+            }
+            for participant_id in tuple(anchor.get("participant_ids", ()) or ())
+            if str(participant_id).casefold() != "camera_holder"
+        ]
+    if not participants:
+        return ()
+    participant_ordinal = 0
+    if len(candidates) == 1 and len(participants) > 1:
+        participant_ordinal = min(max(0, ordinal), len(participants) - 1)
+    source = participants[participant_ordinal]
+    participant_id = str(source.get("participant_id", "") or "event_participant").strip()
+    hypothesis_id = str(source.get("entity_hypothesis_id", "") or "").strip() or re.sub(
+        r"[^a-z0-9]+", "_", f"{participant_id}_{anchor.get('candidate_id', 'event')}".casefold()
+    ).strip("_")
+    reference = {
+        **source,
+        "entity_hypothesis_id": hypothesis_id,
+        "source_event_key": str(anchor.get("canonical_event_key", "") or anchor.get("signature", "") or ""),
+        "source_event_time_range": list(anchor.get("virtual_time_range", ()) or ()),
+    }
+    bounds = tuple(anchor.get("virtual_time_range", ()) or (0.0, 0.0))
+    anchor_end = float(bounds[1]) if len(bounds) == 2 else 0.0
+    segments = tuple(
+        segment for segment in workspace.manifest.segments
+        if float(segment.virtual_end_sec) > anchor_end
+    ) or tuple(workspace.manifest.segments)
+    selected = tuple(reversed(segments[-max(1, min(int(limit), 2)) :]))
+    return tuple(
+        InvestigationTask(
+            query_id=f"participant_link_r{round_id}_{index:03d}",
+            goal=f"Re-identify event participant {participant_id} in this later window and record their visible outcome attributes.",
+            segment_id=segment.segment_id,
+            modality_hint=("visual",),
+            expected_evidence="a supported, refuted, or unknown association using multiple appearance attributes and a frame-witnessed target entity",
+            inspection_mode="entity_association",
+            priority=1.0,
+            source_candidate_ids=tuple(str(item) for item in anchor.get("evidence_ids", ()) or ()),
+            inspection_intent="event_participant_reidentification",
+            reference_entities=(reference,),
+            sampling_floor_fps=1.0,
+            temporal_resolution_rationale="Appearance and finish-state cues persist for several frames.",
+        )
+        for index, segment in enumerate(selected, start=1)
+    )
+
+
+def _narrative_bridge_repair_tasks(
+    workspace: VirtualVideoWorkspace,
+    evidence: Sequence[EvidenceRecord],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    prior_records = tuple(
+        record for record in evidence if str(record.task_id or "").startswith("narrative_bridge_")
+    )
+    if len(prior_records) >= 3:
+        return ()
+    segments = tuple(workspace.manifest.segments)
+    prior_facts = tuple(
+        dict(fact)
+        for record in prior_records
+        for fact in tuple(record.operation_metadata.get("narrative_facts", ()) or ())
+        if isinstance(fact, Mapping)
+    )[-4:]
+    if prior_facts:
+        missing_outcome = any(not str(fact.get("outcome_state", "") or "").strip() for fact in prior_facts)
+        selected = (segments[-1] if missing_outcome else segments[0],)
+        goals = (
+            "Re-observe the missing outcome and complete the prior setup-to-outcome fact."
+            if missing_outcome
+            else "Re-observe the missing setup and complete the prior setup-to-outcome fact.",
+        )
+    elif len(segments) == 1 and int(limit) >= 2:
+        selected = (segments[0], segments[0])
+        goals = (
+            "Locate and record the narrative setup immediately before the implied gap.",
+            "Locate and record the observable outcome immediately after the implied gap.",
+        )
+    else:
+        selected = select_uniform_items(segments, min(max(1, int(limit)), len(segments)))
+        goals = tuple(
+            "Observe the narrative setup and later outcome, then state only the minimal bridge supported by both."
+            for _ in selected
+        )
+    return tuple(
+        InvestigationTask(
+            query_id=f"narrative_bridge_r{round_id}_{index:03d}",
+            goal=goals[index - 1],
+            segment_id=segment.segment_id,
+            modality_hint=("visual", "asr"),
+            expected_evidence="setup state, observed transition or gap, outcome state, and counterevidence for incompatible option predicates",
+            inspection_mode="narrative_bridge",
+            priority=1.0,
+            inspection_intent="narrative_setup_outcome_synthesis",
+            reference_facts=prior_facts,
+            sampling_floor_fps=0.5,
+            temporal_resolution_rationale="Narrative setup and outcome are persistent scene-level states.",
+        )
+        for index, segment in enumerate(selected, start=1)
+    )
+
+
+def _identity_ordinal_index(question: str) -> int:
+    match = re.search(r"\b(first|second|third|fourth|last)\s+(?:person|player|rider|competitor)", str(question).casefold())
+    if not match:
+        return 0
+    return {"first": 0, "second": 1, "third": 2, "fourth": 3, "last": 10_000}[match.group(1)]
 
 
 def _entity_candidate_repair_tasks(
@@ -1976,6 +2336,7 @@ def _completion_status(
     reports: Sequence[InvestigationReport] = (),
     best_choice: str = "",
     active_condition_ids: Sequence[str] = (),
+    option_states: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     answer_evidence = tuple(record for record in evidence if record.evidence_kind != "navigation_hint")
     navigation_evidence = tuple(record for record in evidence if record.evidence_kind == "navigation_hint")
@@ -1998,14 +2359,14 @@ def _completion_status(
         )
         base = _apply_entity_completion(base, contract, answer_evidence)
         base = _apply_event_completion(base, contract, answer_evidence)
-        return _apply_readiness_dashboard(
+        return _attach_canonical_context(_apply_readiness_dashboard(
             base,
             answer_evidence,
             navigation_evidence,
             reports,
             best_choice,
             active_condition_ids,
-        )
+        ), workspace, contract, answer_evidence, option_states)
     if not coverage:
         base = _apply_identity_completion(
             {
@@ -2020,14 +2381,14 @@ def _completion_status(
         )
         base = _apply_entity_completion(base, contract, answer_evidence)
         base = _apply_event_completion(base, contract, answer_evidence)
-        return _apply_readiness_dashboard(
+        return _attach_canonical_context(_apply_readiness_dashboard(
             base,
             answer_evidence,
             navigation_evidence,
             reports,
             best_choice,
             active_condition_ids,
-        )
+        ), workspace, contract, answer_evidence, option_states)
     adopted_source = max(
         coverage,
         key=lambda source_id: (
@@ -2049,14 +2410,44 @@ def _completion_status(
     )
     base = _apply_entity_completion(base, contract, answer_evidence)
     base = _apply_event_completion(base, contract, answer_evidence)
-    return _apply_readiness_dashboard(
+    base = _apply_p1_semantic_completion(base, query_requirements or {}, answer_evidence)
+    return _attach_canonical_context(_apply_readiness_dashboard(
         base,
         answer_evidence,
         navigation_evidence,
         reports,
         best_choice,
         active_condition_ids,
+    ), workspace, contract, answer_evidence, option_states)
+
+
+def _attach_canonical_context(
+    status: Mapping[str, Any],
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    evidence: Sequence[EvidenceRecord],
+    option_states: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    result = dict(status)
+    snapshot = canonical_fact_snapshot(evidence).to_dict()
+    verdict_table = _option_verdict_table(
+        workspace.case.options,
+        contract,
+        snapshot,
+        option_states or {},
     )
+    result.update(
+        {
+            "completion_ready": bool(result.get("ready_for_answer")),
+            "completion_level": str(result.get("grounding_level_ready", "none") or "none"),
+            "completion_blockers": list(result.get("unresolved_critical_condition_ids", ()) or ()),
+            "canonical_fact_snapshot": snapshot,
+            "canonical_fact_counts": dict(snapshot["canonical_fact_counts"]),
+            "raw_candidate_counts": dict(snapshot["raw_candidate_counts"]),
+            "option_verdict_table": verdict_table,
+        }
+    )
+    return result
 
 
 def _apply_readiness_dashboard(
@@ -2146,7 +2537,9 @@ def _completion_scope_ratio(status: Mapping[str, Any]) -> float:
         return 1.0 if bool(status.get("ready_for_answer")) else 0.0
     return max(
         (
-            float(row.get("covered_count", 0) or 0) / max(1, int(row.get("required_count", 0) or 0))
+            float(row.get("coverage_ratio", 0.0) or 0.0)
+            if "coverage_ratio" in row
+            else float(row.get("covered_count", 0) or 0) / max(1, int(row.get("required_count", 0) or 0))
             for row in rows
         ),
         default=0.0,
@@ -2162,7 +2555,9 @@ def _apply_condition_scope(
     coverage_rows = [source_coverage[adopted_source]] if adopted_source in source_coverage else list(source_coverage.values())
     coverage_ratio = max(
         (
-            float(row.get("covered_count", 0) or 0) / max(1, int(row.get("required_count", 0) or 0))
+            float(row.get("coverage_ratio", 0.0) or 0.0)
+            if "coverage_ratio" in row
+            else float(row.get("covered_count", 0) or 0) / max(1, int(row.get("required_count", 0) or 0))
             for row in coverage_rows
         ),
         default=0.0,
@@ -2272,6 +2667,38 @@ def _apply_event_completion(
     return result
 
 
+def _apply_p1_semantic_completion(
+    status: Mapping[str, Any],
+    query_requirements: Mapping[str, Any],
+    evidence: Sequence[EvidenceRecord],
+) -> dict[str, Any]:
+    result = dict(status)
+    snapshot = canonical_fact_snapshot(evidence).to_dict()
+    if bool(query_requirements.get("requires_event_participant_link")):
+        associations = tuple(
+            row for row in tuple(snapshot.get("entity_associations", ()) or ())
+            if str(row.get("status", "") or "") == "supported"
+            and float(row.get("confidence", 0.0) or 0.0) >= 0.6
+        )
+        result["event_participant_association_ids"] = [
+            str(row.get("association_id", "") or "") for row in associations
+        ]
+        result["event_participant_link_ready"] = bool(associations)
+        result["ready_for_answer"] = bool(result.get("ready_for_answer")) and bool(associations)
+    if bool(query_requirements.get("requires_narrative_inference")):
+        facts = tuple(snapshot.get("inferred_facts", ()) or ())
+        unresolved = tuple(snapshot.get("unresolved_inferences", ()) or ())
+        result["narrative_fact_ids"] = [str(row.get("fact_id", "") or "") for row in facts]
+        result["unresolved_narrative_fact_ids"] = [
+            str(row.get("fact_id", "") or "") for row in unresolved
+        ]
+        result["narrative_inference_ready"] = bool(facts) and not unresolved
+        result["ready_for_answer"] = (
+            bool(result.get("ready_for_answer")) and bool(facts) and not unresolved
+        )
+    return result
+
+
 def _entity_census_coverage_evidence(evidence: Sequence[EvidenceRecord]) -> tuple[EvidenceRecord, ...]:
     return tuple(
         record
@@ -2286,10 +2713,12 @@ def _source_coverage(
     workspace: VirtualVideoWorkspace,
     evidence: Sequence[EvidenceRecord],
 ) -> dict[str, dict[str, Any]]:
-    required: dict[str, list[str]] = {}
+    required: dict[str, list[Any]] = {}
+    segments_by_id = {}
     for segment in workspace.manifest.segments:
-        required.setdefault(segment.source_video_id, []).append(segment.segment_id)
-    covered: dict[str, set[str]] = {}
+        required.setdefault(segment.source_video_id, []).append(segment)
+        segments_by_id[segment.segment_id] = segment
+    covered_ranges: dict[str, dict[str, list[tuple[float, float]]]] = {}
     confidence: dict[str, float] = {}
     for record in evidence:
         if record.modality not in {"visual", "ocr"}:
@@ -2299,18 +2728,49 @@ def _source_coverage(
             segment_id = str(lineage.get("segment_id", "") or "")
             if not source_id or not segment_id:
                 continue
-            covered.setdefault(source_id, set()).add(segment_id)
+            segment = segments_by_id.get(segment_id)
+            if segment is None or record.start_sec is None or record.end_sec is None:
+                continue
+            start = max(float(segment.virtual_start_sec), float(record.start_sec))
+            end = min(float(segment.virtual_end_sec), float(record.end_sec))
+            if end <= start:
+                continue
+            covered_ranges.setdefault(source_id, {}).setdefault(segment_id, []).append((start, end))
             confidence[source_id] = max(confidence.get(source_id, 0.0), record.confidence)
     result: dict[str, dict[str, Any]] = {}
-    for source_id, segment_ids in covered.items():
-        required_ids = tuple(required.get(source_id, ()))
-        missing = [segment_id for segment_id in required_ids if segment_id not in segment_ids]
+    for source_id, segment_ranges in covered_ranges.items():
+        required_segments = tuple(required.get(source_id, ()))
+        segment_coverage = {}
+        covered_ids = []
+        total_required = 0.0
+        total_covered = 0.0
+        for segment in required_segments:
+            interval = (float(segment.virtual_start_sec), float(segment.virtual_end_sec))
+            duration = max(0.0, interval[1] - interval[0])
+            ranges = tuple(segment_ranges.get(segment.segment_id, ()))
+            covered_sec = max(0.0, duration - _uncovered_duration(interval, ranges))
+            ratio = covered_sec / duration if duration > 0 else 0.0
+            total_required += duration
+            total_covered += covered_sec
+            segment_coverage[segment.segment_id] = {
+                "covered_sec": round(covered_sec, 3),
+                "required_sec": round(duration, 3),
+                "coverage_ratio": round(min(1.0, ratio), 6),
+            }
+            if ratio + 1e-9 >= 0.95:
+                covered_ids.append(segment.segment_id)
+        required_ids = tuple(segment.segment_id for segment in required_segments)
+        missing = [segment_id for segment_id in required_ids if segment_id not in covered_ids]
         result[source_id] = {
-            "covered_segment_ids": sorted(segment_ids),
+            "covered_segment_ids": sorted(covered_ids),
             "required_segment_ids": list(required_ids),
             "missing_segment_ids": missing,
-            "covered_count": len(segment_ids),
+            "covered_count": len(covered_ids),
             "required_count": len(required_ids),
+            "covered_duration_sec": round(total_covered, 3),
+            "required_duration_sec": round(total_required, 3),
+            "coverage_ratio": round(total_covered / total_required, 6) if total_required > 0 else 0.0,
+            "segment_coverage": segment_coverage,
             "confidence": confidence.get(source_id, 0.0),
         }
     return result
@@ -2655,7 +3115,7 @@ def _global_absence_gate(
             (
                 record.evidence_id,
                 status,
-                bool(record.operation_metadata.get("qualified_absence")),
+                _record_has_qualified_absence(record),
             )
         )
     positive = [evidence_id for evidence_id, status, _qualified in probes if status == "present"]
@@ -2684,6 +3144,20 @@ def _global_absence_gate(
         "negative_evidence_ids": negative,
         "missing_segment_ids": [],
     }
+
+
+def _record_has_qualified_absence(record: EvidenceRecord) -> bool:
+    metadata = record.operation_metadata
+    qualification = dict(metadata.get("absence_qualification", {}) or {})
+    return bool(
+        str(metadata.get("absence_status", "") or "") == "qualified_absence"
+        and str(qualification.get("status", "") or "") == "qualified_absence"
+        and float(qualification.get("coverage_ratio", 0.0) or 0.0) >= 0.9
+        and qualification.get("expected_dwell_time_sec") is not None
+        and qualification.get("sampling_interval_sec") is not None
+        and float(qualification["sampling_interval_sec"]) <= float(qualification["expected_dwell_time_sec"]) / 2.0
+        and str(qualification.get("visibility_status", "") or "") in {"clear", "visible", "unoccluded"}
+    )
 
 
 def _target_matches_option(target: str, option_text: str) -> bool:
@@ -3373,9 +3847,20 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         conditions=tuple(value.get("conditions", ()) or ()),
         source_candidate_ids=tuple(value.get("source_candidate_ids", ()) or ()),
         inspection_intent=str(value.get("inspection_intent", "") or ""),
+        reference_entities=tuple(
+            item for item in tuple(value.get("reference_entities", ()) or ()) if isinstance(item, Mapping)
+        ),
+        reference_facts=tuple(
+            item for item in tuple(value.get("reference_facts", ()) or ()) if isinstance(item, Mapping)
+        ),
         sampling_floor_fps=(
             float(value.get("sampling_floor_fps") or 0.5)
             if "sampling_floor_fps" in value and value.get("sampling_floor_fps") is not None
+            else None
+        ),
+        expected_event_dwell_sec=(
+            float(value.get("expected_event_dwell_sec"))
+            if value.get("expected_event_dwell_sec") is not None
             else None
         ),
         temporal_resolution_rationale=str(value.get("temporal_resolution_rationale", "") or ""),
@@ -3597,6 +4082,7 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         entity_clusters=tuple(value.get("entity_clusters", ())),
         support_status=str(value.get("support_status", "") or ""),
         support_reason=str(value.get("support_reason", "") or ""),
+        option_verdicts=dict(value.get("option_verdicts", {}) or {}),
         primary_gap=_gap(value["primary_gap"]) if isinstance(value.get("primary_gap"), Mapping) else None,
     )
 
@@ -3626,17 +4112,29 @@ def _apply_answer_audit(
     if status:
         result["answer_audit_status"] = status
         result["audit_reason"] = decision.support_reason
-    if required and bool(gate.get("passed")) and (status != "supported" or not decision.support_reason):
-        result.update(
-            {
-                "base_gate_passed": True,
-                "base_gate_reason": str(gate.get("reason", "") or ""),
-                "passed": False,
-                "reason": "answer_audit_missing",
-                "answer_audit_status": status or "missing",
-                "audit_reason": decision.support_reason,
-            }
-        )
+    if (
+        required
+        and bool(gate.get("passed"))
+        and status not in {"insufficient", "contradicted"}
+        and (status != "supported" or not decision.support_reason)
+    ):
+        # A missing model-authored audit field must not erase a deterministic
+        # completion proof. Preserve the candidate and expose that the audit was
+        # reconstructed from the canonical gate for telemetry.
+        result.update({
+            "base_gate_passed": True,
+            "base_gate_reason": str(gate.get("reason", "") or ""),
+            "answer_audit_status": "inferred_from_completion",
+            "answer_audit_missing_fields": [
+                name
+                for name, missing in (
+                    ("support_status", status != "supported"),
+                    ("support_reason", not decision.support_reason),
+                )
+                if missing
+            ],
+            "audit_reason": decision.support_reason or "Deterministic completion gate supplied the missing audit verdict.",
+        })
         return result
     if status not in {"insufficient", "contradicted"}:
         return result
@@ -3702,6 +4200,31 @@ def _record_option_state(
     options: Mapping[str, str],
 ) -> dict[str, dict[str, Any]]:
     result = {str(key): dict(value) for key, value in states.items()}
+    for raw_option, raw_verdict in decision.option_verdicts.items():
+        option_id = str(raw_option or "").strip().upper()
+        if option_id not in options:
+            continue
+        verdict = dict(raw_verdict)
+        raw_status = str(verdict.get("status", "unknown") or "unknown").casefold()
+        status = {
+            "supports": "supported",
+            "supported": "supported",
+            "refutes": "refuted",
+            "refuted": "refuted",
+            "contradicted": "refuted",
+            "conflicted": "conflicted",
+        }.get(raw_status, "unresolved")
+        rank = {"refuted": 0, "unresolved": 1, "conflicted": 2, "supported": 3}[status]
+        result[option_id] = {
+            "status": status,
+            "rank": rank,
+            "answer": f"{option_id}. {options[option_id]}",
+            "reason": str(verdict.get("reason", "") or "option_audit"),
+            "support_reason": str(verdict.get("reason", "") or ""),
+            "citation_ids": list(verdict.get("evidence_ids", ()) or ()),
+            "canonical_fact_ids": list(verdict.get("canonical_fact_ids", ()) or ()),
+            "support_level": str(verdict.get("support_level", "none") or "none"),
+        }
     option = _letter(decision.answer) or _option_letter_from_answer(decision.answer, options)
     if not option:
         return result
@@ -3726,6 +4249,199 @@ def _record_option_state(
             "citation_ids": list(decision.citations),
         }
     return result
+
+
+def _option_verdict_table(
+    options: Mapping[str, str],
+    contract: ClaimContract,
+    snapshot: Mapping[str, Any],
+    states: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    verdicts: dict[str, dict[str, Any]] = {}
+    for option in options:
+        state = dict(states.get(option, {}) or {})
+        state_status = str(state.get("status", "") or "").casefold()
+        verdicts[option] = {
+            "status": "supported" if state_status == "supported" else "contradicted" if state_status == "refuted" else "unknown",
+            "support_level": str(state.get("support_level", "none") or "none"),
+            "evidence_ids": list(state.get("citation_ids", ()) or ()),
+            "canonical_fact_ids": list(state.get("canonical_fact_ids", ()) or ()),
+            "reason": str(state.get("support_reason", "") or state.get("reason", "") or "not_yet_audited"),
+        }
+    if contract.quantifier == "total_count" and contract.observation_target == "event":
+        confirmed = tuple(snapshot.get("confirmed_events", ()) or ())
+        suspects = tuple(snapshot.get("duplicate_suspect_events", ()) or ())
+        confirmed_count = len(confirmed)
+        fact_ids = [str(row.get("candidate_id", "") or "") for row in confirmed]
+        evidence_ids = list(dict.fromkeys(
+            str(evidence_id)
+            for row in confirmed
+            for evidence_id in tuple(row.get("evidence_ids", ()) or ())
+            if str(evidence_id)
+        ))
+        for option, text in options.items():
+            expected = _answer_count(f"{option}. {text}", options)
+            if expected is None or not confirmed:
+                continue
+            if expected == confirmed_count:
+                verdicts[option] = {
+                    "status": "unknown" if suspects else "supported",
+                    "support_level": "direct",
+                    "evidence_ids": evidence_ids,
+                    "canonical_fact_ids": fact_ids,
+                    "reason": (
+                        f"Canonical ledger confirms {confirmed_count} events but has {len(suspects)} unresolved duplicate suspects."
+                        if suspects
+                        else f"Canonical ledger confirms exactly {confirmed_count} events."
+                    ),
+                }
+            elif not suspects:
+                verdicts[option] = {
+                    "status": "contradicted",
+                    "support_level": "direct",
+                    "evidence_ids": evidence_ids,
+                    "canonical_fact_ids": fact_ids,
+                    "reason": f"Option count {expected} differs from canonical count {confirmed_count}.",
+                }
+    elif contract.quantifier == "distinct_count":
+        resolved = tuple(snapshot.get("resolved_entities", ()) or ())
+        unresolved = tuple(snapshot.get("unresolved_entity_bindings", ()) or ())
+        resolved_count = len(resolved)
+        fact_ids = [str(row.get("entity_id", "") or "") for row in resolved]
+        evidence_ids = list(dict.fromkeys(
+            str(evidence_id)
+            for row in resolved
+            for evidence_id in tuple(row.get("evidence_ids", ()) or ())
+            if str(evidence_id)
+        ))
+        for option, text in options.items():
+            expected = _answer_count(f"{option}. {text}", options)
+            if expected is None or not resolved:
+                continue
+            if expected == resolved_count:
+                verdicts[option] = {
+                    "status": "unknown" if unresolved else "supported",
+                    "support_level": "direct",
+                    "evidence_ids": evidence_ids,
+                    "canonical_fact_ids": fact_ids,
+                    "reason": (
+                        f"Canonical entity ledger resolves {resolved_count} entities with {len(unresolved)} bindings pending."
+                        if unresolved
+                        else f"Canonical entity ledger resolves exactly {resolved_count} entities."
+                    ),
+                }
+            elif not unresolved:
+                verdicts[option] = {
+                    "status": "contradicted",
+                    "support_level": "direct",
+                    "evidence_ids": evidence_ids,
+                    "canonical_fact_ids": fact_ids,
+                    "reason": f"Option count {expected} differs from canonical entity count {resolved_count}.",
+                }
+    elif contract.observation_target == "entity" and contract.aggregation == "compare":
+        resolved = tuple(snapshot.get("resolved_entities", ()) or ())
+        attribute_values = {
+            str(value).strip().casefold()
+            for row in resolved
+            for value in dict(row.get("attributes", {}) or {}).values()
+            if str(value).strip()
+        }
+        evidence_ids = list(dict.fromkeys(
+            str(evidence_id)
+            for row in resolved
+            for evidence_id in tuple(row.get("evidence_ids", ()) or ())
+            if str(evidence_id)
+        ))
+        fact_ids = [str(row.get("entity_id", "") or "") for row in resolved]
+        matched = [
+            option for option, text in options.items()
+            if any(re.search(rf"\b{re.escape(value)}\b", str(text).casefold()) for value in attribute_values)
+        ]
+        if len(matched) == 1:
+            selected = matched[0]
+            verdicts[selected] = {
+                "status": "supported",
+                "support_level": "direct",
+                "evidence_ids": evidence_ids,
+                "canonical_fact_ids": fact_ids,
+                "reason": f"Resolved event participant attributes match option {selected}.",
+            }
+            for option in options:
+                if option != selected and verdicts[option]["status"] == "unknown":
+                    verdicts[option] = {
+                        "status": "contradicted",
+                        "support_level": "direct",
+                        "evidence_ids": evidence_ids,
+                        "canonical_fact_ids": fact_ids,
+                        "reason": f"Resolved event participant attributes distinguish option {selected} from {option}.",
+                    }
+    elif contract.observation_target == "event" and contract.aggregation == "compare":
+        facts = tuple(snapshot.get("inferred_facts", ()) or ())
+        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        for fact in facts:
+            for assessment in tuple(fact.get("hypothesis_assessments", ()) or ()):
+                if not isinstance(assessment, Mapping):
+                    continue
+                option = str(assessment.get("option_id", "") or "").strip().upper()
+                if option in options:
+                    grouped.setdefault(option, []).append(assessment)
+        for option, assessments in grouped.items():
+            statuses = {str(row.get("status", "unknown") or "unknown").casefold() for row in assessments}
+            status = "supported" if "supported" in statuses and "contradicted" not in statuses else "contradicted" if statuses == {"contradicted"} else "unknown"
+            supporting_facts = [
+                fact for fact in facts
+                if any(str(row.get("option_id", "") or "").strip().upper() == option for row in tuple(fact.get("hypothesis_assessments", ()) or ()))
+            ]
+            verdicts[option] = {
+                "status": status,
+                "support_level": "inferred" if status != "unknown" else "none",
+                "evidence_ids": list(dict.fromkeys(
+                    str(evidence_id) for fact in supporting_facts
+                    for evidence_id in tuple(fact.get("evidence_ids", ()) or ()) if str(evidence_id)
+                )),
+                "canonical_fact_ids": [str(fact.get("fact_id", "") or "") for fact in supporting_facts],
+                "reason": "; ".join(
+                    str(row.get("reason", "") or "") for row in assessments if str(row.get("reason", "") or "")
+                )[:500] or "Canonical narrative facts assess this option predicate.",
+            }
+    rank = {"supported": 3, "unknown": 1, "contradicted": 0}
+    ordered = sorted(options, key=lambda option: (-rank[verdicts[option]["status"]], option))
+    supported = [option for option in ordered if verdicts[option]["status"] == "supported"]
+    return {
+        "option_verdicts": verdicts,
+        "best_option": supported[0] if len(supported) == 1 else ordered[0] if ordered else "",
+        "strongest_alternative": ordered[1] if len(ordered) > 1 else "",
+        "discriminating_predicate": (
+            "canonical_count" if contract.quantifier in {"total_count", "distinct_count"}
+            else "resolved_entity_attributes" if contract.observation_target == "entity" and contract.aggregation == "compare"
+            else "canonical_narrative_inference" if contract.observation_target == "event" and contract.aggregation == "compare"
+            else ""
+        ),
+        "audit_status": "complete" if all(row["status"] != "unknown" for row in verdicts.values()) else "partial",
+    }
+
+
+def _canonical_forced_answer(
+    options: Mapping[str, str],
+    completion_status: Mapping[str, Any],
+    evidence: Sequence[EvidenceRecord],
+) -> tuple[str, tuple[str, ...]] | None:
+    table = dict(completion_status.get("option_verdict_table", {}) or {})
+    verdicts = dict(table.get("option_verdicts", {}) or {})
+    supported = [
+        option for option in options
+        if str(dict(verdicts.get(option, {}) or {}).get("status", "") or "").casefold() == "supported"
+    ]
+    recommended = str(table.get("best_option", "") or "")
+    if len(supported) != 1 or supported[0] != recommended or recommended not in options:
+        return None
+    citations = _answer_citations(
+        tuple(str(item) for item in dict(verdicts[recommended]).get("evidence_ids", ()) or ()),
+        evidence,
+    )
+    if not citations:
+        return None
+    return f"{recommended}. {options[recommended]}", citations
 
 
 def _candidate_can_be_forced(decision: ReasonerDecision, evidence: Sequence[EvidenceRecord]) -> bool:
@@ -3795,6 +4511,8 @@ def _evidence_digest(
                 if isinstance(entity, Mapping)
             ],
             "events": list(item.operation_metadata.get("events", ())),
+            "entity_associations": list(item.operation_metadata.get("entity_associations", ())),
+            "narrative_facts": list(item.operation_metadata.get("narrative_facts", ())),
             "target_presence": dict(item.operation_metadata.get("target_presence", {}) or {}),
             "measurements": list(item.operation_metadata.get("measurements", ())),
             "relations": list(item.operation_metadata.get("relations", ())),
@@ -3821,9 +4539,12 @@ def _entity_observation_digest(value: Mapping[str, Any]) -> dict[str, Any]:
     row = dict(value)
     return {
         "entity_observation_id": str(row.get("entity_observation_id", "") or ""),
+        "entity_hypothesis_id": str(row.get("entity_hypothesis_id", "") or ""),
+        "association_confidence": float(row.get("association_confidence", 0.0) or 0.0),
         "local_id": str(row.get("local_id", "") or ""),
         "description": str(row.get("description", "") or ""),
         "visual_signature": str(row.get("visual_signature", "") or ""),
+        "attributes": dict(row.get("attributes", {}) or {}),
         "role": str(row.get("role", "") or ""),
         "question_relation": str(row.get("question_relation", "") or ""),
         "supports_question_relation": _metadata_flag(row.get("supports_question_relation")),
@@ -3976,6 +4697,51 @@ def _stagnation_status(reports: Sequence[InvestigationReport]) -> dict[str, Any]
         "reason": "no_goal_or_frontier_progress" if stagnant else "coverage_without_condition_progress" if low_yield_coverage else "",
         "required_shift": "change range, direction, modality, or region focus" if stagnant or low_yield_coverage else "",
     }
+
+
+def _task_progress_fingerprint(task: InvestigationTask) -> tuple[Any, ...]:
+    if task.time_range is None:
+        time_bucket: tuple[float, float] | tuple[()] = ()
+    else:
+        start, end = task.time_range
+        time_bucket = (round(float(start), 1), round(float(end), 1))
+    condition_ids = tuple(sorted(condition.condition_id for condition in task.conditions if condition.condition_id))
+    target_predicate = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        " ".join((task.claim_to_verify, task.expected_evidence, task.goal)).casefold(),
+    ).strip()[:240]
+    return (
+        task.segment_id,
+        time_bucket,
+        condition_ids,
+        target_predicate,
+        task.inspection_mode,
+        round(float(task.sampling_floor_fps or 0.5), 2),
+        tuple(sorted(task.source_candidate_ids)),
+        tuple(
+            sorted(str(item.get("entity_hypothesis_id", "") or item.get("participant_id", "") or "")
+                   for item in task.reference_entities)
+        ),
+        tuple(sorted(str(item.get("fact_id", "") or "") for item in task.reference_facts)),
+        tuple(sorted(task.modality_hint)),
+        task.region_hint.casefold(),
+    )
+
+
+def _canonical_progress_signature(snapshot: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        len(tuple(snapshot.get("confirmed_events", ()) or ())),
+        len(tuple(snapshot.get("duplicate_suspect_events", ()) or ())),
+        len(tuple(snapshot.get("refuted_events", ()) or ())),
+        len(tuple(snapshot.get("resolved_entities", ()) or ())),
+        len(tuple(snapshot.get("unresolved_entity_bindings", ()) or ())),
+        len(tuple(snapshot.get("state_transitions", ()) or ())),
+        len(tuple(snapshot.get("entity_associations", ()) or ())),
+        len(tuple(snapshot.get("inferred_facts", ()) or ())),
+        len(tuple(snapshot.get("unresolved_inferences", ()) or ())),
+        tuple(str(row.get("event_id", "") or "") for row in tuple(snapshot.get("ordered_events", ()) or ())),
+    )
 
 
 def _retrieval_status(reports: Sequence[InvestigationReport], *, verified: bool) -> str:

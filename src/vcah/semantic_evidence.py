@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 from typing import Any, Mapping, Sequence
 
@@ -18,6 +18,105 @@ class SemanticRepairRequest:
     modality_hint: tuple[str, ...]
     expected_evidence: str
     inspection_mode: str = "window"
+
+
+@dataclass(frozen=True)
+class AbsenceQualification:
+    status: str
+    coverage_ratio: float
+    sampling_interval_sec: float | None
+    expected_dwell_time_sec: float | None
+    visibility_status: str
+    targeted_inspection_count: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class CanonicalFactSnapshot:
+    confirmed_events: tuple[Mapping[str, Any], ...] = ()
+    duplicate_suspect_events: tuple[Mapping[str, Any], ...] = ()
+    refuted_events: tuple[Mapping[str, Any], ...] = ()
+    resolved_entities: tuple[Mapping[str, Any], ...] = ()
+    unresolved_entity_bindings: tuple[Mapping[str, Any], ...] = ()
+    state_transitions: tuple[Mapping[str, Any], ...] = ()
+    entity_associations: tuple[Mapping[str, Any], ...] = ()
+    inferred_facts: tuple[Mapping[str, Any], ...] = ()
+    unresolved_inferences: tuple[Mapping[str, Any], ...] = ()
+    ordered_events: tuple[Mapping[str, Any], ...] = ()
+    raw_candidate_counts: Mapping[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "raw_candidate_counts", dict(self.raw_candidate_counts or {}))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "confirmed_events": [dict(row) for row in self.confirmed_events],
+            "duplicate_suspect_events": [dict(row) for row in self.duplicate_suspect_events],
+            "refuted_events": [dict(row) for row in self.refuted_events],
+            "resolved_entities": [dict(row) for row in self.resolved_entities],
+            "unresolved_entity_bindings": [dict(row) for row in self.unresolved_entity_bindings],
+            "state_transitions": [dict(row) for row in self.state_transitions],
+            "entity_associations": [dict(row) for row in self.entity_associations],
+            "inferred_facts": [dict(row) for row in self.inferred_facts],
+            "unresolved_inferences": [dict(row) for row in self.unresolved_inferences],
+            "ordered_events": [dict(row) for row in self.ordered_events],
+            "canonical_fact_counts": {
+                "events": len(self.confirmed_events),
+                "entities": len(self.resolved_entities),
+                "state_transitions": len(self.state_transitions),
+                "entity_associations": len(self.entity_associations),
+                "inferred_facts": len(self.inferred_facts),
+            },
+            "raw_candidate_counts": dict(self.raw_candidate_counts),
+        }
+
+
+def qualify_absence(
+    interval: tuple[float, float],
+    inspected_ranges: Sequence[tuple[float, float]],
+    sampling_interval: float | None,
+    expected_dwell_time: float | None,
+    visibility_status: str,
+    *,
+    targeted_inspection_count: int = 1,
+    coverage_threshold: float = 0.9,
+) -> AbsenceQualification:
+    start, end = sorted((float(interval[0]), float(interval[1])))
+    duration = max(0.0, end - start)
+    clipped = sorted(
+        (max(start, min(float(left), float(right))), min(end, max(float(left), float(right))))
+        for left, right in inspected_ranges
+        if min(end, max(float(left), float(right))) > max(start, min(float(left), float(right)))
+    )
+    covered = 0.0
+    cursor = start
+    for left, right in clipped:
+        if right <= cursor:
+            continue
+        covered += max(0.0, right - max(cursor, left))
+        cursor = max(cursor, right)
+    coverage_ratio = min(1.0, covered / duration) if duration > 0 else 0.0
+    visibility = str(visibility_status or "unknown").strip().casefold()
+    sample_interval = float(sampling_interval) if sampling_interval and sampling_interval > 0 else None
+    dwell = float(expected_dwell_time) if expected_dwell_time and expected_dwell_time > 0 else None
+    common = {
+        "coverage_ratio": coverage_ratio,
+        "sampling_interval_sec": sample_interval,
+        "expected_dwell_time_sec": dwell,
+        "visibility_status": visibility,
+        "targeted_inspection_count": max(0, int(targeted_inspection_count)),
+    }
+    if visibility not in {"clear", "visible", "unoccluded"}:
+        return AbsenceQualification(status="unknown_due_to_visibility", reason="visibility_not_established", **common)
+    if coverage_ratio + 1e-9 < float(coverage_threshold):
+        return AbsenceQualification(status="unknown_due_to_coverage", reason="target_interval_coverage_insufficient", **common)
+    if dwell is None:
+        return AbsenceQualification(status="unknown_due_to_coverage", reason="expected_event_dwell_time_unknown", **common)
+    if sample_interval is None or sample_interval > dwell / 2.0:
+        return AbsenceQualification(status="unknown_due_to_coverage", reason="sampling_interval_exceeds_half_dwell_time", **common)
+    if int(targeted_inspection_count) < 1:
+        return AbsenceQualification(status="not_observed", reason="no_targeted_inspection", **common)
+    return AbsenceQualification(status="qualified_absence", reason="coverage_sampling_and_visibility_sufficient", **common)
 
 
 def semantic_repair_requests(
@@ -261,6 +360,11 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                     if _normalize_participant_id(value)
                 )
             )
+            participant_roles = tuple(
+                dict(item)
+                for item in tuple(event.get("participants", ()) or ())
+                if isinstance(item, Mapping)
+            )
             phase = _normalize_key(event.get("phase")) or "unknown"
             from_previous = _flag(event.get("continues_from_previous"))
             to_next = _flag(event.get("continues_to_next"))
@@ -268,7 +372,18 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                 (
                     item for item in confirmed
                     if item["source_video_id"] == source_id
-                    and item["signature"] == signature
+                    and (
+                        item["signature"] == signature
+                        or _same_focal_transition_episode(
+                            start,
+                            end,
+                            event_class=event_class,
+                            counting_unit=counting_unit,
+                            participant_ids=participant_ids,
+                            transition=_normalize_key(event.get("transition")),
+                            existing=item,
+                        )
+                    )
                     and _same_counted_occurrence(
                         start,
                         end,
@@ -295,6 +410,9 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                     "event_class": event_class,
                     "counting_unit": counting_unit,
                     "participant_ids": list(participant_ids),
+                    "participants": [],
+                    "transitions": [],
+                    "merge_history": [],
                     "phases": [],
                     "continues_from_previous": from_previous,
                     "continues_to_next": to_next,
@@ -303,7 +421,34 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
             row["virtual_time_range"] = [min(row["virtual_time_range"][0], start), max(row["virtual_time_range"][1], end)]
             row["evidence_ids"].append(record.evidence_id)
             row["event_keys"].append(str(event.get("event_key", "") or ""))
+            row["merge_history"].append(
+                {
+                    "evidence_id": record.evidence_id,
+                    "local_id": str(event.get("local_id", "") or ""),
+                    "event_key": str(event.get("event_key", "") or ""),
+                    "virtual_time_range": [start, end],
+                }
+            )
             row["descriptions"].append(str(event.get("description", "") or ""))
+            row["transitions"].append(_normalize_key(event.get("transition")))
+            row["participant_ids"] = list(dict.fromkeys((*row["participant_ids"], *participant_ids)))[:12]
+            known_participants = {
+                (
+                    str(item.get("entity_hypothesis_id", "") or ""),
+                    str(item.get("participant_id", "") or ""),
+                    str(item.get("role", "") or ""),
+                )
+                for item in row["participants"]
+            }
+            for participant in participant_roles:
+                key = (
+                    str(participant.get("entity_hypothesis_id", "") or ""),
+                    str(participant.get("participant_id", "") or ""),
+                    str(participant.get("role", "") or ""),
+                )
+                if key not in known_participants:
+                    row["participants"].append(participant)
+                    known_participants.add(key)
             row["phases"].append(phase)
             row["continues_from_previous"] = bool(row["continues_from_previous"] or from_previous)
             row["continues_to_next"] = bool(row["continues_to_next"] or to_next)
@@ -321,6 +466,9 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                 "event_class": row["event_class"],
                 "counting_unit": row["counting_unit"],
                 "participant_ids": list(row["participant_ids"]),
+                "participants": [dict(item) for item in row["participants"]],
+                "transitions": [item for item in dict.fromkeys(row["transitions"]) if item],
+                "merge_history": list(row["merge_history"])[:12],
                 "phases": list(dict.fromkeys(row["phases"])),
             }
         )
@@ -331,6 +479,242 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
         "unresolved_event_candidate_count": len(unresolved_rows),
         "unresolved_event_windows": unresolved_rows[:16],
     }
+
+
+def canonical_fact_snapshot(evidence: Sequence[EvidenceRecord]) -> CanonicalFactSnapshot:
+    ledger = event_candidate_ledger(evidence)
+    raw_event_count = 0
+    refuted_events: list[dict[str, Any]] = []
+    entities: dict[str, dict[str, Any]] = {}
+    unresolved_entities: dict[str, dict[str, Any]] = {}
+    transitions: list[dict[str, Any]] = []
+    associations: list[dict[str, Any]] = []
+    inferred_facts: list[dict[str, Any]] = []
+    unresolved_inferences: list[dict[str, Any]] = []
+    for record in evidence:
+        for event_index, event in enumerate(record.operation_metadata.get("events", ()) or ()):
+            if not isinstance(event, Mapping):
+                continue
+            raw_event_count += 1
+            status = str(event.get("status", "") or "").strip().casefold()
+            if status in {"refuted", "contradicted"} or event.get("supports_question_event") is False:
+                refuted_events.append(
+                    {
+                        "fact_id": f"refuted_event_{len(refuted_events) + 1:03d}",
+                        "event_key": str(event.get("event_key", "") or ""),
+                        "evidence_ids": [record.evidence_id],
+                        "raw_candidate_index": event_index,
+                    }
+                )
+            for participant in tuple(event.get("participants", ()) or ()):
+                if not isinstance(participant, Mapping):
+                    continue
+                hypothesis_id = str(participant.get("entity_hypothesis_id", "") or "").strip()
+                participant_id = str(participant.get("participant_id", "") or hypothesis_id).strip()
+                if not participant_id:
+                    continue
+                try:
+                    confidence = float(participant.get("association_confidence", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                entity_row = {
+                    "entity_id": hypothesis_id or participant_id,
+                    "entity_observation_id": f"{record.evidence_id}:{participant_id}",
+                    "association_confidence": max(0.0, min(1.0, confidence)),
+                    "role": str(participant.get("role", "") or ""),
+                    "visual_signature": str(participant.get("visual_signature", "") or ""),
+                    "attributes": dict(participant.get("attributes", {}) or {}),
+                    "source_event_key": str(event.get("event_key", "") or ""),
+                    "evidence_ids": [record.evidence_id],
+                }
+                if hypothesis_id and confidence >= 0.6:
+                    existing = entities.setdefault(hypothesis_id, entity_row)
+                    existing["evidence_ids"] = list(
+                        dict.fromkeys((*existing["evidence_ids"], record.evidence_id))
+                    )
+                    existing["association_confidence"] = max(
+                        float(existing.get("association_confidence", 0.0) or 0.0),
+                        entity_row["association_confidence"],
+                    )
+                    existing["attributes"] = {**dict(existing.get("attributes", {}) or {}), **entity_row["attributes"]}
+                else:
+                    unresolved_entities.setdefault(entity_row["entity_id"], entity_row)
+        for entity in record.operation_metadata.get("entities", ()) or ():
+            if not isinstance(entity, Mapping):
+                continue
+            observation_id = str(entity.get("entity_observation_id", "") or "").strip()
+            if not observation_id:
+                continue
+            hypothesis_id = str(entity.get("entity_hypothesis_id", "") or "").strip()
+            try:
+                association_confidence = float(entity.get("association_confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                association_confidence = 0.0
+            row = {
+                "entity_id": hypothesis_id or observation_id,
+                "entity_observation_id": observation_id,
+                "association_confidence": max(0.0, min(1.0, association_confidence)),
+                "role": str(entity.get("role", "") or ""),
+                "visual_signature": str(entity.get("visual_signature", "") or ""),
+                "attributes": dict(entity.get("attributes", {}) or {}),
+                "evidence_ids": [record.evidence_id],
+            }
+            if _flag(entity.get("countable")) and hypothesis_id and association_confidence >= 0.6:
+                existing = entities.setdefault(row["entity_id"], row)
+                existing["evidence_ids"] = list(dict.fromkeys((*existing["evidence_ids"], record.evidence_id)))
+                existing["association_confidence"] = max(
+                    float(existing.get("association_confidence", 0.0) or 0.0),
+                    row["association_confidence"],
+                )
+                existing["attributes"] = {**dict(existing.get("attributes", {}) or {}), **row["attributes"]}
+            else:
+                unresolved_entities.setdefault(row["entity_id"], row)
+        for relation in normalize_relations(record.operation_metadata.get("relations"), evidence_id=record.evidence_id):
+            if relation.relation_type != "transition" or relation.status != "supported":
+                continue
+            transitions.append(
+                {
+                    "fact_id": f"state_transition_{len(transitions) + 1:03d}",
+                    "object_hypothesis_id": relation.subject_id,
+                    "related_object_id": relation.object_id,
+                    "transition": relation.value or relation.description,
+                    "evidence_ids": list(relation.evidence_ids),
+                }
+            )
+        for raw_association in record.operation_metadata.get("entity_associations", ()) or ():
+            if not isinstance(raw_association, Mapping):
+                continue
+            status = str(raw_association.get("status", "unknown") or "unknown").strip().casefold()
+            try:
+                confidence = float(raw_association.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            source_participant_id = str(raw_association.get("source_participant_id", "") or "").strip()
+            hypothesis_id = str(raw_association.get("entity_hypothesis_id", "") or "").strip()
+            target_observation_id = str(raw_association.get("target_entity_observation_id", "") or "").strip()
+            if not source_participant_id or not hypothesis_id or not target_observation_id:
+                continue
+            row = {
+                "association_id": str(raw_association.get("association_id", "") or f"association_{len(associations) + 1:03d}"),
+                "source_participant_id": source_participant_id,
+                "source_event_key": str(raw_association.get("source_event_key", "") or ""),
+                "target_entity_observation_id": target_observation_id,
+                "entity_hypothesis_id": hypothesis_id,
+                "status": status if status in {"supported", "refuted", "unknown"} else "unknown",
+                "confidence": max(0.0, min(1.0, confidence)),
+                "shared_attributes": dict(raw_association.get("shared_attributes", {}) or {}),
+                "distinguishing_attributes": dict(raw_association.get("distinguishing_attributes", {}) or {}),
+                "evidence_ids": [record.evidence_id],
+            }
+            associations.append(row)
+            if row["status"] != "supported" or row["confidence"] < 0.6:
+                continue
+            target = next(
+                (
+                    entity for entity in record.operation_metadata.get("entities", ()) or ()
+                    if isinstance(entity, Mapping)
+                    and str(entity.get("entity_observation_id", "") or "") == target_observation_id
+                ),
+                {},
+            )
+            entity_row = {
+                "entity_id": hypothesis_id,
+                "entity_observation_id": target_observation_id,
+                "association_confidence": row["confidence"],
+                "role": str(target.get("role", "") or ""),
+                "visual_signature": str(target.get("visual_signature", "") or ""),
+                "attributes": dict(target.get("attributes", {}) or {}),
+                "source_participant_id": source_participant_id,
+                "source_event_key": row["source_event_key"],
+                "evidence_ids": [record.evidence_id],
+            }
+            existing = entities.setdefault(hypothesis_id, entity_row)
+            existing["evidence_ids"] = list(dict.fromkeys((*existing["evidence_ids"], record.evidence_id)))
+            existing["association_confidence"] = max(
+                float(existing.get("association_confidence", 0.0) or 0.0),
+                entity_row["association_confidence"],
+            )
+            existing["attributes"] = {
+                **dict(existing.get("attributes", {}) or {}),
+                **entity_row["attributes"],
+                **dict(row["distinguishing_attributes"]),
+            }
+            if entity_row["visual_signature"]:
+                existing["visual_signature"] = entity_row["visual_signature"]
+        for raw_fact in record.operation_metadata.get("narrative_facts", ()) or ():
+            if not isinstance(raw_fact, Mapping):
+                continue
+            try:
+                confidence = float(raw_fact.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            row = {
+                "fact_id": str(raw_fact.get("fact_id", "") or f"inferred_fact_{len(inferred_facts) + len(unresolved_inferences) + 1:03d}"),
+                "subject_id": str(raw_fact.get("subject_id", "") or ""),
+                "setup_state": str(raw_fact.get("setup_state", "") or ""),
+                "observed_bridge": str(raw_fact.get("observed_bridge", "") or ""),
+                "outcome_state": str(raw_fact.get("outcome_state", "") or ""),
+                "inference": str(raw_fact.get("inference", "") or ""),
+                "inference_basis": str(raw_fact.get("inference_basis", "") or ""),
+                "confidence": max(0.0, min(1.0, confidence)),
+                "hypothesis_assessments": [
+                    dict(item) for item in tuple(raw_fact.get("hypothesis_assessments", ()) or ())
+                    if isinstance(item, Mapping)
+                ],
+                "alternative_counterevidence": [
+                    dict(item) for item in tuple(raw_fact.get("alternative_counterevidence", ()) or ())
+                    if isinstance(item, Mapping)
+                ],
+                "evidence_ids": [record.evidence_id],
+            }
+            complete = bool(row["setup_state"] and row["outcome_state"] and row["inference"])
+            if complete and row["confidence"] >= 0.6:
+                inferred_facts.append(row)
+            else:
+                unresolved_inferences.append(row)
+    resolved_source_participants = {
+        str(row["source_participant_id"]).casefold()
+        for row in associations
+        if row["status"] == "supported" and float(row["confidence"]) >= 0.6
+    }
+    unresolved_entities = {
+        key: row for key, row in unresolved_entities.items()
+        if str(row.get("entity_id", "") or "").casefold() not in resolved_source_participants
+    }
+    if inferred_facts:
+        # Incomplete setup/outcome rows are discovery scaffolding. Once a complete
+        # high-confidence bridge exists, they must not remain completion blockers.
+        unresolved_inferences = []
+    confirmed = tuple(dict(row) for row in ledger["confirmed_event_candidates"])
+    suspects = tuple(
+        {
+            "fact_id": f"duplicate_suspect_{index:03d}",
+            "status": "unresolved",
+            **dict(row),
+        }
+        for index, row in enumerate(ledger["unresolved_event_windows"], start=1)
+    )
+    ordered = tuple(
+        {
+            "event_id": str(row.get("candidate_id", "") or ""),
+            "time": float(tuple(row.get("virtual_time_range", (0.0, 0.0)))[0]),
+            "evidence_ids": list(row.get("evidence_ids", ()) or ()),
+        }
+        for row in confirmed
+    )
+    return CanonicalFactSnapshot(
+        confirmed_events=confirmed,
+        duplicate_suspect_events=suspects,
+        refuted_events=tuple(refuted_events),
+        resolved_entities=tuple(entities.values()),
+        unresolved_entity_bindings=tuple(unresolved_entities.values()),
+        state_transitions=tuple(transitions),
+        entity_associations=tuple(associations),
+        inferred_facts=tuple(inferred_facts),
+        unresolved_inferences=tuple(unresolved_inferences),
+        ordered_events=ordered,
+        raw_candidate_counts={"events": raw_event_count},
+    )
 
 
 def _event_signature(event: Mapping[str, Any]) -> str:
@@ -379,6 +763,43 @@ def _same_counted_occurrence(
     return False
 
 
+def _same_focal_transition_episode(
+    start: float,
+    end: float,
+    *,
+    event_class: str,
+    counting_unit: str,
+    participant_ids: Sequence[str],
+    transition: str,
+    existing: Mapping[str, Any],
+) -> bool:
+    if not _equivalent_interval(start, end, *existing["virtual_time_range"]):
+        return False
+    existing_participants = set(existing.get("participant_ids", ()) or ())
+    shared = existing_participants.intersection(participant_ids)
+    if not shared.intersection({"camera_holder", "video recorder", "recorder"}):
+        return False
+    existing_class = str(existing.get("event_class", "") or "")
+    if event_class and existing_class and event_class != existing_class:
+        return False
+    units = {item for item in (counting_unit, str(existing.get("counting_unit", "") or "")) if item}
+    if any("person" in unit or "racer" in unit for unit in units):
+        return False
+    existing_transitions = {str(item) for item in existing.get("transitions", ()) or () if str(item)}
+    if transition and existing_transitions and not any(
+        _transition_family(transition) == _transition_family(item) for item in existing_transitions
+    ):
+        return False
+    return True
+
+
+def _transition_family(value: str) -> str:
+    text = _normalize_key(value)
+    if any(token in text for token in ("overtak", "pass", "rank", "place", "drops position")):
+        return "position_loss"
+    return text
+
+
 def _normalize_participant_id(value: Any) -> str:
     generic = {"dance", "group", "crew", "team", "performer", "performers", "act"}
     tokens = [
@@ -386,7 +807,13 @@ def _normalize_participant_id(value: Any) -> str:
         for token in re.findall(r"[a-z0-9]+", str(value or "").casefold())
         if token not in generic
     ]
-    return " ".join(tokens)
+    normalized = " ".join(tokens)
+    if normalized in {
+        "video recorder", "recorder", "camera wearer", "camera holder", "camera operator",
+        "camera operator wearer", "pov skier", "pov rider",
+    }:
+        return "camera_holder"
+    return normalized
 
 
 def _merge_unresolved(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import inspect
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
@@ -253,6 +254,19 @@ def test_query_compiler_covers_errors10_global_and_cross_window_contracts() -> N
     assert (color_change.required_scope, color_change.aggregation) == ("multi_window", "compare")
 
 
+def test_cross_window_identity_and_narrative_requirements_trigger_p1_protocols() -> None:
+    identity = multiround.compile_query_requirements(
+        "In that same last instance, what final position did the second person who overtook the recorder finish in?"
+    )
+    narrative = multiround.compile_query_requirements(
+        "During this narrative gap, which option best represents Joe's internal monologue?"
+    )
+
+    assert identity["requires_identity_link"] is True
+    assert identity["requires_event_participant_link"] is True
+    assert narrative["requires_narrative_inference"] is True
+
+
 def test_query_compiler_keeps_explicitly_bounded_event_count_local() -> None:
     contract = multiround.compile_query_contract(
         "How many times does the title card appear in the first 5 minutes?"
@@ -387,14 +401,23 @@ def test_global_absence_requires_resolution_qualified_negative(tmp_path: Path) -
     )
 
     def negative(evidence_id: str, qualified: bool) -> EvidenceRecord:
+        qualification = {
+            "status": "qualified_absence" if qualified else "unknown_due_to_coverage",
+            "coverage_ratio": 1.0,
+            "sampling_interval_sec": 0.5 if qualified else 2.0,
+            "expected_dwell_time_sec": 2.0,
+            "visibility_status": "clear",
+        }
         return EvidenceRecord(
             evidence_id=evidence_id, beat_id="", start_sec=0.0, end_sec=5.0,
             modality="visual", pointer=f"virtual://{evidence_id}", verbatim="The backflip was not found.",
             frame_refs=("frame.jpg",), observation_polarity="negative",
             operation_metadata={
                 "target_presence": {"target": "backflip skill", "status": "absent", "confidence": 0.9},
-                "qualified_absence": qualified,
-                "absence_resolution_fps": 2.0 if qualified else 0.5,
+                    "qualified_absence": qualified,
+                    "absence_status": qualification["status"],
+                    "absence_qualification": qualification,
+                    "absence_resolution_fps": 2.0 if qualified else 0.5,
             },
         )
 
@@ -444,7 +467,7 @@ def test_sampling_plan_tracks_unspecified_floor_and_downgrades_missing_rationale
     assert incomplete.priority == 0.8
 
 
-def test_discriminative_audit_fails_closed_when_reason_is_missing() -> None:
+def test_discriminative_audit_preserves_completed_gate_when_reason_is_missing() -> None:
     gate = {"passed": True, "reason": "verified_window_evidence"}
 
     missing = multiround._apply_answer_audit(
@@ -463,9 +486,34 @@ def test_discriminative_audit_fails_closed_when_reason_is_missing() -> None:
         required=True,
     )
 
-    assert missing["passed"] is False
-    assert missing["reason"] == "answer_audit_missing"
+    assert missing["passed"] is True
+    assert missing["answer_audit_status"] == "inferred_from_completion"
+    assert missing["answer_audit_missing_fields"] == ["support_reason"]
     assert supported["passed"] is True
+
+
+def test_total_count_option_verdicts_use_only_canonical_snapshot() -> None:
+    contract = multiround.compile_query_contract(
+        "How many times was the rider overtaken?",
+        {"A": "Three", "B": "Seven"},
+    )
+    table = multiround._option_verdict_table(
+        {"A": "Three", "B": "Seven"},
+        contract,
+        {
+            "confirmed_events": [
+                {"candidate_id": f"event_{index}", "evidence_ids": [f"ev_{index}"]}
+                for index in range(3)
+            ],
+            "duplicate_suspect_events": [],
+            "raw_candidate_counts": {"events": 7},
+        },
+        {},
+    )
+
+    assert table["best_option"] == "A"
+    assert table["option_verdicts"]["A"]["status"] == "supported"
+    assert table["option_verdicts"]["B"]["status"] == "contradicted"
 
 
 def test_new_coverage_does_not_count_as_goal_progress() -> None:
@@ -859,6 +907,19 @@ def test_repeated_partial_attempts_emit_soft_stagnation_warning() -> None:
     assert "change range" in status["required_shift"]
 
 
+def test_task_progress_fingerprint_ignores_reworded_query_id_but_allows_strategy_shift() -> None:
+    first = InvestigationTask(
+        "q_first", "Inspect the same overtake.", segment_id="seg_1", time_range=(10.0, 20.0),
+        inspection_mode="event_window", sampling_floor_fps=1.0,
+        temporal_resolution_rationale="The event lasts about two seconds.",
+    )
+    renamed = replace(first, query_id="q_renamed")
+    denser = replace(first, query_id="q_denser", sampling_floor_fps=2.0)
+
+    assert multiround._task_progress_fingerprint(first) == multiround._task_progress_fingerprint(renamed)
+    assert multiround._task_progress_fingerprint(first) != multiround._task_progress_fingerprint(denser)
+
+
 class ScriptedReasoner:
     def __init__(self) -> None:
         self.calls = 0
@@ -1115,6 +1176,276 @@ def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     return VirtualVideoWorkspace.load(workspace.root_dir)
 
 
+def test_participant_link_repair_targets_ordinal_event_participant(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    workspace = replace(
+        workspace,
+        case=replace(
+            workspace.case,
+            question="In the last instance, what color clothes did the second person who ultimately overtook the recorder wear?",
+            options={"A": "red clothes", "B": "green clothes"},
+        ),
+    )
+    evidence = EvidenceRecord(
+        evidence_id="ev_overtakes",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=4.0,
+        modality="visual",
+        pointer="virtual://overtakes",
+        verbatim="Two racers overtake the recorder.",
+        frame_refs=("frame.jpg",),
+        operation_metadata={
+            "events": [
+                {
+                    "event_key": "first racer overtakes recorder",
+                    "event_class": "overtake",
+                    "counting_unit": "overtake_episode",
+                    "participant_ids": ["recorder", "first racer"],
+                    "participants": [{"participant_id": "first racer", "role": "overtaker"}],
+                    "start_sec": 1.0,
+                    "end_sec": 1.5,
+                    "supports_question_event": True,
+                },
+                {
+                    "event_key": "second racer overtakes recorder",
+                    "event_class": "overtake",
+                    "counting_unit": "overtake_episode",
+                    "participant_ids": ["recorder", "second racer"],
+                    "participants": [{
+                        "participant_id": "second racer",
+                        "role": "overtaker",
+                        "visual_signature": "green jacket; black helmet",
+                    }],
+                    "start_sec": 3.0,
+                    "end_sec": 3.5,
+                    "supports_question_event": True,
+                },
+            ],
+        },
+    )
+
+    tasks = multiround._event_participant_association_tasks(
+        workspace, (evidence,), round_id=2, limit=2,
+    )
+
+    assert tasks[0].inspection_mode == "entity_association"
+    assert tasks[0].reference_entities[0]["participant_id"] == "second racer"
+    assert tasks[0].reference_entities[0]["entity_hypothesis_id"]
+
+
+def test_participant_link_repair_targets_ordinal_participant_in_consolidated_event(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    workspace = replace(
+        workspace,
+        case=replace(
+            workspace.case,
+            question="In the last instance, what color clothes did the second person who ultimately overtook the recorder wear?",
+            options={"A": "red clothes", "B": "green clothes"},
+        ),
+    )
+    evidence = EvidenceRecord(
+        evidence_id="ev_consolidated_overtake",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=4.0,
+        modality="visual",
+        pointer="virtual://consolidated_overtake",
+        verbatim="Two racers overtake the recorder in one continuous episode.",
+        frame_refs=("frame.jpg",),
+        operation_metadata={
+            "events": [{
+                "event_key": "two racers overtake recorder",
+                "event_class": "overtake",
+                "counting_unit": "overtake_episode",
+                "participant_ids": ["recorder", "first racer", "second racer"],
+                "participants": [
+                    {"participant_id": "recorder", "role": "overtaken"},
+                    {"participant_id": "first racer", "role": "overtaker", "visual_signature": "black jacket"},
+                    {"participant_id": "second racer", "role": "overtaker", "visual_signature": "green jacket"},
+                ],
+                "start_sec": 1.0,
+                "end_sec": 3.5,
+                "supports_question_event": True,
+            }],
+        },
+    )
+
+    tasks = multiround._event_participant_association_tasks(
+        workspace, (evidence,), round_id=2, limit=2,
+    )
+
+    assert tasks[0].inspection_mode == "entity_association"
+    assert tasks[0].reference_entities[0]["participant_id"] == "second racer"
+    assert tasks[0].reference_entities[0]["visual_signature"] == "green jacket"
+
+
+def test_participant_link_repair_first_dispatches_one_anchor_event_sweep(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+
+    tasks = multiround._event_participant_association_tasks(
+        workspace, (), round_id=1, limit=2,
+    )
+
+    assert len(tasks) == 1
+    assert tasks[0].query_id.startswith("participant_anchor_")
+    assert tasks[0].inspection_mode == "enumerate_events"
+    assert tasks[0].sampling_floor_fps == 2.0
+    wide_workspace = replace(
+        workspace,
+        manifest=replace(
+            workspace.manifest,
+            segments=tuple(
+                VirtualVideoSegment(
+                    f"seg_{index}", "source", "source.mp4",
+                    float(index * 5), float((index + 1) * 5),
+                    float(index * 5), float((index + 1) * 5), "content",
+                )
+                for index in range(8)
+            ),
+        ),
+    )
+    wide_tasks = multiround._event_participant_association_tasks(
+        wide_workspace, (), round_id=1, limit=4,
+    )
+    assert len(wide_tasks) == 6
+    attempted = EvidenceRecord(
+        evidence_id="ev_anchor_attempt",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=5.0,
+        modality="visual",
+        pointer="virtual://anchor_attempt",
+        verbatim="No structured anchor event was recovered.",
+        frame_refs=("frame.jpg",),
+        task_id="participant_anchor_r1_001",
+    )
+    assert multiround._event_participant_association_tasks(
+        workspace, (attempted,), round_id=2, limit=2,
+    ) == ()
+
+
+def test_canonical_option_table_uses_resolved_participant_attribute() -> None:
+    contract = multiround.compile_query_contract(
+        "In the last instance, what color clothes did the second person who ultimately overtook the recorder wear?",
+        {"A": "red clothes", "B": "green clothes", "C": "blue clothes"},
+    )
+    snapshot = {
+        "resolved_entities": [{
+            "entity_id": "second_racer",
+            "attributes": {"clothing_color": "green", "helmet_color": "black"},
+            "evidence_ids": ["ev_link"],
+        }],
+    }
+
+    table = multiround._option_verdict_table(
+        {"A": "red clothes", "B": "green clothes", "C": "blue clothes"},
+        contract,
+        snapshot,
+        {},
+    )
+
+    assert table["best_option"] == "B"
+    assert table["option_verdicts"]["B"]["status"] == "supported"
+    assert table["discriminating_predicate"] == "resolved_entity_attributes"
+
+
+def test_canonical_option_table_uses_narrative_hypothesis_assessments() -> None:
+    options = {"A": "Joe leaves as planned.", "B": "Joe changes his mind and stays."}
+    contract = multiround.compile_query_contract(
+        "During this narrative gap, which option best represents Joe's internal monologue?", options,
+    )
+    snapshot = {
+        "inferred_facts": [{
+            "fact_id": "bridge_1",
+            "evidence_ids": ["ev_bridge"],
+            "hypothesis_assessments": [
+                {"option_id": "A", "status": "contradicted", "reason": "Joe is shown staying."},
+                {"option_id": "B", "status": "supported", "reason": "The outcome reverses his plan."},
+            ],
+        }],
+    }
+
+    table = multiround._option_verdict_table(options, contract, snapshot, {})
+
+    assert table["best_option"] == "B"
+    assert table["option_verdicts"]["A"]["status"] == "contradicted"
+    assert table["discriminating_predicate"] == "canonical_narrative_inference"
+
+
+def test_canonical_forced_answer_overrides_stale_best_candidate_only_when_unique() -> None:
+    evidence = EvidenceRecord(
+        evidence_id="ev_bridge",
+        beat_id="",
+        start_sec=1.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://bridge",
+        verbatim="The complete bridge supports H.",
+        frame_refs=("bridge.jpg",),
+        attestation_model="test-vlm",
+    )
+    options = {"F": "unsupported", "H": "supported narrative"}
+    completion = {
+        "option_verdict_table": {
+            "best_option": "H",
+            "option_verdicts": {
+                "F": {"status": "contradicted", "evidence_ids": ["ev_bridge"]},
+                "H": {"status": "supported", "evidence_ids": ["ev_bridge"]},
+            },
+        },
+    }
+
+    forced = multiround._canonical_forced_answer(options, completion, (evidence,))
+
+    assert forced == ("H. supported narrative", ("ev_bridge",))
+    ambiguous = {
+        "option_verdict_table": {
+            "best_option": "H",
+            "option_verdicts": {
+                "F": {"status": "supported", "evidence_ids": ["ev_bridge"]},
+                "H": {"status": "supported", "evidence_ids": ["ev_bridge"]},
+            },
+        },
+    }
+    assert multiround._canonical_forced_answer(options, ambiguous, (evidence,)) is None
+
+
+def test_single_segment_narrative_repair_splits_setup_and_outcome_then_carries_context(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    first = multiround._narrative_bridge_repair_tasks(
+        workspace, (), round_id=1, limit=2,
+    )
+    incomplete = EvidenceRecord(
+        evidence_id="ev_setup",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://setup",
+        verbatim="Only the setup is observed.",
+        frame_refs=("setup.jpg",),
+        task_id="narrative_bridge_r1_001",
+        operation_metadata={
+            "narrative_facts": [{
+                "fact_id": "bridge_partial",
+                "setup_state": "Joe intends to leave.",
+                "outcome_state": "",
+                "inference": "He may reconsider.",
+            }],
+        },
+    )
+    followup = multiround._narrative_bridge_repair_tasks(
+        workspace, (incomplete,), round_id=2, limit=2,
+    )
+
+    assert len(first) == 2
+    assert "setup" in first[0].goal.casefold()
+    assert "outcome" in first[1].goal.casefold()
+    assert followup[0].reference_facts[0]["fact_id"] == "bridge_partial"
+    assert "outcome" in followup[0].goal.casefold()
+
+
 def test_rejected_answer_repair_reobserves_cited_window_contrastively(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     evidence = EvidenceRecord(
@@ -1180,6 +1511,45 @@ def _two_chunk_workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     )
     build_virtual_beat_index(workspace, frames, model=TinyModel(), beat_sec=3.0)
     return VirtualVideoWorkspace.load(workspace.root_dir)
+
+
+def test_source_coverage_requires_interval_coverage_not_only_segment_id(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    partial = EvidenceRecord(
+        evidence_id="ev_partial_segment",
+        beat_id="",
+        start_sec=0.0,
+        end_sec=2.0,
+        modality="visual",
+        pointer="virtual://partial",
+        verbatim="Only the first two seconds were inspected.",
+        frame_refs=("frame.jpg",),
+        source_lineage=(
+            {"source_video_id": "target", "segment_id": "seg_target_a", "virtual_time_range": [0.0, 2.0]},
+        ),
+    )
+
+    coverage = multiround._source_coverage(workspace, (partial,))["target"]
+
+    assert coverage["covered_segment_ids"] == []
+    assert coverage["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
+    assert coverage["segment_coverage"]["seg_target_a"]["coverage_ratio"] == 0.4
+
+
+def test_event_coverage_repair_requests_entire_segment_at_high_resolution(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    contract = multiround.compile_query_contract(
+        "How many times does the title card appear in the film?",
+        {"A": "One", "B": "Two"},
+    )
+
+    task = multiround._coverage_repair_tasks(
+        workspace, 2, ("seg_target_b",), contract, limit=1
+    )[0]
+
+    assert task.time_range == (10.0, 15.0)
+    assert task.inspection_mode == "enumerate_events"
+    assert task.sampling_floor_fps == 2.0
 
 
 def _identity_repair_workspace(tmp_path: Path) -> VirtualVideoWorkspace:
@@ -1816,17 +2186,17 @@ def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(
     assert result.retrieval_status == "sufficient"
     assert result.verification_reason == "full_source_coverage_verified"
     assert reasoner.calls == 3
-    assert reasoner.completion_statuses[1]["missing_segment_ids"] == ["seg_target_b"]
+    assert reasoner.completion_statuses[1]["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
     assert reasoner.completion_statuses[2]["missing_segment_ids"] == []
     assert len(result.citations) == 1
     aggregate = next(item for item in result.evidence if item.evidence_id == result.citations[0])
     assert aggregate.modality == "derived"
     assert "ev_q_chunk_a_001" in aggregate.parent_evidence_ids
-    assert len(aggregate.parent_evidence_ids) == 2
+    assert len(aggregate.parent_evidence_ids) == 3
     assert aggregate.entity_ids == ("scholar_1", "scholar_2", "scholar_3")
     assert len(aggregate.operation_metadata["entity_clusters"]) == 3
     repair = next(row for row in result.trace if row.get("type") == "repair_override")
-    assert repair["missing_segment_ids"] == ["seg_target_b"]
+    assert repair["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["passed"] is True
 

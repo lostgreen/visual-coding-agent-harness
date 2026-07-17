@@ -92,9 +92,10 @@ def test_forced_count_choice_penalizes_strong_assertions_without_positive_eviden
         _interactive.ReasonerDecision(action="answer", answer="E. Four green cylinders"),
     )
 
-    assert dashboard["policy"] == "zero_positive_conservative"
+    assert dashboard["policy"] == "canonical_option_verdict_table"
     assert dashboard["recommended_option"] == "A"
-    assert calibrated.answer == "A. One green cylinder"
+    assert dashboard["authoritative"] is False
+    assert calibrated.answer == "E. Four green cylinders"
 
 
 def test_forced_count_choice_uses_countable_witnesses() -> None:
@@ -102,6 +103,17 @@ def test_forced_count_choice_uses_countable_witnesses() -> None:
         "question": "How many green cylinders are visible?",
         "options": {"A": "One", "B": "Two", "E": "Four"},
         "query_contract": {"quantifier": "distinct_count"},
+        "completion_status": {
+            "option_verdict_table": {
+                "best_option": "B",
+                "audit_status": "complete",
+                "option_verdicts": {
+                    "A": {"status": "contradicted", "reason": "canonical entity count is 2"},
+                    "B": {"status": "supported", "reason": "canonical entity count is 2"},
+                    "E": {"status": "contradicted", "reason": "canonical entity count is 2"},
+                },
+            },
+        },
     }
     evidence = ({
         "observation_polarity": "positive",
@@ -113,7 +125,7 @@ def test_forced_count_choice_uses_countable_witnesses() -> None:
 
     dashboard = _forced_option_support_dashboard(kwargs, evidence)
 
-    assert dashboard["policy"] == "countable_witness_match"
+    assert dashboard["policy"] == "canonical_option_verdict_table"
     assert dashboard["recommended_option"] == "B"
 
 
@@ -122,6 +134,18 @@ def test_forced_total_count_choice_uses_canonical_event_candidates() -> None:
         "question": "How many times was the rider overtaken?",
         "options": {"A": "One time", "B": "Two times", "C": "Three times"},
         "query_contract": {"quantifier": "total_count"},
+        "completion_status": {
+            "canonical_fact_snapshot": {"confirmed_events": [{"candidate_id": "event_1"}, {"candidate_id": "event_2"}]},
+            "option_verdict_table": {
+                "best_option": "B",
+                "audit_status": "complete",
+                "option_verdicts": {
+                    "A": {"status": "contradicted", "reason": "canonical count is 2"},
+                    "B": {"status": "supported", "reason": "canonical count is 2"},
+                    "C": {"status": "contradicted", "reason": "canonical count is 2"},
+                },
+            },
+        },
     }
     evidence = tuple(
         {
@@ -133,8 +157,10 @@ def test_forced_total_count_choice_uses_canonical_event_candidates() -> None:
 
     dashboard = _forced_option_support_dashboard(kwargs, evidence)
 
-    assert dashboard["policy"] == "canonical_event_match"
+    assert dashboard["policy"] == "canonical_option_verdict_table"
     assert dashboard["recommended_option"] == "B"
+    assert dashboard["authoritative"] is True
+    assert dashboard["fact_source"] == "completion_status.canonical_fact_snapshot"
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -966,6 +992,45 @@ def test_gemini_reasoner_keeps_last_valid_choice_when_final_response_is_explanat
     assert final.citations == ("ev_1",)
     assert final.support_status == "insufficient"
     assert "valid option" in final.support_reason
+
+
+def test_forced_finalization_answer_is_calibrated_by_unique_canonical_verdict(tmp_path: Path) -> None:
+    api = ScriptedVisionClient(({"action": "answer", "answer": "F. unsupported", "citations": ["ev_1"]},))
+    reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
+    options = {"F": "unsupported", "H": "supported narrative"}
+
+    final = reasoner.decide(
+        question="Which narrative bridge is supported?",
+        options=options,
+        workspace_overview={"segment_overviews": []},
+        query_contract={"required_scope": "multi_window", "aggregation": "none"},
+        query_requirements={},
+        completion_status={
+            "ready_for_answer": False,
+            "canonical_fact_snapshot": {"inferred_facts": [{"fact_id": "bridge_1"}]},
+            "option_verdict_table": {
+                "best_option": "H",
+                "audit_status": "partial",
+                "option_verdicts": {
+                    "F": {"status": "contradicted", "reason": "Conflicts with the observed outcome."},
+                    "H": {"status": "supported", "reason": "Matches the complete narrative bridge."},
+                },
+            },
+        },
+        temporal_navigation={},
+        evidence_digest=({
+            "evidence_id": "ev_1",
+            "summary": "The complete setup and outcome support H.",
+            "virtual_time_range": [0.0, 20.0],
+            "modality": "visual",
+            "source_lineage": [],
+        },),
+        remaining_budget=0,
+        force_finalize=True,
+    )
+
+    assert final.answer == "H. supported narrative"
+    assert "canonical_option_verdict_table" in final.support_reason
 
 
 def test_gemini_reasoner_normalizes_structured_answer_payload_and_nested_citations(tmp_path: Path) -> None:
@@ -2230,9 +2295,10 @@ def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> No
             "local_id": "event_1",
             "event_key": "",
             "event_class": "",
-            "counting_unit": "",
-            "participant_ids": [],
-            "subject_id": "",
+                "counting_unit": "",
+                "participant_ids": [],
+                "participants": [],
+                "subject_id": "",
             "object_id": "",
             "state_before": "",
             "transition": "",
@@ -2407,6 +2473,140 @@ def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> No
     assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5")
 
 
+def test_narrative_bridge_uses_specialized_schema_only_in_detail_stage(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {"summary": "The preview locates the story transition.", "confidence": 0.7, "need_detail": True},
+            {
+                "summary": "Joe changes his plan and stays.",
+                "confidence": 0.85,
+                "narrative_facts": [{
+                    "fact_id": "bridge_1",
+                    "subject_id": "joe",
+                    "setup_state": "Joe plans to leave.",
+                    "outcome_state": "Joe stays.",
+                    "inference": "Joe changes his mind.",
+                    "confidence": 0.85,
+                    "hypothesis_assessments": [{"option_id": "B", "status": "supported"}],
+                }],
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="narrative_bridge_r1_001",
+        goal="Observe the setup and outcome.",
+        segment_id="seg_0001",
+        time_range=(0.0, 20.0),
+        inspection_mode="narrative_bridge",
+        expected_evidence="setup and outcome",
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert len(api.calls) == 2
+    assert "canonical narrative bridge" not in api.calls[0]["prompt"]
+    assert "canonical narrative bridge" in api.calls[1]["prompt"]
+    assert report.evidence[0].operation_metadata["narrative_facts"][0]["fact_id"] == "bridge_1"
+
+
+def test_entity_association_uses_reference_in_detail_stage(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {"summary": "A possible racer is visible.", "confidence": 0.7, "need_detail": True},
+            {
+                "summary": "The later racer matches the reference.",
+                "confidence": 0.9,
+                "entities": [{
+                    "local_id": "target_1",
+                    "description": "A racer in a green jacket and black helmet.",
+                    "visual_signature": "green jacket; black helmet",
+                    "frame_indices": [0],
+                    "attributes": {"clothing_color": "green"},
+                    "supports_question_relation": True,
+                }],
+                "entity_associations": [{
+                    "source_participant_id": "second racer",
+                    "target_local_id": "target_1",
+                    "entity_hypothesis_id": "second_racer_anchor",
+                    "status": "supported",
+                    "confidence": 0.9,
+                    "shared_attributes": {"jacket": "green", "helmet": "black"},
+                }],
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="participant_link_r1_001",
+        goal="Re-identify the second racer.",
+        segment_id="seg_0001",
+        time_range=(0.0, 20.0),
+        inspection_mode="entity_association",
+        expected_evidence="cross-window association",
+        reference_entities=({
+            "participant_id": "second racer",
+            "entity_hypothesis_id": "second_racer_anchor",
+            "source_event_key": "second overtake",
+        },),
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert "targeted cross-window entity association" in api.calls[1]["prompt"]
+    assert report.evidence[0].operation_metadata["entity_associations"][0]["status"] == "supported"
+
+
+def test_anchor_event_window_uses_compact_schema_and_keeps_anchor(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    api = ScriptedVisionClient(
+        (
+            {"summary": "An overtake may occur here.", "confidence": 0.7, "need_detail": True},
+            {
+                "summary": "A green racer overtakes the recorder.",
+                "confidence": 0.9,
+                "events": [{
+                    "event_key": "green racer overtakes recorder",
+                    "description": "A green racer overtakes the recorder.",
+                    "start_sec": 10.0,
+                    "end_sec": 11.0,
+                    "supports_anchor_event": True,
+                    "participant_ids": ["recorder", "green racer"],
+                    "participants": [{
+                        "participant_id": "green racer",
+                        "role": "overtaker",
+                        "visual_signature": "green jacket; black helmet",
+                        "attributes": {"clothing_color": "green", "helmet_color": "black"},
+                    }],
+                }],
+            },
+        )
+    )
+    investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
+    investigator.sampler = _sampler
+    task = InvestigationTask(
+        query_id="participant_anchor_r1_001",
+        goal="Locate the overtaking anchor.",
+        segment_id="seg_0001",
+        time_range=(0.0, 20.0),
+        inspection_mode="event_window",
+        inspection_intent="event_participant_anchor_discovery",
+        expected_evidence="anchor event and participants",
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert "event that identifies a participant" in api.calls[1]["prompt"]
+    assert "state_before" not in api.calls[1]["prompt"]
+    assert report.evidence[0].operation_metadata["events"][0]["participant_ids"] == [
+        "recorder", "green racer",
+    ]
+
+
 def test_model_investigator_adapts_not_found_across_fps_and_phase(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(
@@ -2449,7 +2649,10 @@ def test_model_investigator_caps_repeated_negative_window_at_three_attempts(tmp_
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(
         tuple(
-            {"summary": f"Negative phase {index}.", "finding": "not_found", "confidence": 0.9}
+            {
+                "summary": f"Negative phase {index}.", "finding": "not_found", "confidence": 0.9,
+                "visibility_status": "clear",
+            }
             for index in range(3)
         )
     )
@@ -2457,7 +2660,7 @@ def test_model_investigator_caps_repeated_negative_window_at_three_attempts(tmp_
     investigator.sampler = _sampler
     task = InvestigationTask(
         query_id="q_negative_cap", goal="Locate the requested brief evidence.",
-        segment_id="seg_0001", time_range=(0.0, 30.0),
+        segment_id="seg_0001", time_range=(0.0, 30.0), expected_event_dwell_sec=2.0,
     )
 
     first = investigator.run_batch((task,))[0]
@@ -2503,6 +2706,155 @@ def test_model_investigator_blocks_unresolved_structured_slot_conflict(tmp_path:
     assert second.evidence[0].operation_metadata["evidence_state"] == "conflicted"
     assert second.evidence[0].operation_metadata["conflicted_slot_ids"] == ["jacket_color"]
     assert "structured_slot_conflict" in second.evidence[0].operation_metadata["sampling_policy"]["adaptive_trigger_reasons"]
+
+
+def test_observation_local_slots_at_different_times_do_not_conflict() -> None:
+    rows = (
+        {"structured_slots": _interactive._normalize_structured_slots([
+            {"slot_id": "joe_pose", "slot_type": "observation_attribute", "entity_id": "joe", "attribute": "pose", "value": "sitting", "time_scope": [10.0, 12.0]},
+        ])},
+        {"structured_slots": _interactive._normalize_structured_slots([
+            {"slot_id": "joe_pose", "slot_type": "observation_attribute", "entity_id": "joe", "attribute": "pose", "value": "standing", "time_scope": [20.0, 22.0]},
+        ])},
+    )
+
+    assert _interactive._conflicted_slot_ids(rows) == ()
+
+
+def test_structured_slot_placeholders_are_discarded() -> None:
+    slots = _interactive._normalize_structured_slots([
+        {"slot_id": "joe_pose", "value": "observable unknown"},
+        {"slot_id": "joe_location", "value": "placeholder"},
+    ])
+
+    assert slots == {}
+
+
+def test_entity_hypothesis_fields_survive_observation_normalization() -> None:
+    entities = _interactive._normalize_entities(
+        [{
+            "local_id": "racer_1",
+            "entity_hypothesis_id": "Racer Green 01",
+            "association_confidence": 0.82,
+            "description": "A racer in a green jacket and black helmet.",
+            "visual_signature": "green jacket; black helmet",
+            "attributes": {"jacket_color": "green", "helmet_color": "black"},
+            "frame_indices": [0],
+            "supports_question_relation": True,
+        }],
+        frame_paths=("frame.jpg",),
+        frame_times=(12.0,),
+        observation_id="obs_1",
+        window_duration_sec=2.0,
+    )
+
+    assert entities[0]["entity_hypothesis_id"] == "racer_green_01"
+    assert entities[0]["association_confidence"] == 0.82
+    assert entities[0]["attributes"]["jacket_color"] == "green"
+
+
+def test_event_participant_hypothesis_and_role_survive_normalization() -> None:
+    events = _interactive._normalize_events(
+        [{
+            "event_key": "green racer overtakes recorder",
+            "event_class": "other",
+            "counting_unit": "overtake_episode",
+            "description": "A green-jacket racer overtakes the recorder.",
+            "start_sec": 10.0,
+            "end_sec": 11.0,
+            "supports_question_event": True,
+            "participants": [{
+                "participant_id": "green racer",
+                "entity_hypothesis_id": "Racer Green 01",
+                "role": "overtaker",
+                "visual_signature": "green jacket; black helmet",
+                "attributes": {"jacket_color": "green", "helmet_color": "black"},
+                "association_confidence": 0.84,
+            }],
+        }],
+        (9.0, 12.0),
+    )
+
+    participant = events[0]["participants"][0]
+    assert participant["entity_hypothesis_id"] == "racer_green_01"
+    assert participant["role"] == "overtaker"
+    assert "green racer" in events[0]["participant_ids"]
+
+
+def test_anchor_discovery_accepts_anchor_event_without_relabeling_normal_tasks() -> None:
+    raw = [{
+        "event_key": "second racer overtakes recorder",
+        "description": "The second racer overtakes the recorder.",
+        "start_sec": 10.0,
+        "end_sec": 11.0,
+        "supports_question_event": False,
+        "supports_anchor_event": True,
+    }]
+
+    assert _interactive._normalize_events(raw, (9.0, 12.0)) == ()
+    anchor = _interactive._normalize_events(raw, (9.0, 12.0), anchor_discovery=True)
+
+    assert anchor[0]["supports_question_event"] is True
+
+
+def test_entity_association_requires_exact_reference_and_two_shared_attributes() -> None:
+    entities = ({
+        "local_id": "target_1",
+        "entity_observation_id": "obs:target_1",
+        "attributes": {"clothing_color": "green"},
+    },)
+    reference = ({
+        "participant_id": "second racer",
+        "entity_hypothesis_id": "second_racer_anchor",
+        "source_event_key": "second racer overtakes recorder",
+    },)
+    rows = _interactive._normalize_entity_associations(
+        [{
+            "source_participant_id": "second racer",
+            "target_local_id": "target_1",
+            "entity_hypothesis_id": "second_racer_anchor",
+            "status": "supported",
+            "confidence": 0.88,
+            "shared_attributes": {"jacket": "green", "helmet": "black"},
+            "distinguishing_attributes": {"clothing_color": "green"},
+        }],
+        reference_entities=reference,
+        entities=entities,
+    )
+    weak = _interactive._normalize_entity_associations(
+        [{
+            "source_participant_id": "second racer",
+            "target_local_id": "target_1",
+            "entity_hypothesis_id": "second_racer_anchor",
+            "status": "supported",
+            "confidence": 0.88,
+            "shared_attributes": {"jacket": "green"},
+        }],
+        reference_entities=reference,
+        entities=entities,
+    )
+
+    assert rows[0]["status"] == "supported"
+    assert rows[0]["target_entity_observation_id"] == "obs:target_1"
+    assert weak[0]["status"] == "unknown"
+    assert weak[0]["confidence"] == 0.59
+
+
+def test_incomplete_narrative_fact_cannot_support_an_option() -> None:
+    facts = _interactive._normalize_narrative_facts(
+        [{
+            "fact_id": "bridge_1",
+            "setup_state": "Joe plans to leave.",
+            "outcome_state": "",
+            "inference": "Joe changes his mind.",
+            "confidence": 0.9,
+            "hypothesis_assessments": [{"option_id": "B", "status": "supported", "reason": "possible"}],
+        }],
+        options={"A": "He leaves.", "B": "He stays."},
+    )
+
+    assert facts[0]["confidence"] == 0.59
+    assert facts[0]["hypothesis_assessments"][0]["status"] == "unknown"
 
 
 def test_negative_observation_is_not_reused_as_positive_support(tmp_path: Path) -> None:

@@ -38,6 +38,7 @@ from vcah.investigator import (
     _task_terms,
 )
 from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
+from vcah.semantic_evidence import qualify_absence
 from vcah.types import CoverageSegment, EvidenceRecord, to_jsonable
 from vcah.video import probe_duration
 from vcah.virtual_index import build_virtual_beat_index
@@ -487,7 +488,7 @@ class GeminiReasoner:
             )
             if action == "investigate":
                 if kwargs.get("force_finalize") and self._last_candidate is not None:
-                    return ReasonerDecision(
+                    preserved = ReasonerDecision(
                         action="answer",
                         answer=self._last_candidate.answer,
                         citations=self._last_candidate.citations,
@@ -496,6 +497,7 @@ class GeminiReasoner:
                         support_reason=self._last_audit_reason
                         or "The model requested more investigation after the budget was exhausted.",
                     )
+                    return _calibrate_forced_decision(kwargs, evidence_digest, preserved)
                 if kwargs.get("force_finalize"):
                     return self._force_best_effort(kwargs, evidence_digest)
                 tasks = parsed.get("tasks") or []
@@ -510,7 +512,10 @@ class GeminiReasoner:
                 answer=answer,
                 citations=tuple(parsed.get("citations") or nested_citations or (evidence_digest[-1]["evidence_id"],)),
                 entity_clusters=tuple(parsed.get("entity_clusters") or ()),
+                option_verdicts=dict(parsed.get("option_verdicts") or {}),
             )
+            if kwargs.get("force_finalize"):
+                candidate = _calibrate_forced_decision(kwargs, evidence_digest, candidate)
             if not candidate.answer:
                 if kwargs.get("force_finalize") and self._last_candidate is not None:
                     return ReasonerDecision(
@@ -629,6 +634,7 @@ class GeminiReasoner:
                 entity_clusters=candidate.entity_clusters,
                 support_status="insufficient" if revised_answer else verdict,
                 support_reason=audit_reason,
+                option_verdicts=dict(audit.get("option_verdicts") or candidate.option_verdicts),
             )
             return self._maybe_verify_claim(kwargs, evidence_digest, decision) if verdict == "supported" else decision
         image_paths, visual_manifest = self._visual_context(kwargs)
@@ -863,10 +869,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         error = "invalid_or_truncated_json"
         repair_prompt = (
             "Recover the following investigator response as one compact valid JSON object. Preserve only facts explicitly "
-            "present in the response or supplied images. Do not infer identity or causality. Return JSON only.\n"
+            "present in the response. Do not infer identity or causality. Return JSON only.\n"
             f"Investigation prompt: {prompt[:2400]}\nTruncated response: {str(raw or '')[:5000]}"
         )
-        repaired_raw = self.api.chat(repair_prompt, image_paths=image_paths, max_tokens=900)
+        repaired_raw = self.api.chat(repair_prompt, image_paths=(), max_tokens=1800)
         repaired = _parse_json(repaired_raw)
         _append_jsonl(self.trace_path, {
             "type": "investigator_json_repair",
@@ -874,7 +880,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             "model": str(getattr(self.api, "model", type(self.api).__name__)),
             "query_id": query_id,
             "prompt": repair_prompt,
-            "frame_paths": list(image_paths),
+            "frame_paths": [],
             "raw": repaired_raw,
             "parsed": repaired,
             "time": time.time(),
@@ -937,7 +943,14 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             )
 
         event_window = str(getattr(task, "inspection_mode", "window")) == "event_window"
+        anchor_event_window = bool(
+            event_window
+            and str(getattr(task, "inspection_intent", "") or "")
+            == "event_participant_anchor_discovery"
+        )
         claim_window = str(getattr(task, "inspection_mode", "window")) == "verify_claim"
+        association_window = str(getattr(task, "inspection_mode", "window")) == "entity_association"
+        narrative_window = str(getattr(task, "inspection_mode", "window")) == "narrative_bridge"
         adaptive_rows: list[dict[str, Any]] = []
         adaptive_triggers: list[str] = []
         preview_packets: list[Mapping[str, Any]] = []
@@ -975,6 +988,11 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 preview_prompt = _event_preview_prompt(
                     self.workspace, task, segment_packet, low,
                     prior_events=prior_events, prior_observations=arbitration_context,
+                )
+            elif association_window or narrative_window:
+                preview_prompt = _preview_prompt(
+                    self.workspace, task, segment_packet, low,
+                    prior_observations=arbitration_context,
                 )
             elif claim_window:
                 preview_prompt = _claim_preview_prompt(
@@ -1061,7 +1079,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             tool_trace.append(inspection_trace)
         vlm_calls = len(preview_payloads) + (0 if requested_window is not None else 1) + parse_repair_calls
 
-        if (_truthy(preview.get("need_detail")) or region_box is not None) and len(adaptive_rows) < 3:
+        requires_specialized_evidence = anchor_event_window or association_window or narrative_window
+        if (
+            _truthy(preview.get("need_detail"))
+            or region_box is not None
+            or requires_specialized_evidence
+        ) and len(adaptive_rows) < 3:
             detail_fps, detail_max_frames = _detail_sampling_request(
                 preview,
                 default_fps=self.highfps,
@@ -1157,13 +1180,26 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             else:
                 model_image_paths = detail_paths
             if event_window:
-                final_prompt = _event_evidence_prompt(
-                    self.workspace,
-                    task,
-                    segment_packet,
-                    selected_packet,
-                    preview=preview,
-                    prior_events=prior_events,
+                if anchor_event_window:
+                    final_prompt = _anchor_event_evidence_prompt(
+                        self.workspace, task, segment_packet, selected_packet, preview=preview,
+                    )
+                else:
+                    final_prompt = _event_evidence_prompt(
+                        self.workspace,
+                        task,
+                        segment_packet,
+                        selected_packet,
+                        preview=preview,
+                        prior_events=prior_events,
+                    )
+            elif association_window:
+                final_prompt = _entity_association_prompt(
+                    self.workspace, task, segment_packet, selected_packet, preview=preview,
+                )
+            elif narrative_window:
+                final_prompt = _narrative_bridge_prompt(
+                    self.workspace, task, segment_packet, selected_packet, preview=preview,
                 )
             elif claim_window:
                 final_prompt = _claim_evidence_prompt(
@@ -1178,7 +1214,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             raw = self.api.chat(
                 final_prompt,
                 image_paths=model_image_paths,
-                max_tokens=1400,
+                max_tokens=2200 if anchor_event_window else 1400,
             )
             parsed, parse_status, parse_error, detail_repair_calls = self._parse_structured_observation(
                 raw,
@@ -1245,7 +1281,22 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             observation_id=observation_id,
             window_duration_sec=max(0.0, float(selected_window[1]) - float(selected_window[0])),
         )
-        events = _normalize_events(parsed.get("events"), selected_window)
+        events = _normalize_events(
+            parsed.get("events"),
+            selected_window,
+            anchor_discovery=(
+                str(getattr(task, "inspection_intent", "") or "")
+                == "event_participant_anchor_discovery"
+            ),
+        )
+        entity_associations = _normalize_entity_associations(
+            parsed.get("entity_associations"),
+            reference_entities=tuple(getattr(task, "reference_entities", ()) or ()),
+            entities=entities,
+        )
+        narrative_facts = _normalize_narrative_facts(
+            parsed.get("narrative_facts"), options=self.workspace.case.options,
+        )
         claim_assessment = _normalize_claim_assessment(parsed, task) if claim_window else {}
         target_presence = normalize_target_presence(parsed.get("target_presence"), evidence_id=evidence_id)
         measurements = normalize_measurements(parsed.get("measurements"), evidence_id=evidence_id)
@@ -1268,7 +1319,11 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             region_used=bool(region_frame_paths),
             selected_window=selected_window,
         )
-        if claim_assessment:
+        if entity_associations:
+            evidence_kind = "entity_association"
+        elif narrative_facts:
+            evidence_kind = "narrative_inference"
+        elif claim_assessment:
             evidence_kind = "claim_verification"
         elif supports_answer_event:
             evidence_kind = "event_observation"
@@ -1276,6 +1331,15 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             evidence_kind = "entity_observation"
         else:
             evidence_kind = "visual_observation"
+        effective_fps = float(selected_packet["sampling"]["fps"])
+        absence = qualify_absence(
+            (float(selected_window[0]), float(selected_window[1])),
+            ((float(selected_window[0]), float(selected_window[1])),),
+            1.0 / effective_fps if effective_fps > 0 else None,
+            getattr(task, "expected_event_dwell_sec", None),
+            str(parsed.get("visibility_status", "unknown") or "unknown"),
+            targeted_inspection_count=window_attempt_count,
+        )
         evidence = EvidenceRecord(
             evidence_id=evidence_id,
             beat_id="",
@@ -1298,13 +1362,15 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             ),
             task_id=query_id,
             observation_id=observation_id,
-            sampling_fps=float(selected_packet["sampling"]["fps"]),
+            sampling_fps=effective_fps,
             confidence=confidence,
             source_lineage=tuple(dict(item) for item in selected_packet["source_lineage"]),
             entity_ids=tuple(f"{observation_id}:{item['local_id']}" for item in entities),
             operation_metadata={
                 "entities": entities,
                 "events": events,
+                "entity_associations": entity_associations,
+                "narrative_facts": narrative_facts,
                 "claim_assessment": claim_assessment,
                 "target_presence": to_jsonable(target_presence),
                 "measurements": to_jsonable(measurements),
@@ -1337,14 +1403,15 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "conflicted_slot_ids": list(conflicted_slot_ids),
                 "evidence_state": "conflicted" if conflicted_slot_ids else "active",
                 "absence_resolution_fps": (
-                    float(selected_packet["sampling"]["fps"]) if finding == "not_found" else None
+                    effective_fps if finding == "not_found" else None
                 ),
+                "absence_status": absence.status if finding == "not_found" else "not_observed",
+                "absence_qualification": to_jsonable(absence),
                 "phase_coverage": sorted(
                     {round(float(row["phase_offset_sec"]), 6) for row in adaptive_rows}
                 ),
                 "qualified_absence": bool(
-                    finding == "not_found"
-                    and (float(selected_packet["sampling"]["fps"]) >= 2.0 or window_attempt_count >= 3)
+                    finding == "not_found" and absence.status == "qualified_absence"
                 ),
                 "region_observation": {
                     "hint": str(getattr(task, "region_hint", "") or preview.get("region_hint", "") or ""),
@@ -2076,12 +2143,21 @@ def _normalize_entities(
         elif window_duration_sec is not None and float(window_duration_sec) > ENTITY_WITNESS_MAX_WINDOW_SEC:
             candidate_reason = "coarse_window_candidate"
         entity_observation_id = f"{observation_id}:{local_id}" if observation_id else local_id
+        entity_hypothesis_id = re.sub(
+            r"[^a-z0-9_]+",
+            "_",
+            str(item.get("entity_hypothesis_id", "") or "").strip().casefold(),
+        ).strip("_")
+        association_confidence = _confidence(item.get("association_confidence"), default=0.0)
         rows.append(
             {
                 "local_id": local_id,
                 "entity_observation_id": entity_observation_id,
+                "entity_hypothesis_id": entity_hypothesis_id,
+                "association_confidence": association_confidence,
                 "description": description,
                 "visual_signature": visual_signature,
+                "attributes": dict(item.get("attributes", {}) or {}) if isinstance(item.get("attributes"), Mapping) else {},
                 "role": str(item.get("role", "") or ""),
                 "question_relation": str(item.get("question_relation", "") or ""),
                 "supports_question_relation": supports_question_relation,
@@ -2097,7 +2173,12 @@ def _normalize_entities(
     return tuple(rows)
 
 
-def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str, Any], ...]:
+def _normalize_events(
+    value: Any,
+    window: tuple[float, float],
+    *,
+    anchor_discovery: bool = False,
+) -> tuple[dict[str, Any], ...]:
     if not isinstance(value, list):
         return ()
     window_start, window_end = float(window[0]), float(window[1])
@@ -2108,7 +2189,9 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
         if "preconditions_met" in item and not _truthy(item.get("preconditions_met")):
             continue
         description = str(item.get("description", "") or "").strip()
-        if not description or not _truthy(item.get("supports_question_event")):
+        supports_question_event = _truthy(item.get("supports_question_event"))
+        supports_anchor_event = bool(anchor_discovery and _truthy(item.get("supports_anchor_event")))
+        if not description or not (supports_question_event or supports_anchor_event):
             continue
         try:
             start = float(item.get("start_sec"))
@@ -2123,6 +2206,36 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
         end = min(window_end, end)
         subject_id = " ".join(str(item.get("subject_id", "") or "").strip().casefold().split())
         object_id = " ".join(str(item.get("object_id", "") or "").strip().casefold().split())
+        participant_roles = []
+        for raw_participant in tuple(item.get("participants", ()) or ()):
+            if not isinstance(raw_participant, Mapping):
+                continue
+            hypothesis_id = re.sub(
+                r"[^a-z0-9_]+",
+                "_",
+                str(raw_participant.get("entity_hypothesis_id", "") or "").strip().casefold(),
+            ).strip("_")
+            participant_id = " ".join(
+                str(raw_participant.get("participant_id", "") or hypothesis_id).strip().casefold().split()
+            )
+            if not participant_id:
+                continue
+            participant_roles.append(
+                {
+                    "participant_id": participant_id,
+                    "entity_hypothesis_id": hypothesis_id,
+                    "role": str(raw_participant.get("role", "") or "").strip().casefold(),
+                    "visual_signature": str(raw_participant.get("visual_signature", "") or "").strip(),
+                    "attributes": (
+                        dict(raw_participant.get("attributes", {}) or {})
+                        if isinstance(raw_participant.get("attributes"), Mapping)
+                        else {}
+                    ),
+                    "association_confidence": _confidence(
+                        raw_participant.get("association_confidence"), default=0.0
+                    ),
+                }
+            )
         participant_ids = list(
             dict.fromkeys(
                 value
@@ -2133,6 +2246,7 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
                     ),
                     subject_id,
                     object_id,
+                    *(participant["participant_id"] for participant in participant_roles),
                 )
                 if value
             )
@@ -2144,6 +2258,7 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
                 "event_class": " ".join(str(item.get("event_class", "") or "").strip().casefold().split()),
                 "counting_unit": " ".join(str(item.get("counting_unit", "") or "").strip().casefold().split()),
                 "participant_ids": participant_ids,
+                "participants": participant_roles,
                 "subject_id": subject_id,
                 "object_id": object_id,
                 "state_before": str(item.get("state_before", "") or "").strip(),
@@ -2157,6 +2272,131 @@ def _normalize_events(value: Any, window: tuple[float, float]) -> tuple[dict[str
                 "supports_question_event": True,
                 "continues_from_previous": _truthy(item.get("continues_from_previous")),
                 "continues_to_next": _truthy(item.get("continues_to_next")),
+            }
+        )
+    return tuple(rows)
+
+
+def _normalize_entity_associations(
+    value: Any,
+    *,
+    reference_entities: Sequence[Mapping[str, Any]],
+    entities: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    references = {
+        str(item.get("participant_id", "") or "").strip().casefold(): dict(item)
+        for item in reference_entities
+        if str(item.get("participant_id", "") or "").strip()
+    }
+    targets = {str(item.get("local_id", "") or ""): item for item in entities}
+    rows = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, Mapping):
+            continue
+        participant_id = str(item.get("source_participant_id", "") or "").strip().casefold()
+        reference = references.get(participant_id)
+        target_local_id = str(item.get("target_local_id", "") or "").strip()
+        target = targets.get(target_local_id)
+        if reference is None or target is None:
+            continue
+        expected_hypothesis = str(reference.get("entity_hypothesis_id", "") or "").strip().casefold()
+        hypothesis_id = re.sub(
+            r"[^a-z0-9_]+", "_", str(item.get("entity_hypothesis_id", "") or "").strip().casefold()
+        ).strip("_")
+        status = str(item.get("status", "unknown") or "unknown").strip().casefold()
+        if status not in {"supported", "refuted", "unknown"}:
+            status = "unknown"
+        confidence = _confidence(item.get("confidence"), default=0.0)
+        shared = dict(item.get("shared_attributes", {}) or {}) if isinstance(item.get("shared_attributes"), Mapping) else {}
+        distinguishing = (
+            dict(item.get("distinguishing_attributes", {}) or {})
+            if isinstance(item.get("distinguishing_attributes"), Mapping)
+            else {}
+        )
+        if hypothesis_id != expected_hypothesis:
+            status, confidence = "unknown", min(confidence, 0.5)
+            hypothesis_id = expected_hypothesis
+        if status == "supported" and len([value for value in shared.values() if str(value).strip()]) < 2:
+            status, confidence = "unknown", min(confidence, 0.59)
+        rows.append(
+            {
+                "association_id": str(item.get("association_id", "") or f"association_{index}"),
+                "source_participant_id": str(reference.get("participant_id", "") or participant_id),
+                "source_event_key": str(reference.get("source_event_key", "") or ""),
+                "target_entity_observation_id": str(target.get("entity_observation_id", "") or ""),
+                "entity_hypothesis_id": hypothesis_id,
+                "status": status,
+                "confidence": confidence,
+                "shared_attributes": shared,
+                "distinguishing_attributes": distinguishing,
+                "reason": str(item.get("reason", "") or "")[:400],
+            }
+        )
+    return tuple(rows)
+
+
+def _normalize_narrative_facts(
+    value: Any,
+    *,
+    options: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    valid_options = {str(option).upper() for option in options}
+    rows = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, Mapping):
+            continue
+        setup = str(item.get("setup_state", "") or "").strip()
+        outcome = str(item.get("outcome_state", "") or "").strip()
+        inference = str(item.get("inference", "") or "").strip()
+        if not (setup or outcome or inference):
+            continue
+        complete = bool(setup and outcome and inference)
+        assessments = []
+        for assessment in tuple(item.get("hypothesis_assessments", ()) or ()):
+            if not isinstance(assessment, Mapping):
+                continue
+            option_id = str(assessment.get("option_id", "") or "").strip().upper()
+            if option_id not in valid_options:
+                continue
+            status = str(assessment.get("status", "unknown") or "unknown").strip().casefold()
+            if status not in {"supported", "contradicted", "unknown"}:
+                status = "unknown"
+            if not complete:
+                status = "unknown"
+            assessments.append(
+                {
+                    "option_id": option_id,
+                    "status": status,
+                    "reason": str(assessment.get("reason", "") or "")[:400],
+                }
+            )
+        counterevidence = [
+            {
+                "option_id": str(row.get("option_id", "") or "").strip().upper(),
+                "observation": str(row.get("observation", "") or "")[:400],
+            }
+            for row in tuple(item.get("alternative_counterevidence", ()) or ())
+            if isinstance(row, Mapping)
+            and str(row.get("option_id", "") or "").strip().upper() in valid_options
+            and str(row.get("observation", "") or "").strip()
+        ]
+        confidence = _confidence(item.get("confidence"), default=0.0)
+        rows.append(
+            {
+                "fact_id": str(item.get("fact_id", "") or f"narrative_{index}"),
+                "subject_id": str(item.get("subject_id", "") or "").strip(),
+                "setup_state": setup,
+                "observed_bridge": str(item.get("observed_bridge", "") or "").strip(),
+                "outcome_state": outcome,
+                "inference": inference,
+                "inference_basis": str(item.get("inference_basis", "") or "").strip().casefold(),
+                "confidence": confidence if complete else min(confidence, 0.59),
+                "hypothesis_assessments": assessments,
+                "alternative_counterevidence": counterevidence,
             }
         )
     return tuple(rows)
@@ -2504,13 +2744,14 @@ def _visual_manifest_prompt(visual_manifest: Sequence[Mapping[str, Any]]) -> str
 
 def _sampling_plan_instruction() -> str:
     return (
-        "Every visual task must declare sampling_floor_fps as 0.5, 1.0, or 2.0 and "
-        "temporal_resolution_rationale as one short sentence about the expected visible dwell time or transition speed. "
+        "Every visual task must declare sampling_floor_fps as 0.5, 1.0, or 2.0, expected_event_dwell_sec as a positive "
+        "number when absence may matter, and temporal_resolution_rationale as one short sentence about dwell time or transition speed. "
         "Choose from evidence dynamics, not the question category: use 0.5 for persistent scenes or states, 1.0 for "
         "ordinary appearance and motion, and 2.0 for brief transitions, fast relative motion, small changing text, or exact "
         "temporal boundaries. Estimate target dwell time d when possible and keep the sampling interval <= d/2. "
         "Use inspection_mode=enumerate_events when the task must exhaustively enumerate timestamped occurrences, "
-        "event_window for one atomic occurrence, verify_claim for an independent contrastive check, search_asr for literal "
+        "event_window for one atomic occurrence, verify_claim for an independent contrastive check, entity_association for "
+        "cross-window participant re-identification, narrative_bridge for setup-to-outcome inference, search_asr for literal "
         "navigation, and window otherwise. When validating a change, request ordered before/during/after evidence with timestamps.\n"
     )
 
@@ -2531,7 +2772,7 @@ def _investigate_prompt(
         "One gap may use several parallel windows. Return JSON only: "
         "{\"action\":\"investigate\",\"primary_gap\":{\"gap_id\":\"gap_r1\",\"description\":\"observable unknown\","
         "\"success_conditions\":[\"condition 1\"],\"falsification_conditions\":[]},\"tasks\":[{\"query_id\":\"r1_t1\",\"goal\":\"...\","
-        "\"segment_id\":\"seg_0001\",\"time_range\":null,\"inspection_mode\":\"window|event_window|enumerate_events|verify_claim|search_asr\","
+        "\"segment_id\":\"seg_0001\",\"time_range\":null,\"inspection_mode\":\"window|event_window|enumerate_events|verify_claim|search_asr|entity_association|narrative_bridge\","
         "\"search_terms\":[],\"modality_hint\":[\"visual\"],\"expected_evidence\":\"...\","
         "\"gap_id\":\"gap_r1\",\"success_conditions\":[\"condition 1\"],\"direction\":\"local|forward|backward|global\","
         "\"region_hint\":\"optional visible region\",\"sampling_floor_fps\":1.0,"
@@ -2597,7 +2838,7 @@ def _followup_prompt(
         "{\"action\":\"investigate\",\"primary_gap\":{\"gap_id\":\"gap_r2\",\"description\":\"observable unknown\","
         "\"success_conditions\":[\"condition 1\"],\"falsification_conditions\":[]},\"tasks\":[{\"query_id\":\"r2_t1\","
         "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":null,"
-        "\"inspection_mode\":\"window|event_window|enumerate_events|verify_claim|search_asr\",\"search_terms\":[],\"modality_hint\":[\"visual\"],"
+        "\"inspection_mode\":\"window|event_window|enumerate_events|verify_claim|search_asr|entity_association|narrative_bridge\",\"search_terms\":[],\"modality_hint\":[\"visual\"],"
         "\"expected_evidence\":\"...\",\"gap_id\":\"gap_r2\",\"success_conditions\":[\"condition 1\"],"
         "\"direction\":\"local|forward|backward|global\",\"region_hint\":\"optional visible region\","
         "\"sampling_floor_fps\":1.0,\"temporal_resolution_rationale\":\"Expected dwell time and required interval.\"}]}.\n"
@@ -2985,6 +3226,9 @@ def _answer_audit_prompt(
         f"{_sampling_plan_instruction()}"
         "Return compact JSON only: "
         "{\"verdict\":\"supported|insufficient|contradicted\",\"reason\":\"...\","
+        "\"option_verdicts\":{\"A\":{\"status\":\"supported|contradicted|unknown\","
+        "\"support_level\":\"direct|inferred|uncorroborated_summary|none\",\"evidence_ids\":[\"ev_...\"],"
+        "\"canonical_fact_ids\":[\"event_candidate_001\"],\"reason\":\"...\"}},"
         "\"evidence_relation\":\"direct|causal_chain|consequence_only|cooccurrence_only|unclear\","
         "\"strongest_alternative\":{\"option\":\"A\",\"support\":\"direct|indirect|contradicted|missing\","
         "\"evidence_ids\":[\"ev_...\"],\"reason\":\"...\"},"
@@ -3073,9 +3317,9 @@ def _forced_answer_prompt(
         "Return JSON only: {\"answer\":\"A. option text\",\"citations\":[\"ev_...\"],"
         "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"...\","
         "\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"observation:person_1\"]}]}. "
-        "For distinct counts, use only countable entity observations; candidate-only summaries may inform the best effort but "
-        "must not be presented as grounded identity evidence. Select the highest-ranked option_support row. When its policy is "
-        "zero_positive_conservative, do not select a stronger numerical assertion than the recommended option.\n"
+        "Canonical facts and option_support are the only authoritative fact and verdict sources. Evidence summaries are supporting "
+        "context only and must never be recounted or used to override a canonical count, identity, order, or transition. "
+        "Select the recommended option when option_support is authoritative.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Option support: {json.dumps(option_support, ensure_ascii=False)}\n"
@@ -3121,80 +3365,30 @@ def _forced_option_support_dashboard(
     kwargs: Mapping[str, Any],
     evidence_digest: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    del evidence_digest
     options = {str(key): str(value) for key, value in dict(kwargs.get("options") or {}).items()}
-    scores = {key: 0 for key in options}
-    reasons: dict[str, list[str]] = {key: [] for key in options}
-    authoritative = False
-    policy = "evidence_ranked"
-    positive_signal = False
-    contract = dict(kwargs.get("query_contract") or {})
-    quantifier = str(contract.get("quantifier", "") or "")
-    count_contract = quantifier in {"distinct_count", "total_count"}
-
-    for row in evidence_digest:
-        target_status = str(dict(row.get("target_presence", {}) or {}).get("status", "") or "").casefold()
-        if target_status == "present" or (
-            not count_contract
-            and str(row.get("observation_polarity", "") or "").casefold() == "positive"
-        ):
-            positive_signal = True
-        assessment = row.get("claim_assessment")
-        if not isinstance(assessment, Mapping):
-            continue
-        key = _answer_candidate_key(str(assessment.get("candidate_answer", "") or ""))
-        label = key.split(":", 1)[1] if key.startswith("option:") else ""
-        verdict = str(assessment.get("verdict", "") or "").casefold()
-        if label not in scores or verdict not in {"supports", "refutes"}:
-            continue
-        delta = 100 if verdict == "supports" else -100
-        scores[label] += delta
-        reasons[label].append(f"independent_claim_{verdict}")
-        authoritative = True
-        positive_signal = positive_signal or verdict == "supports"
-
-    option_counts = {key: _forced_option_count(text) for key, text in options.items()}
-    numeric_options = bool(options) and all(value is not None for value in option_counts.values())
-    countable_ids = {
-        str(entity.get("entity_observation_id", "") or f"anon:{row_index}:{entity_index}")
-        for row_index, row in enumerate(evidence_digest)
-        for entity_index, entity in enumerate(tuple(row.get("entities", ()) or ()))
-        if isinstance(entity, Mapping)
-        and bool(entity.get("countable"))
-        and bool(entity.get("supports_question_relation", True))
-    }
-    confirmed_event_ids = {
-        str(event.get("candidate_id", "") or event.get("event_key", "") or f"event:{row_index}:{event_index}")
-        for row_index, row in enumerate(evidence_digest)
-        for event_index, event in enumerate(tuple(row.get("events", ()) or ()))
-        if isinstance(event, Mapping)
-        and bool(event.get("supports_question_event", True))
-        and str(row.get("evidence_kind", "") or "") != "event_candidate_unresolved"
-    }
-    witnessed_ids = confirmed_event_ids if quantifier == "total_count" else countable_ids
-    if count_contract and numeric_options and witnessed_ids:
-        observed_count = len(witnessed_ids)
-        for key, value in option_counts.items():
-            if value == observed_count:
-                scores[key] += 80
-                reasons[key].append(f"matches_{observed_count}_countable_witnesses")
-        authoritative = observed_count in option_counts.values()
-        positive_signal = True
-        policy = "canonical_event_match" if quantifier == "total_count" else "countable_witness_match"
-    elif count_contract and numeric_options and not positive_signal:
-        minimum = min(int(value) for value in option_counts.values() if value is not None)
-        for key, value in option_counts.items():
-            assertion_penalty = int(value) - minimum if value is not None else 0
-            scores[key] -= 10 * assertion_penalty
-            reasons[key].append("zero_positive_evidence_assertion_penalty")
-        authoritative = True
-        policy = "zero_positive_conservative"
-
+    completion = dict(kwargs.get("completion_status") or {})
+    table = dict(completion.get("option_verdict_table") or {})
+    verdicts = dict(table.get("option_verdicts") or {})
+    scores: dict[str, int] = {}
+    reasons: dict[str, list[str]] = {}
+    status_score = {"supported": 100, "unknown": 0, "contradicted": -100}
+    for key in options:
+        row = dict(verdicts.get(key, {}) or {})
+        status = str(row.get("status", "unknown") or "unknown").casefold()
+        scores[key] = status_score.get(status, 0)
+        reasons[key] = [str(row.get("reason", "") or "canonical_verdict_unavailable")]
     ranked = sorted(options, key=lambda key: (-scores[key], key))
+    supported = [key for key in ranked if str(dict(verdicts.get(key, {}) or {}).get("status", "")) == "supported"]
+    recommended = str(table.get("best_option", "") or "")
+    authoritative = len(supported) == 1 and supported[0] == recommended
     return {
-        "policy": policy,
+        "policy": "canonical_option_verdict_table",
         "authoritative": authoritative,
-        "recommended_option": ranked[0] if ranked else "",
-        "positive_signal": positive_signal,
+        "recommended_option": recommended if recommended in options else ranked[0] if ranked else "",
+        "positive_signal": bool(supported),
+        "fact_source": "completion_status.canonical_fact_snapshot",
+        "audit_status": str(table.get("audit_status", "missing") or "missing"),
         "options": [
             {"option": key, "score": scores[key], "reasons": reasons[key]}
             for key in ranked
@@ -3249,16 +3443,50 @@ def _sampling_goal_key(task: Any) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text).strip()[:240]
 
 
-def _normalize_structured_slots(value: Any) -> dict[str, str]:
+_SEMANTIC_EMPTY_SLOT_VALUES = {
+    "unknown", "uncertain", "not visible", "observable unknown", "unknown observable",
+    "template example", "placeholder", "n/a", "na", "tbd",
+}
+
+
+def _normalize_structured_slots(value: Any) -> dict[str, dict[str, Any]]:
     rows = value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else ()
-    result: dict[str, str] = {}
+    result: dict[str, dict[str, Any]] = {}
     for item in rows:
         if not isinstance(item, Mapping):
             continue
         slot_id = re.sub(r"[^a-z0-9_]+", "_", str(item.get("slot_id", "") or "").casefold()).strip("_")
         slot_value = re.sub(r"\s+", " ", str(item.get("value", "") or "").strip().casefold())
-        if slot_id and slot_value and slot_value not in {"unknown", "uncertain", "not visible"}:
-            result[slot_id] = slot_value
+        if not slot_id or not slot_value or slot_value in _SEMANTIC_EMPTY_SLOT_VALUES:
+            continue
+        attribute = re.sub(
+            r"[^a-z0-9_]+", "_", str(item.get("attribute", "") or slot_id).casefold()
+        ).strip("_")
+        scope = str(item.get("slot_type", item.get("scope", "")) or "").strip().casefold()
+        if scope not in {
+            "entity_identity", "persistent_attribute", "observation_attribute", "event_role", "state_at_time",
+        }:
+            scope = (
+                "observation_attribute"
+                if any(token in attribute for token in ("pose", "position", "location", "near", "beside"))
+                else "event_role" if attribute.endswith("role")
+                else "persistent_attribute"
+            )
+        raw_time = tuple(item.get("time_scope", ()) or ())
+        time_scope = (
+            [float(raw_time[0]), float(raw_time[1])]
+            if len(raw_time) == 2 and all(isinstance(part, (int, float)) for part in raw_time)
+            else []
+        )
+        result[slot_id] = {
+            "slot_type": scope,
+            "entity_id": str(item.get("entity_id", "") or "").strip().casefold(),
+            "attribute": attribute,
+            "value": slot_value,
+            "time_scope": time_scope,
+            "observation_id": str(item.get("observation_id", "") or ""),
+            "confidence": _confidence(item.get("confidence"), default=0.7),
+        }
     return result
 
 
@@ -3300,17 +3528,52 @@ def _observation_governance_row(
 
 
 def _conflicted_slot_ids(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
-    values: dict[str, set[str]] = {}
+    observations: dict[str, list[dict[str, Any]]] = {}
     resolved: set[str] = set()
     for row in rows:
-        for slot_id, value in dict(row.get("structured_slots", {}) or {}).items():
-            values.setdefault(str(slot_id), set()).add(str(value))
+        for slot_id, raw_slot in dict(row.get("structured_slots", {}) or {}).items():
+            slot = dict(raw_slot) if isinstance(raw_slot, Mapping) else {
+                "slot_type": "persistent_attribute", "entity_id": "", "attribute": str(slot_id),
+                "value": str(raw_slot), "time_scope": [], "confidence": 0.7,
+            }
+            observations.setdefault(str(slot_id), []).append(slot)
         for verdict in tuple(row.get("slot_arbitration", ()) or ()):
             if not isinstance(verdict, Mapping):
                 continue
             if str(verdict.get("verdict", "") or "") in {"confirm_latest", "confirm_prior"}:
                 resolved.add(str(verdict.get("slot_id", "") or ""))
-    return tuple(sorted(slot_id for slot_id, observed in values.items() if len(observed) > 1 and slot_id not in resolved))
+    conflicted = []
+    for slot_id, slots in observations.items():
+        if slot_id in resolved:
+            continue
+        for index, left in enumerate(slots):
+            for right in slots[index + 1:]:
+                if _typed_slots_conflict(left, right):
+                    conflicted.append(slot_id)
+                    break
+            if slot_id in conflicted:
+                break
+    return tuple(sorted(set(conflicted)))
+
+
+def _typed_slots_conflict(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    if min(float(left.get("confidence", 0.0) or 0.0), float(right.get("confidence", 0.0) or 0.0)) < 0.6:
+        return False
+    if str(left.get("entity_id", "") or "") != str(right.get("entity_id", "") or ""):
+        return False
+    if str(left.get("attribute", "") or "") != str(right.get("attribute", "") or ""):
+        return False
+    if str(left.get("value", "") or "") == str(right.get("value", "") or ""):
+        return False
+    scopes = {str(left.get("slot_type", "") or ""), str(right.get("slot_type", "") or "")}
+    if scopes.intersection({"entity_identity", "persistent_attribute"}):
+        return True
+    left_time = tuple(left.get("time_scope", ()) or ())
+    right_time = tuple(right.get("time_scope", ()) or ())
+    return bool(
+        len(left_time) == 2 and len(right_time) == 2
+        and min(float(left_time[1]), float(right_time[1])) >= max(float(left_time[0]), float(right_time[0]))
+    )
 
 
 def _adaptive_sampling_triggers(
@@ -3334,7 +3597,11 @@ def _resolution_prompt(task: Any, *, question: str = "") -> str:
     return (
         "Evaluate only what is directly observable, not whether frames were returned. In the same JSON include "
         "\"finding\":\"found|not_found|uncertain\", where finding refers only to the task's expected evidence, "
-        "\"structured_slots\":[{\"slot_id\":\"stable task-local name\",\"value\":\"directly observed value\","
+        "\"visibility_status\":\"clear|occluded|unknown\", "
+        "\"structured_slots\":[{\"slot_id\":\"stable task-local name\","
+        "\"slot_type\":\"entity_identity|persistent_attribute|observation_attribute|event_role|state_at_time\","
+        "\"entity_id\":\"canonical entity if known\",\"attribute\":\"typed attribute\","
+        "\"value\":\"directly observed value\",\"time_scope\":[0.0,1.0],\"confidence\":0.8,"
         "\"frame_indices\":[0]}], and "
         "\"target_presence\":{\"target\":\"...\",\"status\":\"present|absent|uncertain\",\"confidence\":0.0}, "
         "\"measurements\":[{\"value\":0.0,\"unit\":\"...\",\"relation\":\"exact|approx|greater_than|less_than\","
@@ -3443,8 +3710,10 @@ def _preview_prompt(
     return (
         "You are the Investigator. Inspect the low-fps preview frames and local ASR without choosing an answer option. "
         "Return JSON only: {\"summary\":\"atomic observation\",\"confidence\":0.0-1.0,"
-        "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"atomic visible observation\","
+        "\"entities\":[{\"local_id\":\"person_1\",\"entity_hypothesis_id\":\"stable task-level entity ID or empty\","
+        "\"association_confidence\":0.0-1.0,\"description\":\"atomic visible observation\","
         "\"visual_signature\":\"stable face, hair, clothing, and accessories\",\"frame_indices\":[0],"
+        "\"attributes\":{\"jacket_color\":\"green\",\"helmet_color\":\"black\"},"
         "\"role\":\"visible role or unknown\",\"question_relation\":\"directly observed relation or unknown\","
         "\"supports_question_relation\":true|false}],"
         "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable occurrence identity\","
@@ -3537,11 +3806,15 @@ def _event_preview_prompt(
         "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable occurrence identity\","
         "\"event_class\":\"audition|news_segment|other\",\"counting_unit\":\"question-defined unit\","
         "\"participant_ids\":[\"stable named group or participant\"],\"phase\":\"intro|main|judging|result|replay|unknown\","
+        "\"participants\":[{\"participant_id\":\"visible participant\",\"entity_hypothesis_id\":\"stable task-level ID or empty\","
+        "\"role\":\"overtaker|overtaken|actor|object\",\"visual_signature\":\"multi-attribute signature\","
+        "\"attributes\":{\"jacket_color\":\"green\",\"helmet_color\":\"black\"},\"association_confidence\":0.0-1.0}],"
         "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
         "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
         "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
         "\"description\":\"one occurrence\",\"start_sec\":float,\"end_sec\":float,"
-        "\"supports_question_event\":true|false,\"continues_from_previous\":true|false,"
+        "\"supports_question_event\":true|false,\"supports_anchor_event\":true|false,"
+        "\"continues_from_previous\":true|false,"
         "\"continues_to_next\":true|false}],"
         "\"supports_answer_event\":true|false,\"need_detail\":true|false,"
         "\"detail_start_sec\":float|null,\"detail_end_sec\":float|null,\"requested_fps\":0.5|1.0|2.0,"
@@ -3559,6 +3832,8 @@ def _event_preview_prompt(
         "is not a counted news segment unless it visibly functions as a distinct broadcast segment. "
         "Compare against the prior adjacent-window events below. Reuse an exact event_key and set continues_from_previous=true "
         "only when the same occurrence visibly continues across the boundary. "
+        "For identity-linked questions, assign participant roles and reuse an entity_hypothesis_id only when multiple visible "
+        "attributes support the association; otherwise leave it empty. "
         "Do not list people or infer a video-level count. The preview covers one complete segment exactly once. Choose a detail "
         "fps that covers the full segment when exhaustive enumeration is required, or request one narrower interval when only a "
         "specific fast boundary is unresolved. Use 0.5 fps for stable scenes, 1 fps for ordinary actions, and 2 fps for fast "
@@ -3585,8 +3860,10 @@ def _evidence_prompt(
         "You are the Investigator. Inspect the detail frames and local ASR. Report only an atomic observation, "
         "not an answer-option judgment. Return JSON only: "
         "{\"summary\":\"atomic visual evidence summary\", \"confidence\":0.0-1.0,"
-        "\"entities\":[{\"local_id\":\"person_1\",\"description\":\"atomic visible observation\","
+        "\"entities\":[{\"local_id\":\"person_1\",\"entity_hypothesis_id\":\"stable task-level entity ID or empty\","
+        "\"association_confidence\":0.0-1.0,\"description\":\"atomic visible observation\","
         "\"visual_signature\":\"stable face, hair, clothing, and accessories\",\"frame_indices\":[0],"
+        "\"attributes\":{\"jacket_color\":\"green\",\"helmet_color\":\"black\"},"
         "\"role\":\"visible role or unknown\",\"question_relation\":\"directly observed relation or unknown\","
         "\"supports_question_relation\":true|false}],"
         "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable occurrence identity\","
@@ -3597,6 +3874,8 @@ def _evidence_prompt(
         "\"start_sec\":float,\"end_sec\":float,\"supports_question_event\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false}.\n"
         "List visible people separately and give every entity one or more 0-based frame_indices from the supplied images. "
+        "Reuse entity_hypothesis_id only when a prior event participant or observation has a matching multi-attribute visual "
+        "signature; otherwise leave it empty. Clothing color alone is insufficient when multiple candidates share it. "
         "Omit any person not directly visible in a cited frame, and never introduce additional people only in summary text. "
         "Do not infer a count across frames or chunks.\n"
         "Enumerate every distinct question-relevant event occurrence visible in this inspected window. Conditional events count "
@@ -3626,12 +3905,22 @@ def _event_evidence_prompt(
     preview: Mapping[str, Any] | None = None,
     prior_events: Sequence[Mapping[str, Any]] = (),
 ) -> str:
+    anchor_instruction = (
+        "This is participant anchor discovery: mark an event supports_anchor_event=true when it is the overtaking, meeting, "
+        "or other referenced anchor that identifies the later participant, even though the final question asks a later "
+        "attribute rather than the event itself. Include every visible participant and explicit role. "
+        if str(getattr(task, "inspection_intent", "") or "") == "event_participant_anchor_discovery"
+        else ""
+    )
     return (
         "You are the Investigator. Verify atomic question-relevant event occurrences in this detail window. "
         "Return concise JSON only: {\"summary\":\"brief verified observation\",\"confidence\":0.0-1.0,"
         "\"events\":[{\"local_id\":\"event_1\",\"event_key\":\"stable occurrence identity\","
         "\"event_class\":\"audition|news_segment|other\",\"counting_unit\":\"question-defined unit\","
         "\"participant_ids\":[\"stable named group or participant\"],\"phase\":\"intro|main|judging|result|replay|unknown\","
+        "\"participants\":[{\"participant_id\":\"visible participant\",\"entity_hypothesis_id\":\"stable task-level ID or empty\","
+        "\"role\":\"overtaker|overtaken|actor|object\",\"visual_signature\":\"multi-attribute signature\","
+        "\"attributes\":{\"jacket_color\":\"green\",\"helmet_color\":\"black\"},\"association_confidence\":0.0-1.0}],"
         "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
         "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
         "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
@@ -3648,6 +3937,10 @@ def _event_evidence_prompt(
         "auditions. Mark an unidentifiable candidate supports_question_event=false rather than keying it as 'one occurrence'. Reuse "
         "an exact event_key and set continues_from_previous=true only for the same continuing occurrence. "
         "For news counts use counting_unit=news_broadcast_appearance and exclude teasers, replays, phone feeds, and incidental headlines. "
+        "For identity-linked questions, assign participant roles and reuse an entity_hypothesis_id only when multiple visible "
+        "attributes support the association; otherwise leave it empty. "
+        + anchor_instruction
+        +
         "Do not list people or infer a video-level count.\n"
         f"{_resolution_prompt(task, question=workspace.case.question)}"
         f"Question: {workspace.case.question}\n"
@@ -3656,6 +3949,104 @@ def _event_evidence_prompt(
         f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1600]}\n"
         f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:3000]}\n"
         f"Detail window metadata: {json.dumps(_window_prompt_metadata(window), ensure_ascii=False)[:5000]}"
+    )
+
+
+def _anchor_event_evidence_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+    *,
+    preview: Mapping[str, Any] | None = None,
+) -> str:
+    return (
+        "You are locating the event that identifies a participant for later re-identification. Return compact JSON only: "
+        "{\"summary\":\"brief direct observation\",\"confidence\":0.0-1.0,\"events\":[{"
+        "\"event_key\":\"stable occurrence key\",\"description\":\"one visible anchor event\","
+        "\"start_sec\":float,\"end_sec\":float,\"supports_anchor_event\":true|false,"
+        "\"participant_ids\":[\"recorder\",\"visible participant\"],\"participants\":[{"
+        "\"participant_id\":\"visible participant\",\"role\":\"overtaker|overtaken|actor|object\","
+        "\"visual_signature\":\"at least two visible appearance attributes\","
+        "\"attributes\":{\"clothing_color\":\"green\",\"helmet_color\":\"black\"}}]}]}\n"
+        "List only events directly visible in this window. Mark supports_anchor_event=true when the event is the overtaking, "
+        "meeting, or other referenced occurrence used to identify the later participant. The final question may ask a later "
+        "attribute; that does not make the anchor event irrelevant. Include explicit participant roles and an empty events list "
+        "when no matching anchor is visible. Do not answer the multiple-choice question and do not emit other schema fields.\n"
+        f"Question: {workspace.case.question}\nTask: {getattr(task, 'goal', '')}\n"
+        f"Preview finding: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1000]}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:2200]}\n"
+        f"Detail window metadata: {json.dumps(_window_prompt_metadata(window), ensure_ascii=False)[:3800]}"
+    )
+
+
+def _entity_association_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+    *,
+    preview: Mapping[str, Any] | None = None,
+) -> str:
+    references = [dict(item) for item in tuple(getattr(task, "reference_entities", ()) or ())]
+    return (
+        "You are performing a targeted cross-window entity association. Compare visible people in the supplied frames "
+        "with the reference event participant. Do not choose an answer option. Return compact JSON only: "
+        "{\"summary\":\"direct comparison\",\"confidence\":0.0-1.0,"
+        "\"entities\":[{\"local_id\":\"target_1\",\"entity_hypothesis_id\":\"reference hypothesis ID only when supported\","
+        "\"association_confidence\":0.0-1.0,\"description\":\"visible target\","
+        "\"visual_signature\":\"face, hair, clothing, helmet, accessories\",\"frame_indices\":[0],"
+        "\"attributes\":{\"clothing_color\":\"green\",\"finish_position\":\"third\"},"
+        "\"role\":\"later appearance\",\"question_relation\":\"same event participant\","
+        "\"supports_question_relation\":true}],"
+        "\"entity_associations\":[{\"association_id\":\"assoc_1\","
+        "\"source_participant_id\":\"exact reference participant_id\",\"source_event_key\":\"exact reference event key\","
+        "\"target_local_id\":\"target_1\",\"entity_hypothesis_id\":\"exact reference hypothesis ID\","
+        "\"status\":\"supported|refuted|unknown\",\"confidence\":0.0-1.0,"
+        "\"shared_attributes\":{\"helmet_color\":\"black\"},"
+        "\"distinguishing_attributes\":{\"clothing_color\":\"green\"},\"reason\":\"brief comparison\"}]}\n"
+        "Use supported only when at least two compatible appearance attributes or a distinctive identity cue match and no "
+        "visible cue conflicts. Clothing color alone is insufficient. Use refuted for a clear conflict and unknown when coverage "
+        "or visibility cannot decide. Every target must cite 0-based frame_indices; do not create an association without a visible target.\n"
+        f"Reference entities: {json.dumps(references, ensure_ascii=False)[:2400]}\n"
+        f"Question: {workspace.case.question}\nTask: {getattr(task, 'goal', '')}\n"
+        f"Preview: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1200]}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:2400]}\n"
+        f"Detail window metadata: {json.dumps(_window_prompt_metadata(window), ensure_ascii=False)[:4200]}"
+    )
+
+
+def _narrative_bridge_prompt(
+    workspace: VirtualVideoWorkspace,
+    task: Any,
+    segment_packet: Mapping[str, Any],
+    window: Mapping[str, Any],
+    *,
+    preview: Mapping[str, Any] | None = None,
+) -> str:
+    prior_facts = [dict(item) for item in tuple(getattr(task, "reference_facts", ()) or ())]
+    return (
+        "You are extracting a canonical narrative bridge from visible scenes and local ASR. Do not select a final answer. "
+        "Return compact JSON only: {\"summary\":\"setup and outcome\",\"confidence\":0.0-1.0,"
+        "\"narrative_facts\":[{\"fact_id\":\"narrative_1\",\"subject_id\":\"stable character or group\","
+        "\"setup_state\":\"directly observed initial intention/situation\","
+        "\"observed_bridge\":\"direct transition, dialogue, or explicitly unshown gap\","
+        "\"outcome_state\":\"directly observed later state\",\"inference\":\"minimal implication linking setup to outcome\","
+        "\"inference_basis\":\"direct_transition|setup_outcome_inference\",\"confidence\":0.0-1.0,"
+        "\"hypothesis_assessments\":[{\"option_id\":\"A\",\"status\":\"supported|contradicted|unknown\","
+        "\"reason\":\"which observed predicate agrees or conflicts\"}],"
+        "\"alternative_counterevidence\":[{\"option_id\":\"B\",\"observation\":\"specific conflicting fact\"}]}]}\n"
+        "A supported assessment requires both setup_state and outcome_state. Treat thoughts or motives as inferred unless spoken. "
+        "Use unknown when the inspected window contains only one side of the gap. Assess every option predicate independently; "
+        "do not force exactly one supported option and do not use general story plausibility.\n"
+        "Prior incomplete facts are navigation hypotheses only. Re-observe their missing side before completing them: "
+        f"{json.dumps(prior_facts, ensure_ascii=False)[:2400]}\n"
+        f"Question: {workspace.case.question}\n"
+        f"Option predicates: {json.dumps(dict(workspace.case.options), ensure_ascii=False)}\n"
+        f"Task: {getattr(task, 'goal', '')}\nExpected evidence: {getattr(task, 'expected_evidence', '')}\n"
+        f"Preview: {json.dumps(dict(preview or {}), ensure_ascii=False)[:1200]}\n"
+        f"Segment: {json.dumps(_compact_segment_packet(segment_packet), ensure_ascii=False)[:2400]}\n"
+        f"Detail window metadata: {json.dumps(_window_prompt_metadata(window), ensure_ascii=False)[:4200]}"
     )
 
 
