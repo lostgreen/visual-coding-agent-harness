@@ -467,7 +467,7 @@ def test_sampling_plan_tracks_unspecified_floor_and_downgrades_missing_rationale
     assert incomplete.priority == 0.8
 
 
-def test_discriminative_audit_preserves_completed_gate_when_reason_is_missing() -> None:
+def test_discriminative_audit_fails_closed_when_required_fields_are_missing() -> None:
     gate = {"passed": True, "reason": "verified_window_evidence"}
 
     missing = multiround._apply_answer_audit(
@@ -482,14 +482,140 @@ def test_discriminative_audit_preserves_completed_gate_when_reason_is_missing() 
             answer="A",
             support_status="supported",
             support_reason="Witnessed before and after states distinguish A from B.",
+            option_verdicts={"A": {"status": "supported", "reason": "Exact predicate witnessed."}},
         ),
         required=True,
     )
 
-    assert missing["passed"] is True
-    assert missing["answer_audit_status"] == "inferred_from_completion"
-    assert missing["answer_audit_missing_fields"] == ["support_reason"]
+    assert missing["passed"] is False
+    assert missing["reason"] == "answer_audit_exact_predicate_unsupported"
+    assert missing["answer_audit_missing_fields"] == [
+        "support_reason", "selected_option_exact_verdict",
+    ]
     assert supported["passed"] is True
+
+
+def test_zero_conditions_never_yield_strict_for_identity_question() -> None:
+    contract = multiround.compile_query_contract(
+        "Who was the second person to overtake the recorder?",
+        {"A": "The rider in green", "B": "The rider in black"},
+    )
+    requirements = multiround.compile_query_requirements(
+        "Who was the second person to overtake the recorder?"
+    )
+
+    status = multiround._enforce_strict_safety(
+        {
+            "ready_for_answer": True,
+            "grounded_ready": True,
+            "grounding_level_ready": "strict",
+            "critical_condition_count": 0,
+            "choice_ready": True,
+            "candidate_available": True,
+        },
+        contract,
+        requirements,
+    )
+
+    assert status["ready_for_answer"] is False
+    assert status["grounded_ready"] is False
+    assert status["strict_safety_blockers"] == ["condition_registry_missing"]
+
+
+def test_choice_not_ready_never_yields_verified_strict() -> None:
+    contract = multiround.compile_query_contract(
+        "How many times was the recorder overtaken?", {"A": "2", "B": "3"}
+    )
+    status = multiround._enforce_strict_safety(
+        {
+            "ready_for_answer": True,
+            "grounded_ready": True,
+            "critical_condition_count": 1,
+            "choice_ready": False,
+            "candidate_available": True,
+        },
+        contract,
+        {},
+    )
+
+    gate = multiround._annotate_grounding_level(
+        {"passed": True, "reason": "full_source_coverage_verified"}, status
+    )
+    assert status["ready_for_answer"] is False
+    assert gate["passed"] is False
+    assert gate["reason"] == "choice_not_ready"
+
+
+def test_unknown_audit_downgrades_grounded_answer() -> None:
+    gate = multiround._apply_answer_audit(
+        {"passed": True, "reason": "verified_window_evidence"},
+        ReasonerDecision(
+            action="answer",
+            answer="B. green clothes",
+            support_status="unknown",
+            support_reason="Audit JSON was unavailable.",
+        ),
+        required=True,
+    )
+
+    assert gate["passed"] is False
+    assert gate["reason"] == "answer_audit_unavailable"
+
+
+def test_repair_tasks_inherit_gap_and_condition_ids() -> None:
+    condition = multiround.GapCondition(
+        "condition_second_overtaker_identity",
+        "Identify the second overtaker in the last qualified episode.",
+        scope="full_video",
+        quantifier="all_events",
+    )
+    gap = EvidenceGap(
+        "gap_last_episode",
+        "Resolve the last qualified lead-loss episode.",
+        conditions=(condition,),
+    )
+    decision = ReasonerDecision(
+        action="investigate",
+        tasks=(InvestigationTask(
+            "participant_anchor_r2_001",
+            "Find the anchor event.",
+            segment_id="seg_1",
+            inspection_intent="event_participant_anchor_discovery",
+        ),),
+    )
+
+    inherited = multiround._inherit_repair_lineage(
+        decision,
+        origin_gap=gap,
+        condition_registry=(condition,),
+        active_condition_ids=(condition.condition_id,),
+        reports=(),
+        options={"A": "green clothes", "B": "Red Bull helmet"},
+    )
+    task = inherited.tasks[0]
+
+    assert task.gap_id == gap.gap_id
+    assert task.origin_gap_id == gap.gap_id
+    assert task.target_condition_ids == (condition.condition_id,)
+    assert task.conditions == (condition,)
+    assert task.target_option_predicates == ("A=green clothes", "B=Red Bull helmet")
+
+
+def test_local_condition_result_cannot_close_global_all_condition() -> None:
+    state = ConditionState(
+        "condition_all_events",
+        status="satisfied",
+        supporting_evidence_ids=("ev_local",),
+        scope="window",
+        quantifier="all_events",
+    )
+
+    scoped = multiround._apply_condition_scope(
+        {state.condition_id: state},
+        {"source_coverage": {"source": {"coverage_ratio": 1.0}}},
+    )
+
+    assert scoped[state.condition_id].status == "unknown"
 
 
 def test_total_count_option_verdicts_use_only_canonical_snapshot() -> None:
@@ -969,6 +1095,10 @@ class CoverageReasoner:
                         segment_id="seg_target_a",
                         modality_hint=("visual",),
                         expected_evidence="distinct scholars discussing Napoleon",
+                        gap_id="gap_scholar_census",
+                        success_conditions=(
+                            "All distinct scholars commenting on Napoleon are visually witnessed and deduplicated.",
+                        ),
                     ),
                 ),
             )
@@ -993,6 +1123,14 @@ class CoverageReasoner:
                 },
                 {"entity_id": "scholar_3", "description": "brown-haired man", "evidence_ids": (citations[-1],)},
             ),
+            support_status="supported",
+            support_reason="The complete witnessed entity census contains exactly three distinct scholars.",
+            option_verdicts={
+                "B": {
+                    "status": "supported",
+                    "reason": "Exactly three distinct witnessed scholars remain after reconciliation.",
+                }
+            },
         )
 
 
@@ -2161,7 +2299,7 @@ def test_identity_completion_respects_explicit_negative_anchor_attestation(tmp_p
     assert completion["identity_anchor_evidence_ids"] == []
 
 
-def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(tmp_path: Path) -> None:
+def test_full_video_count_repairs_coverage_but_does_not_strictly_verify_unknown_condition(tmp_path: Path) -> None:
     workspace = _two_chunk_workspace(tmp_path)
     reasoner = CoverageReasoner()
     investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
@@ -2176,29 +2314,23 @@ def test_full_video_count_answer_repairs_missing_source_chunks_before_aggregate(
 
     assert result.answer == "B. Three"
     assert result.correct is True
-    assert result.verified is True
-    assert result.grounded_answer == "B. Three"
+    assert result.verified is False
+    assert result.grounded_answer == ""
     assert result.forced_answer == "B. Three"
     assert result.selected_option == "B"
-    assert result.answer_mode == "grounded"
-    assert result.grounding_status == "verified_strict"
-    assert result.grounding_level == "strict"
-    assert result.retrieval_status == "sufficient"
-    assert result.verification_reason == "full_source_coverage_verified"
-    assert reasoner.calls == 3
+    assert result.answer_mode == "forced_choice"
+    assert result.grounding_status == "insufficient"
+    assert result.grounding_level == "none"
+    assert result.retrieval_status == "failed"
+    assert result.verification_reason == "gap_scholar_census_c1"
+    assert reasoner.calls >= 3
     assert reasoner.completion_statuses[1]["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
     assert reasoner.completion_statuses[2]["missing_segment_ids"] == []
-    assert len(result.citations) == 1
-    aggregate = next(item for item in result.evidence if item.evidence_id == result.citations[0])
-    assert aggregate.modality == "derived"
-    assert "ev_q_chunk_a_001" in aggregate.parent_evidence_ids
-    assert len(aggregate.parent_evidence_ids) == 3
-    assert aggregate.entity_ids == ("scholar_1", "scholar_2", "scholar_3")
-    assert len(aggregate.operation_metadata["entity_clusters"]) == 3
     repair = next(row for row in result.trace if row.get("type") == "repair_override")
     assert repair["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
-    gate = next(row for row in result.trace if row.get("type") == "completion_gate")
-    assert gate["passed"] is True
+    gates = [row for row in result.trace if row.get("type") == "completion_gate"]
+    assert gates[-1]["passed"] is False
+    assert gates[-1]["reason"] == "gap_scholar_census_c1"
 
 
 def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_path: Path) -> None:
@@ -3603,4 +3735,7 @@ def test_semantic_contract_readiness_blocks_only_contracts_that_need_closure(tmp
     )
 
     assert simple_gate["passed"] is True
-    assert spatial_gate["reason"] == "contract_completion_not_ready"
+    assert spatial_gate["reason"] == "spatial_option_relation_missing"
+    readiness_gate = multiround._contract_readiness_gate(spatial, incomplete)
+    assert readiness_gate is not None
+    assert readiness_gate["reason"] == "gap_relation_c1"

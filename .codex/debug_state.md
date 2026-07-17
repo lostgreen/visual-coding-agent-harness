@@ -1,53 +1,40 @@
-# VideoMME Contract and Verification Debug State
+# P0.5 Strict-Grounding Safety State
 
 ## Goal
 
-Improve the general multi-round Agent architecture using the errors10 failure traces without encoding case-specific answers.
+Eliminate false `verified_strict` answers before continuing P1 capability work.
 
-## Current Evidence
+## Latest Failure Fingerprint
 
-- Current branch: `codex/m3-slim-video-agent`.
-- errors10 had 5 grounded answers with only 1 correct; 445-2 repeated the same rejected answer four times; 521-2 repeatedly recast equivalent conditions.
-- Contract compilation previously classified 445-2 as multi-window rather than full-video and 744-1 as a window-level existential claim.
-- Model-driven Investigator reports already emit structured per-condition results; the unconditional partial behavior is limited to deterministic or cached reuse paths.
-- Existing repair infrastructure already covers source coverage, event candidates, identity anchors, entity candidates, scores, and spatial relations; the missing link was contract activation and rejected-answer control flow.
-- Post-change KML errors10: accuracy stayed 2/10, false-grounded fell 4 -> 0, grounded coverage fell 5/10 -> 0, and average investigations rose 11.1 -> 16.9.
-- Root-cause review of that run found grounded readiness was all-or-nothing, fine-grained contracts stayed on a fixed 0.5fps grid, repeated-window contradictions were not arbitrated, and forced choice had no evidence-strength calibration.
+- Baseline commit `faa1a95` could certify a wrong answer when the condition registry was empty, choice/candidate readiness was false, or the answer audit did not explicitly support the selected option predicate.
+- The direct KML `--case-ids` invocation is invalid for constructed IDs `441-4`, `445-2`, and `445-3`; use `configs/eval_groups/vcah_p0_cases4.json`.
 
-## Latest Change
+## Current Change
 
-- Count, sequence, state-transition, narrative-inference, epistemic-option, attribute-transition, and cross-window identity questions now compile to stricter contracts.
-- Conditions are aligned across rounds by stable semantic identity and completion evaluates the active condition set using accumulated historical evidence.
-- Discriminative questions fail closed on missing answer audits and require independent `verify_claim` evidence.
-- Repeated rejected submissions are converted into coverage, event-enumeration, or contrastive repair tasks.
-- Verification: local full suite `285 passed`.
-- Follow-up iteration adds strict/partial grounding grades; partial requires >=60% satisfied critical conditions, >=75% scope coverage, visual retrieval, no contradiction, and the existing discriminative answer audit.
-- Commit `896aa58` temporarily mapped identity/order/count contracts to fps floors; that design was rejected because it made the framework perform semantic sampling decisions.
-- Forced count choices now rank independent claim checks, countable entity witnesses, or canonical event candidates. Wrong-window positives do not count as target support; zero target-positive evidence deterministically penalizes stronger numerical assertions.
-- Current follow-up removes every contract-to-fps mapping. Reasoner visual tasks now declare `sampling_floor_fps` plus `temporal_resolution_rationale` from expected evidence dynamics; missing declarations default to 0.5fps and are traced.
-- Investigator governance is contract-agnostic: explicit `not_found`, confidence below 0.7, or structured-slot conflict triggers a maximum three-attempt fps/phase ladder. Negative/conflicted observations are not reused as positive support, terminal absence is resolution-qualified, and unresolved slots block grounded readiness.
-- Sampling stability telemetry now reports fps, upshifts, trigger causes, negative-to-positive conversions, conflicts, and unspecified floors.
-- Current local verification: `PYTHONPATH=src:. pytest -q` -> `299 passed`.
+- Strict grounding now fails closed on missing critical conditions, missing choice/candidate readiness, unparseable audits, and unsupported selected-option predicates.
+- Normal, audit, and forced paths share `requires_option_audit` and the canonical option verdict table.
+- Repair tasks inherit gap, condition, boundary episode, and target option-predicate lineage.
+- Local/global condition scope is enforced; local observations cannot close global conditions.
+- Decision-time answer and entity-cluster facts are merged into the same completion status before the gate is evaluated.
 
-## Current Run
+## Verification
 
-- Completed KML diagnostic group at `aef2161`: `videomme_v2_errors10_dynamic_v1`.
-- Valid output: `/m2v_intern/xuboshen/zgw/VideoAgent/videomme_v2_errors10_three_layer_aef2161_seed20260707`.
-- Accuracy remained 2/10; 441-3 and 521-2 are correct. 521-2 recovered from wrong forced E to correct partial-grounded F; false-grounded stayed zero.
-- 468-3 regressed from correct G to wrong D. 445-3 remains wrong and unstable.
-- Average investigations improved 16.9 -> 15.1, but 48 negative triggers caused 103 upshifts with only 2 negative-to-positive conversions.
-- Two similarly named `errors10_three_layer_aef2161_seed20260707_batch1/2` directories are invalid legacy Video-MME runs caused by case-ID collisions and must not be used.
-- Disjoint guard group: `videomme_long_regression50_v1`.
+- Local: `PYTHONPATH=src:. pytest -q` -> `338 passed`.
+- `py_compile` and `git diff --check` pass.
+- One-case KML smoke (`441-2`) answered incorrectly but was correctly downgraded to `forced_choice`, `grounding_status=insufficient`, `verified=false`.
+- Four-case seeded KML replay completed successfully at
+  `/m2v_intern/xuboshen/zgw/VideoAgent/vcah_p05_seeded_replay_20260717/all_summary.json`.
+- Result: 4/4 answers were `forced_choice`, `grounding_status=insufficient`, and `verified=false`.
+- False strict count: 0. Accuracy: 1/4 (`441-4` correct); accuracy remains P1 work.
 
 ## Stale Evidence
 
-- Pre-change errors10 results remain valid as the baseline only; they do not measure the upgraded code.
-- `/m2v_intern/xuboshen/zgw/VideoAgent/videomme_v2_errors10_contract_v2_86118df` is also stale for the new graded-grounding/sampling/calibration iteration.
+- Runs under `vcah_p05_cases4_20260717`, `vcah_p05_cases4_all_20260717`, and
+  `vcah_p05_casegroup_20260717` used an invalid raw-qid construction path and do not represent the four-case regression.
+- Earlier `faa1a95` KML outputs are baseline evidence only.
 
 ## Next Actions
 
-1. Run focused additional seeds for 468-3, 521-2, and 445-3 using the VideoMME-v2 runner.
-2. Aggregate option flip rate, negative-to-positive conversion, and Reasoner floor declaration coverage.
-3. Improve terminal qualified-absence planning and phase selection before increasing adaptive retry budget.
-4. Investigate identity/order evidence reconciliation for 445-3 separately from sampling control.
-5. Run regression50 only after the focused stability regressions are resolved.
+1. Commit and push P0.5 as an independent safety change.
+2. Continue P1 option-accuracy work from the canonical facts and shared verdict table.
+3. Focus first on `441-2`, `445-2`, and `445-3`, without weakening strict fail-closed invariants.

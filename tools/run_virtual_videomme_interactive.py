@@ -37,7 +37,12 @@ from vcah.investigator import (
     _choose_window_from_segment_packet,
     _task_terms,
 )
-from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
+from vcah.multiround import (
+    InvestigationTask,
+    ReasonerDecision,
+    VirtualVideoMultiRoundDriver,
+    requires_option_audit,
+)
 from vcah.semantic_evidence import qualify_absence
 from vcah.types import CoverageSegment, EvidenceRecord, to_jsonable
 from vcah.video import probe_duration
@@ -586,8 +591,20 @@ class GeminiReasoner:
                 visual_manifest=visual_manifest,
                 api_response=audit_api_response,
             )
-            verdict = str(audit.get("verdict", "unknown") or "unknown").strip().casefold()
+            audit_parseable = bool(audit.get("_parseable", False))
+            verdict = (
+                str(audit.get("verdict", "unknown") or "unknown").strip().casefold()
+                if audit_parseable else "unknown"
+            )
             audit_reason = str(audit.get("reason", "") or "")
+            selected_match = re.match(r"\s*([A-H])(?:\.|\)|:|\s|$)", candidate.answer.upper())
+            selected_option = selected_match.group(1) if selected_match else ""
+            strongest = dict(audit.get("strongest_alternative") or {})
+            if selected_option and str(strongest.get("option", "") or "").strip().upper() == selected_option:
+                verdict = "insufficient"
+                audit_reason = (
+                    f"{audit_reason} The strongest alternative duplicates the selected option, so the audit is invalid."
+                ).strip()
             self._last_audit_reason = audit_reason
             revised_answer, revised_nested_citations = _normalize_answer_payload(
                 audit.get("revised_answer"),
@@ -1379,6 +1396,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "structured_parse_error": parse_error,
                 "source_candidate_ids": list(getattr(task, "source_candidate_ids", ()) or ()),
                 "inspection_intent": str(getattr(task, "inspection_intent", "") or ""),
+                "origin_gap_id": str(getattr(task, "origin_gap_id", "") or ""),
+                "target_condition_ids": list(getattr(task, "target_condition_ids", ()) or ()),
+                "boundary_episode_id": str(getattr(task, "boundary_episode_id", "") or ""),
+                "target_option_predicates": list(getattr(task, "target_option_predicates", ()) or ()),
                 "supports_identity_anchor": supports_identity_anchor,
                 "supports_answer_event": supports_answer_event,
                 "investigation": outcome,
@@ -1631,6 +1652,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 conditions=tuple(getattr(task, "conditions", ()) or ()),
                 source_candidate_ids=tuple(getattr(task, "source_candidate_ids", ()) or ()),
                 inspection_intent=str(getattr(task, "inspection_intent", "") or ""),
+                origin_gap_id=str(getattr(task, "origin_gap_id", "") or ""),
+                target_condition_ids=tuple(getattr(task, "target_condition_ids", ()) or ()),
+                boundary_episode_id=str(getattr(task, "boundary_episode_id", "") or ""),
+                target_option_predicates=tuple(getattr(task, "target_option_predicates", ()) or ()),
                 sampling_floor_fps=(
                     float(getattr(task, "sampling_floor_fps", 0.5) or 0.5)
                     if bool(getattr(task, "sampling_floor_specified", False))
@@ -2899,31 +2924,9 @@ def _followup_prompt(
 
 
 def _should_audit_answer(kwargs: Mapping[str, Any]) -> bool:
-    question = str(kwargs.get("question", "") or "").casefold()
     contract = dict(kwargs.get("query_contract") or {})
     requirements = dict(kwargs.get("query_requirements") or {})
-    if requirements.get("requires_identity_link") or requirements.get("requires_spatial_relation"):
-        return True
-    if str(contract.get("required_scope", "") or "") == "full_video":
-        return True
-    high_risk_patterns = (
-        r"\bwhy\b",
-        r"\b(?:cause|reason|motive|because)\b",
-        r"\bhow\s+(?:did|does|do|was|were)\b",
-        r"\bwhat\s+(?:happens?|happened|did|does|was|were)\b",
-        r"\bwho\b",
-        r"\bwhen\b",
-        r"\b(?:at\s+)?what\s+time\b",
-        r"\bspecific\s+time\b",
-        r"\bwhich\s+(?:episode|day|meal|period|quarter|stage|phase)\b",
-        r"\b(?:before|after)\b",
-        r"\bnot\s+(?:true|correct)\b",
-        r"\brelationship\b",
-        r"\b(?:view|opinion|believ\w*)\b",
-        r"\b(?:title|summary|summari[sz]\w*)\b",
-        r"\bhow\s+many\b.*\b(?:tasks?|steps?|actions?|items?)\b.*\b(?:complete\w*|finish\w*)\b",
-    )
-    return any(re.search(pattern, question) for pattern in high_risk_patterns)
+    return requires_option_audit(contract, requirements)
 
 
 def _requires_independent_claim_verification(kwargs: Mapping[str, Any]) -> bool:
@@ -4168,7 +4171,7 @@ def _with_explicit_measurement_fallback(
 def _parse_answer_audit(text: str) -> dict[str, Any]:
     parsed = _parse_json(text)
     if parsed:
-        return parsed
+        return {**parsed, "_parseable": True}
     verdict_match = re.search(
         r'\"verdict\"\s*:\s*\"(supported|insufficient|contradicted)\"',
         str(text or ""),
@@ -4177,10 +4180,11 @@ def _parse_answer_audit(text: str) -> dict[str, Any]:
     verdict = verdict_match.group(1).casefold() if verdict_match else "unknown"
     return {
         "verdict": verdict,
+        "_parseable": False,
         "reason": (
-            "Answer audit output was truncated; only its explicit leading verdict could be retained."
+            "Answer audit output was truncated; its leading verdict is telemetry only and cannot preserve strict grounding."
             if verdict_match
-            else "Answer audit returned no parseable verdict; preserve the independent completion gate result."
+            else "Answer audit returned no parseable verdict; strict grounding must be downgraded."
         ),
         "tasks": [],
     }

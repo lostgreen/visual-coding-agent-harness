@@ -830,7 +830,7 @@ def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> 
         options={"B": "A broader motive", "D": "A downstream benefit"},
         workspace_overview={"segment_overviews": []},
         query_contract={},
-        query_requirements={},
+        query_requirements={"requires_narrative_inference": True},
         completion_status={"ready_for_answer": True},
         temporal_navigation={},
         remaining_budget=4,
@@ -857,7 +857,7 @@ def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> 
     assert api.calls[1]["image_paths"] == (str(frame_path),)
 
 
-def test_gemini_reasoner_preserves_verdict_from_truncated_answer_audit(tmp_path: Path) -> None:
+def test_gemini_reasoner_downgrades_verdict_from_truncated_answer_audit(tmp_path: Path) -> None:
     class TruncatedAuditClient:
         def __init__(self) -> None:
             self.responses = [
@@ -876,7 +876,7 @@ def test_gemini_reasoner_preserves_verdict_from_truncated_answer_audit(tmp_path:
         options={"B": "A broader motive", "D": "A downstream benefit"},
         workspace_overview={"segment_overviews": []},
         workspace_duration_sec=300.0,
-        query_contract={"required_scope": "window", "aggregation": "none"},
+        query_contract={"required_scope": "window", "aggregation": "none", "observation_target": "relation"},
         query_requirements={},
         completion_status={"ready_for_answer": True},
         temporal_navigation={},
@@ -894,7 +894,7 @@ def test_gemini_reasoner_preserves_verdict_from_truncated_answer_audit(tmp_path:
 
     assert decision.action == "answer"
     assert decision.answer.startswith("D.")
-    assert decision.support_status == "contradicted"
+    assert decision.support_status == "unknown"
     assert "truncated" in decision.support_reason.casefold()
 
 
@@ -928,7 +928,11 @@ def test_gemini_reasoner_preserves_candidate_when_forced_finalization_still_inve
         "question": "How many interviewees appear in total?",
         "options": {"A": "Five", "D": "Six"},
         "workspace_overview": {"segment_overviews": []},
-        "query_contract": {"required_scope": "full_video", "aggregation": "deduplicate"},
+        "query_contract": {
+            "required_scope": "full_video",
+            "aggregation": "deduplicate",
+            "quantifier": "distinct_count",
+        },
         "query_requirements": {},
         "completion_status": {"ready_for_answer": True},
         "temporal_navigation": {},
@@ -1335,7 +1339,7 @@ def test_gpt5_followup_and_answer_audit_use_reasoning_safe_completion_budget(tmp
         options={"A": "A later consequence", "B": "A direct motive"},
         workspace_overview={"segment_overviews": []},
         query_contract={"required_scope": "window", "aggregation": "none"},
-        query_requirements={},
+        query_requirements={"requires_narrative_inference": True},
         completion_status={"ready_for_answer": True},
         temporal_navigation={},
         remaining_budget=2,
@@ -1498,7 +1502,11 @@ def test_gemini_reasoner_records_audit_revision_as_unadopted_challenge(tmp_path:
         question="How many interviewees appear in total?",
         options={"A": "Five", "D": "Six"},
         workspace_overview={"segment_overviews": []},
-        query_contract={"required_scope": "full_video", "aggregation": "deduplicate"},
+        query_contract={
+            "required_scope": "full_video",
+            "aggregation": "deduplicate",
+            "quantifier": "distinct_count",
+        },
         query_requirements={},
         completion_status={"ready_for_answer": True},
         temporal_navigation={},
@@ -1534,7 +1542,7 @@ def test_gemini_reasoner_dispatches_independent_claim_verification_for_relation_
         workspace_overview={"segment_overviews": []},
         workspace_duration_sec=300.0,
         query_contract={"required_scope": "window", "aggregation": "none"},
-        query_requirements={},
+        query_requirements={"requires_narrative_inference": True},
         completion_status={"ready_for_answer": True},
         temporal_navigation={},
         remaining_budget=3,
@@ -1604,7 +1612,7 @@ def test_forced_finalization_keeps_existing_claim_assessment_active(tmp_path: Pa
         workspace_overview={"segment_overviews": []},
         workspace_duration_sec=300.0,
         query_contract={"required_scope": "window", "aggregation": "none"},
-        query_requirements={},
+        query_requirements={"requires_narrative_inference": True},
         completion_status={"ready_for_answer": True},
         temporal_navigation={},
         remaining_budget=0,
@@ -1770,14 +1778,18 @@ def test_answer_audit_targets_relation_risk_without_rechecking_simple_quantities
     assert _should_audit_answer(
         {
             "question": "Why did the person give away the money?",
-            "query_contract": {"required_scope": "window", "aggregation": "none"},
+            "query_contract": {
+                "required_scope": "window", "aggregation": "none", "observation_target": "relation",
+            },
             "query_requirements": {},
         }
     )
     assert _should_audit_answer(
         {
             "question": "How many people were interviewed in total?",
-            "query_contract": {"required_scope": "full_video", "aggregation": "deduplicate"},
+            "query_contract": {
+                "required_scope": "full_video", "aggregation": "deduplicate", "quantifier": "distinct_count",
+            },
             "query_requirements": {},
         }
     )
@@ -1846,7 +1858,7 @@ def test_reasoner_deduplicates_identical_answer_audit(tmp_path: Path) -> None:
         "question": "How does he leave the airplane?",
         "options": {"A": "By a stretcher", "B": "By jumping"},
         "workspace_overview": {"segment_overviews": []},
-        "query_contract": {}, "query_requirements": {},
+        "query_contract": {"observation_target": "relation"}, "query_requirements": {},
         "completion_status": {"ready_for_answer": True}, "temporal_navigation": {}, "remaining_budget": 2,
         "evidence_digest": ({
             "evidence_id": "ev_1", "summary": "He is carried on a stretcher.",
@@ -2258,8 +2270,10 @@ def test_empty_answer_audit_is_unknown_not_semantic_insufficiency() -> None:
     truncated = _interactive._parse_answer_audit('{"verdict":"insufficient","reason":"missing')
 
     assert empty["verdict"] == "unknown"
-    assert "completion gate" in empty["reason"]
+    assert empty["_parseable"] is False
+    assert "downgraded" in empty["reason"]
     assert truncated["verdict"] == "insufficient"
+    assert truncated["_parseable"] is False
 
 
 def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> None:

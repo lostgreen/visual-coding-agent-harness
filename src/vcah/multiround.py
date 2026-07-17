@@ -84,6 +84,10 @@ class InvestigationTask:
     inspection_intent: str = ""
     reference_entities: tuple[Mapping[str, Any], ...] = ()
     reference_facts: tuple[Mapping[str, Any], ...] = ()
+    origin_gap_id: str = ""
+    target_condition_ids: tuple[str, ...] = ()
+    boundary_episode_id: str = ""
+    target_option_predicates: tuple[str, ...] = ()
     sampling_floor_fps: float | None = None
     expected_event_dwell_sec: float | None = None
     temporal_resolution_rationale: str = ""
@@ -123,6 +127,18 @@ class InvestigationTask:
             self,
             "reference_facts",
             tuple(dict(item) for item in self.reference_facts if isinstance(item, Mapping)),
+        )
+        object.__setattr__(self, "origin_gap_id", str(self.origin_gap_id or self.gap_id or "").strip())
+        object.__setattr__(
+            self,
+            "target_condition_ids",
+            tuple(dict.fromkeys(str(item).strip() for item in self.target_condition_ids if str(item).strip())),
+        )
+        object.__setattr__(self, "boundary_episode_id", str(self.boundary_episode_id or "").strip())
+        object.__setattr__(
+            self,
+            "target_option_predicates",
+            tuple(dict.fromkeys(str(item).strip() for item in self.target_option_predicates if str(item).strip())),
         )
         specified = self.sampling_floor_fps is not None
         floor_fps = float(self.sampling_floor_fps or 0.5)
@@ -959,6 +975,7 @@ class VirtualVideoMultiRoundDriver:
                 )
             ), condition_registry)
             decision = _bind_gap_to_tasks(decision)
+            origin_gap = decision.primary_gap
             if decision.action == "investigate":
                 executable_tasks = tuple(task for task in decision.tasks if _task_is_executable(task))
                 if executable_tasks != decision.tasks:
@@ -1165,6 +1182,15 @@ class VirtualVideoMultiRoundDriver:
                         }
                     )
                     decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
+            if decision.action == "investigate":
+                decision = _inherit_repair_lineage(
+                    decision,
+                    origin_gap=origin_gap,
+                    condition_registry=condition_registry,
+                    active_condition_ids=active_condition_ids,
+                    reports=reports,
+                    options=workspace.case.options,
+                )
             trace.append(
                 {
                     "type": "reasoner_decision",
@@ -1190,6 +1216,10 @@ class VirtualVideoMultiRoundDriver:
                         }
                     )
                     decision = replace(decision, citations=filtered_citations)
+                decision_completion_status = _completion_status_with_decision(
+                    completion_status,
+                    decision,
+                )
                 gate = _answer_completion_gate(
                     workspace,
                     query_contract,
@@ -1198,9 +1228,9 @@ class VirtualVideoMultiRoundDriver:
                     decision.entity_clusters,
                     evidence_store.records,
                     query_requirements=query_requirements,
-                    completion_status=completion_status,
+                    completion_status=decision_completion_status,
                 )
-                gate = _annotate_grounding_level(gate, completion_status)
+                gate = _annotate_grounding_level(gate, decision_completion_status)
                 gate = _apply_answer_audit(
                     gate,
                     decision,
@@ -1451,6 +1481,10 @@ class VirtualVideoMultiRoundDriver:
                 }
             )
             if final_decision.action == "answer":
+                decision_completion_status = _completion_status_with_decision(
+                    completion_status,
+                    final_decision,
+                )
                 gate = _answer_completion_gate(
                     workspace,
                     query_contract,
@@ -1459,9 +1493,9 @@ class VirtualVideoMultiRoundDriver:
                     final_decision.entity_clusters,
                     evidence_store.records,
                     query_requirements=query_requirements,
-                    completion_status=completion_status,
+                    completion_status=decision_completion_status,
                 )
-                gate = _annotate_grounding_level(gate, completion_status)
+                gate = _annotate_grounding_level(gate, decision_completion_status)
                 gate = _apply_answer_audit(
                     gate,
                     final_decision,
@@ -2366,7 +2400,7 @@ def _completion_status(
             reports,
             best_choice,
             active_condition_ids,
-        ), workspace, contract, answer_evidence, option_states)
+        ), workspace, contract, answer_evidence, option_states, query_requirements)
     if not coverage:
         base = _apply_identity_completion(
             {
@@ -2388,7 +2422,7 @@ def _completion_status(
             reports,
             best_choice,
             active_condition_ids,
-        ), workspace, contract, answer_evidence, option_states)
+        ), workspace, contract, answer_evidence, option_states, query_requirements)
     adopted_source = max(
         coverage,
         key=lambda source_id: (
@@ -2418,7 +2452,7 @@ def _completion_status(
         reports,
         best_choice,
         active_condition_ids,
-    ), workspace, contract, answer_evidence, option_states)
+    ), workspace, contract, answer_evidence, option_states, query_requirements)
 
 
 def _attach_canonical_context(
@@ -2427,6 +2461,7 @@ def _attach_canonical_context(
     contract: ClaimContract,
     evidence: Sequence[EvidenceRecord],
     option_states: Mapping[str, Mapping[str, Any]] | None,
+    query_requirements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = dict(status)
     snapshot = canonical_fact_snapshot(evidence).to_dict()
@@ -2447,7 +2482,14 @@ def _attach_canonical_context(
             "option_verdict_table": verdict_table,
         }
     )
-    return result
+    canonical_candidate = bool(
+        tuple(snapshot.get("confirmed_events", ()) or ())
+        or tuple(snapshot.get("resolved_entities", ()) or ())
+        or tuple(snapshot.get("entity_associations", ()) or ())
+        or tuple(snapshot.get("inferred_facts", ()) or ())
+    )
+    result["candidate_available"] = bool(result.get("candidate_available")) or canonical_candidate
+    return _enforce_strict_safety(result, contract, query_requirements)
 
 
 def _apply_readiness_dashboard(
@@ -2565,9 +2607,17 @@ def _apply_condition_scope(
     result = {}
     for condition_id, state in states.items():
         if (
-            getattr(state, "scope", "window") == "full_video"
-            and state.status == "satisfied"
-            and coverage_ratio + 1e-9 < float(getattr(state, "required_coverage", 1.0) or 1.0)
+            state.status == "satisfied"
+            and (
+                (
+                    getattr(state, "quantifier", "exists") in {"all_events", "all_segments"}
+                    and getattr(state, "scope", "window") != "full_video"
+                )
+                or (
+                    getattr(state, "scope", "window") == "full_video"
+                    and coverage_ratio + 1e-9 < float(getattr(state, "required_coverage", 1.0) or 1.0)
+                )
+            )
         ):
             state = replace(state, status="unknown")
         result[condition_id] = state
@@ -2793,9 +2843,6 @@ def _answer_completion_gate(
         return {"passed": False, "reason": "invalid_option_answer", "missing_segment_ids": []}
     if not _citations_are_visual(citations, evidence):
         return {"passed": False, "reason": "invalid_visual_citations", "missing_segment_ids": []}
-    readiness_gate = _contract_readiness_gate(contract, completion_status)
-    if readiness_gate is not None:
-        return readiness_gate
     by_id = {record.evidence_id: record for record in evidence}
     cited = tuple(by_id[str(citation)] for citation in citations)
     identity_gate = _identity_link_gate(
@@ -2806,12 +2853,15 @@ def _answer_completion_gate(
     if identity_gate is not None:
         return identity_gate
     if contract.observation_target == "relation":
-        return _spatial_relation_gate(
+        relation_gate = _spatial_relation_gate(
             workspace,
             answer,
             cited,
             query_requirements=query_requirements,
         )
+        if not relation_gate.get("passed"):
+            return relation_gate
+        return _contract_readiness_gate(contract, completion_status) or relation_gate
     quantitative_gate = _quantitative_answer_gate(
         workspace,
         contract,
@@ -2820,9 +2870,15 @@ def _answer_completion_gate(
         query_requirements=query_requirements,
     )
     if quantitative_gate is not None:
-        return quantitative_gate
+        if not quantitative_gate.get("passed"):
+            return quantitative_gate
+        return _contract_readiness_gate(contract, completion_status) or quantitative_gate
     if contract.required_scope != "full_video":
-        return {"passed": True, "reason": "verified_window_evidence", "missing_segment_ids": []}
+        return _contract_readiness_gate(contract, completion_status) or {
+            "passed": True,
+            "reason": "verified_window_evidence",
+            "missing_segment_ids": [],
+        }
 
     cited_sources = {
         str(lineage.get("source_video_id", "") or "")
@@ -2895,7 +2951,7 @@ def _answer_completion_gate(
                 "event_occurrence_count": len(event_occurrences),
                 "missing_segment_ids": [],
             }
-    return {
+    return _contract_readiness_gate(contract, completion_status) or {
         "passed": True,
         "reason": "full_source_coverage_verified",
         "source_video_ids": sorted(cited_sources),
@@ -3014,25 +3070,28 @@ def _contract_readiness_gate(
     contract: ClaimContract,
     completion_status: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    status = dict(completion_status or {})
-    if not status or bool(status.get("ready_for_answer")):
+    if completion_status is None:
         return None
+    status = dict(completion_status)
     requires_semantic_closure = (
         contract.required_scope == "full_video"
         or contract.observation_target == "relation"
         or bool(contract.boundary_hint)
-        or contract.quantifier in {"universal", "comparison"}
+        or contract.quantifier in {"universal", "comparison", "total_count", "distinct_count", "order"}
         or (contract.observation_target == "event" and contract.aggregation == "compare")
     )
     if not requires_semantic_closure:
         return None
+    if status and bool(status.get("ready_for_answer")):
+        return None
+    blockers = list(status.get("strict_safety_blockers", ()) or ())
+    unresolved = list(status.get("unresolved_critical_condition_ids", ()) or ())
     return {
         "passed": False,
-        "reason": "contract_completion_not_ready",
+        "reason": blockers[0] if blockers else unresolved[0] if unresolved else "contract_completion_not_ready",
         "completion_reason": str(status.get("reason", "") or ""),
-        "unresolved_critical_condition_ids": list(
-            status.get("unresolved_critical_condition_ids", ()) or ()
-        ),
+        "strict_safety_blockers": blockers,
+        "unresolved_critical_condition_ids": unresolved,
         "unsupported_claim_atom_ids": list(status.get("unsupported_claim_atom_ids", ()) or ()),
         "missing_segment_ids": list(status.get("missing_segment_ids", ()) or ()),
     }
@@ -3853,6 +3912,10 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         reference_facts=tuple(
             item for item in tuple(value.get("reference_facts", ()) or ()) if isinstance(item, Mapping)
         ),
+        origin_gap_id=str(value.get("origin_gap_id", "") or ""),
+        target_condition_ids=tuple(value.get("target_condition_ids", ()) or ()),
+        boundary_episode_id=str(value.get("boundary_episode_id", "") or ""),
+        target_option_predicates=tuple(value.get("target_option_predicates", ()) or ()),
         sampling_floor_fps=(
             float(value.get("sampling_floor_fps") or 0.5)
             if "sampling_floor_fps" in value and value.get("sampling_floor_fps") is not None
@@ -3935,6 +3998,55 @@ def _bind_gap_to_tasks(decision: ReasonerDecision) -> ReasonerDecision:
         for task in decision.tasks
     )
     return replace(decision, tasks=tasks)
+
+
+def _inherit_repair_lineage(
+    decision: ReasonerDecision,
+    *,
+    origin_gap: EvidenceGap | None,
+    condition_registry: Sequence[GapCondition],
+    active_condition_ids: Sequence[str],
+    reports: Sequence[InvestigationReport],
+    options: Mapping[str, str],
+) -> ReasonerDecision:
+    if decision.action != "investigate" or not decision.tasks:
+        return decision
+    active = {str(item) for item in active_condition_ids if str(item)}
+    conditions = tuple(origin_gap.conditions) if origin_gap is not None else tuple(
+        condition for condition in condition_registry
+        if not active or condition.condition_id in active
+    )
+    condition_ids = tuple(dict.fromkeys(
+        condition.condition_id for condition in conditions if condition.condition_id
+    )) or tuple(dict.fromkeys(active_condition_ids))
+    gap_id = (
+        str(origin_gap.gap_id or "")
+        if origin_gap is not None
+        else next((str(report.gap_id) for report in reversed(reports) if report.gap_id), "")
+    )
+    option_predicates = tuple(f"{option}={text}" for option, text in options.items())
+    tasks = []
+    for task in decision.tasks:
+        boundary_episode_id = task.boundary_episode_id or next(
+            (
+                candidate_id for candidate_id in task.source_candidate_ids
+                if "episode" in candidate_id.casefold() or "event" in candidate_id.casefold()
+            ),
+            "",
+        )
+        tasks.append(replace(
+            task,
+            gap_id=task.gap_id or gap_id,
+            success_conditions=task.success_conditions or tuple(
+                condition.description for condition in conditions if condition.description
+            ),
+            conditions=task.conditions or conditions,
+            origin_gap_id=task.origin_gap_id or gap_id,
+            target_condition_ids=task.target_condition_ids or condition_ids,
+            boundary_episode_id=boundary_episode_id,
+            target_option_predicates=task.target_option_predicates or option_predicates,
+        ))
+    return replace(decision, tasks=tuple(tasks))
 
 
 def _align_decision_conditions(
@@ -4087,18 +4199,130 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
     )
 
 
+def requires_option_audit(
+    contract: ClaimContract | Mapping[str, Any],
+    query_requirements: Mapping[str, Any] | None,
+) -> bool:
+    requirements = dict(query_requirements or {})
+    aggregation = str(
+        contract.aggregation if isinstance(contract, ClaimContract) else contract.get("aggregation", "")
+    ).casefold()
+    quantifier = str(
+        contract.quantifier if isinstance(contract, ClaimContract) else contract.get("quantifier", "")
+    ).casefold()
+    boundary_hint = str(
+        contract.boundary_hint if isinstance(contract, ClaimContract) else contract.get("boundary_hint", "")
+    ).strip()
+    observation_target = str(
+        contract.observation_target if isinstance(contract, ClaimContract) else contract.get("observation_target", "")
+    ).casefold()
+    return bool(
+        aggregation in {"order", "compare", "count"}
+        or quantifier in {"order", "comparison", "total_count", "distinct_count", "universal"}
+        or boundary_hint
+        or observation_target == "relation"
+        or requirements.get("requires_temporal_sequence")
+        or requirements.get("requires_state_tracking")
+        or requirements.get("requires_identity_link")
+        or requirements.get("requires_event_participant_link")
+        or requirements.get("requires_narrative_inference")
+        or requirements.get("requires_spatial_relation")
+    )
+
+
 def _requires_discriminative_audit(
     contract: ClaimContract,
     query_requirements: Mapping[str, Any] | None,
 ) -> bool:
+    return requires_option_audit(contract, query_requirements)
+
+
+def _enforce_strict_safety(
+    status: Mapping[str, Any],
+    contract: ClaimContract,
+    query_requirements: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    result = dict(status)
+    if not requires_option_audit(contract, query_requirements):
+        result["strict_safety_blockers"] = []
+        return result
+    blockers = []
+    if int(result.get("critical_condition_count", 0) or 0) == 0:
+        blockers.append("condition_registry_missing")
+    if not bool(result.get("choice_ready")):
+        blockers.append("choice_not_ready")
     requirements = dict(query_requirements or {})
-    return bool(
-        contract.aggregation in {"order", "compare"}
-        or contract.quantifier in {"order", "comparison"}
-        or requirements.get("requires_temporal_sequence")
-        or requirements.get("requires_state_tracking")
+    candidate_required = bool(
+        contract.quantifier in {"total_count", "distinct_count"}
         or requirements.get("requires_identity_link")
+        or requirements.get("requires_event_participant_link")
     )
+    if candidate_required and not bool(result.get("candidate_available")):
+        blockers.append("candidate_unavailable")
+    result["strict_safety_blockers"] = list(dict.fromkeys(blockers))
+    if not blockers:
+        return result
+    result.update(
+        {
+            "pre_strict_ready_for_answer": bool(result.get("ready_for_answer")),
+            "pre_strict_grounded_ready": bool(result.get("grounded_ready")),
+            "pre_strict_partial_grounded_ready": bool(result.get("partial_grounded_ready")),
+            "pre_strict_grounding_level_ready": str(
+                result.get("grounding_level_ready", "none") or "none"
+            ),
+        }
+    )
+    unresolved = list(result.get("unresolved_critical_condition_ids", ()) or ())
+    result.update(
+        {
+            "ready_for_answer": False,
+            "completion_ready": False,
+            "completion_level": "none",
+            "grounded_ready": False,
+            "partial_grounded_ready": False,
+            "grounding_level_ready": "none",
+            "completion_blockers": list(dict.fromkeys((*unresolved, *blockers))),
+            "unsupported_claim_atom_ids": list(dict.fromkeys((
+                *tuple(result.get("unsupported_claim_atom_ids", ()) or ()),
+                *blockers,
+            ))),
+        }
+    )
+    return result
+
+
+def _completion_status_with_decision(
+    completion_status: Mapping[str, Any],
+    decision: ReasonerDecision,
+) -> dict[str, Any]:
+    result = dict(completion_status)
+    result["choice_ready"] = bool(_letter(decision.answer))
+    if decision.entity_clusters:
+        result["candidate_available"] = True
+    blockers = [
+        str(blocker)
+        for blocker in tuple(result.get("strict_safety_blockers", ()) or ())
+        if not (blocker == "choice_not_ready" and result["choice_ready"])
+        and not (blocker == "candidate_unavailable" and result.get("candidate_available"))
+    ]
+    result["strict_safety_blockers"] = blockers
+    if blockers:
+        return result
+    if "pre_strict_ready_for_answer" not in result:
+        return result
+    result.update(
+        {
+            "ready_for_answer": bool(result.get("pre_strict_ready_for_answer")),
+            "completion_ready": bool(result.get("pre_strict_ready_for_answer")),
+            "grounded_ready": bool(result.get("pre_strict_grounded_ready")),
+            "partial_grounded_ready": bool(result.get("pre_strict_partial_grounded_ready")),
+            "grounding_level_ready": str(
+                result.get("pre_strict_grounding_level_ready", "none") or "none"
+            ),
+        }
+    )
+    result["completion_level"] = result["grounding_level_ready"]
+    return result
 
 
 def _apply_answer_audit(
@@ -4112,29 +4336,34 @@ def _apply_answer_audit(
     if status:
         result["answer_audit_status"] = status
         result["audit_reason"] = decision.support_reason
-    if (
-        required
-        and bool(gate.get("passed"))
-        and status not in {"insufficient", "contradicted"}
-        and (status != "supported" or not decision.support_reason)
+    selected = _letter(decision.answer)
+    selected_verdict = dict(decision.option_verdicts.get(selected, {}) or {}) if selected else {}
+    selected_supported = str(selected_verdict.get("status", "") or "").casefold() in {
+        "supported", "supports",
+    }
+    if required and bool(gate.get("passed")) and (
+        status != "supported" or not decision.support_reason or not selected_supported
     ):
-        # A missing model-authored audit field must not erase a deterministic
-        # completion proof. Preserve the candidate and expose that the audit was
-        # reconstructed from the canonical gate for telemetry.
-        result.update({
-            "base_gate_passed": True,
-            "base_gate_reason": str(gate.get("reason", "") or ""),
-            "answer_audit_status": "inferred_from_completion",
-            "answer_audit_missing_fields": [
-                name
-                for name, missing in (
-                    ("support_status", status != "supported"),
-                    ("support_reason", not decision.support_reason),
-                )
-                if missing
-            ],
-            "audit_reason": decision.support_reason or "Deterministic completion gate supplied the missing audit verdict.",
-        })
+        missing_fields = [
+            name
+            for name, missing in (
+                ("support_status", status != "supported"),
+                ("support_reason", not decision.support_reason),
+                ("selected_option_exact_verdict", not selected_supported),
+            )
+            if missing
+        ]
+        result.update(
+            {
+                "base_gate_passed": True,
+                "base_gate_reason": str(gate.get("reason", "") or ""),
+                "passed": False,
+                "reason": "answer_audit_unavailable" if status in {"", "unknown"} else "answer_audit_exact_predicate_unsupported",
+                "answer_audit_status": status or "unknown",
+                "answer_audit_missing_fields": missing_fields,
+                "audit_reason": decision.support_reason or "Required option audit did not provide exact selected-option support.",
+            }
+        )
         return result
     if status not in {"insufficient", "contradicted"}:
         return result
@@ -4161,8 +4390,18 @@ def _annotate_grounding_level(
         result["grounding_level"] = "strict"
     elif bool(status.get("partial_grounded_ready")):
         result["grounding_level"] = "partial"
-    else:
+    elif not status:
         result["grounding_level"] = "strict"
+    else:
+        blockers = list(status.get("strict_safety_blockers", ()) or ())
+        result.update(
+            {
+                "passed": False,
+                "reason": blockers[0] if blockers else "completion_grounding_not_ready",
+                "grounding_level": "none",
+                "strict_safety_blockers": blockers,
+            }
+        )
     return result
 
 
