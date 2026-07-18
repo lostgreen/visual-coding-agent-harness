@@ -49,7 +49,6 @@ _requires_independent_claim_verification = _interactive._requires_independent_cl
 _matching_claim_assessment = _interactive._matching_claim_assessment
 _followup_prompt = _interactive._followup_prompt
 _compile_option_claim_contract = _interactive._compile_option_claim_contract
-_forced_option_support_dashboard = _interactive._forced_option_support_dashboard
 load_role_clients = _interactive.load_role_clients
 run_case = _interactive.run_case
 
@@ -72,88 +71,32 @@ def test_reasoner_prompt_requires_evidence_dynamics_sampling_plan() -> None:
     assert "Choose from evidence dynamics, not the question category" in prompt
 
 
-def test_forced_dashboard_has_no_answer_selection_authority() -> None:
+def test_forced_prompt_has_no_parallel_recommendation_or_calibration_path() -> None:
     kwargs = {
         "question": "How many green cylinders are visible?",
-        "options": {"A": "One green cylinder", "E": "Four green cylinders"},
+        "options": {"A": "One green cylinder", "B": "Two green cylinders"},
         "query_contract": {"quantifier": "distinct_count"},
+        "completion_status": {
+            "revision_context": {"canonical_snapshot_revision": "revision-7"},
+            "effective_scope": "full_video",
+            "option_verdict_table": {
+                "best_option": "B",
+                "option_verdicts": {
+                    "A": {"predicate_verdict": "contradicted"},
+                    "B": {"predicate_verdict": "supported"},
+                },
+            },
+        },
     }
-    wrong_window = ({
-        "observation_polarity": "positive",
-        "target_presence": {"status": "absent"},
-        "summary": "Unrelated objects are visible in this wrong window.",
-        "entities": [],
-    },)
-    dashboard = _forced_option_support_dashboard(kwargs, wrong_window)
-    assert dashboard["policy"] == "canonical_option_verdict_table"
-    assert dashboard["recommended_option"] == "A"
-    assert dashboard["selection_authority"] == "none"
+    prompt = _interactive._forced_answer_prompt(kwargs, ())
+    compact_prompt = _interactive._compact_forced_answer_prompt(kwargs, ())
+
+    assert "Canonical finalization context" in prompt
+    assert "option_verdict_table" in prompt
+    assert "Canonical finalization context" in compact_prompt
+    assert "recommended_option" not in prompt + compact_prompt
+    assert not hasattr(_interactive, "_forced_option_support_dashboard")
     assert not hasattr(_interactive, "_calibrate_forced_decision")
-
-
-def test_forced_count_choice_uses_countable_witnesses() -> None:
-    kwargs = {
-        "question": "How many green cylinders are visible?",
-        "options": {"A": "One", "B": "Two", "E": "Four"},
-        "query_contract": {"quantifier": "distinct_count"},
-        "completion_status": {
-            "option_verdict_table": {
-                "best_option": "B",
-                "audit_status": "complete",
-                "option_verdicts": {
-                    "A": {"status": "contradicted", "reason": "canonical entity count is 2"},
-                    "B": {"status": "supported", "reason": "canonical entity count is 2"},
-                    "E": {"status": "contradicted", "reason": "canonical entity count is 2"},
-                },
-            },
-        },
-    }
-    evidence = ({
-        "observation_polarity": "positive",
-        "entities": [
-            {"entity_observation_id": "obs:1", "countable": True, "supports_question_relation": True},
-            {"entity_observation_id": "obs:2", "countable": True, "supports_question_relation": True},
-        ],
-    },)
-
-    dashboard = _forced_option_support_dashboard(kwargs, evidence)
-
-    assert dashboard["policy"] == "canonical_option_verdict_table"
-    assert dashboard["recommended_option"] == "B"
-
-
-def test_forced_total_count_choice_uses_canonical_event_candidates() -> None:
-    kwargs = {
-        "question": "How many times was the rider overtaken?",
-        "options": {"A": "One time", "B": "Two times", "C": "Three times"},
-        "query_contract": {"quantifier": "total_count"},
-        "completion_status": {
-            "canonical_fact_snapshot": {"confirmed_events": [{"candidate_id": "event_1"}, {"candidate_id": "event_2"}]},
-            "option_verdict_table": {
-                "best_option": "B",
-                "audit_status": "complete",
-                "option_verdicts": {
-                    "A": {"status": "contradicted", "reason": "canonical count is 2"},
-                    "B": {"status": "supported", "reason": "canonical count is 2"},
-                    "C": {"status": "contradicted", "reason": "canonical count is 2"},
-                },
-            },
-        },
-    }
-    evidence = tuple(
-        {
-            "evidence_kind": "event_candidate",
-            "events": [{"candidate_id": f"event_{index}", "supports_question_event": True}],
-        }
-        for index in range(2)
-    )
-
-    dashboard = _forced_option_support_dashboard(kwargs, evidence)
-
-    assert dashboard["policy"] == "canonical_option_verdict_table"
-    assert dashboard["recommended_option"] == "B"
-    assert dashboard["selection_authority"] == "none"
-    assert dashboard["fact_source"] == "completion_status.canonical_fact_snapshot"
 
 
 def _sampler(video_path: str, start_sec: float, end_sec: float, n_frames: int, out_dir: Path) -> tuple[Frame, ...]:
@@ -1356,7 +1299,8 @@ def test_gemini_reasoner_retries_empty_forced_answer_with_compact_evidence(tmp_p
 
     assert decision.answer == "B. Three"
     assert len(api.calls) == 3
-    assert "compact verified evidence" in api.calls[2]["prompt"]
+    assert "read-only canonical finalization context" in api.calls[2]["prompt"]
+    assert "must not be recounted" in api.calls[2]["prompt"]
     assert api.calls[1]["max_tokens"] == 4096
     assert api.calls[2]["max_tokens"] == 4096
 

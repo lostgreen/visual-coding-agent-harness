@@ -62,6 +62,26 @@ def test_contradicted_candidate_short_circuits_descendants_as_not_applicable() -
             "transitions": ["The racer overtakes the recorder."],
             "continues_from_previous": False,
             "continues_to_next": False,
+            "provenance": [{
+                "kind": "direct_witness",
+                "source_evidence_ids": [f"ev_{index:03d}"],
+                "witness_ranges": [[float(index), float(index) + 0.5]],
+                "producer": "observation",
+            }],
+            "distinctness_provenance": [{
+                "kind": "deterministic_derivation",
+                "source_fact_ids": [f"event_candidate_{index:03d}"],
+                "source_evidence_ids": [f"ev_{index:03d}"],
+                "derivation": "canonical_event_reconciliation",
+                "producer": "program",
+                "source_kinds": ["direct_witness"],
+            }],
+            "qualification_provenance": [{
+                "kind": "direct_witness",
+                "source_evidence_ids": [f"ev_{index:03d}"],
+                "witness_ranges": [[float(index), float(index) + 0.5]],
+                "producer": "observation",
+            }],
         }
         for index in range(14)
     )
@@ -73,6 +93,34 @@ def test_contradicted_candidate_short_circuits_descendants_as_not_applicable() -
     assert graph["not_applicable"] == 42
     assert graph["blocked_unresolved"] == 0
     assert graph["unresolved_dependency_ids"] == []
+    assert all(
+        "terminal dependency" in evaluation["reason"]
+        for event in result["unqualified_events"]
+        for evaluation in event["requirement_evaluations"][3:]
+    )
+
+
+def test_model_declared_qualification_without_admissible_provenance_fails_closed() -> None:
+    result = qualify_event_candidates(({
+        "candidate_id": "event_candidate_001",
+        "candidate_status": "observed_candidate",
+        "qualified": True,
+        "focal_position_transition": True,
+        "evidence_ids": ["ev_model_only"],
+        "participant_ids": ["camera_holder", "racer_1"],
+        "states_before": ["ranked 1"],
+        "transitions": ["The racer overtakes the recorder."],
+        "qualification_observations": {
+            "required_prior_state": "supported",
+            "transition": "supported",
+            "same_subject": "supported",
+            "episode_boundary": "supported",
+        },
+    },), require_state_precondition=True)
+
+    assert result["qualified_events"] == []
+    assert len(result["incomplete_events"]) == 1
+    assert result["requirement_graph"]["unknown"] == 1
 
 
 def test_option_parser_keeps_helmet_clothing_and_brand_attributes_distinct() -> None:
@@ -98,7 +146,7 @@ def test_repair_observation_without_lineage_cannot_close_requirement() -> None:
         {"requirement_results": {"req_boundary": "supported"}, "evidence_ids": ["ev_1"]},
         (requirement,),
     )
-    with_lineage = apply_observation_to_requirements(
+    with_lineage_only = apply_observation_to_requirements(
         {
             "target_requirement_ids": ["req_boundary"],
             "requirement_results": {"req_boundary": "supported"},
@@ -106,6 +154,21 @@ def test_repair_observation_without_lineage_cannot_close_requirement() -> None:
         },
         (requirement,),
     )
+    with_lineage_and_provenance = apply_observation_to_requirements(
+        {
+            "target_requirement_ids": ["req_boundary"],
+            "requirement_results": {"req_boundary": "supported"},
+            "evidence_ids": ["ev_1"],
+            "provenance": [{
+                "kind": "direct_witness",
+                "source_evidence_ids": ["ev_1"],
+                "witness_ranges": [[1.0, 2.0]],
+                "producer": "observation",
+            }],
+        },
+        (requirement,),
+    )
 
     assert without_lineage == ()
-    assert with_lineage[0].status is RequirementStatus.SUPPORTED
+    assert with_lineage_only[0].status is RequirementStatus.UNKNOWN
+    assert with_lineage_and_provenance[0].status is RequirementStatus.SUPPORTED

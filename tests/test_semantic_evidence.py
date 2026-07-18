@@ -11,7 +11,12 @@ def _position_qualification() -> dict[str, str]:
     }
 
 
-def _event_evidence(evidence_id: str, events: list[dict]) -> EvidenceRecord:
+def _event_evidence(
+    evidence_id: str,
+    events: list[dict],
+    *,
+    observation_id: str = "",
+) -> EvidenceRecord:
     return EvidenceRecord(
         evidence_id=evidence_id,
         beat_id="",
@@ -21,7 +26,29 @@ def _event_evidence(evidence_id: str, events: list[dict]) -> EvidenceRecord:
         pointer=f"virtual://{evidence_id}",
         verbatim="Structured event observations.",
         frame_refs=("frame.jpg",),
+        observation_id=observation_id,
         operation_metadata={"events": events},
+    )
+
+
+def _candidate_only_events(events: list[dict]) -> list[dict]:
+    return [
+        {
+            key: value
+            for key, value in event.items()
+            if key not in {"qualification", "qualification_status", "preconditions_met"}
+        }
+        for event in events
+    ]
+
+
+def _independently_qualified_event_evidence(
+    evidence_id: str,
+    events: list[dict],
+) -> tuple[EvidenceRecord, EvidenceRecord]:
+    return (
+        _event_evidence(f"{evidence_id}_candidate", _candidate_only_events(events)),
+        _event_evidence(f"{evidence_id}_qualification", events),
     )
 
 
@@ -41,9 +68,11 @@ def test_canonical_snapshot_keeps_raw_count_separate_from_confirmed_count() -> N
         for offset in [index * 0.1 for index in range(repeats)]
     ]
 
-    snapshot = canonical_fact_snapshot((_event_evidence("ev_events", events),)).to_dict()
+    snapshot = canonical_fact_snapshot(
+        _independently_qualified_event_evidence("ev_events", events)
+    ).to_dict()
 
-    assert snapshot["raw_candidate_counts"]["events"] == 7
+    assert snapshot["raw_candidate_counts"]["events"] == 14
     assert snapshot["canonical_fact_counts"]["events"] == 3
     assert len(snapshot["ordered_events"]) == 3
 
@@ -131,7 +160,11 @@ def test_same_focal_transition_with_conflicting_actor_attributes_is_one_candidat
         ],
     )
 
-    snapshot = canonical_fact_snapshot((evidence,)).to_dict()
+    corroborating = _event_evidence(
+        "ev_overtakes_corroborating",
+        _candidate_only_events(list(evidence.operation_metadata["events"])),
+    )
+    snapshot = canonical_fact_snapshot((evidence, corroborating)).to_dict()
 
     assert snapshot["canonical_fact_counts"]["events"] == 1
     assert snapshot["conflicted_events"] == []
@@ -140,7 +173,7 @@ def test_same_focal_transition_with_conflicting_actor_attributes_is_one_candidat
     assert row["participant_binding_conflicts"][0]["reason"] == (
         "same_occurrence_has_ambiguous_actor_attributes"
     )
-    assert len(row["merge_history"]) == 2
+    assert len(row["merge_history"]) == 4
 
 
 def test_focal_position_transition_without_qualification_is_only_observed() -> None:
@@ -174,6 +207,7 @@ def test_model_qualified_claim_cannot_bypass_state_before_requirement() -> None:
             "end_sec": 101.0,
             "supports_question_event": True,
             "qualification_status": "qualified",
+            "qualification": _position_qualification(),
         }],
     )
 
@@ -210,7 +244,7 @@ def test_generic_state_tracking_event_requires_explicit_precondition() -> None:
     assert snapshot["incomplete_events"][0]["qualification_status"] == "incomplete"
 
 
-def test_position_event_requirements_are_derived_from_canonical_observables() -> None:
+def test_position_event_canonical_observables_do_not_self_qualify() -> None:
     evidence = _event_evidence(
         "ev_observable_qualification",
         [{
@@ -231,11 +265,68 @@ def test_position_event_requirements_are_derived_from_canonical_observables() ->
         require_event_precondition=True,
     ).to_dict()
 
+    assert snapshot["qualified_events"] == []
+    assert len(snapshot["incomplete_events"]) == 1
+    assert any(
+        row["status"] == "unknown"
+        for row in snapshot["incomplete_events"][0]["requirement_evaluations"]
+    )
+
+
+def test_independent_qualification_observation_qualifies_position_event() -> None:
+    events = [{
+        "event_key": "black racer passes recorder",
+        "participant_ids": ["recorder", "black racer"],
+        "state_before": "The recorder is in first place.",
+        "transition": "The black racer overtakes the recorder.",
+        "state_after": "The recorder drops to second place.",
+        "preconditions_met": True,
+        "qualification": _position_qualification(),
+        "start_sec": 100.0,
+        "end_sec": 101.0,
+        "supports_question_event": True,
+    }]
+
+    snapshot = canonical_fact_snapshot(
+        _independently_qualified_event_evidence("ev_independent", events),
+        require_event_precondition=True,
+    ).to_dict()
+
     assert len(snapshot["qualified_events"]) == 1
     assert all(
         row["status"] == "supported"
         for row in snapshot["qualified_events"][0]["requirement_evaluations"]
     )
+
+
+def test_two_records_from_same_observation_cannot_self_qualify() -> None:
+    event = {
+        "event_key": "black racer passes recorder",
+        "participant_ids": ["recorder", "black racer"],
+        "transition": "The black racer overtakes the recorder.",
+        "preconditions_met": True,
+        "qualification": _position_qualification(),
+        "start_sec": 100.0,
+        "end_sec": 101.0,
+        "supports_question_event": True,
+    }
+    evidence = (
+        _event_evidence(
+            "ev_same_observation_candidate",
+            _candidate_only_events([event]),
+            observation_id="obs_shared",
+        ),
+        _event_evidence(
+            "ev_same_observation_qualification",
+            [event],
+            observation_id="obs_shared",
+        ),
+    )
+
+    snapshot = canonical_fact_snapshot(evidence, require_event_precondition=True).to_dict()
+
+    assert snapshot["qualified_events"] == []
+    assert len(snapshot["incomplete_events"]) == 1
 
 
 def test_kml_ambiguous_passers_merge_while_independent_qualified_events_count() -> None:
@@ -297,7 +388,11 @@ def test_kml_ambiguous_passers_merge_while_independent_qualified_events_count() 
         ],
     )
 
-    snapshot = canonical_fact_snapshot((evidence,)).to_dict()
+    corroborating = _event_evidence(
+        "ev_kml_overtakes_corroborating",
+        _candidate_only_events(list(evidence.operation_metadata["events"])),
+    )
+    snapshot = canonical_fact_snapshot((evidence, corroborating)).to_dict()
 
     assert snapshot["canonical_fact_counts"]["events"] == 3
     assert snapshot["conflicted_events"] == []

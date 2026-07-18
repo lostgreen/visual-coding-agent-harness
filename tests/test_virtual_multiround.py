@@ -2568,11 +2568,22 @@ def test_full_video_count_repairs_coverage_but_does_not_strictly_verify_unknown_
     # first post-dispatch status already reflects both mandatory repairs.
     assert reasoner.completion_statuses[0]["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
     assert reasoner.completion_statuses[1]["missing_segment_ids"] == []
+    assert all(status["effective_scope"] == "full_video" for status in reasoner.completion_statuses)
+    assert all(
+        status["query_obligations"]["effective_scope"] == status["effective_scope"]
+        for status in reasoner.completion_statuses
+    )
     repair = next(row for row in result.trace if row.get("type") == "repair_override")
     assert repair["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
     gates = [row for row in result.trace if row.get("type") == "completion_gate"]
     assert gates[-1]["passed"] is False
     assert gates[-1]["reason"] == "entity_cluster_evidence_invalid"
+    selections = [row for row in result.trace if row.get("type") == "answer_selection_event"]
+    outcome = next(row for row in result.trace if row.get("type") == "answer_outcome")
+    assert len(selections) == 1
+    assert selections[0]["final_selection_source"] == "raw_reasoner"
+    assert outcome["raw_reasoner_answer"] == result.answer
+    assert outcome["answer_mutation_events"] == []
 
 
 def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_path: Path) -> None:
@@ -2642,6 +2653,7 @@ def test_distinct_count_gate_rejects_free_text_entity_without_frame_witness(tmp_
         (evidence.evidence_id,),
         clusters,
         (evidence,),
+        completion_status={"effective_scope": "full_video", "ready_for_answer": True},
     )
 
     assert gate["passed"] is False
@@ -2705,6 +2717,7 @@ def test_distinct_count_gate_accepts_explicit_witnessed_entity_observations(tmp_
         (evidence.evidence_id,),
         clusters,
         (evidence,),
+        completion_status={"effective_scope": "full_video", "ready_for_answer": True},
     )
 
     assert gate["passed"] is True
@@ -2784,6 +2797,7 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
         ("ev_title_card",),
         (),
         (positive, negative),
+        completion_status={"effective_scope": "full_video", "ready_for_answer": True},
     )
 
     assert gate["passed"] is True
@@ -2795,6 +2809,7 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
         ("ev_title_card",),
         (),
         (positive, negative),
+        completion_status={"effective_scope": "full_video", "ready_for_answer": True},
     )
     assert wrong_count["passed"] is False
     assert wrong_count["reason"] == "event_count_answer_mismatch"

@@ -1,3 +1,5 @@
+"""Single-authority final answer adjudication for VCAH."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,6 +42,55 @@ def _predicate(value: Any) -> str:
         "unknown": "unknown",
         "unresolved": "unknown",
     }.get(str(value or "unknown").strip().casefold(), "unknown")
+
+
+def _revision_context(value: RevisionContext | Mapping[str, Any]) -> dict[str, Any]:
+    return value.to_dict() if isinstance(value, RevisionContext) else dict(value or {})
+
+
+def _revision_blockers(
+    table: Mapping[str, Any],
+    audit: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> tuple[str, ...]:
+    canonical_revision = str(context.get("canonical_snapshot_revision", "") or "")
+    table_stale = (
+        str(table.get("canonical_snapshot_revision", table.get("snapshot_revision", "")) or "")
+        != canonical_revision
+    )
+    audit_stale = (
+        str(audit.get("audit_snapshot_revision", audit.get("snapshot_revision", "")) or "")
+        != canonical_revision
+    )
+    for key in ("evidence_digest_hash", "query_contract_hash"):
+        expected = str(context.get(key, "") or "")
+        table_stale = table_stale or str(table.get(key, "") or "") != expected
+        audit_stale = audit_stale or str(audit.get(key, "") or "") != expected
+    return tuple(
+        blocker
+        for blocker, stale in (
+            ("verdict_table_stale", table_stale),
+            ("audit_stale", audit_stale),
+        )
+        if stale
+    )
+
+
+def _audit_blockers(audit: Mapping[str, Any]) -> tuple[str, ...]:
+    blockers = []
+    if str(audit.get("audit_status", "invalid") or "invalid") != "complete":
+        blockers.append("answer_audit_incomplete")
+    if tuple(audit.get("invalidity_flags", ()) or ()):
+        blockers.append("answer_audit_invalid")
+    return tuple(blockers)
+
+
+def _verdict_rows(table: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(option).strip().upper(): dict(row)
+        for option, row in dict(table.get("option_verdicts", {}) or {}).items()
+        if isinstance(row, Mapping)
+    }
 
 
 @dataclass(frozen=True)
@@ -134,7 +185,7 @@ def build_all_option_audit_record(
     if required and not supplied:
         invalidity_flags.append("all_option_verdicts_missing")
     missing = [option for option in options if option not in supplied]
-    if required and missing:
+    if missing and (required or supplied):
         invalidity_flags.append("all_option_verdicts_incomplete")
     normalized: dict[str, dict[str, Any]] = {}
     for option in options:
@@ -156,22 +207,22 @@ def build_all_option_audit_record(
                 dict(item) for item in tuple(row.get("provenance", ()) or ()) if isinstance(item, Mapping)
             ],
         }
+    source = revision_context.to_dict() if source_revision_context is None else dict(source_revision_context)
+    if supplied and source_revision_context is not None and not all(
+        str(source.get(key, "") or "")
+        for key in ("canonical_snapshot_revision", "evidence_digest_hash", "query_contract_hash")
+    ):
+        invalidity_flags.append("audit_source_revision_missing")
+    source_snapshot_revision = str(
+        source.get("canonical_snapshot_revision", source.get("snapshot_revision", "")) or ""
+    )
+    source_evidence_digest = str(source.get("evidence_digest_hash", "") or "")
+    source_contract_hash = str(source.get("query_contract_hash", "") or "")
     normalized_status = str(audit_status or "unknown").strip().casefold()
     if normalized_status not in {"complete", "partial", "invalid"}:
         normalized_status = "partial" if supplied else "invalid"
     if invalidity_flags:
         normalized_status = "invalid"
-    source = dict(source_revision_context or revision_context.to_dict())
-    source_snapshot_revision = str(
-        source.get("canonical_snapshot_revision", source.get("snapshot_revision", ""))
-        or revision_context.canonical_snapshot_revision
-    )
-    source_evidence_digest = str(
-        source.get("evidence_digest_hash", "") or revision_context.evidence_digest_hash
-    )
-    source_contract_hash = str(
-        source.get("query_contract_hash", "") or revision_context.query_contract_hash
-    )
     fingerprint = _stable_hash({
         "snapshot_revision": source_snapshot_revision,
         "evidence_digest_hash": source_evidence_digest,
@@ -201,27 +252,13 @@ def evaluate_hard_override_guard(
     audit_record: Mapping[str, Any],
     revision_context: RevisionContext | Mapping[str, Any],
 ) -> GuardDecision:
-    context = (
-        revision_context.to_dict()
-        if isinstance(revision_context, RevisionContext)
-        else dict(revision_context or {})
-    )
+    context = _revision_context(revision_context)
     table = dict(option_verdict_table or {})
     audit = dict(audit_record or {})
     completion = dict(completion_status or {})
     qualification = dict(qualification_result or {})
-    blockers: list[str] = []
+    blockers = list(_revision_blockers(table, audit, context))
     canonical_revision = str(context.get("canonical_snapshot_revision", "") or "")
-    if str(table.get("canonical_snapshot_revision", table.get("snapshot_revision", "")) or "") != canonical_revision:
-        blockers.append("verdict_table_stale")
-    if str(audit.get("audit_snapshot_revision", audit.get("snapshot_revision", "")) or "") != canonical_revision:
-        blockers.append("audit_stale")
-    for key in ("evidence_digest_hash", "query_contract_hash"):
-        expected = str(context.get(key, "") or "")
-        if str(table.get(key, "") or "") != expected:
-            blockers.append("verdict_table_stale")
-        if str(audit.get(key, "") or "") != expected:
-            blockers.append("audit_stale")
     if not bool(completion.get("completion_ready", completion.get("ready_for_answer", False))):
         blockers.append("completion_not_ready")
     blockers.extend(
@@ -243,14 +280,8 @@ def evaluate_hard_override_guard(
         blockers.append("critical_condition_conflicted")
     if str(qualification.get("status", completion.get("answer_qualification_status", "incomplete")) or "incomplete") != "complete":
         blockers.append("qualification_incomplete")
-    if str(audit.get("audit_status", "invalid") or "invalid") != "complete":
-        blockers.append("answer_audit_incomplete")
-    if tuple(audit.get("invalidity_flags", ()) or ()):
-        blockers.append("answer_audit_invalid")
-    verdicts = {
-        str(option).strip().upper(): dict(row)
-        for option, row in dict(table.get("option_verdicts", {}) or {}).items()
-    }
+    blockers.extend(_audit_blockers(audit))
+    verdicts = _verdict_rows(table)
     supported = [
         option for option, row in verdicts.items()
         if _predicate(row.get("predicate_verdict", row.get("status"))) == "supported"
@@ -259,6 +290,8 @@ def evaluate_hard_override_guard(
         blockers.append("supported_option_not_unique")
     if any(_predicate(row.get("predicate_verdict", row.get("status"))) == "conflicted" for row in verdicts.values()):
         blockers.append("option_predicate_conflicted")
+    if any(_predicate(row.get("predicate_verdict", row.get("status"))) == "unknown" for row in verdicts.values()):
+        blockers.append("option_predicate_unknown")
     selected = supported[0] if len(supported) == 1 else ""
     selected_row = dict(verdicts.get(selected, {}) or {})
     grounding = str(selected_row.get("grounding_eligibility", "unknown") or "unknown").casefold()
@@ -328,34 +361,17 @@ def evaluate_soft_audit_correction_guard(
     This is intentionally a guard, not a second answer selector. The caller remains
     `final_adjudicate`, which emits the only answer-selection event.
     """
-    context = revision_context.to_dict() if isinstance(revision_context, RevisionContext) else dict(revision_context or {})
+    context = _revision_context(revision_context)
     completion = dict(completion_status or {})
     qualification = dict(qualification_result or {})
     table = dict(option_verdict_table or {})
     audit = dict(audit_record or {})
-    blockers: list[str] = []
+    blockers = list(_revision_blockers(table, audit, context))
     raw_option = _option_id(raw_reasoner_answer, options)
     if not raw_option:
         blockers.append("raw_option_invalid")
     canonical_revision = str(context.get("canonical_snapshot_revision", "") or "")
-    expected_evidence = str(context.get("evidence_digest_hash", "") or "")
-    expected_contract = str(context.get("query_contract_hash", "") or "")
-    if str(audit.get("audit_status", "invalid") or "invalid") != "complete":
-        blockers.append("answer_audit_incomplete")
-    if tuple(audit.get("invalidity_flags", ()) or ()):
-        blockers.append("answer_audit_invalid")
-    if str(audit.get("audit_snapshot_revision", audit.get("snapshot_revision", "")) or "") != canonical_revision:
-        blockers.append("audit_stale")
-    if str(audit.get("evidence_digest_hash", "") or "") != expected_evidence:
-        blockers.append("audit_stale")
-    if str(audit.get("query_contract_hash", "") or "") != expected_contract:
-        blockers.append("audit_stale")
-    if str(table.get("canonical_snapshot_revision", table.get("snapshot_revision", "")) or "") != canonical_revision:
-        blockers.append("verdict_table_stale")
-    if str(table.get("evidence_digest_hash", "") or "") != expected_evidence:
-        blockers.append("verdict_table_stale")
-    if str(table.get("query_contract_hash", "") or "") != expected_contract:
-        blockers.append("verdict_table_stale")
+    blockers.extend(_audit_blockers(audit))
 
     audit_verdicts = {
         str(option).strip().upper(): dict(row)
@@ -373,7 +389,7 @@ def evaluate_soft_audit_correction_guard(
     if len(alternatives) != 1:
         blockers.append("audit_supported_alternative_not_unique")
     selected = alternatives[0] if len(alternatives) == 1 else ""
-    selected_row = dict(dict(table.get("option_verdicts", {}) or {}).get(selected, {}) or {})
+    selected_row = dict(_verdict_rows(table).get(selected, {}) or {})
     if selected and _predicate(selected_row.get("predicate_verdict", selected_row.get("status"))) != "supported":
         blockers.append("alternative_predicate_not_supported")
     if selected and not tuple(selected_row.get("evidence_ids", ()) or ()):
@@ -445,18 +461,9 @@ def final_adjudicate(
     gate = dict(raw_gate or {})
     table = dict(option_verdict_table or {})
     audit = dict(audit_record or {})
-    context = revision_context.to_dict() if isinstance(revision_context, RevisionContext) else dict(revision_context or {})
-    audit_fresh = bool(
-        str(audit.get("audit_status", "invalid") or "invalid") == "complete"
-        and not tuple(audit.get("invalidity_flags", ()) or ())
-        and str(audit.get("audit_snapshot_revision", audit.get("snapshot_revision", "")) or "")
-        == str(context.get("canonical_snapshot_revision", "") or "")
-        and str(audit.get("evidence_digest_hash", "") or "")
-        == str(context.get("evidence_digest_hash", "") or "")
-        and str(audit.get("query_contract_hash", "") or "")
-        == str(context.get("query_contract_hash", "") or "")
-    )
-    verdicts = dict(table.get("option_verdicts", {}) or {})
+    context = _revision_context(revision_context)
+    audit_fresh = not _audit_blockers(audit) and "audit_stale" not in _revision_blockers(table, audit, context)
+    verdicts = _verdict_rows(table)
     selected = str(guard.supporting_state.get("selected_option", "") or "")
     mutations: list[Mapping[str, Any]] = []
     if bool(gate.get("passed")) and raw_is_valid and (not audit_required or audit_fresh):

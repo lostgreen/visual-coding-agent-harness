@@ -82,6 +82,23 @@ def test_unknown_grounding_blocks_hard_override_even_when_predicate_is_unique() 
     assert "selected_option_grounding_unknown" in guard.blockers
 
 
+def test_unknown_competing_option_blocks_hard_override() -> None:
+    context = _context()
+    table = _fresh_table(context)
+    table["option_verdicts"]["D"]["predicate_verdict"] = "unknown"
+
+    guard = evaluate_hard_override_guard(
+        {"completion_ready": True},
+        {"status": "complete", "requirement_graph": {}},
+        table,
+        _fresh_audit(context),
+        context,
+    )
+
+    assert guard.allowed is False
+    assert "option_predicate_unknown" in guard.blockers
+
+
 def test_heuristic_only_provenance_blocks_hard_override() -> None:
     context = _context()
     table = _fresh_table(context)
@@ -154,6 +171,41 @@ def test_required_invalid_audit_cannot_preserve_raw_answer_as_grounded() -> None
     assert result.verified is False
     assert result.answer_mode == "forced_choice"
     assert result.verification_reason == "answer_audit_incomplete"
+
+
+def test_supplied_audit_without_source_revision_fails_closed() -> None:
+    context = _context()
+    audit = build_all_option_audit_record(
+        options=OPTIONS,
+        supplied_verdicts={
+            "D": {"predicate_verdict": "contradicted"},
+            "H": {"predicate_verdict": "supported"},
+        },
+        audit_status="complete",
+        audit_reason="Source revision was omitted.",
+        revision_context=context,
+        required=True,
+        source_revision_context={},
+    )
+
+    assert audit["audit_status"] == "invalid"
+    assert "audit_source_revision_missing" in audit["invalidity_flags"]
+    assert audit["audit_snapshot_revision"] == ""
+
+
+def test_partial_supplied_audit_is_invalid_even_when_audit_is_optional() -> None:
+    context = _context()
+    audit = build_all_option_audit_record(
+        options=OPTIONS,
+        supplied_verdicts={"H": {"predicate_verdict": "supported"}},
+        audit_status="complete",
+        audit_reason="Only one option was checked.",
+        revision_context=context,
+        required=False,
+    )
+
+    assert audit["audit_status"] == "invalid"
+    assert "all_option_verdicts_incomplete" in audit["invalidity_flags"]
 
 
 def test_soft_audit_correction_is_forced_only_and_requires_admissible_predicate() -> None:

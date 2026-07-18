@@ -10,10 +10,18 @@ and immutable multi-seed replay artifacts.
 
 - `final_adjudicate` is the only final-answer selector. The runner, dashboard,
   audit, and removed `_canonical_forced_answer` helper cannot mutate answers.
+- Forced prompts now receive a read-only canonical finalization projection;
+  the parallel option-support recommendation/dashboard has been removed.
 - All-option audits and verdict tables are revision-bound to the same canonical
-  snapshot, evidence digest, and query contract.
+  snapshot, evidence digest, and query contract. Missing source revisions,
+  partial option audits, and unknown competing predicates fail closed.
 - Qualification, obligations, enumeration, provenance, typed state transitions,
   narrative attribution, episode binding, and sequence ledgers are implemented.
+- Event qualification provenance is admissible only when a distinct witnessed
+  observation corroborates the same canonical candidate. Repackaging one
+  observation under multiple evidence IDs remains heuristic.
+- Query obligations are compiled once per driver run. Coverage, enumeration,
+  bootstrap, repair, and answer gates consume the resulting `effective_scope`.
 - Soft audit correction is available only inside `final_adjudicate` for a
   fresh complete audit, an explicitly contradicted raw option, exactly one
   admissibly supported alternative, and no episode-binding conflict. It remains
@@ -26,9 +34,7 @@ and immutable multi-seed replay artifacts.
 ## Verification
 
 - `python -m py_compile` succeeds for the changed runtime modules.
-- `PYTHONPATH=.:src pytest -q` -> `379 passed` before the final provider-seed
-  metadata test; the focused replay/adjudication/runner suite then passed
-  `106` tests. Re-run the full suite after committing the final small test.
+- `PYTHONPATH=.:src pytest -q` -> `384 passed`.
 - `git diff --check` passes.
 
 ## Current Evidence
@@ -39,7 +45,7 @@ and immutable multi-seed replay artifacts.
 
 ## Next Actions
 
-1. Commit and push the final implementation.
+1. Commit, push, and archive the exact review-fix snapshot.
 2. Pull that exact commit on KML and run the targeted immutable multi-seed
    replay for `441-2`, `441-4`, `445-2`, and `445-3`.
 3. Compare the generated `summary.json` safety and semantic metrics; preserve

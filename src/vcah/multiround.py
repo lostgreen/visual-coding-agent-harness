@@ -1303,6 +1303,7 @@ class VirtualVideoMultiRoundDriver:
         workspace_overview = build_workspace_overview(workspace, thumbnail_budget=40)
         query_contract = compile_query_contract(workspace.case.question, workspace.case.options)
         query_requirements = compile_query_requirements(workspace.case.question)
+        query_obligations = compile_query_obligations(query_contract, query_requirements)
         compiled_conditions = compile_contract_conditions(query_contract, query_requirements)
         temporal_navigation = source_time_navigation(workspace, compile_source_time_hint(workspace.case.question))
         evidence_store = EvidenceStore.empty(workspace.root_dir / "evidence.jsonl")
@@ -1342,6 +1343,7 @@ class VirtualVideoMultiRoundDriver:
                 query_contract,
                 evidence_store.records,
                 query_requirements=query_requirements,
+                query_obligations=query_obligations,
                 reports=reports,
                 best_choice=best_answer,
                 active_condition_ids=active_condition_ids,
@@ -1570,7 +1572,7 @@ class VirtualVideoMultiRoundDriver:
                     query_contract,
                     round_id=round_id,
                     limit=min(self.max_tasks_per_round, remaining),
-                    effective_scope=str(completion_status.get("effective_scope", query_contract.required_scope)),
+                    effective_scope=completion_status["effective_scope"],
                 )
                 if bootstrap_tasks:
                     trace.append(
@@ -1675,7 +1677,11 @@ class VirtualVideoMultiRoundDriver:
                     gate,
                     workspace.case.options,
                 )
-                gate_feedback = {**dict(gate), "option_states": option_states}
+                gate_feedback = {
+                    **dict(gate),
+                    "effective_scope": decision_completion_status["effective_scope"],
+                    "option_states": option_states,
+                }
                 if not gate["passed"]:
                     last_rejected_submission = _submission_fingerprint(decision, evidence_store.records)
                 support_rank = _candidate_gate_rank(decision, gate)
@@ -1740,7 +1746,7 @@ class VirtualVideoMultiRoundDriver:
                     query_contract,
                     round_id=round_id,
                     limit=min(self.max_tasks_per_round, remaining),
-                    effective_scope=str(completion_status.get("effective_scope", query_contract.required_scope)),
+                    effective_scope=completion_status["effective_scope"],
                 )
             requested_tasks = tuple(_task_for_contract(task, query_contract) for task in resolved_tasks)
             tasks = _prefer_navigation_repairs(
@@ -1862,6 +1868,7 @@ class VirtualVideoMultiRoundDriver:
                 query_contract,
                 evidence_store.records,
                 query_requirements=query_requirements,
+                query_obligations=query_obligations,
                 reports=reports,
                 best_choice=best_answer,
                 active_condition_ids=active_condition_ids,
@@ -1994,6 +2001,7 @@ class VirtualVideoMultiRoundDriver:
             query_contract,
             evidence_store.records,
             query_requirements=query_requirements,
+            query_obligations=query_obligations,
             reports=reports,
             best_choice=best_answer,
             active_condition_ids=active_condition_ids,
@@ -2249,13 +2257,13 @@ def _bootstrap_investigation_tasks(
     *,
     round_id: int,
     limit: int,
-    effective_scope: str | None = None,
+    effective_scope: str,
 ) -> tuple[InvestigationTask, ...]:
     segment_limit = max(0, int(limit))
     if segment_limit <= 0:
         return ()
     segments = tuple(workspace.manifest.segments)
-    if str(effective_scope or contract.required_scope) != "full_video":
+    if str(effective_scope) != "full_video":
         segments = segments[:1]
     modalities = tuple(contract.required_observability or ("visual",))
     event_count = contract.quantifier == "total_count" and contract.observation_target == "event"
@@ -2409,7 +2417,7 @@ def _rejected_answer_repair_tasks(
         contract,
         round_id=round_id,
         limit=task_limit,
-        effective_scope=str(gate_feedback.get("effective_scope", contract.required_scope)),
+        effective_scope=str(gate_feedback["effective_scope"]),
     )
 
 
@@ -2935,13 +2943,14 @@ def _completion_status(
     evidence: Sequence[EvidenceRecord],
     *,
     query_requirements: Mapping[str, Any] | None = None,
+    query_obligations: QueryObligations | None = None,
     reports: Sequence[InvestigationReport] = (),
     best_choice: str = "",
     active_condition_ids: Sequence[str] = (),
     option_states: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     requirements = dict(query_requirements or {})
-    obligations = compile_query_obligations(contract, requirements)
+    obligations = query_obligations or compile_query_obligations(contract, requirements)
     effective_scope = obligations.effective_scope
     answer_evidence = tuple(record for record in evidence if record.evidence_kind != "navigation_hint")
     navigation_evidence = tuple(record for record in evidence if record.evidence_kind == "navigation_hint")
@@ -2990,7 +2999,7 @@ def _completion_status(
             reports,
             best_choice,
             active_condition_ids,
-        ), workspace, contract, answer_evidence, option_states, requirements)
+        ), workspace, contract, answer_evidence, option_states, requirements, obligations)
     if not coverage:
         base = _apply_identity_completion(
             {
@@ -3031,7 +3040,7 @@ def _completion_status(
             reports,
             best_choice,
             active_condition_ids,
-        ), workspace, contract, answer_evidence, option_states, requirements)
+        ), workspace, contract, answer_evidence, option_states, requirements, obligations)
     adopted_source = max(
         coverage,
         key=lambda source_id: (
@@ -3079,7 +3088,7 @@ def _completion_status(
         reports,
         best_choice,
         active_condition_ids,
-    ), workspace, contract, answer_evidence, option_states, requirements)
+    ), workspace, contract, answer_evidence, option_states, requirements, obligations)
 
 
 def _attach_canonical_context(
@@ -3089,9 +3098,10 @@ def _attach_canonical_context(
     evidence: Sequence[EvidenceRecord],
     option_states: Mapping[str, Mapping[str, Any]] | None,
     query_requirements: Mapping[str, Any] | None = None,
+    query_obligations: QueryObligations | None = None,
 ) -> dict[str, Any]:
     result = dict(status)
-    obligations = compile_query_obligations(contract, query_requirements)
+    obligations = query_obligations or compile_query_obligations(contract, query_requirements)
     result.setdefault("contract_scope", obligations.contract_scope)
     result.setdefault("effective_scope", obligations.effective_scope)
     result.setdefault(
@@ -3527,9 +3537,7 @@ def _enumeration_source_segments(
         for segment in workspace.manifest.segments
         if not source_id or segment.source_video_id == source_id
     )
-    effective_scope = str(
-        completion_status.get("effective_scope", "window") or "window"
-    )
+    effective_scope = _compiled_effective_scope(completion_status)
     if effective_scope == "full_video":
         ranges = tuple(
             (float(segment.virtual_start_sec), float(segment.virtual_end_sec))
@@ -4128,9 +4136,7 @@ def _answer_completion_gate(
         if not quantitative_gate.get("passed"):
             return quantitative_gate
         return _contract_readiness_gate(contract, completion_status) or quantitative_gate
-    effective_scope = str(
-        dict(completion_status or {}).get("effective_scope", contract.required_scope) or contract.required_scope
-    )
+    effective_scope = _compiled_effective_scope(completion_status)
     if effective_scope != "full_video":
         return _contract_readiness_gate(contract, completion_status) or {
             "passed": True,
@@ -4342,7 +4348,7 @@ def _contract_readiness_gate(
         return None
     status = dict(completion_status)
     requires_semantic_closure = (
-        str(status.get("effective_scope", contract.required_scope) or contract.required_scope) == "full_video"
+        _compiled_effective_scope(status) == "full_video"
         or contract.observation_target == "relation"
         or bool(contract.boundary_hint)
         or contract.quantifier in {"universal", "comparison", "total_count", "distinct_count", "order"}
@@ -4363,6 +4369,16 @@ def _contract_readiness_gate(
         "unsupported_claim_atom_ids": list(status.get("unsupported_claim_atom_ids", ()) or ()),
         "missing_segment_ids": list(status.get("missing_segment_ids", ()) or ()),
     }
+
+
+def _compiled_effective_scope(completion_status: Mapping[str, Any] | None) -> str:
+    status = dict(completion_status or {})
+    obligations = dict(status.get("query_obligations", {}) or {})
+    return str(
+        status.get("effective_scope")
+        or obligations.get("effective_scope")
+        or "window"
+    )
 
 
 def _spatial_relation_gate(

@@ -10,6 +10,7 @@ from vcah.provenance import (
     direct_witness_provenance,
     heuristic_provenance,
     normalize_provenance,
+    provenance_is_admissible,
     provenance_kinds,
 )
 from vcah.qualification import qualify_event_candidates
@@ -447,6 +448,7 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                     "candidate_conflict_reasons": [],
                     "participant_binding_conflicts": [],
                     "qualification_observations": {},
+                    "qualification_evidence_ids_by_field": {},
                     "preconditions_met": [],
                     "supports_question_event": [],
                 }
@@ -510,12 +512,22 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
             )
             if "preconditions_met" in event:
                 row["preconditions_met"].append(event.get("preconditions_met"))
+                if _qualification_value(event.get("preconditions_met")) != "unknown":
+                    row["qualification_evidence_ids_by_field"].setdefault(
+                        "required_prior_state", []
+                    ).append(record.evidence_id)
             row["supports_question_event"].append(event.get("supports_question_event"))
             if isinstance(event.get("qualification"), Mapping):
+                qualification = dict(event.get("qualification", {}) or {})
                 row["qualification_observations"] = {
                     **dict(row.get("qualification_observations", {}) or {}),
-                    **dict(event.get("qualification", {}) or {}),
+                    **qualification,
                 }
+                for field_name, value in qualification.items():
+                    if _qualification_value(value) != "unknown":
+                        row["qualification_evidence_ids_by_field"].setdefault(
+                            str(field_name), []
+                        ).append(record.evidence_id)
     public = []
     for index, row in enumerate(sorted(candidates, key=lambda item: item["virtual_time_range"][0]), start=1):
         candidate_status = (
@@ -548,6 +560,12 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                 ),
                 "participant_binding_conflicts": list(row["participant_binding_conflicts"])[:8],
                 "qualification_observations": dict(row.get("qualification_observations", {}) or {}),
+                "qualification_evidence_ids_by_field": {
+                    str(field_name): list(dict.fromkeys(evidence_ids))
+                    for field_name, evidence_ids in dict(
+                        row.get("qualification_evidence_ids_by_field", {}) or {}
+                    ).items()
+                },
                 "preconditions_met_observations": list(row.get("preconditions_met", ()) or ()),
                 "supports_question_event_observations": list(row.get("supports_question_event", ()) or ()),
                 "continues_from_previous": bool(row.get("continues_from_previous")),
@@ -609,8 +627,88 @@ def _candidate_with_provenance(
             evidence_ids=tuple(row.get("evidence_ids", ()) or ()),
             derivation="candidate_without_observation_witness",
         ))
-    row["provenance"] = normalize_provenance(provenance)
+    candidate_provenance = normalize_provenance(provenance)
+    row["provenance"] = candidate_provenance
+    row["distinctness_provenance"] = normalize_provenance(
+        row.get("distinctness_provenance", ())
+    ) or normalize_provenance((
+        deterministic_derivation_provenance(
+            derivation="canonical_event_reconciliation",
+            fact_ids=(candidate_id,),
+            evidence_ids=tuple(row.get("evidence_ids", ()) or ()),
+            source_kinds=provenance_kinds(candidate_provenance),
+        ),
+    ))
+    evidence_ids = tuple(
+        dict.fromkeys(str(item) for item in row.get("evidence_ids", ()) if str(item))
+    )
+    row["qualification_provenance_by_field"] = _qualification_provenance_by_field(
+        candidate_id,
+        evidence_ids,
+        row.get("qualification_evidence_ids_by_field", {}),
+        evidence_by_id,
+    )
+    row["qualification_provenance"] = normalize_provenance(
+        row.get("qualification_provenance", ())
+    ) or normalize_provenance((
+        heuristic_provenance(
+            fact_ids=(candidate_id,),
+            evidence_ids=evidence_ids,
+            derivation="qualification_fields_without_independent_witness",
+        ),
+    ))
     return row
+
+
+def _qualification_provenance_by_field(
+    candidate_id: str,
+    candidate_evidence_ids: Sequence[str],
+    source_ids_by_field: Any,
+    evidence_by_id: Mapping[str, EvidenceRecord],
+) -> dict[str, tuple[dict[str, Any], ...]]:
+    admissible_records = {
+        evidence_id: record
+        for evidence_id in candidate_evidence_ids
+        if (record := evidence_by_id.get(evidence_id)) is not None
+        and provenance_is_admissible(_record_fact_provenance(record, fact_id=candidate_id))
+    }
+    result: dict[str, tuple[dict[str, Any], ...]] = {}
+    for field_name, source_ids in dict(
+        source_ids_by_field or {}
+    ).items():
+        independent_ids = tuple(
+            dict.fromkeys(
+                str(source_id)
+                for source_id in tuple(source_ids or ())
+                if str(source_id)
+                and str(source_id) in admissible_records
+                and any(
+                    _observation_identity(record) != _observation_identity(admissible_records[str(source_id)])
+                    for other_id, record in admissible_records.items()
+                    if other_id != str(source_id)
+                )
+            )
+        )
+        field_provenance = []
+        for evidence_id in independent_ids:
+            field_provenance.extend(
+                _record_fact_provenance(
+                    admissible_records[evidence_id],
+                    fact_id=f"qualification:{candidate_id}:{field_name}",
+                )
+            )
+        result[str(field_name)] = normalize_provenance(field_provenance) or normalize_provenance((
+            heuristic_provenance(
+                fact_ids=(candidate_id,),
+                evidence_ids=tuple(source_ids or ()),
+                derivation="qualification_not_independent_from_candidate_observation",
+            ),
+        ))
+    return result
+
+
+def _observation_identity(record: EvidenceRecord) -> str:
+    return str(record.observation_id or record.evidence_id)
 
 
 def _append_attribute_facts(

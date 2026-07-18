@@ -3607,7 +3607,7 @@ def _forced_answer_prompt(
     visual_manifest: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     rows = select_uniform_items(tuple(evidence_digest), 20)
-    dashboard = [
+    evidence_rows = [
         {
             "evidence_id": row.get("evidence_id"),
             "summary": str(row.get("summary", "") or "")[:320],
@@ -3621,20 +3621,19 @@ def _forced_answer_prompt(
         }
         for row in rows
     ]
-    option_support = _forced_option_support_dashboard(kwargs, evidence_digest)
+    finalization_context = _canonical_finalization_context(kwargs)
     return (
-        "The investigation budget is exhausted. You must choose one best option using the evidence dashboard; "
+        "The investigation budget is exhausted. You must choose one best option using the canonical finalization context; "
         "do not return investigate, abstain, or an empty answer. This is a best-effort answer and may remain unverified. "
         "Return JSON only: {\"answer\":\"A. option text\",\"citations\":[\"ev_...\"],"
         "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"...\","
         "\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"observation:person_1\"]}]}. "
-        "Canonical facts and option_support are status context only. Evidence summaries are supporting context only and must "
+        "Canonical finalization context is read-only. Evidence summaries are supporting context only and must "
         "never be recounted or used to override a canonical count, identity, order, or transition. Return your own best-effort "
         "raw answer; final selection is performed separately by the VCAH adjudicator.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
-        f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
-        f"Option support: {json.dumps(option_support, ensure_ascii=False)}\n"
-        f"Evidence dashboard: {json.dumps(dashboard, ensure_ascii=False)}"
+        f"Canonical finalization context: {json.dumps(finalization_context, ensure_ascii=False)}\n"
+        f"Evidence context: {json.dumps(evidence_rows, ensure_ascii=False)}"
         f"{_visual_manifest_prompt(visual_manifest)}"
     )
 
@@ -3660,62 +3659,35 @@ def _compact_forced_answer_prompt(
                 "entities": entities,
             }
         )
-    option_support = _forced_option_support_dashboard(kwargs, evidence_digest)
+    finalization_context = _canonical_finalization_context(kwargs)
     return (
-        "Choose the single best multiple-choice answer from the compact verified evidence. Do not request more investigation. "
-        "For distinct counts, merge repeated people by visual signature and count only countable entities. Return compact JSON "
+        "Choose the single best multiple-choice answer from the read-only canonical finalization context. Do not request more "
+        "investigation. Evidence summaries may support citations, but must not be recounted or used to replace canonical counts, "
+        "identity bindings, event order, or transitions. Return compact JSON "
         "only: {\"answer\":\"A. option text\",\"citations\":[\"ev_...\"],\"entity_clusters\":[{\"entity_id\":"
         "\"entity_1\",\"description\":\"...\",\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"obs:person_1\"]}]}.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
-        f"Option support: {json.dumps(option_support, ensure_ascii=False)}\n"
+        f"Canonical finalization context: {json.dumps(finalization_context, ensure_ascii=False)}\n"
         f"Evidence: {json.dumps(rows, ensure_ascii=False)}"
     )
 
 
-def _forced_option_support_dashboard(
-    kwargs: Mapping[str, Any],
-    evidence_digest: Sequence[Mapping[str, Any]],
-) -> dict[str, Any]:
-    del evidence_digest
-    options = {str(key): str(value) for key, value in dict(kwargs.get("options") or {}).items()}
+def _canonical_finalization_context(kwargs: Mapping[str, Any]) -> dict[str, Any]:
     completion = dict(kwargs.get("completion_status") or {})
-    table = dict(completion.get("option_verdict_table") or {})
-    verdicts = dict(table.get("option_verdicts") or {})
-    scores: dict[str, int] = {}
-    reasons: dict[str, list[str]] = {}
-    status_score = {"supported": 100, "unknown": 0, "contradicted": -100}
-    for key in options:
-        row = dict(verdicts.get(key, {}) or {})
-        status = str(row.get("status", "unknown") or "unknown").casefold()
-        scores[key] = status_score.get(status, 0)
-        reasons[key] = [str(row.get("reason", "") or "canonical_verdict_unavailable")]
-    ranked = sorted(options, key=lambda key: (-scores[key], key))
-    supported = [key for key in ranked if str(dict(verdicts.get(key, {}) or {}).get("status", "")) == "supported"]
-    recommended = str(table.get("best_option", "") or "")
     return {
-        "policy": "canonical_option_verdict_table",
-        "selection_authority": "none",
-        "recommended_option": recommended if recommended in options else ranked[0] if ranked else "",
-        "positive_signal": bool(supported),
-        "fact_source": "completion_status.canonical_fact_snapshot",
-        "audit_status": str(table.get("audit_status", "missing") or "missing"),
-        "options": [
-            {"option": key, "score": scores[key], "reasons": reasons[key]}
-            for key in ranked
-        ],
+        key: completion.get(key)
+        for key in (
+            "revision_context",
+            "audit_record",
+            "canonical_fact_counts",
+            "option_verdict_table",
+            "answer_qualification_status",
+            "completion_ready",
+            "effective_scope",
+            "query_obligations",
+        )
+        if key in completion
     }
-
-
-def _forced_option_count(text: str) -> int | None:
-    match = re.search(r"\b(\d+)\b", str(text or ""))
-    if match:
-        return int(match.group(1))
-    words = {
-        "zero": 0, "none": 0, "one": 1, "two": 2, "three": 3, "four": 4,
-        "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-    }
-    normalized = str(text or "").casefold()
-    return next((value for word, value in words.items() if re.search(rf"\b{word}\b", normalized)), None)
 
 
 def _sampling_goal_key(task: Any) -> str:
