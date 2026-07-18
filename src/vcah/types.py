@@ -116,6 +116,7 @@ class ClaimContract:
     observability_mode: Literal["all", "any"] = "all"
     measurement_unit: str = ""
     boundary_hint: str = ""
+    requires_agent_attribution: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -127,6 +128,7 @@ class ClaimContract:
             object.__setattr__(self, "observability_mode", "all")
         object.__setattr__(self, "measurement_unit", str(self.measurement_unit or "").strip().casefold())
         object.__setattr__(self, "boundary_hint", str(self.boundary_hint or "").strip())
+        object.__setattr__(self, "requires_agent_attribution", bool(self.requires_agent_attribution))
 
 
 @dataclass(frozen=True)
@@ -807,6 +809,7 @@ def _claim_contract(value: Any) -> ClaimContract:
         observability_mode=str(payload.get("observability_mode") or "all"),  # type: ignore[arg-type]
         measurement_unit=str(payload.get("measurement_unit") or ""),
         boundary_hint=str(payload.get("boundary_hint") or ""),
+        requires_agent_attribution=bool(payload.get("requires_agent_attribution", False)),
     )
 
 

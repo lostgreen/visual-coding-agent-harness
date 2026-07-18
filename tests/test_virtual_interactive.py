@@ -50,7 +50,6 @@ _matching_claim_assessment = _interactive._matching_claim_assessment
 _followup_prompt = _interactive._followup_prompt
 _compile_option_claim_contract = _interactive._compile_option_claim_contract
 _forced_option_support_dashboard = _interactive._forced_option_support_dashboard
-_calibrate_forced_decision = _interactive._calibrate_forced_decision
 load_role_clients = _interactive.load_role_clients
 run_case = _interactive.run_case
 
@@ -73,7 +72,7 @@ def test_reasoner_prompt_requires_evidence_dynamics_sampling_plan() -> None:
     assert "Choose from evidence dynamics, not the question category" in prompt
 
 
-def test_forced_count_choice_penalizes_strong_assertions_without_positive_evidence() -> None:
+def test_forced_dashboard_has_no_answer_selection_authority() -> None:
     kwargs = {
         "question": "How many green cylinders are visible?",
         "options": {"A": "One green cylinder", "E": "Four green cylinders"},
@@ -86,16 +85,10 @@ def test_forced_count_choice_penalizes_strong_assertions_without_positive_eviden
         "entities": [],
     },)
     dashboard = _forced_option_support_dashboard(kwargs, wrong_window)
-    calibrated = _calibrate_forced_decision(
-        kwargs,
-        wrong_window,
-        _interactive.ReasonerDecision(action="answer", answer="E. Four green cylinders"),
-    )
-
     assert dashboard["policy"] == "canonical_option_verdict_table"
     assert dashboard["recommended_option"] == "A"
-    assert dashboard["authoritative"] is False
-    assert calibrated.answer == "E. Four green cylinders"
+    assert dashboard["selection_authority"] == "none"
+    assert not hasattr(_interactive, "_calibrate_forced_decision")
 
 
 def test_forced_count_choice_uses_countable_witnesses() -> None:
@@ -159,7 +152,7 @@ def test_forced_total_count_choice_uses_canonical_event_candidates() -> None:
 
     assert dashboard["policy"] == "canonical_option_verdict_table"
     assert dashboard["recommended_option"] == "B"
-    assert dashboard["authoritative"] is True
+    assert dashboard["selection_authority"] == "none"
     assert dashboard["fact_source"] == "completion_status.canonical_fact_snapshot"
 
 
@@ -341,6 +334,44 @@ def test_gpt5_client_uses_completion_token_parameter(monkeypatch) -> None:
     assert "temperature" not in captured["json"]
 
 
+def test_client_records_seed_support_request_id_and_sampling_parameters(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class Response:
+        status_code = 200
+        text = ""
+        headers = {"x-request-id": "provider-request-7"}
+
+        @staticmethod
+        def json() -> Mapping[str, Any]:
+            return {"id": "payload-id", "choices": [{"message": {"content": "{}"}}]}
+
+    def post(*args: Any, **kwargs: Any) -> Response:
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(_interactive.requests, "post", post)
+    client = OpenAICompatibleVisionClient(
+        {
+            "base": "https://gateway.invalid/v1",
+            "model": "gpt-5.5",
+            "api_key": "secret",
+            "temperature": 0.2,
+            "top_p": 0.8,
+            "provider_reported_seed_support": "supported",
+        }
+    )
+    client.set_requested_seed(42)
+
+    client.chat("plan", max_tokens=1400)
+
+    assert captured["json"]["seed"] == 42
+    assert captured["json"]["temperature"] == 0.2
+    assert captured["json"]["top_p"] == 0.8
+    assert client.last_response_metadata["provider_request_id"] == "provider-request-7"
+    assert client.last_response_metadata["provider_reported_seed_support"] == "supported"
+
+
 def test_gpt5_client_records_reasoning_token_exhaustion(monkeypatch) -> None:
     class Response:
         status_code = 200
@@ -371,6 +402,13 @@ def test_gpt5_client_records_reasoning_token_exhaustion(monkeypatch) -> None:
         "reasoning_tokens": 600,
         "content_chars": 0,
         "requested_completion_tokens": 600,
+        "provider_request_id": "",
+        "retry_count": 0,
+        "temperature": None,
+        "top_p": None,
+        "requested_seed": None,
+        "provider_seed_supported": False,
+        "provider_reported_seed_support": "unknown",
     }
 
 
@@ -998,7 +1036,7 @@ def test_gemini_reasoner_keeps_last_valid_choice_when_final_response_is_explanat
     assert "valid option" in final.support_reason
 
 
-def test_forced_finalization_answer_is_calibrated_by_unique_canonical_verdict(tmp_path: Path) -> None:
+def test_forced_finalization_preserves_raw_answer_despite_stale_canonical_recommendation(tmp_path: Path) -> None:
     api = ScriptedVisionClient(({"action": "answer", "answer": "F. unsupported", "citations": ["ev_1"]},))
     reasoner = GeminiReasoner(api, trace_path=tmp_path / "interactions.jsonl")
     options = {"F": "unsupported", "H": "supported narrative"}
@@ -1033,8 +1071,7 @@ def test_forced_finalization_answer_is_calibrated_by_unique_canonical_verdict(tm
         force_finalize=True,
     )
 
-    assert final.answer == "H. supported narrative"
-    assert "canonical_option_verdict_table" in final.support_reason
+    assert final.answer == "F. unsupported"
 
 
 def test_gemini_reasoner_normalizes_structured_answer_payload_and_nested_citations(tmp_path: Path) -> None:

@@ -5,6 +5,13 @@ import re
 from typing import Any, Mapping, Sequence
 
 from vcah.evidence_primitives import normalize_measurements, normalize_relations
+from vcah.provenance import (
+    deterministic_derivation_provenance,
+    direct_witness_provenance,
+    heuristic_provenance,
+    normalize_provenance,
+    provenance_kinds,
+)
 from vcah.qualification import qualify_event_candidates
 from vcah.types import ClaimContract, EvidenceRecord
 from vcah.virtual_video import VirtualVideoWorkspace
@@ -44,7 +51,9 @@ class CanonicalFactSnapshot:
     resolved_entities: tuple[Mapping[str, Any], ...] = ()
     unresolved_entity_bindings: tuple[Mapping[str, Any], ...] = ()
     state_transitions: tuple[Mapping[str, Any], ...] = ()
+    unresolved_state_transitions: tuple[Mapping[str, Any], ...] = ()
     entity_associations: tuple[Mapping[str, Any], ...] = ()
+    attribute_facts: tuple[Mapping[str, Any], ...] = ()
     inferred_facts: tuple[Mapping[str, Any], ...] = ()
     unresolved_inferences: tuple[Mapping[str, Any], ...] = ()
     ordered_events: tuple[Mapping[str, Any], ...] = ()
@@ -68,7 +77,9 @@ class CanonicalFactSnapshot:
             "resolved_entities": [dict(row) for row in self.resolved_entities],
             "unresolved_entity_bindings": [dict(row) for row in self.unresolved_entity_bindings],
             "state_transitions": [dict(row) for row in self.state_transitions],
+            "unresolved_state_transitions": [dict(row) for row in self.unresolved_state_transitions],
             "entity_associations": [dict(row) for row in self.entity_associations],
+            "attribute_facts": [dict(row) for row in self.attribute_facts],
             "inferred_facts": [dict(row) for row in self.inferred_facts],
             "unresolved_inferences": [dict(row) for row in self.unresolved_inferences],
             "ordered_events": [dict(row) for row in self.ordered_events],
@@ -78,6 +89,7 @@ class CanonicalFactSnapshot:
                 "entities": len(self.resolved_entities),
                 "state_transitions": len(self.state_transitions),
                 "entity_associations": len(self.entity_associations),
+                "attribute_facts": len(self.attribute_facts),
                 "inferred_facts": len(self.inferred_facts),
             },
             "raw_candidate_counts": dict(self.raw_candidate_counts),
@@ -560,16 +572,162 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
     }
 
 
+def _record_fact_provenance(record: EvidenceRecord, *, fact_id: str) -> tuple[dict[str, Any], ...]:
+    parse_status = str(record.operation_metadata.get("structured_parse_status", "") or "").casefold()
+    has_witness = bool(record.frame_refs) and record.start_sec is not None and record.end_sec is not None
+    if has_witness and parse_status in {"", "parsed", "ok"}:
+        return normalize_provenance((
+            direct_witness_provenance(
+                fact_ids=(fact_id,),
+                evidence_ids=(record.evidence_id,),
+                witness_ranges=((float(record.start_sec), float(record.end_sec)),),
+            ),
+        ))
+    return normalize_provenance((
+        heuristic_provenance(
+            fact_ids=(fact_id,),
+            evidence_ids=(record.evidence_id,),
+            derivation="observation_missing_direct_witness_requirements",
+        ),
+    ))
+
+
+def _candidate_with_provenance(
+    candidate: Mapping[str, Any],
+    evidence_by_id: Mapping[str, EvidenceRecord],
+) -> dict[str, Any]:
+    row = dict(candidate)
+    candidate_id = str(row.get("candidate_id", "") or row.get("signature", "") or "event_candidate")
+    provenance = []
+    for evidence_id in tuple(row.get("evidence_ids", ()) or ()):
+        record = evidence_by_id.get(str(evidence_id))
+        if record is not None:
+            provenance.extend(_record_fact_provenance(record, fact_id=candidate_id))
+    if not provenance:
+        provenance.append(heuristic_provenance(
+            fact_ids=(candidate_id,),
+            evidence_ids=tuple(row.get("evidence_ids", ()) or ()),
+            derivation="candidate_without_observation_witness",
+        ))
+    row["provenance"] = normalize_provenance(provenance)
+    return row
+
+
+def _append_attribute_facts(
+    destination: list[dict[str, Any]],
+    *,
+    entity_id: str,
+    episode_id: str,
+    event_role: str,
+    attributes: Mapping[str, Any],
+    record: EvidenceRecord,
+    provenance: Sequence[Mapping[str, Any]],
+) -> None:
+    if not entity_id or not attributes or record.start_sec is None or record.end_sec is None:
+        return
+    for attribute_type, attribute_value in dict(attributes).items():
+        normalized_type = str(attribute_type or "").strip().casefold()
+        if not normalized_type or attribute_value is None or not str(attribute_value).strip():
+            continue
+        fact_id = f"attribute:{entity_id}:{episode_id or 'unbound'}:{normalized_type}:{record.evidence_id}"
+        destination.append(
+            {
+                "fact_id": fact_id,
+                "entity_id": entity_id,
+                "episode_id": episode_id,
+                "event_role": event_role,
+                "attribute_type": normalized_type,
+                "attribute_value": attribute_value,
+                "witness_range": [float(record.start_sec), float(record.end_sec)],
+                "observation_id": str(record.observation_id or record.evidence_id),
+                "evidence_ids": [record.evidence_id],
+                "provenance": [dict(item) for item in provenance],
+            }
+        )
+
+
+def _typed_state_transition_fact(
+    raw: Mapping[str, Any],
+    *,
+    record: EvidenceRecord,
+    fact_id: str,
+) -> dict[str, Any]:
+    object_id = str(raw.get("object_hypothesis_id", raw.get("object_id", "")) or "").strip()
+    attribute_type = str(raw.get("attribute_type", "") or "").strip().casefold()
+    before = raw.get("raw_value_before", raw.get("value_before"))
+    after = raw.get("raw_value_after", raw.get("value_after"))
+    same_object = str(raw.get("same_object_relation", "unknown") or "unknown").casefold()
+    before_witness = raw.get("before_witness", raw.get("before_witness_range"))
+    after_witness = raw.get("after_witness", raw.get("after_witness_range"))
+    occlusion = str(raw.get("coverage_occlusion_status", raw.get("occlusion_status", "unknown")) or "unknown").casefold()
+    witness_ranges = _transition_witness_ranges(before_witness, after_witness)
+    supported = bool(
+        object_id
+        and attribute_type
+        and before is not None
+        and after is not None
+        and str(before).strip()
+        and str(after).strip()
+        and same_object == "supported"
+        and len(witness_ranges) == 2
+        and occlusion not in {"occluded", "unknown"}
+    )
+    provenance = _record_fact_provenance(record, fact_id=fact_id) if supported else normalize_provenance((
+        heuristic_provenance(
+            fact_ids=(fact_id,),
+            evidence_ids=(record.evidence_id,),
+            derivation="state_transition_missing_same_object_or_before_after_witness",
+        ),
+    ))
+    return {
+        "fact_id": fact_id,
+        "object_hypothesis_id": object_id,
+        "attribute_type": attribute_type,
+        "raw_value_before": before,
+        "raw_value_after": after,
+        "before_witness": before_witness,
+        "after_witness": after_witness,
+        "same_object_relation": same_object == "supported",
+        "coverage_occlusion_status": occlusion,
+        "witness_ranges": witness_ranges,
+        "evidence_ids": [record.evidence_id],
+        "status": "supported" if supported else "unknown",
+        "provenance": [dict(item) for item in provenance],
+    }
+
+
+def _transition_witness_ranges(*values: Any) -> list[list[float]]:
+    ranges = []
+    for value in values:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 2:
+            continue
+        try:
+            start, end = sorted((float(value[0]), float(value[1])))
+        except (TypeError, ValueError):
+            continue
+        ranges.append([start, end])
+    return ranges
+
+
 def canonical_fact_snapshot(
     evidence: Sequence[EvidenceRecord],
     *,
     require_event_precondition: bool = False,
 ) -> CanonicalFactSnapshot:
     ledger = event_candidate_ledger(evidence)
+    evidence_by_id = {record.evidence_id: record for record in evidence}
+    observed_candidates = tuple(
+        _candidate_with_provenance(candidate, evidence_by_id)
+        for candidate in tuple(ledger.get("observed_event_candidates", ()) or ())
+    )
+    conflicted_candidates = tuple(
+        _candidate_with_provenance(candidate, evidence_by_id)
+        for candidate in tuple(ledger.get("conflicted_event_candidates", ()) or ())
+    )
     event_qualification = qualify_event_candidates(
         (
-            *tuple(ledger.get("observed_event_candidates", ()) or ()),
-            *tuple(ledger.get("conflicted_event_candidates", ()) or ()),
+            *observed_candidates,
+            *conflicted_candidates,
         ),
         require_state_precondition=require_event_precondition,
     )
@@ -578,7 +736,9 @@ def canonical_fact_snapshot(
     entities: dict[str, dict[str, Any]] = {}
     unresolved_entities: dict[str, dict[str, Any]] = {}
     transitions: list[dict[str, Any]] = []
+    unresolved_transitions: list[dict[str, Any]] = []
     associations: list[dict[str, Any]] = []
+    attribute_facts: list[dict[str, Any]] = []
     inferred_facts: list[dict[str, Any]] = []
     unresolved_inferences: list[dict[str, Any]] = []
     for record in evidence:
@@ -615,7 +775,12 @@ def canonical_fact_snapshot(
                     "visual_signature": str(participant.get("visual_signature", "") or ""),
                     "attributes": dict(participant.get("attributes", {}) or {}),
                     "source_event_key": str(event.get("event_key", "") or ""),
+                    "episode_id": str(event.get("event_key", "") or ""),
                     "evidence_ids": [record.evidence_id],
+                    "provenance": _record_fact_provenance(
+                        record,
+                        fact_id=f"entity:{hypothesis_id or participant_id}",
+                    ),
                 }
                 if hypothesis_id and confidence >= 0.6:
                     existing = entities.setdefault(hypothesis_id, entity_row)
@@ -629,6 +794,15 @@ def canonical_fact_snapshot(
                     existing["attributes"] = {**dict(existing.get("attributes", {}) or {}), **entity_row["attributes"]}
                 else:
                     unresolved_entities.setdefault(entity_row["entity_id"], entity_row)
+                _append_attribute_facts(
+                    attribute_facts,
+                    entity_id=entity_row["entity_id"],
+                    episode_id=entity_row["episode_id"],
+                    event_role=entity_row["role"],
+                    attributes=entity_row["attributes"],
+                    record=record,
+                    provenance=entity_row["provenance"],
+                )
         for entity in record.operation_metadata.get("entities", ()) or ():
             if not isinstance(entity, Mapping):
                 continue
@@ -647,7 +821,13 @@ def canonical_fact_snapshot(
                 "role": str(entity.get("role", "") or ""),
                 "visual_signature": str(entity.get("visual_signature", "") or ""),
                 "attributes": dict(entity.get("attributes", {}) or {}),
+                "episode_id": str(entity.get("episode_id", "") or ""),
+                "event_role": str(entity.get("role", "") or ""),
                 "evidence_ids": [record.evidence_id],
+                "provenance": _record_fact_provenance(
+                    record,
+                    fact_id=f"entity:{hypothesis_id or observation_id}",
+                ),
             }
             if _flag(entity.get("countable")) and hypothesis_id and association_confidence >= 0.6:
                 existing = entities.setdefault(row["entity_id"], row)
@@ -659,6 +839,15 @@ def canonical_fact_snapshot(
                 existing["attributes"] = {**dict(existing.get("attributes", {}) or {}), **row["attributes"]}
             else:
                 unresolved_entities.setdefault(row["entity_id"], row)
+            _append_attribute_facts(
+                attribute_facts,
+                entity_id=row["entity_id"],
+                episode_id=row["episode_id"],
+                event_role=row["event_role"],
+                attributes=row["attributes"],
+                record=record,
+                provenance=row["provenance"],
+            )
         for relation in normalize_relations(record.operation_metadata.get("relations"), evidence_id=record.evidence_id):
             if relation.relation_type != "transition" or relation.status != "supported":
                 continue
@@ -669,8 +858,27 @@ def canonical_fact_snapshot(
                     "related_object_id": relation.object_id,
                     "transition": relation.value or relation.description,
                     "evidence_ids": list(relation.evidence_ids),
+                    "provenance": [
+                        heuristic_provenance(
+                            fact_ids=(f"state_transition_{len(transitions) + 1:03d}",),
+                            evidence_ids=relation.evidence_ids,
+                            derivation="transition_relation_without_before_after_witness_chain",
+                        )
+                    ],
                 }
             )
+        for raw_transition in tuple(record.operation_metadata.get("state_transitions", ()) or ()):
+            if not isinstance(raw_transition, Mapping):
+                continue
+            row = _typed_state_transition_fact(
+                raw_transition,
+                record=record,
+                fact_id=f"state_transition_typed_{len(transitions) + len(unresolved_transitions) + 1:03d}",
+            )
+            if row["status"] == "supported":
+                transitions.append(row)
+            else:
+                unresolved_transitions.append(row)
         for raw_association in record.operation_metadata.get("entity_associations", ()) or ():
             if not isinstance(raw_association, Mapping):
                 continue
@@ -688,6 +896,9 @@ def canonical_fact_snapshot(
                 "association_id": str(raw_association.get("association_id", "") or f"association_{len(associations) + 1:03d}"),
                 "source_participant_id": source_participant_id,
                 "source_event_key": str(raw_association.get("source_event_key", "") or ""),
+                "source_episode_id": str(raw_association.get("source_episode_id", "") or raw_association.get("source_event_key", "") or ""),
+                "source_event_role": str(raw_association.get("source_event_role", "") or ""),
+                "ordinal": raw_association.get("ordinal", None),
                 "target_entity_observation_id": target_observation_id,
                 "entity_hypothesis_id": hypothesis_id,
                 "status": status if status in {"supported", "refuted", "unknown"} else "unknown",
@@ -695,6 +906,13 @@ def canonical_fact_snapshot(
                 "shared_attributes": dict(raw_association.get("shared_attributes", {}) or {}),
                 "distinguishing_attributes": dict(raw_association.get("distinguishing_attributes", {}) or {}),
                 "evidence_ids": [record.evidence_id],
+                "provenance": normalize_provenance(raw_association.get("provenance", ())) or (
+                    heuristic_provenance(
+                        fact_ids=(str(raw_association.get("association_id", "") or ""),),
+                        evidence_ids=(record.evidence_id,),
+                        derivation="entity_association_model_assertion",
+                    ),
+                ),
             }
             associations.append(row)
             if row["status"] != "supported" or row["confidence"] < 0.6:
@@ -716,7 +934,10 @@ def canonical_fact_snapshot(
                 "attributes": dict(target.get("attributes", {}) or {}),
                 "source_participant_id": source_participant_id,
                 "source_event_key": row["source_event_key"],
+                "episode_id": row["source_episode_id"],
+                "event_role": row["source_event_role"],
                 "evidence_ids": [record.evidence_id],
+                "provenance": row["provenance"],
             }
             existing = entities.setdefault(hypothesis_id, entity_row)
             existing["evidence_ids"] = list(dict.fromkeys((*existing["evidence_ids"], record.evidence_id)))
@@ -731,6 +952,15 @@ def canonical_fact_snapshot(
             }
             if entity_row["visual_signature"]:
                 existing["visual_signature"] = entity_row["visual_signature"]
+            _append_attribute_facts(
+                attribute_facts,
+                entity_id=hypothesis_id,
+                episode_id=entity_row["episode_id"],
+                event_role=entity_row["event_role"],
+                attributes=entity_row["attributes"],
+                record=record,
+                provenance=entity_row["provenance"],
+            )
         for raw_fact in record.operation_metadata.get("narrative_facts", ()) or ():
             if not isinstance(raw_fact, Mapping):
                 continue
@@ -742,6 +972,8 @@ def canonical_fact_snapshot(
                 "fact_id": str(raw_fact.get("fact_id", "") or f"inferred_fact_{len(inferred_facts) + len(unresolved_inferences) + 1:03d}"),
                 "episode_id": str(raw_fact.get("episode_id", "") or "").strip(),
                 "timeline_phase": str(raw_fact.get("timeline_phase", "unknown") or "unknown").strip().casefold(),
+                "temporal_role": str(raw_fact.get("temporal_role", raw_fact.get("timeline_phase", "unknown")) or "unknown").strip().casefold(),
+                "anchor_event_id": str(raw_fact.get("anchor_event_id", "") or "").strip(),
                 "anchor_match": _flag(raw_fact.get("anchor_match")),
                 "subject_id": str(raw_fact.get("subject_id", "") or ""),
                 "relation_type": str(raw_fact.get("relation_type", "") or "").strip().casefold(),
@@ -761,6 +993,22 @@ def canonical_fact_snapshot(
                     if isinstance(item, Mapping)
                 ],
                 "evidence_ids": [record.evidence_id],
+                "supporting_observation_ids": list(dict.fromkeys((
+                    str(record.observation_id or record.evidence_id),
+                    *(str(item) for item in tuple(raw_fact.get("supporting_observation_ids", ()) or ()) if str(item)),
+                ))),
+                "competing_explanation_evidence": [
+                    dict(item) for item in tuple(raw_fact.get("alternative_counterevidence", ()) or ())
+                    if isinstance(item, Mapping)
+                ],
+                "agent_witness_type": str(raw_fact.get("agent_witness_type", "") or "").strip().casefold(),
+                "provenance": normalize_provenance(raw_fact.get("provenance", ())) or (
+                    heuristic_provenance(
+                        fact_ids=(str(raw_fact.get("fact_id", "") or ""),),
+                        evidence_ids=(record.evidence_id,),
+                        derivation="narrative_model_inference",
+                    ),
+                ),
             }
             if row["relation_type"] == "temporal_cooccurrence":
                 row["hypothesis_assessments"] = [
@@ -811,12 +1059,20 @@ def canonical_fact_snapshot(
             "event_id": str(row.get("candidate_id", "") or ""),
             "time": float(tuple(row.get("virtual_time_range", (0.0, 0.0)))[0]),
             "evidence_ids": list(row.get("evidence_ids", ()) or ()),
+            "provenance": [
+                deterministic_derivation_provenance(
+                    derivation="canonical_event_order",
+                    fact_ids=(str(row.get("candidate_id", "") or ""),),
+                    evidence_ids=tuple(row.get("evidence_ids", ()) or ()),
+                    source_kinds=provenance_kinds(row.get("provenance", ())),
+                )
+            ],
         }
         for row in qualified
     )
     return CanonicalFactSnapshot(
         qualified_events=qualified,
-        observed_event_candidates=tuple(ledger.get("observed_event_candidates", ()) or ()),
+        observed_event_candidates=observed_candidates,
         unqualified_events=tuple(event_qualification["unqualified_events"]),
         incomplete_events=tuple(event_qualification["incomplete_events"]),
         conflicted_events=tuple(event_qualification["conflicted_events"]),
@@ -825,7 +1081,9 @@ def canonical_fact_snapshot(
         resolved_entities=tuple(entities.values()),
         unresolved_entity_bindings=tuple(unresolved_entities.values()),
         state_transitions=tuple(transitions),
+        unresolved_state_transitions=tuple(unresolved_transitions),
         entity_associations=tuple(associations),
+        attribute_facts=tuple(attribute_facts),
         inferred_facts=tuple(inferred_facts),
         unresolved_inferences=tuple(unresolved_inferences),
         ordered_events=ordered,

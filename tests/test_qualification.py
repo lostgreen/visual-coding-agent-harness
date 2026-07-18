@@ -5,6 +5,7 @@ from vcah.qualification import (
     evaluate_requirement_graph,
     parse_option_predicates,
     qualification_status,
+    qualify_event_candidates,
 )
 
 
@@ -47,6 +48,31 @@ def test_requirement_dependencies_block_downstream_evaluation() -> None:
     ]
     assert evaluations[1].blocked_by == ("req_episode",)
     assert evaluations[2].blocked_by == ("req_participant",)
+
+
+def test_contradicted_candidate_short_circuits_descendants_as_not_applicable() -> None:
+    candidates = tuple(
+        {
+            "candidate_id": f"event_candidate_{index:03d}",
+            "candidate_status": "observed_candidate",
+            "focal_position_transition": True,
+            "evidence_ids": [f"ev_{index:03d}"],
+            "participant_ids": ["camera_holder", f"racer_{index:03d}"],
+            "preconditions_met_observations": [False],
+            "transitions": ["The racer overtakes the recorder."],
+            "continues_from_previous": False,
+            "continues_to_next": False,
+        }
+        for index in range(14)
+    )
+
+    result = qualify_event_candidates(candidates, require_state_precondition=True)
+    graph = result["requirement_graph"]
+
+    assert len(result["unqualified_events"]) == 14
+    assert graph["not_applicable"] == 42
+    assert graph["blocked_unresolved"] == 0
+    assert graph["unresolved_dependency_ids"] == []
 
 
 def test_option_parser_keeps_helmet_clothing_and_brand_attributes_distinct() -> None:

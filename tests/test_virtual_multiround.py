@@ -575,9 +575,9 @@ def test_last_instance_requirement_graph_blocks_ordinal_until_global_boundary_re
     }
 
     assert evaluations["req_full_video_coverage"].status.value == "unknown"
-    assert evaluations["req_last_episode_selected"].status.value == "blocked"
-    assert evaluations["req_second_participant_resolved"].status.value == "blocked"
-    assert evaluations["req_target_attributes_resolved"].status.value == "blocked"
+    assert evaluations["req_last_episode_selected"].status.value == "blocked_unresolved"
+    assert evaluations["req_second_participant_resolved"].status.value == "blocked_unresolved"
+    assert evaluations["req_target_attributes_resolved"].status.value == "blocked_unresolved"
 
 
 def test_choice_not_ready_never_yields_verified_strict() -> None:
@@ -1574,6 +1574,37 @@ def test_canonical_option_table_uses_narrative_hypothesis_assessments() -> None:
     assert table["discriminating_predicate"] == "canonical_narrative_inference"
 
 
+def test_temporal_cooccurrence_cannot_support_agent_attribution_predicate() -> None:
+    options = {"A": "Joe called the police", "B": "Joe waited for the police"}
+    contract = multiround.compile_query_contract(
+        "Who called the police after the siren?",
+        options,
+    )
+    contract = replace(
+        contract,
+        observation_target="event",
+        aggregation="compare",
+        requires_agent_attribution=True,
+    )
+    table = multiround._option_verdict_table(
+        options,
+        contract,
+        {
+            "inferred_facts": [{
+                "fact_id": "siren_only",
+                "episode_id": "street_01",
+                "anchor_match": True,
+                "relation_type": "temporal_cooccurrence",
+                "evidence_ids": ["ev_siren"],
+                "hypothesis_assessments": [{"option_id": "A", "status": "supported"}],
+            }],
+        },
+        {},
+    )
+
+    assert table["option_verdicts"]["A"]["status"] == "unknown"
+
+
 def test_out_of_episode_action_does_not_support_final_decision() -> None:
     options = {
         "D": "Joe accepts his parents' request and conceals the event.",
@@ -1612,55 +1643,8 @@ def test_out_of_episode_action_does_not_support_final_decision() -> None:
     assert table["option_verdicts"]["H"]["status"] == "unknown"
 
 
-def test_canonical_forced_answer_overrides_stale_best_candidate_only_when_unique() -> None:
-    evidence = EvidenceRecord(
-        evidence_id="ev_bridge",
-        beat_id="",
-        start_sec=1.0,
-        end_sec=2.0,
-        modality="visual",
-        pointer="virtual://bridge",
-        verbatim="The complete bridge supports H.",
-        frame_refs=("bridge.jpg",),
-        attestation_model="test-vlm",
-    )
-    options = {"F": "unsupported", "H": "supported narrative"}
-    completion = {
-        "completion_ready": True,
-        "critical_condition_count": 2,
-        "satisfied_condition_count": 2,
-        "unresolved_critical_condition_ids": [],
-        "conflicted_condition_count": 0,
-        "strict_safety_blockers": [],
-        "option_verdict_table": {
-            "audit_status": "complete",
-            "best_option": "H",
-            "answer_qualification_status": "complete",
-            "hard_override_allowed": True,
-            "option_verdicts": {
-                "F": {"status": "contradicted", "evidence_ids": ["ev_bridge"]},
-                "H": {"status": "supported", "evidence_ids": ["ev_bridge"]},
-            },
-        },
-    }
-
-    forced = multiround._canonical_forced_answer(options, completion, (evidence,))
-
-    assert forced == ("H. supported narrative", ("ev_bridge",))
-    ambiguous = {
-        **completion,
-        "option_verdict_table": {
-            "audit_status": "complete",
-            "best_option": "H",
-            "answer_qualification_status": "complete",
-            "hard_override_allowed": True,
-            "option_verdicts": {
-                "F": {"status": "supported", "evidence_ids": ["ev_bridge"]},
-                "H": {"status": "supported", "evidence_ids": ["ev_bridge"]},
-            },
-        },
-    }
-    assert multiround._canonical_forced_answer(options, ambiguous, (evidence,)) is None
+def test_legacy_canonical_forced_selector_is_absent() -> None:
+    assert not hasattr(multiround, "_canonical_forced_answer")
 
 
 def test_unique_supported_option_does_not_imply_override_allowed() -> None:
@@ -1721,17 +1705,6 @@ def test_selected_supported_option_is_not_downgraded_when_completion_is_incomple
     assert states["F"]["predicate_verdict"] == "supported"
     assert states["F"]["grounding_eligibility"] == "insufficient"
     assert table["best_option"] == ""
-    assert multiround._canonical_forced_answer(
-        options,
-        {
-            "completion_ready": False,
-            "critical_condition_count": 3,
-            "satisfied_condition_count": 0,
-            "unresolved_critical_condition_ids": ["condition_last_episode_selected"],
-            "option_verdict_table": table,
-        },
-        (),
-    ) is None
 
 
 def test_partial_audit_support_is_not_overwritten_by_unique_canonical_attribute() -> None:
@@ -2589,15 +2562,17 @@ def test_full_video_count_repairs_coverage_but_does_not_strictly_verify_unknown_
     assert result.grounding_status == "insufficient"
     assert result.grounding_level == "none"
     assert result.retrieval_status == "failed"
-    assert result.verification_reason == "gap_scholar_census_c1"
+    assert result.verification_reason == "entity_cluster_evidence_invalid"
     assert reasoner.calls >= 3
-    assert reasoner.completion_statuses[1]["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
-    assert reasoner.completion_statuses[2]["missing_segment_ids"] == []
+    # Full-video obligations now take precedence in the first round, so the
+    # first post-dispatch status already reflects both mandatory repairs.
+    assert reasoner.completion_statuses[0]["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
+    assert reasoner.completion_statuses[1]["missing_segment_ids"] == []
     repair = next(row for row in result.trace if row.get("type") == "repair_override")
     assert repair["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
     gates = [row for row in result.trace if row.get("type") == "completion_gate"]
     assert gates[-1]["passed"] is False
-    assert gates[-1]["reason"] == "gap_scholar_census_c1"
+    assert gates[-1]["reason"] == "entity_cluster_evidence_invalid"
 
 
 def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_path: Path) -> None:
@@ -2621,10 +2596,10 @@ def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_pa
     assert result.selected_option == "B"
     assert result.answer_mode == "forced_choice"
     assert result.grounding_status == "insufficient"
-    assert result.verification_reason == "entity_reconciliation_missing"
+    assert result.verification_reason == "invalid_visual_citations"
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["passed"] is False
-    assert gate["reason"] == "entity_reconciliation_missing"
+    assert gate["reason"] == "invalid_visual_citations"
 
 
 def test_distinct_count_gate_rejects_free_text_entity_without_frame_witness(tmp_path: Path) -> None:

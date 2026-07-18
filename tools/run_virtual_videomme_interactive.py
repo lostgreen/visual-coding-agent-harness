@@ -43,6 +43,16 @@ from vcah.multiround import (
     VirtualVideoMultiRoundDriver,
     requires_option_audit,
 )
+from vcah.replay import (
+    aggregate_seed_results,
+    create_immutable_run,
+    default_run_id,
+    file_checksum,
+    git_commit,
+    replay_case_metadata,
+    workspace_input_checksums,
+    write_immutable_summary,
+)
 from vcah.semantic_evidence import qualify_absence
 from vcah.types import CoverageSegment, EvidenceRecord, to_jsonable
 from vcah.video import probe_duration
@@ -129,8 +139,11 @@ def _load_existing_case_summary(workspace_root: Path) -> dict[str, Any] | None:
 def main() -> None:
     args = _parse_args()
     dataset_root = Path(args.dataset_root)
-    out_root = Path(args.out_root)
-    out_root.mkdir(parents=True, exist_ok=True)
+    if args.skip_completed:
+        raise ValueError("--skip-completed is incompatible with immutable replay runs; create a new --run-id instead")
+    seeds = tuple(dict.fromkeys(int(seed) for seed in (args.seeds or (args.seed,))))
+    if not seeds:
+        raise ValueError("Provide at least one seed.")
     reasoner_api, investigator_api = load_role_clients(
         shared_config=args.config,
         reasoner_config=args.reasoner_config,
@@ -153,17 +166,29 @@ def main() -> None:
         if args.max_duration_sec is None:
             args.max_duration_sec = 25200.0
     selected = case_ids[:1] if args.mode == "smoke" else case_ids
-    def run_one(case_id: str) -> Mapping[str, Any]:
-        workspace_root = out_root / "workspaces" / case_id
-        if args.skip_completed:
-            existing = _load_existing_case_summary(workspace_root)
-            if existing is not None:
-                return existing
+    run = create_immutable_run(
+        Path(args.out_root),
+        run_id=args.run_id or default_run_id(),
+        config=_replay_run_config(
+            args,
+            selected=selected,
+            seeds=seeds,
+            reasoner_api=reasoner_api,
+            investigator_api=investigator_api,
+        ),
+    )
+
+    def run_one(case_id: str, seed: int) -> Mapping[str, Any]:
+        reasoner_api.set_requested_seed(seed)
+        investigator_api.set_requested_seed(seed)
+        workspace_root = run.root / "workspaces" / case_id
+        if len(seeds) > 1:
+            workspace_root = workspace_root / f"seed-{seed}"
         workspace = build_or_load_workspace(
             dataset_root,
             workspace_root,
             case_id=case_id,
-            seed=int(args.seed),
+            seed=seed,
             min_duration_sec=float(args.min_duration_sec),
             max_duration_sec=None if args.max_duration_sec is None else float(args.max_duration_sec),
             segment_sec=float(args.segment_sec),
@@ -179,8 +204,21 @@ def main() -> None:
             max_rounds=int(args.max_rounds),
             max_investigations=int(args.max_investigations),
         )
+        case_summary = json.loads((workspace.root_dir / "run_summary.json").read_text(encoding="utf-8"))
+        replay = replay_case_metadata(
+            workspace_root=workspace.root_dir,
+            case_summary=case_summary,
+            input_checksums=workspace_input_checksums(workspace),
+            seed=seed,
+            provider_settings={
+                "reasoner": {**reasoner_api.replay_settings, "requested_seed": seed},
+                "investigator": {**investigator_api.replay_settings, "requested_seed": seed},
+            },
+            gold_option=workspace.case.gold,
+        )
         return {
             "case_id": result.case_id,
+            "seed": seed,
             "answer": result.answer,
             "grounded_answer": result.grounded_answer,
             "forced_answer": result.forced_answer,
@@ -199,19 +237,74 @@ def main() -> None:
             "trace": str(workspace.root_dir / "interactions.jsonl"),
             "skipped_completed": False,
             "models": {"reasoner": reasoner_api.model, "investigator": investigator_api.model},
+            "replay": replay,
         }
 
-    summaries = list(_run_case_batch(selected, run_one, workers=int(args.workers)))
+    summaries: list[Mapping[str, Any]] = []
+    for seed in seeds:
+        summaries.extend(
+            _run_case_batch(
+                selected,
+                lambda case_id, current_seed=seed: run_one(case_id, current_seed),
+                workers=int(args.workers),
+            )
+        )
     payload = {
         "mode": args.mode,
         "case_group": None if case_group is None else case_group["group_id"],
         "case_count": len(summaries),
+        "seeds": list(seeds),
         "correct": sum(1 for item in summaries if item["correct"]),
         "models": {"reasoner": reasoner_api.model, "investigator": investigator_api.model},
         "cases": summaries,
+        "multi_seed_report": aggregate_seed_results(
+            [dict(item.get("replay", {}) or {}) for item in summaries]
+        ),
     }
-    (out_root / f"{args.mode}_summary.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    summary_path = write_immutable_summary(run, payload)
+    print(json.dumps({
+        "run_id": run.run_id,
+        "summary": str(summary_path),
+        "case_count": len(summaries),
+        "correct": payload["correct"],
+        "seeds": list(seeds),
+    }, ensure_ascii=False, sort_keys=True))
+
+
+def _replay_run_config(
+    args: argparse.Namespace,
+    *,
+    selected: Sequence[str],
+    seeds: Sequence[int],
+    reasoner_api: "OpenAICompatibleVisionClient",
+    investigator_api: "OpenAICompatibleVisionClient",
+) -> dict[str, Any]:
+    source_paths = {
+        "shared_config": args.config,
+        "reasoner_config": args.reasoner_config,
+        "investigator_config": args.investigator_config,
+        "case_group": args.case_group,
+    }
+    return {
+        "git_commit": git_commit(Path(__file__).resolve().parents[1]),
+        "models": {"reasoner": reasoner_api.model, "investigator": investigator_api.model},
+        "provider_settings": {
+            "reasoner": reasoner_api.replay_settings,
+            "investigator": investigator_api.replay_settings,
+        },
+        "seeds": [int(seed) for seed in seeds],
+        "case_ids": [str(case_id) for case_id in selected],
+        "arguments": {
+            key: value
+            for key, value in vars(args).items()
+            if key not in {"config", "reasoner_config", "investigator_config", "case_group", "run_id"}
+        },
+        "input_config_checksums": {
+            key: file_checksum(Path(value))
+            for key, value in source_paths.items()
+            if value
+        },
+    }
 
 
 def build_or_load_workspace(
@@ -345,6 +438,49 @@ def _write_model_roles(
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "on", "supported"}
+    return bool(value)
+
+
+def _seed_support_status(value: Any) -> str:
+    if value is None or value == "":
+        return "unknown"
+    if _as_bool(value):
+        return "supported"
+    if isinstance(value, str) and value.strip().casefold() in {"unknown", "unreported", "not_reported"}:
+        return "unknown"
+    return "unsupported"
+
+
+def _provider_request_id(response: Any, payload: Mapping[str, Any]) -> str:
+    headers = getattr(response, "headers", {}) or {}
+    for key in ("x-request-id", "request-id", "x-amzn-requestid"):
+        value = headers.get(key) or headers.get(key.title())
+        if value:
+            return str(value)
+    return str(dict(payload).get("id", "") or "")
+
+
 class OpenAICompatibleVisionClient:
     def __init__(self, planner: Mapping[str, Any]) -> None:
         self.base = str(planner["base"]).rstrip("/")
@@ -358,6 +494,16 @@ class OpenAICompatibleVisionClient:
         self.retry_base_sec = max(0.0, float(planner.get("retry_base_sec", 1.0)))
         self.retry_max_sec = max(self.retry_base_sec, float(planner.get("retry_max_sec", 30.0)))
         self.retry_jitter = max(0.0, min(1.0, float(planner.get("retry_jitter", 0.2))))
+        self.temperature = _optional_float(planner.get("temperature"))
+        self.top_p = _optional_float(planner.get("top_p"))
+        self.provider_reported_seed_support = _seed_support_status(
+            planner.get(
+                "provider_reported_seed_support",
+                planner.get("provider_seed_supported", planner.get("supports_seed")),
+            )
+        )
+        self.provider_seed_supported = self.provider_reported_seed_support == "supported"
+        self._configured_seed = _optional_int(planner.get("seed"))
         self._thread_state = threading.local()
         for key, value in (planner.get("proxy_env") or {}).items():
             os.environ[str(key)] = str(value)
@@ -379,9 +525,18 @@ class OpenAICompatibleVisionClient:
         }
         if "gpt-5" in self.model.casefold():
             body["max_completion_tokens"] = int(max_tokens)
+            if self.temperature is not None:
+                body["temperature"] = self.temperature
+            if self.top_p is not None:
+                body["top_p"] = self.top_p
         else:
-            body["temperature"] = 0
+            body["temperature"] = 0 if self.temperature is None else self.temperature
+            if self.top_p is not None:
+                body["top_p"] = self.top_p
             body["max_tokens"] = int(max_tokens)
+        requested_seed = self.requested_seed
+        if self.provider_seed_supported and requested_seed is not None:
+            body["seed"] = requested_seed
         request = {
             "headers": self._headers(),
             "json": body,
@@ -412,6 +567,13 @@ class OpenAICompatibleVisionClient:
                     "reasoning_tokens": completion_details.get("reasoning_tokens"),
                     "content_chars": len(content),
                     "requested_completion_tokens": int(max_tokens),
+                    "provider_request_id": _provider_request_id(response, payload),
+                    "retry_count": attempt,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "requested_seed": requested_seed,
+                    "provider_seed_supported": self.provider_seed_supported,
+                    "provider_reported_seed_support": self.provider_reported_seed_support,
                 }
                 return content
             if response.status_code in retryable_statuses and attempt < self.max_retries:
@@ -430,6 +592,24 @@ class OpenAICompatibleVisionClient:
     @last_response_metadata.setter
     def last_response_metadata(self, value: Mapping[str, Any]) -> None:
         self._thread_state.last_response_metadata = dict(value)
+
+    @property
+    def requested_seed(self) -> int | None:
+        return getattr(self._thread_state, "requested_seed", self._configured_seed)
+
+    def set_requested_seed(self, seed: int | None) -> None:
+        self._thread_state.requested_seed = None if seed is None else int(seed)
+
+    @property
+    def replay_settings(self) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "requested_seed": self.requested_seed,
+            "provider_seed_supported": self.provider_seed_supported,
+            "provider_reported_seed_support": self.provider_reported_seed_support,
+        }
 
     def _headers(self) -> dict[str, str]:
         base = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -502,7 +682,7 @@ class GeminiReasoner:
                         support_reason=self._last_audit_reason
                         or "The model requested more investigation after the budget was exhausted.",
                     )
-                    return _calibrate_forced_decision(kwargs, evidence_digest, preserved)
+                    return preserved
                 if kwargs.get("force_finalize"):
                     return self._force_best_effort(kwargs, evidence_digest)
                 tasks = parsed.get("tasks") or []
@@ -519,8 +699,6 @@ class GeminiReasoner:
                 entity_clusters=tuple(parsed.get("entity_clusters") or ()),
                 option_verdicts=dict(parsed.get("option_verdicts") or {}),
             )
-            if kwargs.get("force_finalize"):
-                candidate = _calibrate_forced_decision(kwargs, evidence_digest, candidate)
             if not candidate.answer:
                 if kwargs.get("force_finalize") and self._last_candidate is not None:
                     return ReasonerDecision(
@@ -605,6 +783,26 @@ class GeminiReasoner:
                 audit_reason = (
                     f"{audit_reason} The strongest alternative duplicates the selected option, so the audit is invalid."
                 ).strip()
+            audit_verdicts = {
+                str(option).strip().upper(): dict(row)
+                for option, row in dict(audit.get("option_verdicts") or {}).items()
+                if str(option).strip().upper() in dict(kwargs.get("options") or {}) and isinstance(row, Mapping)
+            }
+            audit_flags = []
+            if not audit_parseable:
+                audit_flags.append("audit_parse_failed")
+            if set(audit_verdicts) != set(dict(kwargs.get("options") or {})):
+                audit_flags.append("all_option_verdicts_incomplete")
+            if selected_option and str(strongest.get("option", "") or "").strip().upper() == selected_option:
+                audit_flags.append("strongest_alternative_duplicates_selected")
+            audit_record = {
+                "audit_status": "complete" if not audit_flags else "invalid" if not audit_parseable else "partial",
+                "invalidity_flags": audit_flags,
+                "source_revision_context": dict(
+                    dict(kwargs.get("completion_status") or {}).get("revision_context") or {}
+                ),
+                "audit_reason": audit_reason,
+            }
             self._last_audit_reason = audit_reason
             revised_answer, revised_nested_citations = _normalize_answer_payload(
                 audit.get("revised_answer"),
@@ -651,7 +849,8 @@ class GeminiReasoner:
                 entity_clusters=candidate.entity_clusters,
                 support_status="insufficient" if revised_answer else verdict,
                 support_reason=audit_reason,
-                option_verdicts=dict(audit.get("option_verdicts") or candidate.option_verdicts),
+                option_verdicts=audit_verdicts,
+                audit_record=audit_record,
             )
             return self._maybe_verify_claim(kwargs, evidence_digest, decision) if verdict == "supported" else decision
         image_paths, visual_manifest = self._visual_context(kwargs)
@@ -718,7 +917,6 @@ class GeminiReasoner:
             support_status="insufficient",
             support_reason="Best-effort answer produced after the investigation budget was exhausted.",
         )
-        decision = _calibrate_forced_decision(kwargs, evidence_digest, decision)
         if decision.answer and _valid_option_answer(decision.answer, kwargs.get("options") or {}):
             self._last_candidate = decision
         elif self._last_candidate is not None:
@@ -810,6 +1008,8 @@ class GeminiReasoner:
                         assessment.get("reason", "")
                         or "Independent claim verification did not support the answer."
                     ),
+                    option_verdicts=decision.option_verdicts,
+                    audit_record=decision.audit_record,
                 )
             return decision
         if int(kwargs.get("remaining_budget", 0) or 0) <= 0 or kwargs.get("force_finalize"):
@@ -890,6 +1090,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             f"Investigation prompt: {prompt[:2400]}\nTruncated response: {str(raw or '')[:5000]}"
         )
         repaired_raw = self.api.chat(repair_prompt, image_paths=(), max_tokens=1800)
+        repaired_api_response = dict(getattr(self.api, "last_response_metadata", {}) or {})
         repaired = _parse_json(repaired_raw)
         _append_jsonl(self.trace_path, {
             "type": "investigator_json_repair",
@@ -900,6 +1101,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             "frame_paths": [],
             "raw": repaired_raw,
             "parsed": repaired,
+            "api_response": repaired_api_response,
             "time": time.time(),
         })
         if repaired:
@@ -977,6 +1179,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         preview_prompts: list[str] = []
         preview_raws: list[str] = []
         preview_payloads: list[dict[str, Any]] = []
+        preview_api_responses: list[dict[str, Any]] = []
         parse_status = "failed"
         parse_error = ""
         parse_repair_calls = 0
@@ -1022,6 +1225,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                     prior_observations=arbitration_context,
                 )
             preview_raw = self.api.chat(preview_prompt, image_paths=preview_paths, max_tokens=1400)
+            preview_api_response = dict(getattr(self.api, "last_response_metadata", {}) or {})
             preview, attempt_parse_status, attempt_parse_error, attempt_repair_calls = self._parse_structured_observation(
                 preview_raw, query_id=query_id, prompt=preview_prompt, image_paths=preview_paths,
             )
@@ -1039,6 +1243,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             preview_prompts.append(preview_prompt)
             preview_raws.append(preview_raw)
             preview_payloads.append(preview)
+            preview_api_responses.append(preview_api_response)
             _append_jsonl(
                 self.trace_path,
                 {
@@ -1055,6 +1260,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                     "frame_paths": list(preview_paths),
                     "raw": preview_raw,
                     "parsed": preview,
+                    "api_response": preview_api_response,
                     "time": time.time(),
                 },
             )
@@ -1076,6 +1282,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         preview_prompt = preview_prompts[-1]
         preview_raw = preview_raws[-1]
         preview = preview_payloads[-1]
+        final_api_response = preview_api_responses[-1]
 
         selected_window = window
         selected_packet = low
@@ -1233,6 +1440,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 image_paths=model_image_paths,
                 max_tokens=2200 if anchor_event_window else 1400,
             )
+            final_api_response = dict(getattr(self.api, "last_response_metadata", {}) or {})
             parsed, parse_status, parse_error, detail_repair_calls = self._parse_structured_observation(
                 raw,
                 query_id=query_id,
@@ -1283,6 +1491,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "region_frame_paths": list(region_frame_paths),
                 "raw": raw,
                 "parsed": parsed,
+                "api_response": final_api_response,
                 "structured_parse_status": parse_status,
                 "structured_parse_error": parse_error,
                 "time": time.time(),
@@ -1323,6 +1532,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         target_presence = normalize_target_presence(parsed.get("target_presence"), evidence_id=evidence_id)
         measurements = normalize_measurements(parsed.get("measurements"), evidence_id=evidence_id)
         relations = normalize_relations(parsed.get("relations"), evidence_id=evidence_id)
+        state_transitions = _normalize_state_transitions(parsed.get("state_transitions"))
         supports_identity_anchor = _truthy(parsed.get("supports_identity_anchor")) and any(
             bool(item.get("countable")) for item in entities
         )
@@ -1397,9 +1607,13 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "target_presence": to_jsonable(target_presence),
                 "measurements": to_jsonable(measurements),
                 "relations": to_jsonable(relations),
+                "state_transitions": state_transitions,
                 "structured_parse_status": parse_status,
                 "structured_parse_error": parse_error,
                 "source_candidate_ids": list(getattr(task, "source_candidate_ids", ()) or ()),
+                "inspection_mode": str(getattr(task, "inspection_mode", "") or ""),
+                "sampling_floor_fps": getattr(task, "sampling_floor_fps", None),
+                "expected_event_dwell_sec": getattr(task, "expected_event_dwell_sec", None),
                 "inspection_intent": str(getattr(task, "inspection_intent", "") or ""),
                 "origin_gap_id": str(getattr(task, "origin_gap_id", "") or ""),
                 "target_condition_ids": list(getattr(task, "target_condition_ids", ()) or ()),
@@ -1757,6 +1971,7 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
     for beat in beats:
         image_paths.extend(str(path) for path in beat.get("thumbnail_grid_paths", ())[:1])
     raw = api.chat(prompt, image_paths=image_paths, max_tokens=400)
+    api_response = dict(getattr(api, "last_response_metadata", {}) or {})
     parsed = _parse_json(raw)
     seg_start, seg_end = segment_packet["virtual_time_range"]
     try:
@@ -1779,6 +1994,7 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
             "query_id": getattr(task, "query_id"),
             "raw": raw,
             "parsed": parsed,
+            "api_response": api_response,
             "selected_window": list(selected),
             "fallback_used": fallback_used,
             "time": time.time(),
@@ -2131,6 +2347,14 @@ def _confidence(value: Any, *, default: float) -> float:
         return float(default)
 
 
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 ENTITY_WITNESS_MAX_WINDOW_SEC = 120.0
 
 
@@ -2282,6 +2506,7 @@ def _normalize_events(
                     "association_confidence": _confidence(
                         raw_participant.get("association_confidence"), default=0.0
                     ),
+                    "ordinal": _positive_int(raw_participant.get("ordinal")),
                 }
             )
         participant_ids = list(
@@ -2379,6 +2604,9 @@ def _normalize_entity_associations(
                 "association_id": str(item.get("association_id", "") or f"association_{index}"),
                 "source_participant_id": str(reference.get("participant_id", "") or participant_id),
                 "source_event_key": str(reference.get("source_event_key", "") or ""),
+                "source_episode_id": str(reference.get("source_episode_id", "") or reference.get("source_event_key", "") or ""),
+                "source_event_role": str(reference.get("role", "") or ""),
+                "ordinal": _positive_int(reference.get("ordinal")),
                 "target_entity_observation_id": str(target.get("entity_observation_id", "") or ""),
                 "entity_hypothesis_id": hypothesis_id,
                 "status": status,
@@ -2386,6 +2614,37 @@ def _normalize_entity_associations(
                 "shared_attributes": shared,
                 "distinguishing_attributes": distinguishing,
                 "reason": str(item.get("reason", "") or "")[:400],
+            }
+        )
+    return tuple(rows)
+
+
+def _normalize_state_transitions(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    rows = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        object_id = str(item.get("object_hypothesis_id", item.get("object_id", "")) or "").strip()
+        attribute_type = str(item.get("attribute_type", "") or "").strip().casefold()
+        before = item.get("raw_value_before", item.get("value_before"))
+        after = item.get("raw_value_after", item.get("value_after"))
+        same_object = str(item.get("same_object_relation", "unknown") or "unknown").strip().casefold()
+        if same_object not in {"supported", "contradicted", "unknown"}:
+            same_object = "unknown"
+        rows.append(
+            {
+                "object_hypothesis_id": object_id,
+                "attribute_type": attribute_type,
+                "raw_value_before": before,
+                "raw_value_after": after,
+                "before_witness": list(item.get("before_witness", item.get("before_witness_range", ())) or ()),
+                "after_witness": list(item.get("after_witness", item.get("after_witness_range", ())) or ()),
+                "same_object_relation": same_object,
+                "coverage_occlusion_status": str(
+                    item.get("coverage_occlusion_status", item.get("occlusion_status", "unknown")) or "unknown"
+                ).strip().casefold(),
             }
         )
     return tuple(rows)
@@ -2449,6 +2708,8 @@ def _normalize_narrative_facts(
                 "fact_id": str(item.get("fact_id", "") or f"narrative_{index}"),
                 "episode_id": episode_id,
                 "timeline_phase": str(item.get("timeline_phase", "unknown") or "unknown").strip().casefold(),
+                "temporal_role": str(item.get("temporal_role", item.get("timeline_phase", "unknown")) or "unknown").strip().casefold(),
+                "anchor_event_id": str(item.get("anchor_event_id", "") or "").strip(),
                 "anchor_match": _truthy(item.get("anchor_match")),
                 "subject_id": str(item.get("subject_id", "") or "").strip(),
                 "relation_type": relation_type,
@@ -2461,6 +2722,10 @@ def _normalize_narrative_facts(
                 "confidence": confidence if complete else min(confidence, 0.59),
                 "hypothesis_assessments": assessments,
                 "alternative_counterevidence": counterevidence,
+                "supporting_observation_ids": [
+                    str(value) for value in tuple(item.get("supporting_observation_ids", ()) or ()) if str(value)
+                ],
+                "agent_witness_type": str(item.get("agent_witness_type", "") or "").strip().casefold(),
             }
         )
     return tuple(rows)
@@ -3264,7 +3529,8 @@ def _answer_audit_prompt(
         f"{task_instruction}\n"
         "Identify the single strongest_alternative after comparing every option internally. If that alternative is directly "
         "supported, provide revised_answer and its citations. Do not revise based only on plausibility or elimination. Keep the "
-        "reason under 100 words and each task goal under 40 words. "
+        "reason under 100 words and each task goal under 40 words. Every option key must appear exactly once in option_verdicts; "
+        "use unknown for an undecidable option rather than omitting it. "
         f"{_sampling_plan_instruction()}"
         "Return compact JSON only: "
         "{\"verdict\":\"supported|insufficient|contradicted\",\"reason\":\"...\","
@@ -3327,6 +3593,9 @@ def _answer_audit_fingerprint(
         "atoms": contract["atoms"],
         "citations": sorted(cited),
         "ranges": ranges,
+        "revision_context": dict(
+            dict(kwargs.get("completion_status") or {}).get("revision_context") or {}
+        ),
         "method": "answer_audit_v1",
     }, sort_keys=True)
 
@@ -3359,9 +3628,9 @@ def _forced_answer_prompt(
         "Return JSON only: {\"answer\":\"A. option text\",\"citations\":[\"ev_...\"],"
         "\"entity_clusters\":[{\"entity_id\":\"entity_1\",\"description\":\"...\","
         "\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"observation:person_1\"]}]}. "
-        "Canonical facts and option_support are the only authoritative fact and verdict sources. Evidence summaries are supporting "
-        "context only and must never be recounted or used to override a canonical count, identity, order, or transition. "
-        "Select the recommended option when option_support is authoritative.\n"
+        "Canonical facts and option_support are status context only. Evidence summaries are supporting context only and must "
+        "never be recounted or used to override a canonical count, identity, order, or transition. Return your own best-effort "
+        "raw answer; final selection is performed separately by the VCAH adjudicator.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Option support: {json.dumps(option_support, ensure_ascii=False)}\n"
@@ -3423,10 +3692,9 @@ def _forced_option_support_dashboard(
     ranked = sorted(options, key=lambda key: (-scores[key], key))
     supported = [key for key in ranked if str(dict(verdicts.get(key, {}) or {}).get("status", "")) == "supported"]
     recommended = str(table.get("best_option", "") or "")
-    authoritative = len(supported) == 1 and supported[0] == recommended
     return {
         "policy": "canonical_option_verdict_table",
-        "authoritative": authoritative,
+        "selection_authority": "none",
         "recommended_option": recommended if recommended in options else ranked[0] if ranked else "",
         "positive_signal": bool(supported),
         "fact_source": "completion_status.canonical_fact_snapshot",
@@ -3448,31 +3716,6 @@ def _forced_option_count(text: str) -> int | None:
     }
     normalized = str(text or "").casefold()
     return next((value for word, value in words.items() if re.search(rf"\b{word}\b", normalized)), None)
-
-
-def _calibrate_forced_decision(
-    kwargs: Mapping[str, Any],
-    evidence_digest: Sequence[Mapping[str, Any]],
-    decision: ReasonerDecision,
-) -> ReasonerDecision:
-    dashboard = _forced_option_support_dashboard(kwargs, evidence_digest)
-    recommended = str(dashboard.get("recommended_option", "") or "")
-    if not dashboard.get("authoritative") or not recommended:
-        return decision
-    current = _answer_candidate_key(decision.answer)
-    if current == f"option:{recommended}":
-        return decision
-    options = dict(kwargs.get("options") or {})
-    if recommended not in options:
-        return decision
-    return replace(
-        decision,
-        answer=f"{recommended}. {options[recommended]}",
-        support_reason=(
-            "Best-effort option calibrated by the evidence support dashboard "
-            f"({dashboard.get('policy', 'evidence_ranked')})."
-        ),
-    )
 
 
 def _sampling_goal_key(task: Any) -> str:
@@ -3656,6 +3899,9 @@ def _resolution_prompt(task: Any, *, question: str = "") -> str:
         "\"reference_frame\":\"viewer|subject_egocentric|object_egocentric|scene\",\"same_frame\":true|false,"
         "\"witness_frame_indices\":[0],"
         "\"status\":\"supported|contradicted|unknown\",\"description\":\"\"}], and "
+        "\"state_transitions\":[{\"object_hypothesis_id\":\"stable object ID\",\"attribute_type\":\"surface_color|shape|state\","
+        "\"raw_value_before\":\"\",\"raw_value_after\":\"\",\"before_witness\":[0.0,1.0],\"after_witness\":[2.0,3.0],"
+        "\"same_object_relation\":\"supported|contradicted|unknown\",\"coverage_occlusion_status\":\"clear|occluded|unknown\"}], and "
         "\"condition_results\":[{\"condition_id\":\"...\",\"status\":\"satisfied|unknown|contradicted\","
         "\"observation\":\"direct observation\"}]. Use only the stable condition_id values below. "
         "For a crop, mark target_presence present only if the requested target is actually inside that crop; otherwise use absent or uncertain. "
@@ -3666,6 +3912,8 @@ def _resolution_prompt(task: Any, *, question: str = "") -> str:
         "reference_frame explicitly, and set same_frame=true only when both are jointly visible. "
         "For every same_frame relation, list one or more 0-based witness_frame_indices where both bound entities are visible in that "
         "single supplied image; if no such image exists, set same_frame=false and status=unknown. "
+        "For a state transition, keep raw before/after values, identify the same object explicitly, and provide one temporal witness "
+        "range for each side. Do not claim a transition when the object identity is unbound or either side is occluded. "
         "For a completed-task progress checkpoint, emit the visible completed value as unit=task, measurement_semantics=cumulative, "
         "boundary_relation=at, and binding_status=explicit only when the checkpoint event and counter belong to the same scene. "
         f"{_measurement_subject_semantics(question)}"
@@ -4267,7 +4515,12 @@ def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run dual-model Reasoner/Investigator evaluation on Video-MME virtual videos.")
     parser.add_argument("--dataset-root", default="/ytech_m2v5_hdd/workspace/kling_mm/Datasets/VLMEvalKit_Dataset_Cache/HFCache/datasets--lmms-lab--Video-MME/snapshots/ead1408f75b618502df9a1d8e0950166bf0a2a0b")
-    parser.add_argument("--out-root", default="/m2v_intern/xuboshen/zgw/VideoAgent/virtual_videomme_interactive")
+    parser.add_argument(
+        "--out-root",
+        default="/m2v_intern/xuboshen/zgw/VideoAgent/virtual_videomme_interactive/runs",
+        help="Parent directory for create-exclusive replay runs.",
+    )
+    parser.add_argument("--run-id", help="Create exactly this immutable run ID; an existing ID is rejected.")
     parser.add_argument("--config", help="Legacy shared API config used for both roles.")
     parser.add_argument("--reasoner-config", help="Text-only planning/reasoning API config.")
     parser.add_argument("--investigator-config", help="Multimodal observation API config.")
@@ -4276,6 +4529,7 @@ def _parse_args() -> argparse.Namespace:
     cases.add_argument("--case-group", help="JSON manifest containing an ordered cases[] list and default construction.")
     parser.add_argument("--mode", choices=("smoke", "all", "long"), default="smoke")
     parser.add_argument("--seed", type=int, default=20260707)
+    parser.add_argument("--seeds", type=int, nargs="+", help="Run every selected case once per seed in one immutable suite.")
     parser.add_argument("--min-duration-sec", type=float, default=18000.0)
     parser.add_argument("--max-duration-sec", type=float)
     parser.add_argument("--segment-sec", type=float, default=600.0)
@@ -4290,7 +4544,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=20)
     parser.add_argument("--workers", type=int, default=1, help="Parallel case workers, clamped to 1-16.")
-    parser.add_argument("--skip-completed", action="store_true", help="Reuse cases with an existing run_summary.json.")
+    parser.add_argument(
+        "--skip-completed",
+        action="store_true",
+        help="Deprecated: immutable replay runs never reuse an existing workspace.",
+    )
     parser.add_argument("--rebuild", action="store_true")
     parser.add_argument("--rebuild-index", action="store_true")
     return parser.parse_args()

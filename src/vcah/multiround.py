@@ -5,6 +5,12 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
+from vcah.adjudication import (
+    RevisionContext,
+    build_all_option_audit_record,
+    evaluate_hard_override_guard,
+    final_adjudicate,
+)
 from vcah.evidence_primitives import (
     GapCondition,
     MeasurementFact,
@@ -14,8 +20,19 @@ from vcah.evidence_primitives import (
     normalize_measurements,
     normalize_relations,
 )
+from vcah.enumeration import build_enumeration_manifest
 from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
 from vcah.memory import EvidenceStore
+from vcah.obligations import (
+    QueryObligations,
+    compile_query_obligations,
+    evaluate_query_obligations,
+)
+from vcah.provenance import (
+    deterministic_derivation_provenance,
+    heuristic_provenance,
+    provenance_kinds,
+)
 from vcah.qualification import (
     QualificationRequirement,
     evaluate_requirement_graph,
@@ -27,6 +44,7 @@ from vcah.semantic_evidence import (
     event_candidate_ledger as _event_candidate_ledger,
     semantic_repair_requests,
 )
+from vcah.sequence import build_sequence_ledger
 from vcah.types import ClaimContract, EvidenceRecord, is_path_only_visual_evidence, to_jsonable
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import VirtualVideoWorkspace, select_uniform_items
@@ -197,6 +215,22 @@ class InvestigationTask:
             object.__setattr__(self, "inspection_mode", "window")
 
 
+def _task_replay_descriptor(task: InvestigationTask) -> dict[str, Any]:
+    """Keep replay ordering inspectable without embedding prompt or observation text."""
+    return {
+        "query_id": task.query_id,
+        "segment_id": task.segment_id,
+        "time_range": list(task.time_range) if task.time_range is not None else [],
+        "inspection_mode": task.inspection_mode,
+        "gap_id": task.gap_id,
+        "source_candidate_ids": list(task.source_candidate_ids),
+        "episode_id": task.episode_id,
+        "entity_hypothesis_id": task.entity_hypothesis_id,
+        "target_requirement_ids": list(task.target_requirement_ids),
+        "sampling_floor_fps": task.sampling_floor_fps,
+    }
+
+
 @dataclass(frozen=True)
 class ReasonerDecision:
     action: str
@@ -207,6 +241,7 @@ class ReasonerDecision:
     support_status: str = ""
     support_reason: str = ""
     option_verdicts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    audit_record: Mapping[str, Any] = field(default_factory=dict)
     primary_gap: EvidenceGap | None = None
 
     def __post_init__(self) -> None:
@@ -224,6 +259,7 @@ class ReasonerDecision:
                 if str(option).strip() and isinstance(verdict, Mapping)
             },
         )
+        object.__setattr__(self, "audit_record", dict(self.audit_record or {}))
         if isinstance(self.primary_gap, Mapping):
             object.__setattr__(self, "primary_gap", _gap(self.primary_gap))
         elif self.primary_gap is not None and not isinstance(self.primary_gap, EvidenceGap):
@@ -311,6 +347,7 @@ def compile_query_contract(
     state_outcome = _is_state_outcome_question(text)
     epistemic_options = _has_epistemic_answer_option(options or {})
     attribute_transition = _is_attribute_transition_question(text)
+    agent_attribution = _requires_agent_attribution_question(text)
     language_action = any(term in text for term in ("comment", "say", "speak", "discuss", "mention"))
     identity_anchor_terms = _identity_anchor_terms(question)
     if _is_boundary_score_question(text, options or {}, boundary_hint):
@@ -448,6 +485,7 @@ def compile_query_contract(
             required_observability=("visual", "asr"),
             observability_mode="any",
             boundary_hint="narrative setup to implied outcome",
+            requires_agent_attribution=agent_attribution,
         )
     if identity_anchor_terms:
         return ClaimContract(
@@ -494,6 +532,7 @@ def compile_query_contract(
             aggregation="compare",
             required_observability=("visual",),
             observability_mode="all",
+            requires_agent_attribution=True,
         )
     return ClaimContract(
         required_scope="window",
@@ -740,6 +779,18 @@ def _is_agent_relation_question(text: str) -> bool:
     )
 
 
+def _requires_agent_attribution_question(text: str) -> bool:
+    normalized = str(text or "").casefold()
+    return bool(
+        _is_agent_relation_question(normalized)
+        or re.search(
+            r"\b(?:who|[a-z][a-z]+)\s+(?:called?|calls?|reported|reports?|told|tells|warned|warns|"
+            r"helped|helps|rescued|rescues|attacked|attacks|stole|steals|hid|hides|concealed|conceals)\b",
+            normalized,
+        )
+    )
+
+
 def _is_global_absence_question(text: str) -> bool:
     normalized = str(text or "").casefold()
     return bool(
@@ -767,6 +818,9 @@ def compile_query_requirements(question: str) -> dict[str, Any]:
     temporal_sequence = bool(
         re.search(r"\b(?:sequence|order|before|after|then|first|last|initially|ultimately)\b", text)
     )
+    temporal_extremum = bool(
+        re.search(r"\b(?:first|last|final|ultimately|latest|earliest)\b", text)
+    )
     state_tracking = bool(
         re.search(r"\b(?:change|changed|turn(?:ed)?|remain(?:ed)?|maintain(?:ed)?|overtak\w*|track\w*)\b", text)
     )
@@ -774,6 +828,7 @@ def compile_query_requirements(question: str) -> dict[str, Any]:
         "requires_identity_link": bool(terms) or cross_window_identity,
         "requires_event_participant_link": cross_window_identity,
         "requires_narrative_inference": narrative_inference,
+        "requires_agent_attribution": _requires_agent_attribution_question(text),
         "identity_anchor_terms": list(terms),
         "requires_spatial_relation": spatial,
         "spatial_relation_type": "relative_facing" if spatial and "facing" in text else "relative_bearing" if spatial else "",
@@ -786,7 +841,9 @@ def compile_query_requirements(question: str) -> dict[str, Any]:
         ),
         "requires_contrastive_subject_binding": contrastive_subject,
         "requires_temporal_sequence": temporal_sequence,
+        "requires_temporal_extremum": temporal_extremum,
         "requires_state_tracking": state_tracking,
+        "requires_same_object_transition": _is_attribute_transition_question(text),
         "measurement_subject_role": (
             "other_team"
             if contrastive_subject and "team" in text
@@ -859,6 +916,57 @@ def compile_contract_conditions(
     return tuple(conditions)
 
 
+def _fact_derivation_provenance(
+    rows: Sequence[Mapping[str, Any]],
+    derivation: str,
+) -> tuple[Mapping[str, Any], ...]:
+    fact_ids = []
+    evidence_ids = []
+    source_kinds = []
+    for row in rows:
+        fact_id = str(
+            row.get("candidate_id", "")
+            or row.get("entity_id", "")
+            or row.get("association_id", "")
+            or row.get("fact_id", "")
+            or ""
+        )
+        if fact_id:
+            fact_ids.append(fact_id)
+        evidence_ids.extend(str(item) for item in tuple(row.get("evidence_ids", ()) or ()) if str(item))
+        source_kinds.extend(provenance_kinds(row.get("provenance", ())))
+    if fact_ids and evidence_ids:
+        return (
+            deterministic_derivation_provenance(
+                derivation=derivation,
+                fact_ids=tuple(dict.fromkeys(fact_ids)),
+                evidence_ids=tuple(dict.fromkeys(evidence_ids)),
+                source_kinds=tuple(dict.fromkeys(source_kinds)),
+            ),
+        )
+    return (
+        heuristic_provenance(
+            fact_ids=tuple(dict.fromkeys(fact_ids)),
+            evidence_ids=tuple(dict.fromkeys(evidence_ids)),
+            derivation=f"{derivation}_without_canonical_witnesses",
+            producer="program",
+        ),
+    )
+
+
+def _snapshot_derivation_provenance(
+    snapshot: Mapping[str, Any],
+    derivation: str,
+) -> tuple[Mapping[str, Any], ...]:
+    rows = tuple(
+        row
+        for key in ("qualified_events", "resolved_entities", "entity_associations", "inferred_facts")
+        for row in tuple(snapshot.get(key, ()) or ())
+        if isinstance(row, Mapping)
+    )
+    return _fact_derivation_provenance(rows, derivation)
+
+
 def compile_query_qualification_requirements(
     contract: ClaimContract,
     requirements: Mapping[str, Any],
@@ -867,17 +975,26 @@ def compile_query_qualification_requirements(
 ) -> tuple[QualificationRequirement, ...]:
     snapshot = dict(snapshot or {})
     completion = dict(completion_status or {})
+    obligations = compile_query_obligations(contract, requirements)
     compiled: list[QualificationRequirement] = []
-    coverage_supported = _completion_scope_ratio(completion) >= 1.0
+    coverage_supported = bool(
+        completion.get("range_coverage_complete", _completion_scope_ratio(completion) >= 1.0)
+    )
     needs_global_temporal = bool(
         requirements.get("requires_event_participant_link")
         and requirements.get("requires_temporal_sequence")
     )
-    if contract.required_scope == "full_video" or contract.quantifier == "total_count" or needs_global_temporal:
+    if obligations.effective_scope == "full_video" or contract.quantifier == "total_count" or needs_global_temporal:
         compiled.append(QualificationRequirement(
             "req_full_video_coverage",
             "coverage_complete",
-            {"status": "supported" if coverage_supported else "unknown"},
+            {
+                "status": "supported" if coverage_supported else "unknown",
+                "provenance": _snapshot_derivation_provenance(
+                    snapshot,
+                    "coverage_complete",
+                ),
+            },
             scope="full_video",
             quantifier="all_segments",
         ))
@@ -896,6 +1013,10 @@ def compile_query_qualification_requirements(
                         else "supported"
                     ),
                     "fact_ids": [row.get("candidate_id") for row in qualified],
+                    "provenance": _fact_derivation_provenance(
+                        qualified,
+                        "qualified_event_enumeration",
+                    ),
                 },
                 scope="full_video",
                 quantifier="all_events",
@@ -907,6 +1028,10 @@ def compile_query_qualification_requirements(
                 {
                     "status": "supported" if qualified and not incomplete and not conflicted else "unknown",
                     "fact_ids": [row.get("candidate_id") for row in qualified],
+                    "provenance": _fact_derivation_provenance(
+                        qualified,
+                        "qualified_event_count",
+                    ),
                 },
                 scope="full_video",
                 dependency_ids=("req_all_event_candidates_resolved",),
@@ -916,23 +1041,48 @@ def compile_query_qualification_requirements(
         qualified = tuple(snapshot.get("qualified_events", ()) or ())
         incomplete = tuple(snapshot.get("incomplete_events", ()) or ())
         conflicted = tuple(snapshot.get("conflicted_events", ()) or ())
-        temporal_ready = bool(qualified) and not incomplete and not conflicted and coverage_supported
-        associations = tuple(
-            row for row in tuple(snapshot.get("entity_associations", ()) or ())
-            if str(row.get("status", "") or "") == "supported"
+        selection = dict(completion.get("temporal_max_selection", {}) or {})
+        participant_selection = dict(completion.get("target_participant_selection", {}) or {})
+        entity_binding = dict(completion.get("target_entity_binding", {}) or {})
+        selected_episode_id = str(selection.get("selected_episode_id", "") or "")
+        selected_episode = tuple(
+            row for row in qualified
+            if str(row.get("candidate_id", "") or "") == selected_episode_id
         )
-        ordinal_associations = tuple(
-            row for row in associations
-            if int(row.get("ordinal", 0) or 0) == 2
-            or re.search(r"\b(?:second|ordinal[_ -]?2|overtaker[_ -]?2)\b", str(row.get("source_participant_id", "") or "").casefold())
-        )
-        target_entity_ids = {
-            str(row.get("entity_hypothesis_id", "") or "") for row in ordinal_associations
-            if str(row.get("entity_hypothesis_id", "") or "")
-        }
+        target_entity_id = str(entity_binding.get("entity_id", "") or "")
         resolved_targets = tuple(
             row for row in tuple(snapshot.get("resolved_entities", ()) or ())
-            if str(row.get("entity_id", "") or "") in target_entity_ids
+            if str(row.get("entity_id", "") or "") == target_entity_id
+        )
+        target_attributes = tuple(
+            row for row in tuple(completion.get("target_attribute_facts", ()) or ())
+            if isinstance(row, Mapping)
+        )
+        enumeration_ready = bool(completion.get("enumeration_complete", False))
+        temporal_ready = (
+            bool(qualified)
+            and not incomplete
+            and not conflicted
+            and coverage_supported
+            and enumeration_ready
+        )
+        selection_status = str(selection.get("status", "incomplete") or "incomplete")
+        participant_status = str(participant_selection.get("status", "incomplete") or "incomplete")
+        entity_status = str(entity_binding.get("status", "incomplete") or "incomplete")
+        selection_requirement_status = (
+            "supported" if selection_status == "resolved"
+            else "conflicted" if selection_status == "ambiguous"
+            else "unknown"
+        )
+        participant_requirement_status = (
+            "supported" if participant_status == "resolved"
+            else "conflicted" if participant_status == "ambiguous"
+            else "unknown"
+        )
+        entity_requirement_status = (
+            "supported" if entity_status == "resolved" and len(resolved_targets) == 1
+            else "conflicted" if entity_status == "ambiguous" or len(resolved_targets) > 1
+            else "unknown"
         )
         coverage_dependency = ("req_full_video_coverage",) if any(
             requirement.requirement_id == "req_full_video_coverage" for requirement in compiled
@@ -941,7 +1091,13 @@ def compile_query_qualification_requirements(
             QualificationRequirement(
                 "req_all_qualified_episodes_enumerated",
                 "distinct_occurrence",
-                {"status": "supported" if temporal_ready else "unknown"},
+                {
+                    "status": "supported" if temporal_ready else "unknown",
+                    "provenance": _fact_derivation_provenance(
+                        qualified,
+                        "qualified_episode_enumeration",
+                    ),
+                },
                 scope="full_video",
                 quantifier="all_events",
                 dependency_ids=coverage_dependency,
@@ -949,7 +1105,12 @@ def compile_query_qualification_requirements(
             QualificationRequirement(
                 "req_last_episode_selected",
                 "temporal_max",
-                {"status": "supported" if temporal_ready else "unknown"},
+                {
+                    "status": selection_requirement_status,
+                    "fact_ids": [selected_episode_id] if selected_episode_id else [],
+                    "provenance": tuple(selection.get("derivation_provenance", ()) or ())
+                    or _fact_derivation_provenance(selected_episode, "temporal_max"),
+                },
                 scope="full_video",
                 quantifier="temporal_max",
                 dependency_ids=("req_all_qualified_episodes_enumerated",),
@@ -958,8 +1119,14 @@ def compile_query_qualification_requirements(
                 "req_second_participant_resolved",
                 "ordinal_member",
                 {
-                    "status": "supported" if len(ordinal_associations) == 1 else "conflicted" if len(ordinal_associations) > 1 else "unknown",
-                    "fact_ids": [row.get("association_id") for row in ordinal_associations],
+                    "status": participant_requirement_status,
+                    "fact_ids": [
+                        str(participant_selection.get("participant_id", "") or "")
+                    ] if participant_selection.get("participant_id") else [],
+                    "provenance": _fact_derivation_provenance(
+                        selected_episode,
+                        "ordinal_participant_selection",
+                    ),
                 },
                 scope="episode",
                 quantifier="ordinal_2",
@@ -969,8 +1136,12 @@ def compile_query_qualification_requirements(
                 "req_target_entity_bound",
                 "same_entity",
                 {
-                    "status": "supported" if len(resolved_targets) == 1 else "conflicted" if len(resolved_targets) > 1 else "unknown",
+                    "status": entity_requirement_status,
                     "fact_ids": [row.get("entity_id") for row in resolved_targets],
+                    "provenance": _fact_derivation_provenance(
+                        resolved_targets,
+                        "target_entity_binding",
+                    ),
                 },
                 scope="episode",
                 dependency_ids=("req_second_participant_resolved",),
@@ -979,8 +1150,12 @@ def compile_query_qualification_requirements(
                 "req_target_attributes_resolved",
                 "attribute_match",
                 {
-                    "status": "supported" if len(resolved_targets) == 1 and dict(resolved_targets[0].get("attributes", {}) or {}) else "unknown",
-                    "fact_ids": [row.get("entity_id") for row in resolved_targets],
+                    "status": "supported" if entity_requirement_status == "supported" and target_attributes else "unknown",
+                    "fact_ids": [str(row.get("fact_id", "") or "") for row in target_attributes],
+                    "provenance": _fact_derivation_provenance(
+                        target_attributes,
+                        "target_attribute_resolution",
+                    ),
                 },
                 scope="episode",
                 dependency_ids=("req_target_entity_bound",),
@@ -1143,6 +1318,10 @@ class VirtualVideoMultiRoundDriver:
         best_citations: tuple[str, ...] = ()
         best_verification_reason = ""
         best_support_rank = -1
+        best_raw_gate: dict[str, Any] = {"passed": False, "reason": "answer_missing"}
+        last_raw_decision: ReasonerDecision | None = None
+        last_raw_gate: dict[str, Any] = {"passed": False, "reason": "answer_missing"}
+        last_raw_completion: dict[str, Any] = {}
         option_states: dict[str, dict[str, Any]] = {}
         last_gate_reason = "answer_missing"
         gate_feedback: dict[str, Any] = {}
@@ -1232,6 +1411,32 @@ class VirtualVideoMultiRoundDriver:
                     }
                 )
                 decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
+            elif (
+                bool(completion_status.get("enumeration_required"))
+                and not bool(completion_status.get("enumeration_complete"))
+                and remaining > 0
+            ):
+                repair_tasks = _enumeration_repair_tasks(
+                    workspace,
+                    completion_status,
+                    round_id=round_id,
+                    limit=min(self.max_tasks_per_round, remaining),
+                )
+                if repair_tasks:
+                    trace.append(
+                        {
+                            "type": "repair_override",
+                            "round": round_id,
+                            "reason": "enumeration_incomplete",
+                            "unprocessed_ranges": list(
+                                completion_status.get("enumeration_manifest", {}).get("unprocessed_ranges", ())
+                                if isinstance(completion_status.get("enumeration_manifest"), Mapping)
+                                else ()
+                            ),
+                            "task_count": len(repair_tasks),
+                        }
+                    )
+                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
             elif missing_identity_terms and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
                 repair_tasks = _navigation_repair_tasks(
                     evidence_store.records,
@@ -1365,6 +1570,7 @@ class VirtualVideoMultiRoundDriver:
                     query_contract,
                     round_id=round_id,
                     limit=min(self.max_tasks_per_round, remaining),
+                    effective_scope=str(completion_status.get("effective_scope", query_contract.required_scope)),
                 )
                 if bootstrap_tasks:
                     trace.append(
@@ -1418,6 +1624,7 @@ class VirtualVideoMultiRoundDriver:
                     "round": round_id,
                     "action": decision.action,
                     "task_count": len(decision.tasks),
+                    "tasks": [_task_replay_descriptor(task) for task in decision.tasks],
                     "remaining_budget": remaining,
                     "completion_status": completion_status,
                     "primary_gap": to_jsonable(decision.primary_gap) if decision.primary_gap else None,
@@ -1457,6 +1664,9 @@ class VirtualVideoMultiRoundDriver:
                     decision,
                     required=_requires_discriminative_audit(query_contract, query_requirements),
                 )
+                last_raw_decision = decision
+                last_raw_gate = dict(gate)
+                last_raw_completion = dict(decision_completion_status)
                 trace.append({"type": "completion_gate", "round": round_id, **gate})
                 last_gate_reason = str(gate.get("reason", "") or "verification_failed")
                 option_states = _record_option_state(
@@ -1474,6 +1684,7 @@ class VirtualVideoMultiRoundDriver:
                     best_citations = decision.citations
                     best_verification_reason = last_gate_reason
                     best_support_rank = support_rank
+                    best_raw_gate = dict(gate)
                 if gate["passed"]:
                     answer = decision.answer
                     verified = True
@@ -1529,6 +1740,7 @@ class VirtualVideoMultiRoundDriver:
                     query_contract,
                     round_id=round_id,
                     limit=min(self.max_tasks_per_round, remaining),
+                    effective_scope=str(completion_status.get("effective_scope", query_contract.required_scope)),
                 )
             requested_tasks = tuple(_task_for_contract(task, query_contract) for task in resolved_tasks)
             tasks = _prefer_navigation_repairs(
@@ -1722,6 +1934,9 @@ class VirtualVideoMultiRoundDriver:
                     final_decision,
                     required=_requires_discriminative_audit(query_contract, query_requirements),
                 )
+                last_raw_decision = final_decision
+                last_raw_gate = dict(gate)
+                last_raw_completion = dict(decision_completion_status)
                 trace.append(
                     {
                         "type": "completion_gate",
@@ -1743,6 +1958,7 @@ class VirtualVideoMultiRoundDriver:
                     best_citations = final_decision.citations
                     best_verification_reason = last_gate_reason
                     best_support_rank = support_rank
+                    best_raw_gate = dict(gate)
                 if gate["passed"]:
                     answer = final_decision.answer
                     verified = True
@@ -1763,57 +1979,104 @@ class VirtualVideoMultiRoundDriver:
                     else:
                         citations = final_decision.citations
 
-        if not verified and evidence_store.records:
-            forced_completion = _completion_status(
-                workspace,
-                query_contract,
-                evidence_store.records,
-                query_requirements=query_requirements,
-                reports=reports,
-                best_choice=best_answer,
-                active_condition_ids=active_condition_ids,
-                option_states=option_states,
+        if best_answer:
+            last_raw_decision = ReasonerDecision(
+                action="answer",
+                answer=best_answer,
+                citations=best_citations,
+                support_status="insufficient",
+                support_reason=best_verification_reason,
             )
-            canonical_forced = _canonical_forced_answer(
-                workspace.case.options,
-                forced_completion,
+            last_raw_gate = dict(best_raw_gate)
+        raw_decision = last_raw_decision or ReasonerDecision(action="answer")
+        final_completion = _completion_status(
+            workspace,
+            query_contract,
+            evidence_store.records,
+            query_requirements=query_requirements,
+            reports=reports,
+            best_choice=best_answer,
+            active_condition_ids=active_condition_ids,
+            option_states=option_states,
+        ) if evidence_store.records else dict(last_raw_completion)
+        decision_completion = _completion_status_with_decision(final_completion, raw_decision)
+        final_snapshot = dict(final_completion.get("canonical_fact_snapshot", {}) or {})
+        if not final_snapshot:
+            final_snapshot = canonical_fact_snapshot(
                 evidence_store.records,
-            )
-            if canonical_forced is not None:
-                best_answer, best_citations = canonical_forced
-                best_verification_reason = "canonical_option_verdict_forced_override"
-                trace.append(
-                    {
-                        "type": "canonical_forced_override",
-                        "answer": best_answer,
-                        "citations": list(best_citations),
-                        "fact_source": "completion_status.canonical_fact_snapshot",
-                    }
-                )
-
-        if verified:
-            final_answer = answer
-            final_citations = citations
-            grounded_answer = answer
-            forced_answer = answer
-            answer_mode = "grounded"
-            grounding_status = f"verified_{grounding_level}"
-        elif best_answer:
-            final_answer = best_answer
-            final_citations = best_citations
-            verification_reason = best_verification_reason or last_gate_reason
-            grounded_answer = ""
-            forced_answer = best_answer
-            answer_mode = "forced_choice"
-            grounding_status = "insufficient"
-        else:
-            final_answer = "Insufficient verified evidence."
-            final_citations = ()
-            verification_reason = last_gate_reason or "answer_missing"
-            grounded_answer = ""
-            forced_answer = ""
-            answer_mode = "insufficient"
-            grounding_status = "insufficient"
+                require_event_precondition=bool(query_requirements.get("requires_state_tracking")),
+            ).to_dict()
+        final_revision_context = RevisionContext.from_inputs(
+            final_snapshot,
+            _evidence_digest(evidence_store.records, query_contract),
+            to_jsonable(query_contract),
+        )
+        audit_required = _requires_discriminative_audit(query_contract, query_requirements)
+        raw_audit = dict(raw_decision.audit_record or {})
+        final_audit = build_all_option_audit_record(
+            options=workspace.case.options,
+            supplied_verdicts=raw_decision.option_verdicts,
+            audit_status=str(
+                raw_audit.get("audit_status", "complete" if raw_decision.option_verdicts else "invalid")
+                or "invalid"
+            ),
+            audit_reason=str(raw_audit.get("audit_reason", raw_decision.support_reason) or ""),
+            revision_context=final_revision_context,
+            required=audit_required,
+            source_revision_context=dict(raw_audit.get("source_revision_context") or {}),
+        )
+        final_table = _option_verdict_table(
+            workspace.case.options,
+            query_contract,
+            final_snapshot,
+            _audit_option_states(raw_decision, workspace.case.options),
+            revision_context=final_revision_context,
+            audit_record=final_audit,
+        )
+        final_table = _annotate_forced_override_eligibility(
+            final_table,
+            decision_completion,
+            final_snapshot,
+            query_requirements,
+            audit_record=final_audit,
+            revision_context=final_revision_context,
+        )
+        final_completion.update({
+            "canonical_fact_snapshot": final_snapshot,
+            "option_verdict_table": final_table,
+            "revision_context": final_revision_context.to_dict(),
+            "audit_record": final_audit,
+            "answer_qualification_status": final_table["answer_qualification_status"],
+        })
+        adjudication = final_adjudicate(
+            options=workspace.case.options,
+            raw_reasoner_answer=raw_decision.answer,
+            raw_citations=raw_decision.citations,
+            raw_gate=last_raw_gate,
+            completion_status=decision_completion,
+            qualification_result={
+                "status": final_table["answer_qualification_status"],
+                "requirement_graph": final_snapshot.get("requirement_graph", {}),
+                "incomplete_events": final_snapshot.get("incomplete_events", ()),
+                "conflicted_events": final_snapshot.get("conflicted_events", ()),
+                "qualification_evaluations": final_completion.get("qualification_evaluations", ()),
+                "event_qualification_evaluations": _event_qualification_evaluations(final_snapshot),
+            },
+            option_verdict_table=final_table,
+            audit_record=final_audit,
+            revision_context=final_revision_context,
+            audit_required=audit_required,
+        )
+        final_answer = adjudication.answer
+        final_citations = adjudication.citations
+        answer_mode = adjudication.answer_mode
+        verified = adjudication.verified
+        grounding_status = adjudication.grounding_status
+        grounding_level = adjudication.grounding_level
+        verification_reason = adjudication.verification_reason
+        grounded_answer = final_answer if verified else ""
+        forced_answer = final_answer if answer_mode == "forced_choice" else final_answer if verified else ""
+        trace.append(dict(adjudication.answer_selection_event))
         selected_option = _letter(final_answer) or _option_letter_from_answer(final_answer, workspace.case.options)
         retrieval_status = _retrieval_status(reports, verified=verified)
         trace.append(
@@ -1831,14 +2094,22 @@ class VirtualVideoMultiRoundDriver:
                 "verification_reason": verification_reason,
                 "best_effort": bool(final_answer and not verified and best_answer),
                 "option_states": option_states,
-                "option_verdict_table": _option_verdict_table(
-                    workspace.case.options,
-                    query_contract,
-                    canonical_fact_snapshot(evidence_store.records).to_dict(),
-                    option_states,
+                "raw_reasoner_answer": raw_decision.answer,
+                "answer_mutation_events": [dict(item) for item in adjudication.answer_mutation_events],
+                "final_selection_source": adjudication.selection_source,
+                "answer_selection_event": dict(adjudication.answer_selection_event),
+                "revision_context": final_revision_context.to_dict(),
+                "audit_record": final_audit,
+                "option_verdict_table": final_table,
+                "canonical_fact_counts": final_snapshot["canonical_fact_counts"],
+                "raw_candidate_counts": final_snapshot["raw_candidate_counts"],
+                "qualified_event_count": len(tuple(final_snapshot.get("qualified_events", ()) or ())),
+                "selected_episode_id": str(final_completion.get("selected_last_episode_id", "") or ""),
+                "selected_entity_id": str(
+                    dict(final_completion.get("target_entity_binding", {}) or {}).get("entity_id", "") or ""
                 ),
-                "canonical_fact_counts": canonical_fact_snapshot(evidence_store.records).to_dict()["canonical_fact_counts"],
-                "raw_candidate_counts": canonical_fact_snapshot(evidence_store.records).to_dict()["raw_candidate_counts"],
+                "final_adjudication_blockers": list(adjudication.guard.blockers),
+                "soft_audit_correction": adjudication.soft_audit_guard.to_dict(),
                 "forced_reason": verification_reason if answer_mode == "forced_choice" else None,
                 "forced_fact_source": "canonical_fact_snapshot" if answer_mode == "forced_choice" else None,
                 "stagnation_actions": stagnation_actions,
@@ -1911,18 +2182,80 @@ def _coverage_repair_tasks(
     return tuple(tasks)
 
 
+def _enumeration_repair_tasks(
+    workspace: VirtualVideoWorkspace,
+    completion_status: Mapping[str, Any],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[InvestigationTask, ...]:
+    manifest = dict(completion_status.get("enumeration_manifest", {}) or {})
+    requested_ranges = tuple(
+        tuple(float(value) for value in item)
+        for item in tuple(manifest.get("unprocessed_ranges", ()) or ())
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes)) and len(item) == 2
+    )
+    if not requested_ranges:
+        requested_ranges = tuple(
+            tuple(float(value) for value in item)
+            for item in tuple(manifest.get("required_ranges", ()) or ())
+            if isinstance(item, Sequence) and not isinstance(item, (str, bytes)) and len(item) == 2
+        )
+    if not requested_ranges:
+        return ()
+    source_id = str(completion_status.get("adopted_source_video_id", "") or "")
+    segments = tuple(
+        segment
+        for segment in workspace.manifest.segments
+        if not source_id or segment.source_video_id == source_id
+    )
+    tasks: list[InvestigationTask] = []
+    window_sec = 12.0
+    overlap_sec = 2.0
+    for requested_start, requested_end in requested_ranges:
+        left, right = sorted((requested_start, requested_end))
+        for segment in segments:
+            segment_start = max(left, float(segment.virtual_start_sec))
+            segment_end = min(right, float(segment.virtual_end_sec))
+            if segment_end <= segment_start:
+                continue
+            cursor = segment_start
+            while cursor < segment_end - 1e-6 and len(tasks) < max(0, int(limit)):
+                end = min(segment_end, cursor + window_sec)
+                tasks.append(InvestigationTask(
+                    query_id=f"enumerate_r{round_id}_{len(tasks) + 1:03d}",
+                    goal="Enumerate every atomic question-relevant event in this short overlap window and reconcile it with adjacent windows.",
+                    segment_id=segment.segment_id,
+                    time_range=(cursor, end),
+                    modality_hint=("visual",),
+                    expected_evidence="parsed timestamped event candidates, explicit negative observations, and continuation links for overlap reconciliation",
+                    inspection_mode="enumerate_events",
+                    priority=1.0,
+                    sampling_floor_fps=2.0,
+                    expected_event_dwell_sec=1.0,
+                    temporal_resolution_rationale="Enumeration windows must resolve events that may persist for roughly one second.",
+                ))
+                if end >= segment_end - 1e-6:
+                    break
+                cursor = max(cursor + 1e-6, end - overlap_sec)
+            if len(tasks) >= max(0, int(limit)):
+                return tuple(tasks)
+    return tuple(tasks)
+
+
 def _bootstrap_investigation_tasks(
     workspace: VirtualVideoWorkspace,
     contract: ClaimContract,
     *,
     round_id: int,
     limit: int,
+    effective_scope: str | None = None,
 ) -> tuple[InvestigationTask, ...]:
     segment_limit = max(0, int(limit))
     if segment_limit <= 0:
         return ()
     segments = tuple(workspace.manifest.segments)
-    if contract.required_scope != "full_video":
+    if str(effective_scope or contract.required_scope) != "full_video":
         segments = segments[:1]
     modalities = tuple(contract.required_observability or ("visual",))
     event_count = contract.quantifier == "total_count" and contract.observation_target == "event"
@@ -2071,7 +2404,13 @@ def _rejected_answer_repair_tasks(
             break
     if tasks:
         return tuple(tasks)
-    return _bootstrap_investigation_tasks(workspace, contract, round_id=round_id, limit=task_limit)
+    return _bootstrap_investigation_tasks(
+        workspace,
+        contract,
+        round_id=round_id,
+        limit=task_limit,
+        effective_scope=str(gate_feedback.get("effective_scope", contract.required_scope)),
+    )
 
 
 def _identity_repair_tasks(
@@ -2148,8 +2487,13 @@ def _event_participant_association_tasks(
             )
             for index, segment in enumerate(selected, start=1)
         )
+    # Scheduling may use the latest observed candidate provisionally, but only
+    # the completion path can turn it into a resolved temporal-max episode.
+    anchor = max(
+        candidates,
+        key=lambda row: float(tuple(row.get("virtual_time_range", (0.0, 0.0)))[0]),
+    )
     ordinal = _identity_ordinal_index(workspace.case.question)
-    anchor = candidates[min(max(0, ordinal), len(candidates) - 1)]
     participants = [
         dict(item) for item in tuple(anchor.get("participants", ()) or ())
         if isinstance(item, Mapping)
@@ -2168,9 +2512,7 @@ def _event_participant_association_tasks(
         ]
     if not participants:
         return ()
-    participant_ordinal = 0
-    if len(candidates) == 1 and len(participants) > 1:
-        participant_ordinal = min(max(0, ordinal), len(participants) - 1)
+    participant_ordinal = min(max(0, ordinal), len(participants) - 1)
     source = participants[participant_ordinal]
     participant_id = str(source.get("participant_id", "") or "event_participant").strip()
     hypothesis_id = str(source.get("entity_hypothesis_id", "") or "").strip() or re.sub(
@@ -2180,6 +2522,8 @@ def _event_participant_association_tasks(
         **source,
         "entity_hypothesis_id": hypothesis_id,
         "source_event_key": str(anchor.get("canonical_event_key", "") or anchor.get("signature", "") or ""),
+        "source_episode_id": str(anchor.get("candidate_id", "") or ""),
+        "ordinal": ordinal + 1,
         "source_event_time_range": list(anchor.get("virtual_time_range", ()) or ()),
     }
     bounds = tuple(anchor.get("virtual_time_range", ()) or (0.0, 0.0))
@@ -2596,6 +2940,9 @@ def _completion_status(
     active_condition_ids: Sequence[str] = (),
     option_states: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    requirements = dict(query_requirements or {})
+    obligations = compile_query_obligations(contract, requirements)
+    effective_scope = obligations.effective_scope
     answer_evidence = tuple(record for record in evidence if record.evidence_kind != "navigation_hint")
     navigation_evidence = tuple(record for record in evidence if record.evidence_kind == "navigation_hint")
     coverage_evidence = (
@@ -2604,19 +2951,38 @@ def _completion_status(
         else answer_evidence
     )
     coverage = _source_coverage(workspace, coverage_evidence)
-    if contract.required_scope != "full_video":
+    if effective_scope != "full_video":
         base = _apply_identity_completion(
             {
                 "ready_for_answer": bool(answer_evidence),
                 "required_scope": contract.required_scope,
+                "contract_scope": obligations.contract_scope,
+                "effective_scope": effective_scope,
+                "scope_escalation_requirement_ids": list(obligations.scope_escalation_requirement_ids),
+                "query_obligations": obligations.to_dict(),
+                "range_coverage_complete": bool(answer_evidence) if effective_scope == "window" else False,
                 "missing_segment_ids": [],
                 "source_coverage": coverage,
             },
             answer_evidence,
-            query_requirements,
+            requirements,
         )
         base = _apply_entity_completion(base, contract, answer_evidence)
-        base = _apply_event_completion(base, contract, answer_evidence)
+        base = _apply_event_completion(base, contract, answer_evidence, requirements)
+        base = _apply_p1_semantic_completion(base, requirements, answer_evidence)
+        base = _apply_enumeration_completion(
+            base,
+            workspace,
+            contract,
+            answer_evidence,
+            requirements,
+        )
+        base = _apply_episode_binding_completion(
+            base,
+            workspace,
+            answer_evidence,
+            requirements,
+        )
         return _attach_canonical_context(_apply_readiness_dashboard(
             base,
             answer_evidence,
@@ -2624,21 +2990,40 @@ def _completion_status(
             reports,
             best_choice,
             active_condition_ids,
-        ), workspace, contract, answer_evidence, option_states, query_requirements)
+        ), workspace, contract, answer_evidence, option_states, requirements)
     if not coverage:
         base = _apply_identity_completion(
             {
                 "ready_for_answer": False,
                 "required_scope": contract.required_scope,
+                "contract_scope": obligations.contract_scope,
+                "effective_scope": effective_scope,
+                "scope_escalation_requirement_ids": list(obligations.scope_escalation_requirement_ids),
+                "query_obligations": obligations.to_dict(),
+                "range_coverage_complete": False,
                 "reason": "source_not_identified",
                 "missing_segment_ids": [],
                 "source_coverage": {},
             },
             answer_evidence,
-            query_requirements,
+            requirements,
         )
         base = _apply_entity_completion(base, contract, answer_evidence)
-        base = _apply_event_completion(base, contract, answer_evidence)
+        base = _apply_event_completion(base, contract, answer_evidence, requirements)
+        base = _apply_p1_semantic_completion(base, requirements, answer_evidence)
+        base = _apply_enumeration_completion(
+            base,
+            workspace,
+            contract,
+            answer_evidence,
+            requirements,
+        )
+        base = _apply_episode_binding_completion(
+            base,
+            workspace,
+            answer_evidence,
+            requirements,
+        )
         return _attach_canonical_context(_apply_readiness_dashboard(
             base,
             answer_evidence,
@@ -2646,7 +3031,7 @@ def _completion_status(
             reports,
             best_choice,
             active_condition_ids,
-        ), workspace, contract, answer_evidence, option_states, query_requirements)
+        ), workspace, contract, answer_evidence, option_states, requirements)
     adopted_source = max(
         coverage,
         key=lambda source_id: (
@@ -2659,16 +3044,34 @@ def _completion_status(
         {
             "ready_for_answer": not missing,
             "required_scope": contract.required_scope,
+            "contract_scope": obligations.contract_scope,
+            "effective_scope": effective_scope,
+            "scope_escalation_requirement_ids": list(obligations.scope_escalation_requirement_ids),
+            "query_obligations": obligations.to_dict(),
+            "range_coverage_complete": not missing,
             "adopted_source_video_id": adopted_source,
             "missing_segment_ids": missing,
             "source_coverage": coverage,
         },
         answer_evidence,
-        query_requirements,
+        requirements,
     )
     base = _apply_entity_completion(base, contract, answer_evidence)
-    base = _apply_event_completion(base, contract, answer_evidence, query_requirements or {})
-    base = _apply_p1_semantic_completion(base, query_requirements or {}, answer_evidence)
+    base = _apply_event_completion(base, contract, answer_evidence, requirements)
+    base = _apply_p1_semantic_completion(base, requirements, answer_evidence)
+    base = _apply_enumeration_completion(
+        base,
+        workspace,
+        contract,
+        answer_evidence,
+        requirements,
+    )
+    base = _apply_episode_binding_completion(
+        base,
+        workspace,
+        answer_evidence,
+        requirements,
+    )
     return _attach_canonical_context(_apply_readiness_dashboard(
         base,
         answer_evidence,
@@ -2676,7 +3079,7 @@ def _completion_status(
         reports,
         best_choice,
         active_condition_ids,
-    ), workspace, contract, answer_evidence, option_states, query_requirements)
+    ), workspace, contract, answer_evidence, option_states, requirements)
 
 
 def _attach_canonical_context(
@@ -2688,15 +3091,51 @@ def _attach_canonical_context(
     query_requirements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = dict(status)
+    obligations = compile_query_obligations(contract, query_requirements)
+    result.setdefault("contract_scope", obligations.contract_scope)
+    result.setdefault("effective_scope", obligations.effective_scope)
+    result.setdefault(
+        "scope_escalation_requirement_ids",
+        list(obligations.scope_escalation_requirement_ids),
+    )
+    result.setdefault("query_obligations", obligations.to_dict())
     snapshot = canonical_fact_snapshot(
         evidence,
         require_event_precondition=bool((query_requirements or {}).get("requires_state_tracking")),
     ).to_dict()
+    if result.get("temporal_max_selection"):
+        snapshot["episode_binding"] = {
+            "temporal_max_selection": dict(result.get("temporal_max_selection", {}) or {}),
+            "target_participant_selection": dict(result.get("target_participant_selection", {}) or {}),
+            "target_entity_binding": dict(result.get("target_entity_binding", {}) or {}),
+            "target_attribute_facts": [
+                dict(item)
+                for item in tuple(result.get("target_attribute_facts", ()) or ())
+                if isinstance(item, Mapping)
+            ],
+        }
+    if contract.quantifier == "order" or bool((query_requirements or {}).get("requires_temporal_sequence")):
+        snapshot["sequence_ledger"] = build_sequence_ledger(snapshot, workspace.case.options)
+    revision_context = RevisionContext.from_inputs(
+        snapshot,
+        _evidence_digest(evidence, contract),
+        to_jsonable(contract),
+    )
+    audit_record = build_all_option_audit_record(
+        options=workspace.case.options,
+        supplied_verdicts={},
+        audit_status="invalid",
+        audit_reason="No fresh all-option audit is attached to this canonical snapshot.",
+        revision_context=revision_context,
+        required=requires_option_audit(contract, query_requirements),
+    )
     verdict_table = _option_verdict_table(
         workspace.case.options,
         contract,
         snapshot,
         option_states or {},
+        revision_context=revision_context,
+        audit_record=audit_record,
     )
     result.update(
         {
@@ -2708,6 +3147,8 @@ def _attach_canonical_context(
             "raw_candidate_counts": dict(snapshot["raw_candidate_counts"]),
             "requirement_graph": dict(snapshot.get("requirement_graph", {}) or {}),
             "option_verdict_table": verdict_table,
+            "revision_context": revision_context.to_dict(),
+            "audit_record": audit_record,
         }
     )
     canonical_candidate = bool(
@@ -2731,8 +3172,21 @@ def _attach_canonical_context(
     combined_requirement_telemetry = {
         key: int(global_requirement_telemetry.get(key, 0) or 0)
         + int(event_requirement_telemetry.get(key, 0) or 0)
-        for key in ("total", "supported", "contradicted", "conflicted", "unknown", "blocked")
+        for key in (
+            "total",
+            "supported",
+            "contradicted",
+            "conflicted",
+            "unknown",
+            "blocked_unresolved",
+            "blocked_conflicted",
+            "not_applicable",
+        )
     }
+    combined_requirement_telemetry["blocked"] = (
+        int(combined_requirement_telemetry.get("blocked_unresolved", 0) or 0)
+        + int(combined_requirement_telemetry.get("blocked_conflicted", 0) or 0)
+    )
     combined_requirement_telemetry["unresolved_dependency_ids"] = list(dict.fromkeys((
         *tuple(event_requirement_telemetry.get("unresolved_dependency_ids", ()) or ()),
         *tuple(global_requirement_telemetry.get("unresolved_dependency_ids", ()) or ()),
@@ -2751,15 +3205,35 @@ def _attach_canonical_context(
         }
         for requirement in qualification_requirements
     ]
-    snapshot["qualification_evaluations"] = [evaluation.to_dict() for evaluation in qualification_evaluations]
+    required_by_id = {
+        requirement.requirement_id: bool(requirement.required)
+        for requirement in qualification_requirements
+    }
+    snapshot["qualification_evaluations"] = [
+        {
+            **evaluation.to_dict(),
+            "required": required_by_id.get(evaluation.requirement_id, True),
+        }
+        for evaluation in qualification_evaluations
+    ]
     result["canonical_fact_snapshot"] = snapshot
     result["requirement_graph"] = combined_requirement_telemetry
     result["qualification_evaluations"] = snapshot["qualification_evaluations"]
+    obligation_evaluations = evaluate_query_obligations(obligations, snapshot, result)
+    unresolved_obligation_ids = [
+        str(row["requirement_id"])
+        for row in obligation_evaluations
+        if str(row.get("status", "unknown") or "unknown") != "supported"
+    ]
+    result["query_obligation_evaluations"] = [dict(row) for row in obligation_evaluations]
+    result["query_obligation_blockers"] = unresolved_obligation_ids
     verdict_table = _annotate_forced_override_eligibility(
         verdict_table,
         result,
         snapshot,
         query_requirements or {},
+        audit_record=audit_record,
+        revision_context=revision_context,
     )
     result["option_verdict_table"] = verdict_table
     result["answer_qualification_status"] = verdict_table["answer_qualification_status"]
@@ -3021,6 +3495,451 @@ def _apply_event_completion(
     return result
 
 
+def _enumeration_required(
+    contract: ClaimContract,
+    query_requirements: Mapping[str, Any] | None = None,
+) -> bool:
+    requirements = dict(query_requirements or {})
+    return bool(
+        (contract.quantifier == "total_count" and contract.observation_target == "event")
+        or contract.quantifier == "universal"
+        or contract.quantifier == "order"
+        or (contract.aggregation == "order" and requirements.get("requires_temporal_sequence"))
+        or requirements.get("requires_temporal_extremum")
+        or (
+            requirements.get("requires_event_participant_link")
+            and requirements.get("requires_temporal_sequence")
+        )
+    )
+
+
+def _enumeration_source_segments(
+    workspace: VirtualVideoWorkspace,
+    completion_status: Mapping[str, Any],
+) -> tuple[str, tuple[Any, ...], tuple[tuple[float, float], ...]]:
+    by_id = {segment.segment_id: segment for segment in workspace.manifest.segments}
+    target = by_id.get(workspace.case.target_segment_id)
+    source_id = str(completion_status.get("adopted_source_video_id", "") or "")
+    if not source_id and target is not None:
+        source_id = str(target.source_video_id or "")
+    segments = tuple(
+        segment
+        for segment in workspace.manifest.segments
+        if not source_id or segment.source_video_id == source_id
+    )
+    effective_scope = str(
+        completion_status.get("effective_scope", "window") or "window"
+    )
+    if effective_scope == "full_video":
+        ranges = tuple(
+            (float(segment.virtual_start_sec), float(segment.virtual_end_sec))
+            for segment in segments
+        )
+    else:
+        requested_start, requested_end = sorted(workspace.case.target_virtual_interval)
+        ranges = tuple(
+            (
+                max(requested_start, float(segment.virtual_start_sec)),
+                min(requested_end, float(segment.virtual_end_sec)),
+            )
+            for segment in segments
+            if min(requested_end, float(segment.virtual_end_sec))
+            > max(requested_start, float(segment.virtual_start_sec))
+        )
+    return source_id, segments, tuple(item for item in ranges if item[1] > item[0])
+
+
+def _parse_status_for_enumeration(record: EvidenceRecord) -> str:
+    raw = str(record.operation_metadata.get("structured_parse_status", "") or "").casefold()
+    if raw in {"parsed", "ok"}:
+        return "ok"
+    if not raw:
+        return "unknown"
+    return raw
+
+
+def _enumeration_manifest(
+    workspace: VirtualVideoWorkspace,
+    completion_status: Mapping[str, Any],
+    evidence: Sequence[EvidenceRecord],
+    query_requirements: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_id, segments, required_ranges = _enumeration_source_segments(workspace, completion_status)
+    if not required_ranges:
+        return {
+            "target_segment_id": workspace.case.target_segment_id,
+            "required_range": list(workspace.case.target_virtual_interval),
+            "required_ranges": [],
+            "windows": [],
+            "unprocessed_ranges": [],
+            "candidate_ids": [],
+            "candidate_reconciliation_status": "incomplete",
+            "unresolved_candidate_ids": ["enumeration_source_not_identified"],
+            "boundary_gaps": [],
+            "enumeration_complete": False,
+        }
+
+    segment_ids = {segment.segment_id for segment in segments}
+    windows = []
+    for record in evidence:
+        if (
+            record.modality not in {"visual", "ocr"}
+            or record.start_sec is None
+            or record.end_sec is None
+        ):
+            continue
+        lineages = tuple(record.source_lineage or ())
+        record_segment_ids = {
+            str(lineage.get("segment_id", "") or "")
+            for lineage in lineages
+            if str(lineage.get("segment_id", "") or "")
+        }
+        record_source_ids = {
+            str(lineage.get("source_video_id", "") or "")
+            for lineage in lineages
+            if str(lineage.get("source_video_id", "") or "")
+        }
+        if lineages and (
+            (source_id and source_id not in record_source_ids)
+            or (record_segment_ids and not record_segment_ids.intersection(segment_ids))
+        ):
+            continue
+        metadata = dict(record.operation_metadata or {})
+        event_rows = tuple(metadata.get("events", ()) or ())
+        inspection_intent = str(metadata.get("inspection_intent", "") or "").casefold()
+        if not event_rows and record.evidence_kind != "event_observation" and "event" not in inspection_intent:
+            continue
+        candidate_ids = [
+            str(row.get("event_key", "") or row.get("candidate_id", "") or "")
+            for row in event_rows
+            if isinstance(row, Mapping)
+        ]
+        candidate_ids.extend(str(item) for item in tuple(metadata.get("source_candidate_ids", ()) or ()) if str(item))
+        sampling_policy = dict(metadata.get("sampling_policy", {}) or {})
+        fps = float(record.sampling_fps or sampling_policy.get("effective_fps", 0.0) or 0.0)
+        dwell = metadata.get("expected_event_dwell_sec", None)
+        try:
+            dwell_value = float(dwell) if dwell is not None else 1.0
+        except (TypeError, ValueError):
+            dwell_value = 1.0
+        windows.append(
+            {
+                "range": [float(record.start_sec), float(record.end_sec)],
+                "sampling_fps": fps,
+                "expected_event_dwell_sec": dwell_value,
+                "parse_status": _parse_status_for_enumeration(record),
+                "candidate_ids": list(dict.fromkeys(candidate_ids)),
+                "evidence_id": record.evidence_id,
+            }
+        )
+    snapshot = canonical_fact_snapshot(
+        evidence,
+        require_event_precondition=bool((query_requirements or {}).get("requires_state_tracking")),
+    ).to_dict()
+    candidate_rows = (
+        *tuple(snapshot.get("qualified_events", ()) or ()),
+        *tuple(snapshot.get("observed_event_candidates", ()) or ()),
+        *tuple(snapshot.get("unqualified_events", ()) or ()),
+        *tuple(snapshot.get("incomplete_events", ()) or ()),
+        *tuple(snapshot.get("conflicted_events", ()) or ()),
+        *tuple(snapshot.get("duplicate_suspect_events", ()) or ()),
+    )
+    candidate_ids = [
+        str(row.get("candidate_id", "") or row.get("fact_id", "") or row.get("event_key", "") or "")
+        for row in candidate_rows
+        if isinstance(row, Mapping)
+    ]
+    unresolved_rows = (
+        *tuple(snapshot.get("incomplete_events", ()) or ()),
+        *tuple(snapshot.get("conflicted_events", ()) or ()),
+        *tuple(snapshot.get("duplicate_suspect_events", ()) or ()),
+    )
+    unresolved_ids = [
+        str(row.get("candidate_id", "") or row.get("fact_id", "") or row.get("event_key", "") or "")
+        for row in unresolved_rows
+        if isinstance(row, Mapping)
+    ]
+    required_start = min(left for left, _ in required_ranges)
+    required_end = max(right for _, right in required_ranges)
+    return build_enumeration_manifest(
+        target_segment_id=workspace.case.target_segment_id,
+        required_range=(required_start, required_end),
+        required_ranges=required_ranges,
+        windows=windows,
+        candidate_ids=list(dict.fromkeys(item for item in candidate_ids if item)),
+        unresolved_candidate_ids=list(dict.fromkeys(item for item in unresolved_ids if item)),
+        expected_event_dwell_sec=1.0,
+    )
+
+
+def _apply_enumeration_completion(
+    status: Mapping[str, Any],
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    evidence: Sequence[EvidenceRecord],
+    query_requirements: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = dict(status)
+    required = _enumeration_required(contract, query_requirements)
+    result["enumeration_required"] = required
+    if not required:
+        result.setdefault("enumeration_complete", True)
+        return result
+    manifest = _enumeration_manifest(workspace, result, evidence, query_requirements)
+    result.update(
+        {
+            "enumeration_manifest": manifest,
+            "enumeration_complete": bool(manifest.get("enumeration_complete", False)),
+        }
+    )
+    result["ready_for_answer"] = bool(result.get("ready_for_answer")) and bool(
+        manifest.get("enumeration_complete", False)
+    )
+    return result
+
+
+def _event_keys_for_candidate(candidate: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            str(item or "").strip().casefold()
+            for item in (
+                candidate.get("canonical_event_key", ""),
+                candidate.get("signature", ""),
+                *tuple(candidate.get("event_keys", ()) or ()),
+            )
+            if str(item or "").strip()
+        )
+    )
+
+
+def _temporal_max_selection(
+    snapshot: Mapping[str, Any],
+    completion_status: Mapping[str, Any],
+) -> dict[str, Any]:
+    qualified = tuple(
+        row for row in tuple(snapshot.get("qualified_events", ()) or ()) if isinstance(row, Mapping)
+    )
+    incomplete = tuple(snapshot.get("incomplete_events", ()) or ())
+    conflicted = tuple(snapshot.get("conflicted_events", ()) or ())
+    candidate_ids = [str(row.get("candidate_id", "") or "") for row in qualified]
+    coverage_ready = bool(completion_status.get("range_coverage_complete", False))
+    enumeration_ready = (
+        not bool(completion_status.get("enumeration_required", False))
+        or bool(completion_status.get("enumeration_complete", False))
+    )
+    evidence_ids = [
+        str(evidence_id)
+        for row in qualified
+        for evidence_id in tuple(row.get("evidence_ids", ()) or ())
+        if str(evidence_id)
+    ]
+    if not coverage_ready or not enumeration_ready or incomplete or conflicted or not qualified:
+        return {
+            "status": "incomplete",
+            "selected_episode_id": "",
+            "selected_event_key": "",
+            "candidate_episode_ids": candidate_ids,
+            "proof_requirement_ids": [
+                item
+                for item, missing in (
+                    ("req_full_video_coverage", not coverage_ready),
+                    ("req_all_qualified_episodes_enumerated", not enumeration_ready),
+                    ("req_event_qualification_resolved", bool(incomplete or conflicted)),
+                )
+                if missing
+            ],
+            "derivation_provenance": list(_fact_derivation_provenance(qualified, "temporal_max")),
+        }
+    timed_candidates = tuple(
+        row
+        for row in qualified
+        if len(tuple(row.get("virtual_time_range", ()) or ())) == 2
+    )
+    if not timed_candidates:
+        return {
+            "status": "incomplete",
+            "selected_episode_id": "",
+            "selected_event_key": "",
+            "candidate_episode_ids": candidate_ids,
+            "proof_requirement_ids": ["req_last_episode_selected"],
+            "derivation_provenance": list(_fact_derivation_provenance(qualified, "temporal_max")),
+        }
+    latest_time = max(
+        float(tuple(row.get("virtual_time_range", (0.0, 0.0)))[0])
+        for row in timed_candidates
+    )
+    latest = tuple(
+        row
+        for row in timed_candidates
+        if len(tuple(row.get("virtual_time_range", ()) or ())) == 2
+        and abs(float(tuple(row.get("virtual_time_range", ()))[0]) - latest_time) <= 1e-6
+    )
+    if len(latest) != 1:
+        return {
+            "status": "ambiguous",
+            "selected_episode_id": "",
+            "selected_event_key": "",
+            "candidate_episode_ids": candidate_ids,
+            "proof_requirement_ids": ["req_last_episode_selected"],
+            "derivation_provenance": list(_fact_derivation_provenance(qualified, "temporal_max")),
+        }
+    selected = latest[0]
+    keys = _event_keys_for_candidate(selected)
+    return {
+        "status": "resolved",
+        "selected_episode_id": str(selected.get("candidate_id", "") or ""),
+        "selected_event_key": keys[0] if keys else "",
+        "candidate_episode_ids": candidate_ids,
+        "proof_requirement_ids": [],
+        "selected_episode_range": list(selected.get("virtual_time_range", ()) or ()),
+        "derivation_provenance": list(_fact_derivation_provenance((selected,), "temporal_max")),
+    }
+
+
+def _apply_episode_binding_completion(
+    status: Mapping[str, Any],
+    workspace: VirtualVideoWorkspace,
+    evidence: Sequence[EvidenceRecord],
+    query_requirements: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = dict(status)
+    requirements = dict(query_requirements or {})
+    if not (
+        requirements.get("requires_event_participant_link")
+        and requirements.get("requires_temporal_sequence")
+    ):
+        return result
+    snapshot = canonical_fact_snapshot(
+        evidence,
+        require_event_precondition=bool(requirements.get("requires_state_tracking")),
+    ).to_dict()
+    selection = _temporal_max_selection(snapshot, result)
+    result["temporal_max_selection"] = selection
+    result["selected_last_episode_id"] = str(selection.get("selected_episode_id", "") or "")
+    result["selected_episode_event_key"] = str(selection.get("selected_event_key", "") or "")
+    result["temporal_max_ready"] = selection.get("status") == "resolved"
+    if selection.get("status") != "resolved":
+        result.update(
+            {
+                "event_participant_link_ready": False,
+                "target_attribute_ready": False,
+                "target_participant_selection": {"status": "incomplete"},
+                "target_entity_binding": {"status": "incomplete"},
+                "target_attribute_facts": [],
+            }
+        )
+        result["ready_for_answer"] = False
+        return result
+    selected = next(
+        (
+            row
+            for row in tuple(snapshot.get("qualified_events", ()) or ())
+            if str(row.get("candidate_id", "") or "") == selection["selected_episode_id"]
+        ),
+        {},
+    )
+    participants = [
+        dict(item)
+        for item in tuple(selected.get("participants", ()) or ())
+        if isinstance(item, Mapping)
+        and str(item.get("role", "") or "").casefold() not in {"overtaken", "camera_holder", "recorder"}
+    ]
+    ordinal_index = _identity_ordinal_index(workspace.case.question)
+    if ordinal_index >= len(participants):
+        result.update(
+            {
+                "event_participant_link_ready": False,
+                "target_attribute_ready": False,
+                "target_participant_selection": {
+                    "status": "incomplete",
+                    "ordinal": ordinal_index + 1,
+                    "selected_episode_id": selection["selected_episode_id"],
+                },
+                "target_entity_binding": {"status": "incomplete"},
+                "target_attribute_facts": [],
+            }
+        )
+        result["ready_for_answer"] = False
+        return result
+    participant = participants[ordinal_index]
+    participant_id = str(participant.get("participant_id", "") or "").strip()
+    event_keys = set(_event_keys_for_candidate(selected))
+    associations = tuple(
+        row
+        for row in tuple(snapshot.get("entity_associations", ()) or ())
+        if isinstance(row, Mapping)
+        and str(row.get("status", "") or "") == "supported"
+        and str(row.get("source_participant_id", "") or "").strip().casefold() == participant_id.casefold()
+        and str(row.get("source_event_key", "") or "").strip().casefold() in event_keys
+    )
+    if len(associations) != 1:
+        result.update(
+            {
+                "event_participant_link_ready": False,
+                "target_attribute_ready": False,
+                "target_participant_selection": {
+                    "status": "resolved",
+                    "participant_id": participant_id,
+                    "ordinal": ordinal_index + 1,
+                    "selected_episode_id": selection["selected_episode_id"],
+                    "source_event_key": selection["selected_event_key"],
+                },
+                "target_entity_binding": {
+                    "status": "ambiguous" if len(associations) > 1 else "incomplete",
+                    "association_ids": [str(row.get("association_id", "") or "") for row in associations],
+                },
+                "target_attribute_facts": [],
+            }
+        )
+        result["ready_for_answer"] = False
+        return result
+    association = associations[0]
+    entity_id = str(association.get("entity_hypothesis_id", "") or "")
+    entity = next(
+        (
+            row
+            for row in tuple(snapshot.get("resolved_entities", ()) or ())
+            if str(row.get("entity_id", "") or "") == entity_id
+        ),
+        {},
+    )
+    attribute_facts = tuple(
+        row
+        for row in tuple(snapshot.get("attribute_facts", ()) or ())
+        if isinstance(row, Mapping)
+        and str(row.get("entity_id", "") or "") == entity_id
+        and str(row.get("episode_id", "") or "").strip().casefold() in event_keys
+    )
+    entity_ready = bool(entity) and bool(entity_id)
+    needs_attribute = bool(parse_option_predicates(workspace.case.options)) or bool(
+        re.search(r"\b(?:rank|place|finish|color|colour|wearing|helmet|clothes|clothing)\b", workspace.case.question.casefold())
+    )
+    result.update(
+        {
+            "event_participant_link_ready": entity_ready,
+            "target_attribute_ready": bool(attribute_facts) if needs_attribute else True,
+            "target_participant_selection": {
+                "status": "resolved",
+                "participant_id": participant_id,
+                "ordinal": ordinal_index + 1,
+                "selected_episode_id": selection["selected_episode_id"],
+                "source_event_key": selection["selected_event_key"],
+            },
+            "target_entity_binding": {
+                "status": "resolved" if entity_ready else "incomplete",
+                "entity_id": entity_id,
+                "association_id": str(association.get("association_id", "") or ""),
+                "source_event_key": str(association.get("source_event_key", "") or ""),
+            },
+            "target_attribute_facts": [dict(row) for row in attribute_facts],
+        }
+    )
+    result["ready_for_answer"] = bool(result.get("ready_for_answer")) and entity_ready and (
+        bool(attribute_facts) if needs_attribute else True
+    )
+    return result
+
+
 def _apply_p1_semantic_completion(
     status: Mapping[str, Any],
     query_requirements: Mapping[str, Any],
@@ -3031,7 +3950,10 @@ def _apply_p1_semantic_completion(
         evidence,
         require_event_precondition=bool(query_requirements.get("requires_state_tracking")),
     ).to_dict()
-    if bool(query_requirements.get("requires_event_participant_link")):
+    if (
+        bool(query_requirements.get("requires_event_participant_link"))
+        and not bool(query_requirements.get("requires_temporal_sequence"))
+    ):
         associations = tuple(
             row for row in tuple(snapshot.get("entity_associations", ()) or ())
             if str(row.get("status", "") or "") == "supported"
@@ -3044,6 +3966,11 @@ def _apply_p1_semantic_completion(
         result["ready_for_answer"] = bool(result.get("ready_for_answer")) and bool(associations)
     if bool(query_requirements.get("requires_narrative_inference")):
         facts = tuple(snapshot.get("inferred_facts", ()) or ())
+        if bool(query_requirements.get("requires_agent_attribution")):
+            facts = tuple(
+                fact for fact in facts
+                if isinstance(fact, Mapping) and _narrative_fact_has_agent_witness(fact)
+            )
         unresolved = tuple(snapshot.get("unresolved_inferences", ()) or ())
         result["narrative_fact_ids"] = [str(row.get("fact_id", "") or "") for row in facts]
         result["unresolved_narrative_fact_ids"] = [
@@ -3052,6 +3979,26 @@ def _apply_p1_semantic_completion(
         result["narrative_inference_ready"] = bool(facts) and not unresolved
         result["ready_for_answer"] = (
             bool(result.get("ready_for_answer")) and bool(facts) and not unresolved
+        )
+    if bool(query_requirements.get("requires_same_object_transition")):
+        transitions = tuple(
+            row for row in tuple(snapshot.get("state_transitions", ()) or ())
+            if isinstance(row, Mapping)
+            and str(row.get("status", "") or "") == "supported"
+            and bool(row.get("same_object_relation", False))
+        )
+        unresolved_transitions = tuple(snapshot.get("unresolved_state_transitions", ()) or ())
+        result["same_object_transition_fact_ids"] = [
+            str(row.get("fact_id", "") or "") for row in transitions
+        ]
+        result["unresolved_state_transition_fact_ids"] = [
+            str(row.get("fact_id", "") or "") for row in unresolved_transitions
+        ]
+        result["same_object_transition_ready"] = bool(transitions) and not unresolved_transitions
+        result["ready_for_answer"] = (
+            bool(result.get("ready_for_answer"))
+            and bool(transitions)
+            and not unresolved_transitions
         )
     return result
 
@@ -3095,8 +4042,9 @@ def _source_coverage(
             covered_ranges.setdefault(source_id, {}).setdefault(segment_id, []).append((start, end))
             confidence[source_id] = max(confidence.get(source_id, 0.0), record.confidence)
     result: dict[str, dict[str, Any]] = {}
-    for source_id, segment_ranges in covered_ranges.items():
-        required_segments = tuple(required.get(source_id, ()))
+    for source_id, required_segments_raw in required.items():
+        segment_ranges = covered_ranges.get(source_id, {})
+        required_segments = tuple(required_segments_raw)
         segment_coverage = {}
         covered_ids = []
         total_required = 0.0
@@ -3180,7 +4128,10 @@ def _answer_completion_gate(
         if not quantitative_gate.get("passed"):
             return quantitative_gate
         return _contract_readiness_gate(contract, completion_status) or quantitative_gate
-    if contract.required_scope != "full_video":
+    effective_scope = str(
+        dict(completion_status or {}).get("effective_scope", contract.required_scope) or contract.required_scope
+    )
+    if effective_scope != "full_video":
         return _contract_readiness_gate(contract, completion_status) or {
             "passed": True,
             "reason": "verified_window_evidence",
@@ -3391,7 +4342,7 @@ def _contract_readiness_gate(
         return None
     status = dict(completion_status)
     requires_semantic_closure = (
-        contract.required_scope == "full_video"
+        str(status.get("effective_scope", contract.required_scope) or contract.required_scope) == "full_video"
         or contract.observation_target == "relation"
         or bool(contract.boundary_hint)
         or contract.quantifier in {"universal", "comparison", "total_count", "distinct_count", "order"}
@@ -4541,6 +5492,7 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         support_status=str(value.get("support_status", "") or ""),
         support_reason=str(value.get("support_reason", "") or ""),
         option_verdicts=dict(value.get("option_verdicts", {}) or {}),
+        audit_record=dict(value.get("audit_record", {}) or {}),
         primary_gap=_gap(value["primary_gap"]) if isinstance(value.get("primary_gap"), Mapping) else None,
     )
 
@@ -4778,6 +5730,39 @@ def _candidate_gate_rank(decision: ReasonerDecision, gate: Mapping[str, Any]) ->
     return _answer_support_rank(decision)
 
 
+def _audit_option_states(
+    decision: ReasonerDecision,
+    options: Mapping[str, str],
+) -> dict[str, dict[str, Any]]:
+    states: dict[str, dict[str, Any]] = {}
+    for raw_option, raw_verdict in decision.option_verdicts.items():
+        option = str(raw_option or "").strip().upper()
+        if option not in options or not isinstance(raw_verdict, Mapping):
+            continue
+        verdict = dict(raw_verdict)
+        predicate_verdict = _predicate_verdict(verdict.get("predicate_verdict", verdict.get("status")))
+        states[option] = {
+            "status": predicate_verdict,
+            "predicate_verdict": predicate_verdict,
+            "grounding_eligibility": str(
+                verdict.get("grounding_eligibility", "unknown") or "unknown"
+            ).casefold(),
+            "support_level": str(verdict.get("support_level", "none") or "none"),
+            "citation_ids": list(verdict.get("evidence_ids", ()) or ()),
+            "canonical_fact_ids": list(verdict.get("canonical_fact_ids", ()) or ()),
+            "predicate_results": [
+                dict(item) for item in tuple(verdict.get("predicate_results", ()) or ())
+                if isinstance(item, Mapping)
+            ],
+            "provenance": [
+                dict(item) for item in tuple(verdict.get("provenance", ()) or ())
+                if isinstance(item, Mapping)
+            ],
+            "support_reason": str(verdict.get("reason", "") or ""),
+        }
+    return states
+
+
 def _record_option_state(
     states: Mapping[str, Mapping[str, Any]],
     decision: ReasonerDecision,
@@ -4808,6 +5793,9 @@ def _record_option_state(
             "citation_ids": list(verdict.get("evidence_ids", ()) or ()),
             "canonical_fact_ids": list(verdict.get("canonical_fact_ids", ()) or ()),
             "support_level": str(verdict.get("support_level", "none") or "none"),
+            "provenance": [
+                dict(item) for item in tuple(verdict.get("provenance", ()) or ()) if isinstance(item, Mapping)
+            ],
         }
     option = _letter(decision.answer) or _option_letter_from_answer(decision.answer, options)
     if not option:
@@ -4836,12 +5824,15 @@ def _record_option_state(
         **current,
         "status": predicate_verdict,
         "predicate_verdict": predicate_verdict,
-        "grounding_eligibility": "eligible" if bool(gate.get("passed")) else "insufficient",
+        "grounding_eligibility": "sufficient" if bool(gate.get("passed")) else "insufficient",
         "rank": max(rank, predicate_rank),
         "answer": decision.answer,
         "reason": str(gate.get("reason", "") or "verification_failed"),
         "support_reason": decision.support_reason or str(current.get("support_reason", "") or ""),
         "citation_ids": list(decision.citations) or list(current.get("citation_ids", ()) or ()),
+        "provenance": [
+            dict(item) for item in tuple(current.get("provenance", ()) or ()) if isinstance(item, Mapping)
+        ],
     }
     return result
 
@@ -4874,6 +5865,9 @@ def _option_verdict_table(
     contract: ClaimContract,
     snapshot: Mapping[str, Any],
     states: Mapping[str, Mapping[str, Any]],
+    *,
+    revision_context: RevisionContext | None = None,
+    audit_record: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     verdicts: dict[str, dict[str, Any]] = {}
     for option in options:
@@ -4886,6 +5880,9 @@ def _option_verdict_table(
             "support_level": str(state.get("support_level", "none") or "none"),
             "evidence_ids": list(state.get("citation_ids", ()) or ()),
             "canonical_fact_ids": list(state.get("canonical_fact_ids", ()) or ()),
+            "provenance": [
+                dict(item) for item in tuple(state.get("provenance", ()) or ()) if isinstance(item, Mapping)
+            ],
             "reason": str(state.get("support_reason", "") or state.get("reason", "") or "not_yet_audited"),
         }
     audited_verdicts = {option: dict(row) for option, row in verdicts.items()}
@@ -4910,6 +5907,10 @@ def _option_verdict_table(
                     "support_level": "direct",
                     "evidence_ids": evidence_ids,
                     "canonical_fact_ids": fact_ids,
+                    "provenance": _fact_derivation_provenance(
+                        confirmed,
+                        "canonical_event_count",
+                    ),
                     "reason": (
                         f"Canonical ledger confirms {confirmed_count} events but has {len(suspects)} unresolved duplicate suspects."
                         if suspects
@@ -4922,6 +5923,10 @@ def _option_verdict_table(
                     "support_level": "direct",
                     "evidence_ids": evidence_ids,
                     "canonical_fact_ids": fact_ids,
+                    "provenance": _fact_derivation_provenance(
+                        confirmed,
+                        "canonical_event_count_refutation",
+                    ),
                     "reason": f"Option count {expected} differs from canonical count {confirmed_count}.",
                 }
     elif contract.quantifier == "distinct_count":
@@ -4945,6 +5950,10 @@ def _option_verdict_table(
                     "support_level": "direct",
                     "evidence_ids": evidence_ids,
                     "canonical_fact_ids": fact_ids,
+                    "provenance": _fact_derivation_provenance(
+                        resolved,
+                        "canonical_entity_count",
+                    ),
                     "reason": (
                         f"Canonical entity ledger resolves {resolved_count} entities with {len(unresolved)} bindings pending."
                         if unresolved
@@ -4957,26 +5966,86 @@ def _option_verdict_table(
                     "support_level": "direct",
                     "evidence_ids": evidence_ids,
                     "canonical_fact_ids": fact_ids,
+                    "provenance": _fact_derivation_provenance(
+                        resolved,
+                        "canonical_entity_count_refutation",
+                    ),
                     "reason": f"Option count {expected} differs from canonical entity count {resolved_count}.",
                 }
-    elif contract.observation_target == "entity" and contract.aggregation == "compare":
-        resolved = tuple(snapshot.get("resolved_entities", ()) or ())
+    elif contract.quantifier == "order" and contract.aggregation == "order":
+        ledger = dict(snapshot.get("sequence_ledger", {}) or build_sequence_ledger(snapshot, options))
+        sequence_verdicts = dict(ledger.get("option_sequence_verdicts", {}) or {})
+        qualified = tuple(snapshot.get("qualified_events", ()) or ())
+        fact_ids = [str(row.get("candidate_id", "") or "") for row in qualified]
         evidence_ids = list(dict.fromkeys(
             str(evidence_id)
-            for row in resolved
+            for row in qualified
             for evidence_id in tuple(row.get("evidence_ids", ()) or ())
             if str(evidence_id)
         ))
-        fact_ids = [str(row.get("entity_id", "") or "") for row in resolved]
+        for option in options:
+            sequence_row = dict(sequence_verdicts.get(option, {}) or {})
+            status = str(sequence_row.get("status", "unknown") or "unknown")
+            verdicts[option] = {
+                "status": status if status in {"supported", "contradicted"} else "unknown",
+                "support_level": "direct" if status != "unknown" else "none",
+                "evidence_ids": evidence_ids,
+                "canonical_fact_ids": fact_ids,
+                "predicate_results": [{
+                    "predicate_id": f"sequence_{option}",
+                    "status": status,
+                    "matched_event_ids": list(sequence_row.get("matched_event_ids", ()) or ()),
+                }],
+                "provenance": _fact_derivation_provenance(qualified, "canonical_sequence_order"),
+                "reason": str(sequence_row.get("reason", "") or "canonical sequence ledger is incomplete"),
+            }
+    elif contract.observation_target == "entity" and contract.aggregation == "compare":
+        resolved = tuple(snapshot.get("resolved_entities", ()) or ())
+        episode_binding = dict(snapshot.get("episode_binding", {}) or {})
+        temporal_selection = dict(episode_binding.get("temporal_max_selection", {}) or {})
+        target_binding = dict(episode_binding.get("target_entity_binding", {}) or {})
+        target_attribute_facts = tuple(
+            row for row in tuple(episode_binding.get("target_attribute_facts", ()) or ())
+            if isinstance(row, Mapping)
+        )
+        strict_episode_binding = bool(temporal_selection)
+        evidence_ids = list(dict.fromkeys(
+            str(evidence_id)
+            for row in (target_attribute_facts if strict_episode_binding else resolved)
+            for evidence_id in tuple(row.get("evidence_ids", ()) or ())
+            if str(evidence_id)
+        ))
+        fact_ids = [
+            str(row.get("fact_id", "") or row.get("entity_id", "") or "")
+            for row in (target_attribute_facts if strict_episode_binding else resolved)
+            if str(row.get("fact_id", "") or row.get("entity_id", "") or "")
+        ]
         typed_predicates = parse_option_predicates(options)
         bound_entities = tuple(
             row for row in resolved
             if str(row.get("role", "") or "").casefold() in {"overtaker", "participant", "target_participant"}
             and str(row.get("source_event_key", "") or row.get("episode_id", "") or "")
         )
-        target_entities = bound_entities if len(bound_entities) == 1 else resolved if len(resolved) == 1 else ()
-        if len(target_entities) == 1:
-            attributes = _typed_entity_attributes(target_entities[0])
+        target_entities = (
+            tuple(
+                row for row in resolved
+                if str(row.get("entity_id", "") or "")
+                == str(target_binding.get("entity_id", "") or "")
+            )
+            if strict_episode_binding
+            else bound_entities if len(bound_entities) == 1 else resolved if len(resolved) == 1 else ()
+        )
+        if len(target_entities) == 1 and (
+            not strict_episode_binding
+            or str(temporal_selection.get("status", "") or "") == "resolved"
+            and str(target_binding.get("status", "") or "") == "resolved"
+            and target_attribute_facts
+        ):
+            attributes = (
+                _typed_attribute_facts(target_attribute_facts)
+                if strict_episode_binding
+                else _typed_entity_attributes(target_entities[0])
+            )
             for option, predicates in typed_predicates.items():
                 if not predicates:
                     continue
@@ -4998,6 +6067,10 @@ def _option_verdict_table(
                     "support_level": "direct" if status != "unknown" else "none",
                     "evidence_ids": evidence_ids,
                     "canonical_fact_ids": fact_ids,
+                    "provenance": _fact_derivation_provenance(
+                        target_attribute_facts if strict_episode_binding else target_entities,
+                        "typed_entity_attribute_comparison",
+                    ),
                     "predicate_results": [
                         {
                             "predicate_id": predicate.predicate_id,
@@ -5026,12 +6099,24 @@ def _option_verdict_table(
                 if option in options:
                     grouped.setdefault(option, []).append(assessment)
         for option, assessments in grouped.items():
-            statuses = {str(row.get("status", "unknown") or "unknown").casefold() for row in assessments}
-            status = "supported" if "supported" in statuses and "contradicted" not in statuses else "contradicted" if statuses == {"contradicted"} else "unknown"
             supporting_facts = [
                 fact for fact in facts
                 if any(str(row.get("option_id", "") or "").strip().upper() == option for row in tuple(fact.get("hypothesis_assessments", ()) or ()))
             ]
+            statuses = set()
+            for fact in supporting_facts:
+                for assessment in tuple(fact.get("hypothesis_assessments", ()) or ()):
+                    if str(assessment.get("option_id", "") or "").strip().upper() != option:
+                        continue
+                    assessment_status = str(assessment.get("status", "unknown") or "unknown").casefold()
+                    if (
+                        assessment_status == "supported"
+                        and contract.requires_agent_attribution
+                        and not _narrative_fact_has_agent_witness(fact)
+                    ):
+                        assessment_status = "unknown"
+                    statuses.add(assessment_status)
+            status = "supported" if "supported" in statuses and "contradicted" not in statuses else "contradicted" if statuses == {"contradicted"} else "unknown"
             verdicts[option] = {
                 "status": status,
                 "support_level": "inferred" if status != "unknown" else "none",
@@ -5040,6 +6125,10 @@ def _option_verdict_table(
                     for evidence_id in tuple(fact.get("evidence_ids", ()) or ()) if str(evidence_id)
                 )),
                 "canonical_fact_ids": [str(fact.get("fact_id", "") or "") for fact in supporting_facts],
+                "provenance": _fact_derivation_provenance(
+                    supporting_facts,
+                    "narrative_option_predicate_comparison",
+                ),
                 "reason": "; ".join(
                     str(row.get("reason", "") or "") for row in assessments if str(row.get("reason", "") or "")
                 )[:500] or "Canonical narrative facts assess this option predicate.",
@@ -5051,7 +6140,7 @@ def _option_verdict_table(
     rank = {"supported": 3, "unknown": 1, "contradicted": 0}
     ordered = sorted(options, key=lambda option: (-rank[verdicts[option]["status"]], option))
     supported = [option for option in ordered if verdicts[option]["status"] == "supported"]
-    return {
+    result = {
         "option_verdicts": verdicts,
         "best_option": supported[0] if len(supported) == 1 else "",
         "best_supported_option": supported[0] if len(supported) == 1 else "",
@@ -5059,6 +6148,7 @@ def _option_verdict_table(
         "strongest_alternative": ordered[1] if len(ordered) > 1 else "",
         "discriminating_predicate": (
             "canonical_count" if contract.quantifier in {"total_count", "distinct_count"}
+            else "canonical_sequence_ledger" if contract.quantifier == "order"
             else "resolved_entity_attributes" if contract.observation_target == "entity" and contract.aggregation == "compare"
             else "canonical_narrative_inference" if contract.observation_target == "event" and contract.aggregation == "compare"
             else ""
@@ -5067,6 +6157,42 @@ def _option_verdict_table(
         "answer_qualification_status": "incomplete",
         "hard_override_allowed": False,
         "hard_override_blockers": ["completion_context_not_attached"],
+        "provenance_required": any(
+            _predicate_verdict(row.get("predicate_verdict", row.get("status"))) == "supported"
+            and bool(tuple(row.get("canonical_fact_ids", ()) or ()) or tuple(row.get("evidence_ids", ()) or ()))
+            for row in verdicts.values()
+        ),
+    }
+    if revision_context is not None:
+        result.update({
+            **revision_context.to_dict(),
+            "option_verdict_revision": revision_context.canonical_snapshot_revision,
+        })
+    if audit_record is not None:
+        audit = dict(audit_record)
+        result.update({
+            "audit_status": str(audit.get("audit_status", "invalid") or "invalid"),
+            "audit_snapshot_revision": str(audit.get("audit_snapshot_revision", "") or ""),
+            "audit_fingerprint": str(audit.get("audit_fingerprint", "") or ""),
+            "audit_invalidity_flags": list(audit.get("invalidity_flags", ()) or ()),
+        })
+    return result
+
+
+def _narrative_fact_has_agent_witness(fact: Mapping[str, Any]) -> bool:
+    relation_type = str(fact.get("relation_type", "") or "").casefold()
+    witness_type = str(fact.get("agent_witness_type", "") or "").casefold()
+    return relation_type in {
+        "observed_action",
+        "spoken_intention",
+        "spoken_statement",
+        "asr_statement",
+        "explicit_narrative_statement",
+        "agent_causation",
+    } or witness_type in {
+        "action_frame",
+        "attributed_dialogue",
+        "explicit_narration",
     }
 
 
@@ -5086,6 +6212,37 @@ def _typed_entity_attributes(entity: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _typed_attribute_facts(facts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    aliases = {
+        "clothes_color": "clothing_color",
+        "jacket_color": "clothing_color",
+        "jersey_color": "clothing_color",
+        "shirt_color": "clothing_color",
+        "suit_color": "clothing_color",
+        "top_color": "clothing_color",
+    }
+    values: dict[str, set[str]] = {}
+    originals: dict[str, Any] = {}
+    for fact in facts:
+        attribute = aliases.get(
+            str(fact.get("attribute_type", "") or "").strip().casefold(),
+            str(fact.get("attribute_type", "") or "").strip().casefold(),
+        )
+        value = fact.get("attribute_value")
+        if not attribute or value is None:
+            continue
+        normalized = _normalized_attribute_value(value)
+        if not normalized:
+            continue
+        values.setdefault(attribute, set()).add(normalized)
+        originals.setdefault(attribute, value)
+    return {
+        attribute: originals[attribute]
+        for attribute, candidates in values.items()
+        if len(candidates) == 1
+    }
+
+
 def _normalized_attribute_value(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().casefold()).strip("_")
 
@@ -5095,57 +6252,64 @@ def _annotate_forced_override_eligibility(
     completion_status: Mapping[str, Any],
     snapshot: Mapping[str, Any],
     query_requirements: Mapping[str, Any],
+    *,
+    audit_record: Mapping[str, Any] | None = None,
+    revision_context: RevisionContext | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     result = dict(table)
-    verdicts = dict(result.get("option_verdicts", {}) or {})
-    supported = [
-        option for option, verdict in verdicts.items()
-        if _predicate_verdict(dict(verdict).get("predicate_verdict", dict(verdict).get("status"))) == "supported"
-    ]
-    blockers = []
-    if str(result.get("audit_status", "partial") or "partial") != "complete":
-        blockers.append("answer_audit_incomplete")
-    if len(supported) != 1:
-        blockers.append("supported_option_not_unique")
-    if any(
-        _predicate_verdict(dict(verdict).get("predicate_verdict", dict(verdict).get("status"))) == "conflicted"
-        for verdict in verdicts.values()
-    ):
-        blockers.append("option_predicate_conflicted")
-    if supported and str(dict(verdicts[supported[0]]).get("grounding_eligibility", "unknown") or "unknown") == "insufficient":
-        blockers.append("selected_option_grounding_insufficient")
-    blockers.extend(str(item) for item in tuple(completion_status.get("unresolved_critical_condition_ids", ()) or ()))
-    blockers.extend(str(item) for item in tuple(completion_status.get("strict_safety_blockers", ()) or ()))
-    if int(completion_status.get("conflicted_condition_count", 0) or 0):
-        blockers.append("critical_condition_conflicted")
-    if not bool(completion_status.get("ready_for_answer")):
-        blockers.append("completion_not_ready")
-    if tuple(snapshot.get("incomplete_events", ()) or ()):
-        blockers.append("event_qualification_incomplete")
-    if tuple(snapshot.get("conflicted_events", ()) or ()):
-        blockers.append("event_qualification_conflicted")
-    if query_requirements.get("requires_event_participant_link") and (
-        tuple(snapshot.get("unresolved_entity_bindings", ()) or ())
-        or not bool(completion_status.get("event_participant_link_ready"))
-    ):
-        blockers.append("entity_binding_unresolved")
-    graph = dict(snapshot.get("requirement_graph", {}) or {})
-    if any(int(graph.get(key, 0) or 0) for key in ("unknown", "blocked", "conflicted")):
-        blockers.append("requirement_graph_incomplete")
-    blockers.extend(
-        str(item)
-        for item in tuple(graph.get("unresolved_dependency_ids", ()) or ())
-        if str(item)
+    context = revision_context or {
+        "canonical_snapshot_revision": result.get("canonical_snapshot_revision", ""),
+        "evidence_digest_hash": result.get("evidence_digest_hash", ""),
+        "query_contract_hash": result.get("query_contract_hash", ""),
+    }
+    audit = dict(audit_record or {
+        "audit_snapshot_revision": result.get("audit_snapshot_revision", ""),
+        "evidence_digest_hash": result.get("evidence_digest_hash", ""),
+        "query_contract_hash": result.get("query_contract_hash", ""),
+        "audit_status": result.get("audit_status", "invalid"),
+        "invalidity_flags": result.get("audit_invalidity_flags", ()),
+        "audit_fingerprint": result.get("audit_fingerprint", ""),
+    })
+    qualification = {
+        "status": "complete" if not tuple(snapshot.get("incomplete_events", ()) or ()) and not tuple(snapshot.get("conflicted_events", ()) or ()) else "incomplete",
+        "requirement_graph": dict(snapshot.get("requirement_graph", {}) or {}),
+        "incomplete_events": tuple(snapshot.get("incomplete_events", ()) or ()),
+        "conflicted_events": tuple(snapshot.get("conflicted_events", ()) or ()),
+        "qualification_evaluations": tuple(
+            completion_status.get("qualification_evaluations", ()) or ()
+        ),
+        "event_qualification_evaluations": _event_qualification_evaluations(snapshot),
+    }
+    guard = evaluate_hard_override_guard(
+        completion_status,
+        qualification,
+        result,
+        audit,
+        context,
     )
-    blockers = list(dict.fromkeys(item for item in blockers if item))
+    supported = tuple(guard.supporting_state.get("supported_options", ()) or ())
     result.update({
-        "best_supported_option": supported[0] if len(supported) == 1 else "",
+        "best_supported_option": str(guard.supporting_state.get("selected_option", "") or ""),
         "unique_supported": len(supported) == 1,
-        "answer_qualification_status": "complete" if not blockers else "incomplete",
-        "hard_override_allowed": not blockers,
-        "hard_override_blockers": blockers,
+        "answer_qualification_status": "complete" if guard.allowed else "incomplete",
+        "hard_override_allowed": guard.allowed,
+        "hard_override_blockers": list(guard.blockers),
+        "hard_override_supporting_state": dict(guard.supporting_state),
     })
     return result
+
+
+def _event_qualification_evaluations(snapshot: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    return tuple(
+        {
+            **dict(evaluation),
+            "required": True,
+        }
+        for event in tuple(snapshot.get("qualified_events", ()) or ())
+        if isinstance(event, Mapping)
+        for evaluation in tuple(event.get("requirement_evaluations", ()) or ())
+        if isinstance(evaluation, Mapping)
+    )
 
 
 def _merge_option_verdict_rows(
@@ -5183,60 +6347,44 @@ def _merge_option_verdict_rows(
         for item in (audited.get("reason", ""), canonical.get("reason", ""))
         if str(item).strip() and str(item).strip() != "not_yet_audited"
     ))
+    audited_grounding = _grounding_eligibility(audited.get("grounding_eligibility", "unknown"))
+    canonical_grounding = _grounding_eligibility(canonical.get("grounding_eligibility", "unknown"))
+    if "insufficient" in {audited_grounding, canonical_grounding}:
+        grounding_eligibility = "insufficient"
+    elif audited_grounding == canonical_grounding == "sufficient":
+        grounding_eligibility = "sufficient"
+    else:
+        grounding_eligibility = "unknown"
+    predicate_results = [
+        dict(item)
+        for item in (*tuple(audited.get("predicate_results", ()) or ()), *tuple(canonical.get("predicate_results", ()) or ()))
+        if isinstance(item, Mapping)
+    ]
+    provenance = [
+        dict(item)
+        for item in (*tuple(audited.get("provenance", ()) or ()), *tuple(canonical.get("provenance", ()) or ()))
+        if isinstance(item, Mapping)
+    ]
     return {
         **canonical,
         "status": status,
         "predicate_verdict": predicate_verdict,
-        "grounding_eligibility": str(audited.get("grounding_eligibility", "unknown") or "unknown"),
+        "grounding_eligibility": grounding_eligibility,
         "evidence_ids": evidence_ids,
         "canonical_fact_ids": fact_ids,
+        "predicate_results": predicate_results,
+        "provenance": provenance,
         "reason": "; ".join(reasons)[:500] or "not_yet_audited",
     }
 
 
-def _canonical_forced_answer(
-    options: Mapping[str, str],
-    completion_status: Mapping[str, Any],
-    evidence: Sequence[EvidenceRecord],
-) -> tuple[str, tuple[str, ...]] | None:
-    table = dict(completion_status.get("option_verdict_table", {}) or {})
-    verdicts = dict(table.get("option_verdicts", {}) or {})
-    critical_count = int(completion_status.get("critical_condition_count", 0) or 0)
-    satisfied_count = int(completion_status.get("satisfied_condition_count", 0) or 0)
-    if (
-        not bool(table.get("hard_override_allowed"))
-        or str(table.get("answer_qualification_status", "incomplete") or "incomplete") != "complete"
-        or str(table.get("audit_status", "partial") or "partial").casefold() != "complete"
-        or not bool(completion_status.get("completion_ready") or completion_status.get("ready_for_answer"))
-        or critical_count <= 0
-        or satisfied_count != critical_count
-        or bool(tuple(completion_status.get("unresolved_critical_condition_ids", ()) or ()))
-        or int(completion_status.get("conflicted_condition_count", 0) or 0) > 0
-        or bool(tuple(completion_status.get("strict_safety_blockers", ()) or ()))
-    ):
-        return None
-    supported = [
-        option for option in options
-        if str(dict(verdicts.get(option, {}) or {}).get("status", "") or "").casefold() == "supported"
-    ]
-    recommended = str(table.get("best_option", "") or "")
-    if len(supported) != 1 or supported[0] != recommended or recommended not in options:
-        return None
-    recommended_verdict = dict(verdicts.get(recommended, {}) or {})
-    if (
-        _predicate_verdict(recommended_verdict.get("predicate_verdict", recommended_verdict.get("status")))
-        != "supported"
-        or str(recommended_verdict.get("grounding_eligibility", "unknown") or "unknown").casefold()
-        == "insufficient"
-    ):
-        return None
-    citations = _answer_citations(
-        tuple(str(item) for item in dict(verdicts[recommended]).get("evidence_ids", ()) or ()),
-        evidence,
-    )
-    if not citations:
-        return None
-    return f"{recommended}. {options[recommended]}", citations
+def _grounding_eligibility(value: Any) -> str:
+    return {
+        "eligible": "sufficient",
+        "sufficient": "sufficient",
+        "insufficient": "insufficient",
+        "unknown": "unknown",
+    }.get(str(value or "unknown").strip().casefold(), "unknown")
 
 
 def _candidate_can_be_forced(decision: ReasonerDecision, evidence: Sequence[EvidenceRecord]) -> bool:

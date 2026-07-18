@@ -5,13 +5,19 @@ from enum import Enum
 import re
 from typing import Any, Callable, Mapping, Sequence
 
+from vcah.provenance import heuristic_provenance, normalize_provenance
+
 
 class RequirementStatus(str, Enum):
     SUPPORTED = "supported"
     CONTRADICTED = "contradicted"
     CONFLICTED = "conflicted"
     UNKNOWN = "unknown"
-    BLOCKED = "blocked"
+    BLOCKED_UNRESOLVED = "blocked_unresolved"
+    BLOCKED_CONFLICTED = "blocked_conflicted"
+    NOT_APPLICABLE = "not_applicable"
+    # Compatibility alias for callers that only distinguish a generic blocked state.
+    BLOCKED = "blocked_unresolved"
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,7 @@ class RequirementEvaluation:
     evidence_ids: tuple[str, ...] = ()
     reason: str = ""
     blocked_by: tuple[str, ...] = ()
+    provenance: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +64,7 @@ class RequirementEvaluation:
             "evidence_ids": list(self.evidence_ids),
             "reason": self.reason,
             "blocked_by": list(self.blocked_by),
+            "provenance": [dict(item) for item in self.provenance],
         }
 
 
@@ -98,16 +106,40 @@ def evaluate_requirement_graph(
             unresolved = tuple(item for item in requirement.dependency_ids if item not in results)
             if unresolved:
                 continue
+            dependencies = tuple(results[item] for item in requirement.dependency_ids)
             blocked_by = tuple(
-                item
-                for item in requirement.dependency_ids
+                item for item in requirement.dependency_ids
                 if results[item].status is not RequirementStatus.SUPPORTED
             )
-            if blocked_by:
+            dependency_statuses = {item.status for item in dependencies}
+            if dependency_statuses.intersection({
+                RequirementStatus.CONTRADICTED,
+                RequirementStatus.NOT_APPLICABLE,
+            }):
                 results[requirement_id] = RequirementEvaluation(
                     requirement_id,
-                    RequirementStatus.BLOCKED,
-                    reason="Required dependencies are not supported.",
+                    RequirementStatus.NOT_APPLICABLE,
+                    reason="A required dependency was contradicted, so this requirement does not apply.",
+                    blocked_by=blocked_by,
+                )
+            elif dependency_statuses.intersection({
+                RequirementStatus.CONFLICTED,
+                RequirementStatus.BLOCKED_CONFLICTED,
+            }):
+                results[requirement_id] = RequirementEvaluation(
+                    requirement_id,
+                    RequirementStatus.BLOCKED_CONFLICTED,
+                    reason="A required dependency is conflicted.",
+                    blocked_by=blocked_by,
+                )
+            elif dependency_statuses.intersection({
+                RequirementStatus.UNKNOWN,
+                RequirementStatus.BLOCKED_UNRESOLVED,
+            }):
+                results[requirement_id] = RequirementEvaluation(
+                    requirement_id,
+                    RequirementStatus.BLOCKED_UNRESOLVED,
+                    reason="A required dependency remains unresolved.",
                     blocked_by=blocked_by,
                 )
             else:
@@ -126,10 +158,10 @@ def evaluate_requirement_graph(
         if progressed:
             continue
         for requirement_id, requirement in pending.items():
-            results[requirement_id] = RequirementEvaluation(
-                requirement_id,
-                RequirementStatus.BLOCKED,
-                reason="Requirement dependency cycle or missing dependency.",
+                results[requirement_id] = RequirementEvaluation(
+                    requirement_id,
+                    RequirementStatus.BLOCKED_UNRESOLVED,
+                    reason="Requirement dependency cycle or missing dependency.",
                 blocked_by=tuple(requirement.dependency_ids),
             )
         break
@@ -153,9 +185,9 @@ def qualification_status(
     }
     if RequirementStatus.CONTRADICTED in statuses:
         return "unqualified_precondition"
-    if RequirementStatus.CONFLICTED in statuses:
+    if statuses.intersection({RequirementStatus.CONFLICTED, RequirementStatus.BLOCKED_CONFLICTED}):
         return "conflicted"
-    if statuses.intersection({RequirementStatus.UNKNOWN, RequirementStatus.BLOCKED}) or evaluated_required_ids != required_ids:
+    if statuses.intersection({RequirementStatus.UNKNOWN, RequirementStatus.BLOCKED_UNRESOLVED}) or evaluated_required_ids != required_ids:
         return "incomplete"
     return "qualified"
 
@@ -164,13 +196,21 @@ def requirement_telemetry(evaluations: Sequence[RequirementEvaluation]) -> dict[
     counts = {status.value: 0 for status in RequirementStatus}
     for evaluation in evaluations:
         counts[evaluation.status.value] += 1
+    blocked_unresolved = counts.get(RequirementStatus.BLOCKED_UNRESOLVED.value, 0)
+    blocked_conflicted = counts.get(RequirementStatus.BLOCKED_CONFLICTED.value, 0)
     return {
         "total": len(evaluations),
         **counts,
+        "blocked": blocked_unresolved + blocked_conflicted,
         "unresolved_dependency_ids": [
             evaluation.requirement_id
             for evaluation in evaluations
-            if evaluation.status in {RequirementStatus.UNKNOWN, RequirementStatus.BLOCKED}
+            if evaluation.status in {
+                RequirementStatus.UNKNOWN,
+                RequirementStatus.CONFLICTED,
+                RequirementStatus.BLOCKED_UNRESOLVED,
+                RequirementStatus.BLOCKED_CONFLICTED,
+            }
         ],
     }
 
@@ -223,13 +263,27 @@ def event_candidate_requirements(
 ) -> tuple[QualificationRequirement, ...]:
     candidate_id = str(candidate.get("candidate_id", "") or "candidate")
     evidence_ids = tuple(candidate.get("evidence_ids", ()) or ())
+    provenance = tuple(candidate.get("provenance", ()) or ()) or (
+        heuristic_provenance(
+            fact_ids=(candidate_id,),
+            evidence_ids=evidence_ids,
+            derivation="candidate_fields_without_independent_witness",
+        ),
+    )
+    qualification_provenance = tuple(candidate.get("qualification_provenance", ()) or ()) or (
+        heuristic_provenance(
+            fact_ids=(candidate_id,),
+            evidence_ids=evidence_ids,
+            derivation="qualification_fields_without_independent_witness",
+        ),
+    )
     candidate_status = str(candidate.get("candidate_status", "observed_candidate") or "observed_candidate")
     observed_status = "conflicted" if candidate_status == "conflicted_candidate" else "supported"
     requirements = [
         QualificationRequirement(
             f"req_{candidate_id}_observed",
             "observed",
-            {"status": observed_status, "evidence_ids": evidence_ids},
+            {"status": observed_status, "evidence_ids": evidence_ids, "provenance": provenance},
             scope="candidate",
         ),
         QualificationRequirement(
@@ -238,6 +292,7 @@ def event_candidate_requirements(
             {
                 "status": "conflicted" if candidate_status == "conflicted_candidate" else "supported",
                 "evidence_ids": evidence_ids,
+                "provenance": provenance,
             },
             scope="candidate",
             dependency_ids=(f"req_{candidate_id}_observed",),
@@ -277,7 +332,11 @@ def event_candidate_requirements(
             requirements.append(QualificationRequirement(
                 requirement_id,
                 predicate,
-                {"status": _normalized_observation_status(status), "evidence_ids": evidence_ids},
+                {
+                    "status": _normalized_observation_status(status),
+                    "evidence_ids": evidence_ids,
+                    "provenance": qualification_provenance,
+                },
                 scope="event",
                 dependency_ids=(dependency,),
             ))
@@ -292,7 +351,11 @@ def event_candidate_requirements(
         requirements.append(QualificationRequirement(
             f"req_{candidate_id}_prior_state",
             "state_before",
-            {"status": status, "evidence_ids": evidence_ids},
+            {
+                "status": status,
+                "evidence_ids": evidence_ids,
+                "provenance": qualification_provenance,
+            },
             scope="event",
             dependency_ids=(f"req_{candidate_id}_distinct",),
         ))
@@ -327,6 +390,7 @@ def apply_observation_to_requirements(
                 **dict(requirement.arguments),
                 "status": proposed.get(requirement.requirement_id, "unknown"),
                 "evidence_ids": tuple(observation.get("evidence_ids", ()) or ()),
+                "provenance": tuple(observation.get("provenance", ()) or ()),
             },
             requirement.scope,
             requirement.quantifier,
@@ -435,6 +499,7 @@ def _argument_status(
         fact_ids=_strings(requirement.arguments.get("fact_ids", ())),
         evidence_ids=_strings(requirement.arguments.get("evidence_ids", ())),
         reason=str(requirement.arguments.get("reason", "") or f"{requirement.predicate} is {status.value}."),
+        provenance=normalize_provenance(requirement.arguments.get("provenance", ())),
     )
 
 

@@ -1,39 +1,46 @@
-# P1 Qualification State
+# Final Iteration State
 
 ## Goal
 
-Prevent canonical candidates from becoming query-qualified facts until a program-evaluated requirement graph is complete; keep predicate support independent from grounding eligibility and hard forced override.
+Complete the final VCAH qualification and adjudication plan: one final selector,
+qualified-only canonical facts, fail-closed provenance, episode/entity binding,
+and immutable multi-seed replay artifacts.
 
-## Current Failure Fingerprint
+## Current State
 
-- `445-2`: after the merge fix, canonical qualification finds 2 of the gold 3 events. The remaining miss is event discovery/prior-state recovery, not a second counting path.
-- `445-3`: the sampled replay remains incomplete and forced; episode/boundary/entity blockers correctly prevent hard override.
-
-## Current Change
-
-- Added `src/vcah/qualification.py` with requirement graph evaluation, dependency blocking, fail-closed custom predicates, event qualification, typed option predicates, and lineage-scoped observation updates.
-- Event ledger now owns canonical candidates only. `canonical_fact_snapshot()` computes `qualified_events`; `confirmed_events` is a compatibility alias.
-- Option predicate verdict and grounding eligibility are independent. OptionVerdictTable reports unique support separately from hard-override eligibility and blocker telemetry.
-- Query contracts compile full-video coverage, temporal max, ordinal participant, entity binding, and attribute requirements.
-- Repair tasks carry requirement, candidate, episode, entity, and typed option-predicate lineage.
-- Narrative facts are namespaced by episode and relation type; out-of-episode facts are excluded and co-occurrence cannot support causation.
-- Same-occurrence actor attribute disagreement now produces an ambiguous participant binding while preserving one countable event; it no longer invalidates the occurrence.
+- `final_adjudicate` is the only final-answer selector. The runner, dashboard,
+  audit, and removed `_canonical_forced_answer` helper cannot mutate answers.
+- All-option audits and verdict tables are revision-bound to the same canonical
+  snapshot, evidence digest, and query contract.
+- Qualification, obligations, enumeration, provenance, typed state transitions,
+  narrative attribution, episode binding, and sequence ledgers are implemented.
+- Soft audit correction is available only inside `final_adjudicate` for a
+  fresh complete audit, an explicitly contradicted raw option, exactly one
+  admissibly supported alternative, and no episode-binding conflict. It remains
+  `forced_choice` with insufficient grounding.
+- Replay runs are create-exclusive under `runs/<run_id>/`; each case records
+  source/frame/trace checksums, content hashes, provider metadata, retry count,
+  investigation ordering, and final semantic telemetry. `--seeds` emits
+  per-case distributions and the targeted seed protocol status.
 
 ## Verification
 
-- Local: `PYTHONPATH=.:src pytest -q` -> `358 passed`.
-- `py_compile` and `git diff --check` pass.
-- KML implementation files uploaded to `/tmp/vcah_p0_eval` with SHA verification.
-- Replay output: `/m2v_intern/xuboshen/zgw/VideoAgent/vcah_p1_qualification_replay_20260718`.
-- Final `445-2`: forced `G=2` versus gold `E=3`, verified false; qualified 2, conflicted 0, hard override blocked. Before the merge fix it had qualified 0 and conflicted 9.
-- Safety replay `445-3`: forced and verified false; hard override blocked by episode/boundary/entity requirements.
+- `python -m py_compile` succeeds for the changed runtime modules.
+- `PYTHONPATH=.:src pytest -q` -> `379 passed` before the final provider-seed
+  metadata test; the focused replay/adjudication/runner suite then passed
+  `106` tests. Re-run the full suite after committing the final small test.
+- `git diff --check` passes.
 
-## Stale Evidence
+## Current Evidence
 
-- `/m2v_intern/xuboshen/zgw/VideoAgent/vcah_p05_seeded_replay_20260717/all_summary.json` is the P0.5 baseline only: false strict 0, accuracy 1/4.
-- Earlier `vcah_p05_cases4*`, `vcah_p1_final_cases4*`, and raw-qid runs are not current P1 Qualification evidence.
+- Local semantic and replay tests are current.
+- KML replay artifacts from P1 are stale for this final implementation and must
+  not be used as release evidence.
 
-## Remaining Work
+## Next Actions
 
-1. Improve event discovery and prior-state recovery for the missing `445-2` occurrence as a later capability iteration.
-2. Re-evaluate answer accuracy on a larger seeded set; do not weaken qualification or hard-override blockers to recover accuracy.
+1. Commit and push the final implementation.
+2. Pull that exact commit on KML and run the targeted immutable multi-seed
+   replay for `441-2`, `441-4`, `445-2`, and `445-3`.
+3. Compare the generated `summary.json` safety and semantic metrics; preserve
+   any failure as an artifact rather than relaxing a gate.
