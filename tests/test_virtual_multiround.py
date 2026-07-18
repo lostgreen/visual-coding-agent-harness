@@ -522,6 +522,64 @@ def test_zero_conditions_never_yield_strict_for_identity_question() -> None:
     assert status["strict_safety_blockers"] == ["condition_registry_missing"]
 
 
+def test_contract_compiles_last_episode_and_second_participant_conditions() -> None:
+    question = (
+        "In the last instance, what color clothes did the second person "
+        "who ultimately overtook the recorder wear?"
+    )
+    contract = multiround.compile_query_contract(
+        question,
+        {"A": "green clothes", "B": "blue clothes"},
+    )
+    requirements = multiround.compile_query_requirements(question)
+
+    conditions = {
+        condition.condition_id: condition
+        for condition in multiround.compile_contract_conditions(contract, requirements)
+    }
+
+    assert conditions["condition_all_qualified_episodes_enumerated"].quantifier == "all_events"
+    assert conditions["condition_all_qualified_episodes_enumerated"].scope == "full_video"
+    assert conditions["condition_last_episode_selected"].quantifier == "temporal_max"
+    assert conditions["condition_last_episode_selected"].scope == "full_video"
+    assert conditions["condition_second_participant_resolved"].quantifier == "ordinal_2"
+    assert conditions["condition_second_participant_resolved"].scope == "episode"
+
+
+def test_auto_conditions_infer_global_and_ordinal_semantics() -> None:
+    temporal_max = multiround.GapCondition("c_last", "No later qualified episode exists.")
+    event_union = multiround.GapCondition("c_all", "All overtakes are enumerated.")
+    ordinal = multiround.GapCondition("c_second", "Resolve the second overtaker attributes.")
+
+    assert (temporal_max.scope, temporal_max.quantifier) == ("full_video", "temporal_max")
+    assert (event_union.scope, event_union.quantifier) == ("full_video", "all_events")
+    assert (ordinal.scope, ordinal.quantifier) == ("episode", "ordinal_2")
+
+
+def test_last_instance_requirement_graph_blocks_ordinal_until_global_boundary_resolves() -> None:
+    question = (
+        "In the last instance, what did the second person who ultimately "
+        "overtook the recorder wear?"
+    )
+    requirements = multiround.compile_query_requirements(question)
+    graph = multiround.compile_query_qualification_requirements(
+        multiround.compile_query_contract(question, {"A": "blue helmet", "B": "green clothes"}),
+        requirements,
+        {"qualified_events": [], "incomplete_events": [], "conflicted_events": []},
+        {"ready_for_answer": False, "source_coverage": {}},
+    )
+
+    evaluations = {
+        evaluation.requirement_id: evaluation
+        for evaluation in multiround.evaluate_requirement_graph(graph, {})
+    }
+
+    assert evaluations["req_full_video_coverage"].status.value == "unknown"
+    assert evaluations["req_last_episode_selected"].status.value == "blocked"
+    assert evaluations["req_second_participant_resolved"].status.value == "blocked"
+    assert evaluations["req_target_attributes_resolved"].status.value == "blocked"
+
+
 def test_choice_not_ready_never_yields_verified_strict() -> None:
     contract = multiround.compile_query_contract(
         "How many times was the recorder overtaken?", {"A": "2", "B": "3"}
@@ -597,8 +655,13 @@ def test_repair_tasks_inherit_gap_and_condition_ids() -> None:
     assert task.gap_id == gap.gap_id
     assert task.origin_gap_id == gap.gap_id
     assert task.target_condition_ids == (condition.condition_id,)
+    assert task.target_requirement_ids == (condition.condition_id,)
     assert task.conditions == (condition,)
     assert task.target_option_predicates == ("A=green clothes", "B=Red Bull helmet")
+    assert set(task.target_option_predicate_ids) == {
+        "option_A_pred_01",
+        "option_B_pred_01",
+    }
 
 
 def test_local_condition_result_cannot_close_global_all_condition() -> None:
@@ -1511,6 +1574,44 @@ def test_canonical_option_table_uses_narrative_hypothesis_assessments() -> None:
     assert table["discriminating_predicate"] == "canonical_narrative_inference"
 
 
+def test_out_of_episode_action_does_not_support_final_decision() -> None:
+    options = {
+        "D": "Joe accepts his parents' request and conceals the event.",
+        "H": "Joe chooses to eat cake together.",
+    }
+    contract = multiround.compile_query_contract(
+        "During this narrative gap, which option best represents Joe's final decision?",
+        options,
+    )
+    snapshot = {
+        "inferred_facts": [
+            {
+                "fact_id": "door_final",
+                "episode_id": "door_confrontation_01",
+                "anchor_match": True,
+                "evidence_ids": ["ev_door"],
+                "hypothesis_assessments": [
+                    {"option_id": "D", "status": "supported", "reason": "The anchor episode ends with concealment."},
+                ],
+            },
+            {
+                "fact_id": "cake_action",
+                "episode_id": "cake_01",
+                "anchor_match": False,
+                "evidence_ids": ["ev_cake"],
+                "hypothesis_assessments": [
+                    {"option_id": "H", "status": "supported", "reason": "Joe later eats cake."},
+                ],
+            },
+        ],
+    }
+
+    table = multiround._option_verdict_table(options, contract, snapshot, {})
+
+    assert table["option_verdicts"]["D"]["status"] == "supported"
+    assert table["option_verdicts"]["H"]["status"] == "unknown"
+
+
 def test_canonical_forced_answer_overrides_stale_best_candidate_only_when_unique() -> None:
     evidence = EvidenceRecord(
         evidence_id="ev_bridge",
@@ -1525,8 +1626,17 @@ def test_canonical_forced_answer_overrides_stale_best_candidate_only_when_unique
     )
     options = {"F": "unsupported", "H": "supported narrative"}
     completion = {
+        "completion_ready": True,
+        "critical_condition_count": 2,
+        "satisfied_condition_count": 2,
+        "unresolved_critical_condition_ids": [],
+        "conflicted_condition_count": 0,
+        "strict_safety_blockers": [],
         "option_verdict_table": {
+            "audit_status": "complete",
             "best_option": "H",
+            "answer_qualification_status": "complete",
+            "hard_override_allowed": True,
             "option_verdicts": {
                 "F": {"status": "contradicted", "evidence_ids": ["ev_bridge"]},
                 "H": {"status": "supported", "evidence_ids": ["ev_bridge"]},
@@ -1538,8 +1648,12 @@ def test_canonical_forced_answer_overrides_stale_best_candidate_only_when_unique
 
     assert forced == ("H. supported narrative", ("ev_bridge",))
     ambiguous = {
+        **completion,
         "option_verdict_table": {
+            "audit_status": "complete",
             "best_option": "H",
+            "answer_qualification_status": "complete",
+            "hard_override_allowed": True,
             "option_verdicts": {
                 "F": {"status": "supported", "evidence_ids": ["ev_bridge"]},
                 "H": {"status": "supported", "evidence_ids": ["ev_bridge"]},
@@ -1547,6 +1661,157 @@ def test_canonical_forced_answer_overrides_stale_best_candidate_only_when_unique
         },
     }
     assert multiround._canonical_forced_answer(options, ambiguous, (evidence,)) is None
+
+
+def test_unique_supported_option_does_not_imply_override_allowed() -> None:
+    table = {
+        "audit_status": "complete",
+        "best_option": "B",
+        "option_verdicts": {
+            "A": {"predicate_verdict": "refuted", "status": "contradicted"},
+            "B": {"predicate_verdict": "supported", "status": "supported"},
+        },
+    }
+    annotated = multiround._annotate_forced_override_eligibility(
+        table,
+        {
+            "ready_for_answer": False,
+            "unresolved_critical_condition_ids": ["req_last_episode_selected"],
+        },
+        {"requirement_graph": {"unknown": 1, "blocked": 2}},
+        {"requires_event_participant_link": True},
+    )
+
+    assert annotated["unique_supported"] is True
+    assert annotated["hard_override_allowed"] is False
+    assert "req_last_episode_selected" in annotated["hard_override_blockers"]
+
+
+def test_selected_supported_option_is_not_downgraded_when_completion_is_incomplete() -> None:
+    options = {"C": "The one wearing a blue helmet", "F": "The one wearing blue clothes"}
+    decision = multiround.ReasonerDecision(
+        action="answer",
+        answer="F. The one wearing blue clothes",
+        citations=("ev_racer",),
+        support_status="supported",
+        support_reason="The same participant is described with blue clothing and a blue helmet.",
+        option_verdicts={
+            "C": {"status": "supported", "reason": "A blue helmet is visible."},
+            "F": {"status": "supported", "reason": "Blue clothing is visible."},
+        },
+    )
+
+    states = multiround._record_option_state(
+        {},
+        decision,
+        {"passed": False, "reason": "condition_last_episode_selected"},
+        options,
+    )
+    table = multiround._option_verdict_table(
+        options,
+        multiround.compile_query_contract(
+            "In the last instance, what did the second person who overtook the recorder wear?",
+            options,
+        ),
+        {},
+        states,
+    )
+
+    assert states["C"]["predicate_verdict"] == "supported"
+    assert states["F"]["predicate_verdict"] == "supported"
+    assert states["F"]["grounding_eligibility"] == "insufficient"
+    assert table["best_option"] == ""
+    assert multiround._canonical_forced_answer(
+        options,
+        {
+            "completion_ready": False,
+            "critical_condition_count": 3,
+            "satisfied_condition_count": 0,
+            "unresolved_critical_condition_ids": ["condition_last_episode_selected"],
+            "option_verdict_table": table,
+        },
+        (),
+    ) is None
+
+
+def test_partial_audit_support_is_not_overwritten_by_unique_canonical_attribute() -> None:
+    options = {"C": "The one wearing a blue helmet", "F": "The one wearing blue clothes"}
+    contract = multiround.compile_query_contract(
+        "In the last instance, what did the second person who overtook the recorder wear?",
+        options,
+    )
+    states = {
+        option: {
+            "status": "supported",
+            "predicate_verdict": "supported",
+            "grounding_eligibility": "insufficient",
+            "citation_ids": ["ev_audit"],
+            "support_reason": "The partial audit supports this visible description.",
+        }
+        for option in options
+    }
+    snapshot = {
+        "resolved_entities": [{
+            "entity_id": "second_racer",
+            "attributes": {"helmet_color": "blue"},
+            "evidence_ids": ["ev_canonical"],
+        }],
+    }
+
+    table = multiround._option_verdict_table(options, contract, snapshot, states)
+
+    assert table["best_option"] == ""
+    assert table["audit_status"] == "complete"
+    assert table["option_verdicts"]["C"]["status"] == "supported"
+    assert table["option_verdicts"]["F"]["predicate_verdict"] == "supported"
+
+
+def test_blue_helmet_does_not_support_blue_clothing() -> None:
+    options = {"C": "The one wearing a blue helmet", "F": "The one wearing blue clothes"}
+    table = multiround._option_verdict_table(
+        options,
+        multiround.compile_query_contract(
+            "In the last instance, what did the second person who ultimately overtook the recorder wear?",
+            options,
+        ),
+        {
+            "resolved_entities": [{
+                "entity_id": "target_racer",
+                "role": "target_participant",
+                "source_event_key": "episode_3",
+                "attributes": {"helmet_color": "blue"},
+                "evidence_ids": ["ev_target"],
+            }],
+        },
+        {},
+    )
+
+    assert table["option_verdicts"]["C"]["status"] == "supported"
+    assert table["option_verdicts"]["F"]["status"] == "unknown"
+
+
+def test_red_helmet_does_not_support_red_bull_brand() -> None:
+    options = {"A": "The one wearing a red helmet", "B": "The one wearing a Red Bull helmet"}
+    table = multiround._option_verdict_table(
+        options,
+        multiround.compile_query_contract(
+            "In the last instance, what did the second person who ultimately overtook the recorder wear?",
+            options,
+        ),
+        {
+            "resolved_entities": [{
+                "entity_id": "target_racer",
+                "role": "target_participant",
+                "source_event_key": "episode_3",
+                "attributes": {"helmet_color": "red"},
+                "evidence_ids": ["ev_target"],
+            }],
+        },
+        {},
+    )
+
+    assert table["option_verdicts"]["A"]["status"] == "supported"
+    assert table["option_verdicts"]["B"]["status"] == "unknown"
 
 
 def test_single_segment_narrative_repair_splits_setup_and_outcome_then_carries_context(tmp_path: Path) -> None:
@@ -1918,10 +2183,11 @@ def test_event_candidate_ledger_compacts_aliases_and_exposes_generic_windows() -
     contract = multiround.compile_query_contract("How many auditions are included in this video?")
     digest = multiround._evidence_digest(evidence, contract)
 
-    assert ledger["confirmed_event_candidate_count"] == 2
-    assert ledger["confirmed_event_candidates"][0]["signature"] == "light balance"
-    assert ledger["confirmed_event_candidates"][0]["evidence_ids"] == ["ev_1", "ev_2"]
-    assert ledger["confirmed_event_candidates"][1]["evidence_ids"] == ["ev_4"]
+    assert ledger["observed_event_candidate_count"] == 2
+    assert ledger["confirmed_event_candidate_count"] == 0
+    assert ledger["observed_event_candidates"][0]["signature"] == "light balance"
+    assert ledger["observed_event_candidates"][0]["evidence_ids"] == ["ev_1", "ev_2"]
+    assert ledger["observed_event_candidates"][1]["evidence_ids"] == ["ev_4"]
     assert ledger["unresolved_event_candidate_count"] == 1
     assert [row["evidence_kind"] for row in digest] == [
         "event_candidate",
@@ -1994,9 +2260,10 @@ def test_event_candidate_ledger_merges_named_audition_phases_with_variant_keys()
         )
     )
 
-    assert ledger["confirmed_event_candidate_count"] == 1
-    assert ledger["confirmed_event_candidates"][0]["signature"] == "mayyas"
-    assert ledger["confirmed_event_candidates"][0]["evidence_ids"] == ["ev_performance", "ev_judging"]
+    assert ledger["observed_event_candidate_count"] == 1
+    assert ledger["confirmed_event_candidate_count"] == 0
+    assert ledger["observed_event_candidates"][0]["signature"] == "mayyas"
+    assert ledger["observed_event_candidates"][0]["evidence_ids"] == ["ev_performance", "ev_judging"]
 
 
 def test_event_candidate_ledger_uses_counting_unit_for_phase_merging() -> None:
@@ -2094,9 +2361,9 @@ def test_event_candidate_ledger_uses_counting_unit_for_phase_merging() -> None:
         )
     )
 
-    assert audition["confirmed_event_candidate_count"] == 1
-    assert audition["confirmed_event_candidates"][0]["phases"] == ["intro", "result"]
-    assert news["confirmed_event_candidate_count"] == 2
+    assert audition["observed_event_candidate_count"] == 1
+    assert audition["observed_event_candidates"][0]["phases"] == ["intro", "result"]
+    assert news["observed_event_candidate_count"] == 2
 
 
 def test_semantic_event_repair_targets_unresolved_window_once(tmp_path: Path) -> None:

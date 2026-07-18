@@ -2316,8 +2316,10 @@ def test_event_normalizer_keeps_only_supported_occurrences_inside_window() -> No
             "object_id": "",
             "state_before": "",
             "transition": "",
-            "state_after": "",
-            "preconditions_met": None,
+                "state_after": "",
+                "preconditions_met": None,
+                "qualification_status": "",
+                "qualification": {},
             "phase": "unknown",
             "description": "The presenter points to the diagram.",
             "start_sec": 35.0,
@@ -2976,9 +2978,13 @@ def test_conditional_event_requires_explicit_preconditions(tmp_path: Path) -> No
     report = investigator.run_batch((task,))[0]
     events = report.evidence[0].operation_metadata["events"]
 
-    assert len(events) == 1
+    assert len(events) == 2
     assert events[0]["event_key"] == "qualified pass"
     assert events[0]["preconditions_met"] is True
+    assert events[1]["event_key"] == "nonqualifying pass"
+    assert events[1]["preconditions_met"] is False
+    assert events[1]["supports_question_event"] is False
+    assert events[1]["qualification_status"] == "unqualified_precondition"
 
 
 def test_model_investigator_preserves_candidate_provenance(tmp_path: Path) -> None:

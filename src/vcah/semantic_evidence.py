@@ -5,6 +5,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from vcah.evidence_primitives import normalize_measurements, normalize_relations
+from vcah.qualification import qualify_event_candidates
 from vcah.types import ClaimContract, EvidenceRecord
 from vcah.virtual_video import VirtualVideoWorkspace
 
@@ -33,7 +34,11 @@ class AbsenceQualification:
 
 @dataclass(frozen=True)
 class CanonicalFactSnapshot:
-    confirmed_events: tuple[Mapping[str, Any], ...] = ()
+    qualified_events: tuple[Mapping[str, Any], ...] = ()
+    observed_event_candidates: tuple[Mapping[str, Any], ...] = ()
+    unqualified_events: tuple[Mapping[str, Any], ...] = ()
+    incomplete_events: tuple[Mapping[str, Any], ...] = ()
+    conflicted_events: tuple[Mapping[str, Any], ...] = ()
     duplicate_suspect_events: tuple[Mapping[str, Any], ...] = ()
     refuted_events: tuple[Mapping[str, Any], ...] = ()
     resolved_entities: tuple[Mapping[str, Any], ...] = ()
@@ -44,13 +49,20 @@ class CanonicalFactSnapshot:
     unresolved_inferences: tuple[Mapping[str, Any], ...] = ()
     ordered_events: tuple[Mapping[str, Any], ...] = ()
     raw_candidate_counts: Mapping[str, int] = field(default_factory=dict)
+    requirement_graph: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "raw_candidate_counts", dict(self.raw_candidate_counts or {}))
+        object.__setattr__(self, "requirement_graph", dict(self.requirement_graph or {}))
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "confirmed_events": [dict(row) for row in self.confirmed_events],
+            "qualified_events": [dict(row) for row in self.qualified_events],
+            "confirmed_events": [dict(row) for row in self.qualified_events],
+            "observed_event_candidates": [dict(row) for row in self.observed_event_candidates],
+            "unqualified_events": [dict(row) for row in self.unqualified_events],
+            "incomplete_events": [dict(row) for row in self.incomplete_events],
+            "conflicted_events": [dict(row) for row in self.conflicted_events],
             "duplicate_suspect_events": [dict(row) for row in self.duplicate_suspect_events],
             "refuted_events": [dict(row) for row in self.refuted_events],
             "resolved_entities": [dict(row) for row in self.resolved_entities],
@@ -60,8 +72,9 @@ class CanonicalFactSnapshot:
             "inferred_facts": [dict(row) for row in self.inferred_facts],
             "unresolved_inferences": [dict(row) for row in self.unresolved_inferences],
             "ordered_events": [dict(row) for row in self.ordered_events],
+            "requirement_graph": dict(self.requirement_graph),
             "canonical_fact_counts": {
-                "events": len(self.confirmed_events),
+                "events": len(self.qualified_events),
                 "entities": len(self.resolved_entities),
                 "state_transitions": len(self.state_transitions),
                 "entity_associations": len(self.entity_associations),
@@ -326,11 +339,11 @@ _GENERIC_EVENT_TOKENS = {
 
 
 def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]:
-    confirmed: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     unresolved: list[dict[str, Any]] = []
     for record in evidence:
         for event in record.operation_metadata.get("events", ()) or ():
-            if not isinstance(event, Mapping) or not _flag(event.get("supports_question_event")):
+            if not isinstance(event, Mapping):
                 continue
             try:
                 start, end = float(event.get("start_sec")), float(event.get("end_sec"))
@@ -370,7 +383,7 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
             to_next = _flag(event.get("continues_to_next"))
             row = next(
                 (
-                    item for item in confirmed
+                    item for item in candidates
                     if item["source_video_id"] == source_id
                     and (
                         item["signature"] == signature
@@ -411,13 +424,38 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                     "counting_unit": counting_unit,
                     "participant_ids": list(participant_ids),
                     "participants": [],
+                    "states_before": [],
                     "transitions": [],
+                    "states_after": [],
                     "merge_history": [],
                     "phases": [],
                     "continues_from_previous": from_previous,
                     "continues_to_next": to_next,
+                    "candidate_statuses": [],
+                    "candidate_conflict_reasons": [],
+                    "participant_binding_conflicts": [],
+                    "qualification_observations": {},
+                    "preconditions_met": [],
+                    "supports_question_event": [],
                 }
-                confirmed.append(row)
+                candidates.append(row)
+            existing_actors = set(row["participant_ids"]).difference({
+                "camera_holder", "video recorder", "recorder",
+            })
+            incoming_actors = set(participant_ids).difference({
+                "camera_holder", "video recorder", "recorder",
+            })
+            if (
+                existing_actors
+                and incoming_actors
+                and not existing_actors.intersection(incoming_actors)
+                and _is_focal_position_transition(event)
+            ):
+                row["participant_binding_conflicts"].append({
+                    "existing_actor_ids": sorted(existing_actors),
+                    "observed_actor_ids": sorted(incoming_actors),
+                    "reason": "same_occurrence_has_ambiguous_actor_attributes",
+                })
             row["virtual_time_range"] = [min(row["virtual_time_range"][0], start), max(row["virtual_time_range"][1], end)]
             row["evidence_ids"].append(record.evidence_id)
             row["event_keys"].append(str(event.get("event_key", "") or ""))
@@ -430,7 +468,9 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                 }
             )
             row["descriptions"].append(str(event.get("description", "") or ""))
+            row["states_before"].append(str(event.get("state_before", "") or "").strip())
             row["transitions"].append(_normalize_key(event.get("transition")))
+            row["states_after"].append(str(event.get("state_after", "") or "").strip())
             row["participant_ids"] = list(dict.fromkeys((*row["participant_ids"], *participant_ids)))[:12]
             known_participants = {
                 (
@@ -452,8 +492,25 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
             row["phases"].append(phase)
             row["continues_from_previous"] = bool(row["continues_from_previous"] or from_previous)
             row["continues_to_next"] = bool(row["continues_to_next"] or to_next)
+            explicit_status = str(event.get("qualification_status", "") or "").strip().casefold()
+            row["candidate_statuses"].append(
+                "conflicted_candidate" if explicit_status == "conflicted" else "observed_candidate"
+            )
+            if "preconditions_met" in event:
+                row["preconditions_met"].append(event.get("preconditions_met"))
+            row["supports_question_event"].append(event.get("supports_question_event"))
+            if isinstance(event.get("qualification"), Mapping):
+                row["qualification_observations"] = {
+                    **dict(row.get("qualification_observations", {}) or {}),
+                    **dict(event.get("qualification", {}) or {}),
+                }
     public = []
-    for index, row in enumerate(sorted(confirmed, key=lambda item: item["virtual_time_range"][0]), start=1):
+    for index, row in enumerate(sorted(candidates, key=lambda item: item["virtual_time_range"][0]), start=1):
+        candidate_status = (
+            "conflicted_candidate"
+            if "conflicted_candidate" in set(row["candidate_statuses"])
+            else "observed_candidate"
+        )
         public.append(
             {
                 "candidate_id": f"event_candidate_{index:03d}",
@@ -467,22 +524,55 @@ def event_candidate_ledger(evidence: Sequence[EvidenceRecord]) -> dict[str, Any]
                 "counting_unit": row["counting_unit"],
                 "participant_ids": list(row["participant_ids"]),
                 "participants": [dict(item) for item in row["participants"]],
+                "states_before": [item for item in dict.fromkeys(row["states_before"]) if item],
                 "transitions": [item for item in dict.fromkeys(row["transitions"]) if item],
+                "states_after": [item for item in dict.fromkeys(row["states_after"]) if item],
                 "merge_history": list(row["merge_history"])[:12],
                 "phases": list(dict.fromkeys(row["phases"])),
+                "candidate_status": candidate_status,
+                "candidate_conflict_reasons": list(dict.fromkeys(row["candidate_conflict_reasons"])),
+                "participant_binding_status": (
+                    "ambiguous" if row["participant_binding_conflicts"] else "resolved"
+                ),
+                "participant_binding_conflicts": list(row["participant_binding_conflicts"])[:8],
+                "qualification_observations": dict(row.get("qualification_observations", {}) or {}),
+                "preconditions_met_observations": list(row.get("preconditions_met", ()) or ()),
+                "supports_question_event_observations": list(row.get("supports_question_event", ()) or ()),
+                "continues_from_previous": bool(row.get("continues_from_previous")),
+                "continues_to_next": bool(row.get("continues_to_next")),
+                "focal_position_transition": _candidate_is_focal_position_transition(row),
             }
         )
+    observed = [row for row in public if row["candidate_status"] == "observed_candidate"]
+    conflicted = [row for row in public if row["candidate_status"] == "conflicted_candidate"]
     unresolved_rows = _merge_unresolved(unresolved)
     return {
-        "confirmed_event_candidate_count": len(public),
-        "confirmed_event_candidates": public[:40],
+        "confirmed_event_candidate_count": 0,
+        "confirmed_event_candidates": [],
+        "observed_event_candidate_count": len(observed),
+        "observed_event_candidates": observed[:40],
+        "unqualified_event_candidate_count": 0,
+        "unqualified_event_candidates": [],
+        "conflicted_event_candidate_count": len(conflicted),
+        "conflicted_event_candidates": conflicted[:40],
         "unresolved_event_candidate_count": len(unresolved_rows),
         "unresolved_event_windows": unresolved_rows[:16],
     }
 
 
-def canonical_fact_snapshot(evidence: Sequence[EvidenceRecord]) -> CanonicalFactSnapshot:
+def canonical_fact_snapshot(
+    evidence: Sequence[EvidenceRecord],
+    *,
+    require_event_precondition: bool = False,
+) -> CanonicalFactSnapshot:
     ledger = event_candidate_ledger(evidence)
+    event_qualification = qualify_event_candidates(
+        (
+            *tuple(ledger.get("observed_event_candidates", ()) or ()),
+            *tuple(ledger.get("conflicted_event_candidates", ()) or ()),
+        ),
+        require_state_precondition=require_event_precondition,
+    )
     raw_event_count = 0
     refuted_events: list[dict[str, Any]] = []
     entities: dict[str, dict[str, Any]] = {}
@@ -650,7 +740,12 @@ def canonical_fact_snapshot(evidence: Sequence[EvidenceRecord]) -> CanonicalFact
                 confidence = 0.0
             row = {
                 "fact_id": str(raw_fact.get("fact_id", "") or f"inferred_fact_{len(inferred_facts) + len(unresolved_inferences) + 1:03d}"),
+                "episode_id": str(raw_fact.get("episode_id", "") or "").strip(),
+                "timeline_phase": str(raw_fact.get("timeline_phase", "unknown") or "unknown").strip().casefold(),
+                "anchor_match": _flag(raw_fact.get("anchor_match")),
                 "subject_id": str(raw_fact.get("subject_id", "") or ""),
+                "relation_type": str(raw_fact.get("relation_type", "") or "").strip().casefold(),
+                "predicate": str(raw_fact.get("predicate", "") or "").strip().casefold(),
                 "setup_state": str(raw_fact.get("setup_state", "") or ""),
                 "observed_bridge": str(raw_fact.get("observed_bridge", "") or ""),
                 "outcome_state": str(raw_fact.get("outcome_state", "") or ""),
@@ -667,7 +762,22 @@ def canonical_fact_snapshot(evidence: Sequence[EvidenceRecord]) -> CanonicalFact
                 ],
                 "evidence_ids": [record.evidence_id],
             }
-            complete = bool(row["setup_state"] and row["outcome_state"] and row["inference"])
+            if row["relation_type"] == "temporal_cooccurrence":
+                row["hypothesis_assessments"] = [
+                    {
+                        **assessment,
+                        "status": "unknown" if str(assessment.get("status", "")) == "supported" else assessment.get("status", "unknown"),
+                        "reason": "Temporal co-occurrence cannot establish agent causation.",
+                    }
+                    for assessment in row["hypothesis_assessments"]
+                ]
+            complete = bool(
+                row["episode_id"]
+                and row["setup_state"]
+                and row["outcome_state"]
+                and row["inference"]
+                and row["relation_type"]
+            )
             if complete and row["confidence"] >= 0.6:
                 inferred_facts.append(row)
             else:
@@ -682,10 +792,12 @@ def canonical_fact_snapshot(evidence: Sequence[EvidenceRecord]) -> CanonicalFact
         if str(row.get("entity_id", "") or "").casefold() not in resolved_source_participants
     }
     if inferred_facts:
-        # Incomplete setup/outcome rows are discovery scaffolding. Once a complete
-        # high-confidence bridge exists, they must not remain completion blockers.
-        unresolved_inferences = []
-    confirmed = tuple(dict(row) for row in ledger["confirmed_event_candidates"])
+        completed_episodes = {str(row.get("episode_id", "") or "") for row in inferred_facts}
+        unresolved_inferences = [
+            row for row in unresolved_inferences
+            if str(row.get("episode_id", "") or "") not in completed_episodes
+        ]
+    qualified = tuple(dict(row) for row in event_qualification["qualified_events"])
     suspects = tuple(
         {
             "fact_id": f"duplicate_suspect_{index:03d}",
@@ -700,10 +812,14 @@ def canonical_fact_snapshot(evidence: Sequence[EvidenceRecord]) -> CanonicalFact
             "time": float(tuple(row.get("virtual_time_range", (0.0, 0.0)))[0]),
             "evidence_ids": list(row.get("evidence_ids", ()) or ()),
         }
-        for row in confirmed
+        for row in qualified
     )
     return CanonicalFactSnapshot(
-        confirmed_events=confirmed,
+        qualified_events=qualified,
+        observed_event_candidates=tuple(ledger.get("observed_event_candidates", ()) or ()),
+        unqualified_events=tuple(event_qualification["unqualified_events"]),
+        incomplete_events=tuple(event_qualification["incomplete_events"]),
+        conflicted_events=tuple(event_qualification["conflicted_events"]),
         duplicate_suspect_events=suspects,
         refuted_events=tuple(refuted_events),
         resolved_entities=tuple(entities.values()),
@@ -714,7 +830,117 @@ def canonical_fact_snapshot(evidence: Sequence[EvidenceRecord]) -> CanonicalFact
         unresolved_inferences=tuple(unresolved_inferences),
         ordered_events=ordered,
         raw_candidate_counts={"events": raw_event_count},
+        requirement_graph=dict(event_qualification["requirement_graph"]),
     )
+
+
+def _event_qualification_status(event: Mapping[str, Any]) -> tuple[str, str]:
+    explicit = str(event.get("qualification_status", "") or "").strip().casefold()
+    aliases = {
+        "confirmed": "qualified",
+        "supported": "qualified",
+        "candidate": "observed_candidate",
+        "unqualified": "unqualified_precondition",
+        "contradicted": "conflicted",
+    }
+    explicit = aliases.get(explicit, explicit)
+    if explicit in {
+        "qualified",
+        "observed_candidate",
+        "unqualified_precondition",
+        "conflicted",
+        "refuted",
+    }:
+        return explicit, f"explicit_{explicit}"
+    if event.get("preconditions_met") is False:
+        return "unqualified_precondition", "required_precondition_not_met"
+
+    qualification = dict(event.get("qualification", {}) or {}) if isinstance(
+        event.get("qualification"), Mapping
+    ) else {}
+    if _is_focal_position_transition(event):
+        required = {
+            "required_prior_state": (
+                qualification.get("required_prior_state")
+                or qualification.get("recorder_was_first_before")
+            ),
+            "transition": qualification.get("transition") or qualification.get("overtake_transition"),
+            "same_subject": qualification.get("same_subject") or qualification.get("same_recorder"),
+            "episode_boundary": qualification.get("episode_boundary"),
+        }
+        statuses = {key: _qualification_value(value) for key, value in required.items()}
+        if any(status == "conflicted" for status in statuses.values()):
+            return "conflicted", "position_event_qualification_conflicted"
+        if any(status == "refuted" for status in statuses.values()):
+            return "unqualified_precondition", "position_event_precondition_refuted"
+        if all(status == "supported" for status in statuses.values()):
+            return "qualified", "all_position_event_qualifiers_supported"
+        return "observed_candidate", "position_event_qualification_incomplete"
+    if _flag(event.get("supports_question_event")):
+        return "qualified", "legacy_nonconditional_event_support"
+    return "refuted", "question_event_not_supported"
+
+
+def _qualification_value(value: Any) -> str:
+    if value is True:
+        return "supported"
+    if value is False:
+        return "refuted"
+    return {
+        "supported": "supported",
+        "verified": "supported",
+        "satisfied": "supported",
+        "refuted": "refuted",
+        "contradicted": "refuted",
+        "conflicted": "conflicted",
+    }.get(str(value or "unknown").strip().casefold(), "unknown")
+
+
+def _is_focal_position_transition(event: Mapping[str, Any]) -> bool:
+    participants = {
+        _normalize_participant_id(value)
+        for value in tuple(event.get("participant_ids", ()) or ())
+        if _normalize_participant_id(value)
+    }
+    if "camera_holder" not in participants:
+        return False
+    text = " ".join(
+        str(event.get(name, "") or "").casefold()
+        for name in (
+            "event_key",
+            "event_class",
+            "counting_unit",
+            "state_before",
+            "transition",
+            "state_after",
+        )
+    )
+    return bool(re.search(r"\b(?:overtak\w*|pass(?:es|ed|ing)?|rank|first place|lead|position loss)\b", text))
+
+
+def _candidate_is_focal_position_transition(candidate: Mapping[str, Any]) -> bool:
+    participants = set(candidate.get("participant_ids", ()) or ())
+    if "camera_holder" not in participants:
+        return False
+    text = " ".join((
+        str(candidate.get("event_class", "") or ""),
+        str(candidate.get("counting_unit", "") or ""),
+        *tuple(str(item) for item in tuple(candidate.get("event_keys", ()) or ())),
+        *tuple(str(item) for item in tuple(candidate.get("transitions", ()) or ())),
+        *tuple(str(item) for item in tuple(candidate.get("descriptions", ()) or ())),
+    )).casefold()
+    return bool(re.search(r"\b(?:overtak\w*|pass(?:es|ed|ing)?|rank|first place|lead|position loss)\b", text))
+
+
+def _combined_qualification_status(row: Mapping[str, Any]) -> str:
+    statuses = set(row.get("qualification_statuses", ()) or ())
+    if "conflicted" in statuses:
+        return "conflicted"
+    if "qualified" in statuses:
+        return "qualified"
+    if "unqualified_precondition" in statuses:
+        return "unqualified_precondition"
+    return "observed_candidate"
 
 
 def _event_signature(event: Mapping[str, Any]) -> str:
@@ -726,8 +952,14 @@ def _event_signature(event: Mapping[str, Any]) -> str:
     if participants:
         return " ".join(dict.fromkeys(participants))[:120]
     event_key = str(event.get("event_key", "") or "").strip()
-    text = (event_key or str(event.get("description", "") or "")).casefold()
+    description = str(event.get("description", "") or "").strip()
+    text = (event_key or description).casefold()
     tokens = [token for token in re.findall(r"[a-z0-9]+", text) if len(token) > 1 and token not in _GENERIC_EVENT_TOKENS]
+    if not tokens and description and description.casefold() != text:
+        tokens = [
+            token for token in re.findall(r"[a-z0-9]+", description.casefold())
+            if len(token) > 1 and token not in _GENERIC_EVENT_TOKENS
+        ]
     return " ".join(dict.fromkeys(tokens))[:120] if tokens else ""
 
 

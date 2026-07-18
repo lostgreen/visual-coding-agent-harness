@@ -36,15 +36,31 @@ class GapCondition:
         description = self.description.casefold()
         scope = str(self.scope or "auto").strip().casefold()
         if scope == "auto":
-            scope = "full_video" if _requires_global_scope(description) else "window"
-        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "full_video"} else "window")
+            scope = (
+                "full_video"
+                if _requires_global_scope(description) or _requires_temporal_max(description)
+                else "episode"
+                if _requires_ordinal_participant(description)
+                else "window"
+            )
+        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "episode", "full_video"} else "window")
         quantifier = str(self.quantifier or "auto").strip().casefold()
         if quantifier == "auto":
-            quantifier = "all_events" if _requires_event_union(description) else "all_segments" if scope == "full_video" else "exists"
+            quantifier = (
+                "temporal_max"
+                if _requires_temporal_max(description)
+                else "ordinal_2"
+                if _requires_ordinal_participant(description)
+                else "all_events"
+                if _requires_event_union(description)
+                else "all_segments"
+                if scope == "full_video"
+                else "exists"
+            )
         object.__setattr__(
             self,
             "quantifier",
-            quantifier if quantifier in {"exists", "all_segments", "all_events"} else "exists",
+            quantifier if quantifier in {"exists", "all_segments", "all_events", "temporal_max", "ordinal_2"} else "exists",
         )
         required_coverage = max(0.0, min(1.0, float(self.required_coverage or 0.0)))
         if scope == "full_video" and required_coverage == 0.0:
@@ -53,6 +69,10 @@ class GapCondition:
         aggregation = str(self.aggregation or "none").strip().casefold()
         if aggregation == "none" and quantifier == "all_events":
             aggregation = "event_union"
+        elif aggregation == "none" and quantifier == "temporal_max":
+            aggregation = "temporal_max"
+        elif aggregation == "none" and quantifier == "ordinal_2":
+            aggregation = "ordinal"
         object.__setattr__(self, "aggregation", aggregation)
 
 
@@ -79,12 +99,12 @@ class ConditionResult:
             tuple(dict.fromkeys(str(item).strip() for item in self.evidence_ids if str(item).strip())),
         )
         scope = str(self.scope or "window").strip().casefold()
-        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "full_video"} else "window")
+        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "episode", "full_video"} else "window")
         quantifier = str(self.quantifier or "exists").strip().casefold()
         object.__setattr__(
             self,
             "quantifier",
-            quantifier if quantifier in {"exists", "all_segments", "all_events"} else "exists",
+            quantifier if quantifier in {"exists", "all_segments", "all_events", "temporal_max", "ordinal_2"} else "exists",
         )
         object.__setattr__(self, "required_coverage", max(0.0, min(1.0, float(self.required_coverage or 0.0))))
 
@@ -109,12 +129,12 @@ class ConditionState:
         task_id = str(self.updated_by_task_id or "").strip()
         object.__setattr__(self, "updated_by_task_id", task_id or None)
         scope = str(self.scope or "window").strip().casefold()
-        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "full_video"} else "window")
+        object.__setattr__(self, "scope", scope if scope in {"window", "segment", "episode", "full_video"} else "window")
         quantifier = str(self.quantifier or "exists").strip().casefold()
         object.__setattr__(
             self,
             "quantifier",
-            quantifier if quantifier in {"exists", "all_segments", "all_events"} else "exists",
+            quantifier if quantifier in {"exists", "all_segments", "all_events", "temporal_max", "ordinal_2"} else "exists",
         )
         object.__setattr__(self, "required_coverage", max(0.0, min(1.0, float(self.required_coverage or 0.0))))
 
@@ -422,13 +442,14 @@ def derive_resolution(
 def _requires_global_scope(description: str) -> bool:
     text = str(description or "").casefold()
     return bool(
-        re.search(r"\b(?:throughout|entire|whole|full)\s+(?:source|video|film|workspace)\b", text)
+        re.search(r"\b(?:throughout|entire|whole|full)\s+(?:source|video|film|workspace|race)\b", text)
         or re.search(
             r"\b(?:list|enumerate|catalog|count|find|verify|inspect)\b[^.]{0,80}"
             r"\b(?:all|every|each|total)\b",
             text,
         )
-        or re.search(r"\b(?:all|every|each)\b[^.]{0,80}\b(?:appearance|event|occurrence|segment|audition)s?\b", text)
+        or re.search(r"\b(?:all|every|each)\b[^.]{0,80}\b(?:appearance|event|occurrence|segment|audition|overtake|episode)s?\b", text)
+        or _requires_temporal_max(text)
     )
 
 
@@ -436,7 +457,23 @@ def _requires_event_union(description: str) -> bool:
     text = str(description or "").casefold()
     return bool(
         re.search(r"\b(?:list|enumerate|catalog|count)\b[^.]{0,100}\b(?:event|occurrence|appearance|audition|segment)s?\b", text)
-        or re.search(r"\b(?:all|every|each)\b[^.]{0,80}\b(?:event|occurrence|appearance|audition)s?\b", text)
+        or re.search(r"\b(?:all|every|each)\b[^.]{0,80}\b(?:event|occurrence|appearance|audition|overtake|episode)s?\b", text)
+    )
+
+
+def _requires_temporal_max(description: str) -> bool:
+    text = str(description or "").casefold()
+    return bool(
+        re.search(r"\b(?:no\s+later|last|latest|final)\b[^.]{0,80}\b(?:event|occurrence|episode|overtake|lead[ -]?loss|instance|timestamp)\b", text)
+        or re.search(r"\b(?:event|occurrence|episode|overtake|lead[ -]?loss|instance)\b[^.]{0,80}\b(?:last|latest|final)\b", text)
+    )
+
+
+def _requires_ordinal_participant(description: str) -> bool:
+    text = str(description or "").casefold()
+    return bool(
+        re.search(r"\b(?:second|2nd)\b[^.]{0,60}\b(?:person|participant|overtaker|racer|rider)\b", text)
+        or re.search(r"\b(?:person|participant|overtaker|racer|rider)\b[^.]{0,60}\b(?:second|2nd)\b", text)
     )
 
 

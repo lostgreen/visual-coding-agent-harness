@@ -1312,7 +1312,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             entities=entities,
         )
         narrative_facts = _normalize_narrative_facts(
-            parsed.get("narrative_facts"), options=self.workspace.case.options,
+            parsed.get("narrative_facts"),
+            options=self.workspace.case.options,
+            default_episode_id=(
+                str(getattr(task, "episode_id", "") or getattr(task, "boundary_episode_id", "") or "")
+                or f"narrative:{segment_packet.get('segment_id', 'unknown')}"
+            ),
         )
         claim_assessment = _normalize_claim_assessment(parsed, task) if claim_window else {}
         target_presence = normalize_target_presence(parsed.get("target_presence"), evidence_id=evidence_id)
@@ -1400,6 +1405,11 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "target_condition_ids": list(getattr(task, "target_condition_ids", ()) or ()),
                 "boundary_episode_id": str(getattr(task, "boundary_episode_id", "") or ""),
                 "target_option_predicates": list(getattr(task, "target_option_predicates", ()) or ()),
+                "target_requirement_ids": list(getattr(task, "target_requirement_ids", ()) or ()),
+                "candidate_id": str(getattr(task, "candidate_id", "") or ""),
+                "episode_id": str(getattr(task, "episode_id", "") or ""),
+                "entity_hypothesis_id": str(getattr(task, "entity_hypothesis_id", "") or ""),
+                "target_option_predicate_ids": list(getattr(task, "target_option_predicate_ids", ()) or ()),
                 "supports_identity_anchor": supports_identity_anchor,
                 "supports_answer_event": supports_answer_event,
                 "investigation": outcome,
@@ -1656,6 +1666,11 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 target_condition_ids=tuple(getattr(task, "target_condition_ids", ()) or ()),
                 boundary_episode_id=str(getattr(task, "boundary_episode_id", "") or ""),
                 target_option_predicates=tuple(getattr(task, "target_option_predicates", ()) or ()),
+                target_requirement_ids=tuple(getattr(task, "target_requirement_ids", ()) or ()),
+                candidate_id=str(getattr(task, "candidate_id", "") or ""),
+                episode_id=str(getattr(task, "episode_id", "") or ""),
+                entity_hypothesis_id=str(getattr(task, "entity_hypothesis_id", "") or ""),
+                target_option_predicate_ids=tuple(getattr(task, "target_option_predicate_ids", ()) or ()),
                 sampling_floor_fps=(
                     float(getattr(task, "sampling_floor_fps", 0.5) or 0.5)
                     if bool(getattr(task, "sampling_floor_specified", False))
@@ -2211,12 +2226,20 @@ def _normalize_events(
     for index, item in enumerate(value, start=1):
         if not isinstance(item, Mapping):
             continue
-        if "preconditions_met" in item and not _truthy(item.get("preconditions_met")):
-            continue
         description = str(item.get("description", "") or "").strip()
         supports_question_event = _truthy(item.get("supports_question_event"))
         supports_anchor_event = bool(anchor_discovery and _truthy(item.get("supports_anchor_event")))
-        if not description or not (supports_question_event or supports_anchor_event):
+        qualification_status = str(item.get("qualification_status", "") or "").strip().casefold()
+        preconditions_failed = "preconditions_met" in item and not _truthy(item.get("preconditions_met"))
+        if preconditions_failed:
+            supports_question_event = False
+            qualification_status = qualification_status or "unqualified_precondition"
+        if not description or not (
+            supports_question_event
+            or supports_anchor_event
+            or preconditions_failed
+            or qualification_status in {"observed_candidate", "unqualified_precondition", "conflicted"}
+        ):
             continue
         try:
             start = float(item.get("start_sec"))
@@ -2290,11 +2313,17 @@ def _normalize_events(
                 "transition": str(item.get("transition", "") or "").strip(),
                 "state_after": str(item.get("state_after", "") or "").strip(),
                 "preconditions_met": _truthy(item.get("preconditions_met")) if "preconditions_met" in item else None,
+                "qualification_status": qualification_status,
+                "qualification": (
+                    dict(item.get("qualification", {}) or {})
+                    if isinstance(item.get("qualification"), Mapping)
+                    else {}
+                ),
                 "phase": " ".join(str(item.get("phase", "unknown") or "unknown").strip().casefold().split()),
                 "description": description,
                 "start_sec": round(start, 3),
                 "end_sec": round(end, 3),
-                "supports_question_event": True,
+                "supports_question_event": bool(supports_question_event or supports_anchor_event),
                 "continues_from_previous": _truthy(item.get("continues_from_previous")),
                 "continues_to_next": _truthy(item.get("continues_to_next")),
             }
@@ -2366,6 +2395,7 @@ def _normalize_narrative_facts(
     value: Any,
     *,
     options: Mapping[str, Any],
+    default_episode_id: str = "",
 ) -> tuple[dict[str, Any], ...]:
     if not isinstance(value, list):
         return ()
@@ -2380,6 +2410,8 @@ def _normalize_narrative_facts(
         if not (setup or outcome or inference):
             continue
         complete = bool(setup and outcome and inference)
+        episode_id = str(item.get("episode_id", "") or default_episode_id).strip()
+        relation_type = str(item.get("relation_type", "") or "").strip().casefold()
         assessments = []
         for assessment in tuple(item.get("hypothesis_assessments", ()) or ()):
             if not isinstance(assessment, Mapping):
@@ -2391,6 +2423,8 @@ def _normalize_narrative_facts(
             if status not in {"supported", "contradicted", "unknown"}:
                 status = "unknown"
             if not complete:
+                status = "unknown"
+            if relation_type == "temporal_cooccurrence" and status == "supported":
                 status = "unknown"
             assessments.append(
                 {
@@ -2413,7 +2447,12 @@ def _normalize_narrative_facts(
         rows.append(
             {
                 "fact_id": str(item.get("fact_id", "") or f"narrative_{index}"),
+                "episode_id": episode_id,
+                "timeline_phase": str(item.get("timeline_phase", "unknown") or "unknown").strip().casefold(),
+                "anchor_match": _truthy(item.get("anchor_match")),
                 "subject_id": str(item.get("subject_id", "") or "").strip(),
+                "relation_type": relation_type,
+                "predicate": str(item.get("predicate", "") or "").strip().casefold(),
                 "setup_state": setup,
                 "observed_bridge": str(item.get("observed_bridge", "") or "").strip(),
                 "outcome_state": outcome,
@@ -3723,6 +3762,10 @@ def _preview_prompt(
         "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
         "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
         "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
+        "\"qualification_status\":\"qualified|observed_candidate|unqualified_precondition|conflicted\","
+        "\"qualification\":{\"required_prior_state\":\"supported|refuted|unknown\","
+        "\"transition\":\"supported|refuted|unknown\",\"same_subject\":\"supported|refuted|unknown\","
+        "\"episode_boundary\":\"supported|refuted|unknown\"},"
         "\"description\":\"one atomic occurrence relevant to the question\","
         "\"start_sec\":float,\"end_sec\":float,\"supports_question_event\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false,"
@@ -3825,6 +3868,8 @@ def _event_preview_prompt(
         "List every distinct supported occurrence, use virtual timestamps inside this window, and return an empty events list when none. "
         "For conditional counts, count only events whose named subject and required prior state are visibly established; set "
         "preconditions_met=false and supports_question_event=false for visually similar events that fail the condition. "
+        "For recorder position-loss events, qualification_status=qualified requires all four qualification fields supported "
+        "by the inspected frames or linked boundary evidence; never infer them from a descriptive summary alone. "
         "event_key must identify this occurrence by topic, title, or visible anchor; never use only the generic event class. "
         "The counted unit is defined by the question. For audition counts, a named group's introduction, performance, judging, "
         "and result are phases of one audition: use counting_unit=audition_group, preserve the same participant_ids and exact "
@@ -3873,6 +3918,10 @@ def _evidence_prompt(
         "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
         "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
         "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
+        "\"qualification_status\":\"qualified|observed_candidate|unqualified_precondition|conflicted\","
+        "\"qualification\":{\"required_prior_state\":\"supported|refuted|unknown\","
+        "\"transition\":\"supported|refuted|unknown\",\"same_subject\":\"supported|refuted|unknown\","
+        "\"episode_boundary\":\"supported|refuted|unknown\"},"
         "\"description\":\"one atomic occurrence relevant to the question\","
         "\"start_sec\":float,\"end_sec\":float,\"supports_question_event\":true|false}],"
         "\"supports_identity_anchor\":true|false,\"supports_answer_event\":true|false}.\n"
@@ -3884,6 +3933,8 @@ def _evidence_prompt(
         "Enumerate every distinct question-relevant event occurrence visible in this inspected window. Conditional events count "
         "only when the named subject and required prior state are established; otherwise set preconditions_met=false and "
         "supports_question_event=false. "
+        "For recorder position-loss events, emit qualified only when required_prior_state, transition, same_subject, and "
+        "episode_boundary are each explicitly supported; missing fields make the row observed_candidate. "
         "Use virtual timestamps from the window metadata, one row per occurrence, and return an empty events list when none is supported.\n"
         "Set supports_identity_anchor only when one visible entity jointly matches the identifying attributes in the question. "
         "Set supports_answer_event only when the observation directly supports the event, cause, action, or state being asked about.\n"
@@ -3927,12 +3978,18 @@ def _event_evidence_prompt(
         "\"subject_id\":\"tracked subject\",\"object_id\":\"other participant or object\","
         "\"state_before\":\"observable state before\",\"transition\":\"observable change/action\","
         "\"state_after\":\"observable state after\",\"preconditions_met\":true|false,"
+        "\"qualification_status\":\"qualified|observed_candidate|unqualified_precondition|conflicted\","
+        "\"qualification\":{\"required_prior_state\":\"supported|refuted|unknown\","
+        "\"transition\":\"supported|refuted|unknown\",\"same_subject\":\"supported|refuted|unknown\","
+        "\"episode_boundary\":\"supported|refuted|unknown\"},"
         "\"description\":\"one occurrence\",\"start_sec\":float,\"end_sec\":float,"
         "\"supports_question_event\":true|false,\"continues_from_previous\":true|false,"
         "\"continues_to_next\":true|false}],"
         "\"supports_answer_event\":true|false}.\n"
         "List every distinct supported occurrence with virtual timestamps. For conditional event counts, supports_question_event "
         "may be true only when the named subject, required state_before, transition, and state_after are all established. "
+        "For recorder position-loss events, qualification_status=qualified additionally requires explicit support for "
+        "required_prior_state, transition, same_subject, and episode_boundary; otherwise preserve it as a candidate. "
         "event_key must identify the occurrence by topic, "
         "title, or visible anchor, not only its generic class. Preserve the question's counted unit across phases. For audition "
         "counts, introduction, performance, judging, and result for one named group use counting_unit=audition_group, the same "
@@ -4031,7 +4088,11 @@ def _narrative_bridge_prompt(
     return (
         "You are extracting a canonical narrative bridge from visible scenes and local ASR. Do not select a final answer. "
         "Return compact JSON only: {\"summary\":\"setup and outcome\",\"confidence\":0.0-1.0,"
-        "\"narrative_facts\":[{\"fact_id\":\"narrative_1\",\"subject_id\":\"stable character or group\","
+        "\"narrative_facts\":[{\"fact_id\":\"narrative_1\",\"episode_id\":\"stable anchor episode\","
+        "\"timeline_phase\":\"setup|transition|outcome|final\",\"anchor_match\":true|false,"
+        "\"subject_id\":\"stable character or group\",\"relation_type\":\"observed_action|spoken_intention|"
+        "observed_outcome|temporal_cooccurrence|agent_causation|inferred_intention|final_decision\","
+        "\"predicate\":\"normalized relation predicate\","
         "\"setup_state\":\"directly observed initial intention/situation\","
         "\"observed_bridge\":\"direct transition, dialogue, or explicitly unshown gap\","
         "\"outcome_state\":\"directly observed later state\",\"inference\":\"minimal implication linking setup to outcome\","
@@ -4040,6 +4101,8 @@ def _narrative_bridge_prompt(
         "\"reason\":\"which observed predicate agrees or conflicts\"}],"
         "\"alternative_counterevidence\":[{\"option_id\":\"B\",\"observation\":\"specific conflicting fact\"}]}]}\n"
         "A supported assessment requires both setup_state and outcome_state. Treat thoughts or motives as inferred unless spoken. "
+        "Bind every fact to the question's anchor episode. Do not mark out-of-episode actions as anchor_match. "
+        "Temporal co-occurrence such as a siren near a character never establishes that character caused it. "
         "Use unknown when the inspected window contains only one side of the gap. Assess every option predicate independently; "
         "do not force exactly one supported option and do not use general story plausibility.\n"
         "Prior incomplete facts are navigation hypotheses only. Re-observe their missing side before completing them: "
