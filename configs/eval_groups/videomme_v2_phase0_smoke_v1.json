@@ -1,0 +1,35 @@
+{
+  "group_id": "videomme_v2_phase0_smoke_v1",
+  "dataset": "VideoMME-v2",
+  "evaluation_role": "phase0_mechanism_and_accuracy_smoke",
+  "construction": "source_only",
+  "description": "Fixed ten-case Phase 0 smoke set. The target4 cases are diagnostic; accuracy is evaluated across all ten cases.",
+  "baseline_policy": {
+    "replay_schema_version": 2,
+    "regenerate_on_trace_or_behavior_change": true,
+    "archive_previous_as": "stale_pre_<change_id>",
+    "comparison": ["compatibility_field_whitelist", "semantic_metrics"]
+  },
+  "hard_mechanism_metrics": [
+    "finish_reason_length_ratio",
+    "format_repair_count",
+    "no_information_gain_task_count",
+    "system_task_budget_ratio",
+    "system_override_count",
+    "reasoner_task_execution_rate",
+    "budget_exhausted_before_round3",
+    "images_dropped"
+  ],
+  "cases": [
+    {"case_id": "441-2", "video_id": "441", "task_type": "Narrative Cloze Inference", "target4": true},
+    {"case_id": "441-3", "video_id": "441", "task_type": "Narrative Cloze Inference"},
+    {"case_id": "441-4", "video_id": "441", "task_type": "Narrative Cloze Inference", "target4": true},
+    {"case_id": "445-2", "video_id": "445", "task_type": "Entity Persistence Tracking", "target4": true},
+    {"case_id": "445-3", "video_id": "445", "task_type": "Entity Persistence Tracking", "target4": true},
+    {"case_id": "445-4", "video_id": "445", "task_type": "Entity Persistence Tracking"},
+    {"case_id": "468-2", "video_id": "468", "task_type": "Entity Attribute Change Detection"},
+    {"case_id": "468-3", "video_id": "468", "task_type": "Entity Attribute Change Detection"},
+    {"case_id": "521-2", "video_id": "521", "task_type": "Basic Counting"},
+    {"case_id": "744-1", "video_id": "744", "task_type": "Event Sequence Ordering"}
+  ]
+}

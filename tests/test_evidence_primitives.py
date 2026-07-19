@@ -50,6 +50,32 @@ def test_global_enumeration_condition_infers_scope_and_preserves_it_in_results()
     assert result.quantifier == "all_events"
 
 
+def test_success_conditions_are_routed_to_their_own_evaluators() -> None:
+    conditions = (
+        GapCondition("c_observe", "Joe says that he will call the police."),
+        GapCondition("c_aggregate", "Count every qualified overtake event."),
+        GapCondition("c_derive", "The final decision differs from the original plan."),
+        GapCondition("c_interpret", "Which monologue best fits the transition?"),
+        GapCondition("c_counterfactual", "If Joe acted otherwise, what would happen instead?"),
+    )
+
+    assert tuple(condition.evaluation_type for condition in conditions) == (
+        "observable",
+        "aggregatable",
+        "derivable",
+        "interpretive",
+        "counterfactual",
+    )
+
+    result = normalize_condition_results(
+        ({"condition_id": "c_derive", "status": "satisfied", "observation": "Model inference."},),
+        (conditions[2],),
+        evidence_id="ev_inference",
+    )
+    assert result[0].status == "unknown"
+    assert result[0].evidence_ids == ()
+
+
 def test_read_condition_requires_visible_target_and_measurement() -> None:
     condition = GapCondition("gap_clock_c1", "read the displayed clock and score")
     raw = (

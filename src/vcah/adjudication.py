@@ -475,43 +475,6 @@ def final_adjudicate(
         status = f"verified_{grounding_level}"
         reason = str(gate.get("reason", "verified") or "verified")
         source = "raw_reasoner"
-    elif guard.allowed and selected in options:
-        answer = f"{selected}. {options[selected]}"
-        citations = tuple(
-            str(item) for item in tuple(dict(verdicts.get(selected, {}) or {}).get("evidence_ids", ()) or ()) if str(item)
-        )
-        mode = "grounded"
-        verified = True
-        grounding_level = "strict"
-        status = "verified_strict"
-        reason = "final_adjudicator_hard_override"
-        source = "final_adjudicator_hard_override"
-        if raw_is_valid and _option_id(answer, options) != raw_option:
-            mutations.append({
-                "source": source,
-                "from_answer": raw_reasoner_answer,
-                "to_answer": answer,
-                "reason": reason,
-            })
-    elif soft_audit_guard.allowed and str(soft_audit_guard.supporting_state.get("selected_option", "") or "") in options:
-        selected = str(soft_audit_guard.supporting_state["selected_option"])
-        answer = f"{selected}. {options[selected]}"
-        citations = tuple(
-            str(item) for item in tuple(dict(verdicts.get(selected, {}) or {}).get("evidence_ids", ()) or ()) if str(item)
-        )
-        mode = "forced_choice"
-        verified = False
-        grounding_level = "none"
-        status = "insufficient"
-        reason = "soft_audit_correction"
-        source = "soft_audit_correction"
-        if raw_is_valid and _option_id(answer, options) != raw_option:
-            mutations.append({
-                "source": source,
-                "from_answer": raw_reasoner_answer,
-                "to_answer": answer,
-                "reason": reason,
-            })
     elif raw_is_valid:
         answer = raw_reasoner_answer
         citations = tuple(str(item) for item in raw_citations if str(item))

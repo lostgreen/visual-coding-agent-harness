@@ -7,7 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from vcah.replay import (
+    REPLAY_SCHEMA_VERSION,
     aggregate_seed_results,
+    compare_replay_records,
     create_immutable_run,
     replay_case_metadata,
     workspace_input_checksums,
@@ -24,6 +26,7 @@ def test_immutable_run_creation_is_exclusive_and_writes_hashed_config(tmp_path: 
 
     payload = json.loads((run.root / "config.json").read_text(encoding="utf-8"))
     assert payload["run_id"] == "targeted-001"
+    assert payload["schema_version"] == REPLAY_SCHEMA_VERSION == 2
     assert payload["config_hash"] == run.config_hash
     assert (run.root / "workspaces").is_dir()
     with pytest.raises(FileExistsError):
@@ -76,6 +79,15 @@ def test_replay_metadata_and_multi_seed_aggregation_are_content_free_and_compara
                 "action": "investigate",
                 "task_count": 1,
                 "tasks": [{"query_id": "q1", "inspection_mode": "event_window"}],
+                "remaining_budget": 4,
+            },
+            {
+                "type": "investigator_batch",
+                "round": 1,
+                "requested_tasks": 1,
+                "accepted_tasks": 1,
+                "no_information_gain_tasks": 0,
+                "system_suggestion_tasks": 0,
             },
             {"type": "answer_selection_event"},
             {
@@ -87,6 +99,7 @@ def test_replay_metadata_and_multi_seed_aggregation_are_content_free_and_compara
                 "selected_episode_id": "episode_3",
                 "final_adjudication_blockers": ["completion_not_ready"],
                 "revision_context": {"evidence_digest_hash": "same-evidence"},
+                "investigation_budget_limit": 4,
             },
         ],
     }
@@ -100,11 +113,33 @@ def test_replay_metadata_and_multi_seed_aggregation_are_content_free_and_compara
     )
 
     assert record["source_media_checksum"]
+    assert record["schema_version"] == 2
     assert record["frame_manifest_checksum"]
     assert record["provider_request_ids"] == ["request-1"]
     assert record["api_retry_count"] == 1
     assert record["investigation_ordering"][0]["tasks"][0]["query_id"] == "q1"
+    assert record["execution_health"]["forced_choice"] is True
+    assert record["execution_health"]["finish_reason_length_ratio"] == 0.0
+    assert record["execution_health"]["reasoner_task_execution_rate"] == 1.0
+    assert record["execution_health"]["budget_exhausted_before_round3"] is False
     assert "Which option is correct?" not in json.dumps(record)
+
+    current = {
+        **record,
+        "execution_health": {
+            **record["execution_health"],
+            "finish_reason_length_ratio": 0.25,
+            "images_dropped": 2,
+        },
+    }
+    comparison = compare_replay_records(record, current)
+    assert comparison["format_compatible"] is True
+    assert comparison["semantic_delta"]["finish_reason_length_ratio"] == 0.25
+    assert comparison["semantic_delta"]["images_dropped"] == 2.0
+
+    incompatible = dict(current)
+    incompatible.pop("execution_health")
+    assert compare_replay_records(record, incompatible)["format_compatible"] is False
 
     drifted = {
         **record,
@@ -119,3 +154,6 @@ def test_replay_metadata_and_multi_seed_aggregation_are_content_free_and_compara
     assert case["final_answer_distribution"] == {"D": 1, "H": 1}
     assert case["same_evidence_answer_drift"] == 1
     assert aggregate["targeted_seed_protocol"]["441-2"]["satisfied"] is False
+    assert aggregate["overall"]["accuracy"] == 0.5
+    assert aggregate["overall"]["forced_choice_rate"] == 1.0
+    assert aggregate["overall"]["execution_health"]["reasoner_task_execution_rate"] == 1.0

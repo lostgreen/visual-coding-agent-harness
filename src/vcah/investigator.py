@@ -41,10 +41,88 @@ HIGHFPS_KEYWORDS = {
 
 
 @dataclass(frozen=True)
+class ObservationAttempt:
+    """One concrete inspection request, separate from any facts inferred from it."""
+
+    attempt_id: str
+    task_id: str
+    requested_range: tuple[float, float] | None = None
+    inspected_ranges: tuple[tuple[float, float], ...] = ()
+    attached_frame_times: tuple[float, ...] = ()
+    sampling_config: Mapping[str, Any] = field(default_factory=dict)
+    images_requested: int = 0
+    images_attached: int = 0
+    images_dropped: int = 0
+    parse_status: str = "unknown"
+    outcome: str = "uncertain"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attempt_id", str(self.attempt_id or "").strip())
+        object.__setattr__(self, "task_id", str(self.task_id or "").strip())
+        requested = self.requested_range
+        object.__setattr__(
+            self,
+            "requested_range",
+            _normalized_range(requested) if requested is not None and _valid_range(requested) else None,
+        )
+        object.__setattr__(
+            self,
+            "inspected_ranges",
+            tuple(_normalized_range(item) for item in self.inspected_ranges if _valid_range(item)),
+        )
+        object.__setattr__(self, "attached_frame_times", tuple(float(item) for item in self.attached_frame_times))
+        object.__setattr__(self, "sampling_config", dict(self.sampling_config or {}))
+        requested_count = max(0, int(self.images_requested or 0))
+        attached_count = max(0, int(self.images_attached or 0))
+        dropped_count = max(0, int(self.images_dropped or 0))
+        object.__setattr__(self, "images_requested", requested_count)
+        object.__setattr__(self, "images_attached", min(requested_count, attached_count))
+        object.__setattr__(self, "images_dropped", dropped_count)
+        object.__setattr__(self, "parse_status", str(self.parse_status or "unknown").strip().casefold())
+        outcome = str(self.outcome or "uncertain").strip().casefold()
+        allowed = {"found", "not_found", "uncertain", "failed", "duplicate"}
+        object.__setattr__(self, "outcome", outcome if outcome in allowed else "uncertain")
+
+    @property
+    def sampling_fps(self) -> float:
+        try:
+            return max(0.0, float(self.sampling_config.get("fps", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
+
+@dataclass(frozen=True)
+class EvidenceFact:
+    """A typed semantic fact produced by one observation attempt."""
+
+    fact_id: str
+    fact_range: tuple[float, float] | None
+    fact_type: str
+    text: str
+    confidence: float
+    source_attempt_id: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fact_id", str(self.fact_id or "").strip())
+        fact_range = self.fact_range
+        object.__setattr__(
+            self,
+            "fact_range",
+            _normalized_range(fact_range) if fact_range is not None and _valid_range(fact_range) else None,
+        )
+        object.__setattr__(self, "fact_type", str(self.fact_type or "observation").strip().casefold())
+        object.__setattr__(self, "text", str(self.text or "").strip())
+        object.__setattr__(self, "confidence", max(0.0, min(1.0, float(self.confidence or 0.0))))
+        object.__setattr__(self, "source_attempt_id", str(self.source_attempt_id or "").strip())
+
+
+@dataclass(frozen=True)
 class InvestigationReport:
     query_id: str
     status: str
     evidence: tuple[EvidenceRecord, ...] = ()
+    attempts: tuple[ObservationAttempt, ...] = ()
+    facts: tuple[EvidenceFact, ...] = ()
     cost: Mapping[str, Any] = field(default_factory=dict)
     gap_id: str = ""
     resolution: str = ""
@@ -60,6 +138,8 @@ class InvestigationReport:
     def __post_init__(self) -> None:
         object.__setattr__(self, "query_id", str(self.query_id or "").strip())
         object.__setattr__(self, "status", str(self.status or "").strip().casefold())
+        object.__setattr__(self, "attempts", tuple(_observation_attempt(item) for item in self.attempts))
+        object.__setattr__(self, "facts", tuple(_evidence_fact(item) for item in self.facts))
         object.__setattr__(self, "gap_id", str(self.gap_id or "").strip())
         resolution = str(self.resolution or "").strip().casefold()
         if resolution not in {"resolved", "partial", "unresolved"}:
@@ -105,7 +185,7 @@ class InvestigationReport:
 
 @dataclass(frozen=True)
 class _CachedObservation:
-    goal_fingerprint: str
+    cache_key: tuple[Any, ...]
     source_lineage: tuple[Mapping[str, Any], ...]
     evidence: EvidenceRecord
 
@@ -145,14 +225,12 @@ class VirtualVideoInvestigator:
         *,
         required_fps: float,
     ) -> EvidenceRecord | None:
-        goal = _goal_fingerprint(task)
+        cache_key = _observation_cache_key(task, start_sec, end_sec)
         lineage = _source_lineage(self.workspace, start_sec, end_sec)
         for cached in reversed(self._observation_cache):
-            if cached.goal_fingerprint != goal:
+            if cached.cache_key != cache_key:
                 continue
             if cached.evidence.sampling_fps + 1e-6 < float(required_fps):
-                continue
-            if cached.evidence.observation_polarity != "positive":
                 continue
             evidence_state = str(cached.evidence.operation_metadata.get("evidence_state", "active") or "active")
             if evidence_state in {"conflicted", "superseded"}:
@@ -162,9 +240,17 @@ class VirtualVideoInvestigator:
         return None
 
     def _remember_evidence(self, task: Any, evidence: EvidenceRecord) -> None:
+        if evidence.start_sec is None or evidence.end_sec is None:
+            return
+        sampling_policy = dict(evidence.operation_metadata.get("sampling_policy", {}) or {})
         self._observation_cache.append(
             _CachedObservation(
-                goal_fingerprint=_goal_fingerprint(task),
+                cache_key=_observation_cache_key(
+                    task,
+                    float(evidence.start_sec),
+                    float(evidence.end_sec),
+                    sampling_phase=float(sampling_policy.get("phase_offset_sec", 0.0) or 0.0),
+                ),
                 source_lineage=tuple(dict(item) for item in evidence.source_lineage),
                 evidence=evidence,
             )
@@ -204,6 +290,8 @@ class VirtualVideoInvestigator:
         vlm_calls: int = 0,
     ) -> InvestigationReport:
         self._record_visit(task, evidence, status="reused", reused_from=evidence.evidence_id)
+        task_id = str(getattr(task, "query_id", "") or "")
+        requested_range = getattr(task, "time_range", None)
         conditions = tuple(getattr(task, "conditions", ()) or ())
         condition_results = tuple(
             ConditionResult(item.condition_id, "unknown", "Cached observation requires a new semantic assessment.")
@@ -211,13 +299,30 @@ class VirtualVideoInvestigator:
         )
         return InvestigationReport(
             query_id=str(getattr(task, "query_id", "") or ""),
-            status="satisfied",
+            status="duplicate",
             evidence=(evidence,),
+            attempts=(
+                ObservationAttempt(
+                    attempt_id=f"{task_id or evidence.observation_id}:cache",
+                    task_id=task_id,
+                    requested_range=requested_range or (
+                        (float(evidence.start_sec), float(evidence.end_sec))
+                        if evidence.start_sec is not None and evidence.end_sec is not None
+                        else None
+                    ),
+                    inspected_ranges=(),
+                    sampling_config={"fps": evidence.sampling_fps, "mode": "cache_reuse", "modality": evidence.modality},
+                    parse_status="reused",
+                    outcome="duplicate",
+                ),
+            ),
             cost={
                 "tool_trace": tuple(tool_trace),
                 "frames": 0,
                 "vlm_calls": int(vlm_calls),
                 "reused": True,
+                "consumes_budget": False,
+                "information_gain": "none",
             },
             gap_id=str(getattr(task, "gap_id", "") or ""),
             resolution="partial" if getattr(task, "success_conditions", ()) else "resolved",
@@ -415,6 +520,25 @@ class VirtualVideoInvestigator:
         if frame_paths:
             self._remember_evidence(task, evidence)
             self._record_visit(task, evidence, status="satisfied")
+        attempt = ObservationAttempt(
+            attempt_id=query_id,
+            task_id=query_id,
+            requested_range=(float(start_sec), float(end_sec)),
+            inspected_ranges=((float(start_sec), float(end_sec)),) if frame_paths else (),
+            attached_frame_times=tuple(float(frame["virtual_time_sec"]) for frame in window["frames"]),
+            sampling_config={
+                "fps": float(window["sampling"]["fps"]),
+                "max_frames": int(window["sampling"]["max_frames"]),
+                "mode": str(getattr(task, "inspection_mode", "window") or "window"),
+                "modality": "visual",
+                "phase_offset_sec": float(window["sampling"].get("phase_offset_sec", 0.0) or 0.0),
+            },
+            images_requested=len(frame_paths),
+            images_attached=len(frame_paths),
+            images_dropped=0,
+            parse_status="deterministic",
+            outcome="found" if frame_paths else "failed",
+        )
         condition_results = tuple(
             ConditionResult(
                 item.condition_id,
@@ -427,12 +551,15 @@ class VirtualVideoInvestigator:
             query_id=query_id,
             status="satisfied" if frame_paths else "empty",
             evidence=(evidence,) if frame_paths else (),
+            attempts=(attempt,),
+            facts=(_fact_from_evidence(evidence, attempt.attempt_id),) if frame_paths else (),
             cost={
                 "tool_steps": len(tool_trace),
                 "tool_trace": tuple(tool_trace),
                 "frames": len(frame_paths),
                 "vlm_calls": 1 if frame_paths else 0,
                 "reused": False,
+                "consumes_budget": bool(frame_paths),
             },
             gap_id=str(getattr(task, "gap_id", "") or ""),
             resolution=(
@@ -624,6 +751,116 @@ def _goal_fingerprint(task: Any) -> str:
         ]
     ).casefold()
     return " ".join(re.findall(r"[a-z0-9]+", text))
+
+
+def _observation_cache_key(
+    task: Any,
+    start_sec: float,
+    end_sec: float,
+    *,
+    sampling_phase: float = 0.0,
+) -> tuple[Any, ...]:
+    """Return a structural cache key; free-form goal text is intentionally excluded."""
+    target_ids = tuple(
+        dict.fromkeys(
+            str(item).strip()
+            for name in (
+                "target_requirement_ids",
+                "target_condition_ids",
+                "target_option_predicate_ids",
+                "source_candidate_ids",
+            )
+            for item in tuple(getattr(task, name, ()) or ())
+            if str(item).strip()
+        )
+    )
+    scalar_targets = tuple(
+        str(getattr(task, name, "") or "").strip()
+        for name in (
+            "candidate_id",
+            "episode_id",
+            "entity_hypothesis_id",
+            "inspection_intent",
+            "claim_to_verify",
+        )
+        if str(getattr(task, name, "") or "").strip()
+    )
+    stable_targets = (*target_ids, *scalar_targets)
+    if not stable_targets:
+        # Generic tasks have no safe semantic reuse boundary. Keeping their task
+        # identifier in the key prevents similar prose from sharing evidence.
+        stable_targets = (str(getattr(task, "query_id", "") or ""),)
+    profile = str(
+        getattr(task, "schema_profile", "")
+        or getattr(task, "task_profile", "")
+        or getattr(task, "profile", "")
+        or getattr(task, "inspection_mode", "window")
+    ).strip().casefold()
+    start, end = _normalized_range((float(start_sec), float(end_sec)))
+    return (
+        str(getattr(task, "segment_id", "") or ""),
+        round(start, 3),
+        round(end, 3),
+        str(getattr(task, "inspection_mode", "window") or "window").strip().casefold(),
+        round(float(sampling_phase or 0.0), 6),
+        profile,
+        tuple(stable_targets),
+    )
+
+
+def _fact_from_evidence(record: EvidenceRecord, attempt_id: str) -> EvidenceFact:
+    fact_range = (
+        (float(record.start_sec), float(record.end_sec))
+        if record.start_sec is not None and record.end_sec is not None and float(record.end_sec) > float(record.start_sec)
+        else None
+    )
+    return EvidenceFact(
+        fact_id=record.evidence_id,
+        fact_range=fact_range,
+        fact_type=record.evidence_kind,
+        text=record.verbatim,
+        confidence=record.confidence,
+        source_attempt_id=attempt_id,
+    )
+
+
+def _observation_attempt(value: ObservationAttempt | Mapping[str, Any]) -> ObservationAttempt:
+    if isinstance(value, ObservationAttempt):
+        return value
+    return ObservationAttempt(
+        attempt_id=str(value.get("attempt_id", "") or ""),
+        task_id=str(value.get("task_id", "") or ""),
+        requested_range=(
+            tuple(value.get("requested_range", ()))  # type: ignore[arg-type]
+            if value.get("requested_range") is not None
+            else None
+        ),
+        inspected_ranges=tuple(value.get("inspected_ranges", ()) or ()),
+        attached_frame_times=tuple(value.get("attached_frame_times", ()) or ()),
+        sampling_config=dict(value.get("sampling_config", {}) or {}),
+        images_requested=int(value.get("images_requested", 0) or 0),
+        images_attached=int(value.get("images_attached", 0) or 0),
+        images_dropped=int(value.get("images_dropped", 0) or 0),
+        parse_status=str(value.get("parse_status", "unknown") or "unknown"),
+        outcome=str(value.get("outcome", "uncertain") or "uncertain"),
+    )
+
+
+def _evidence_fact(value: EvidenceFact | Mapping[str, Any]) -> EvidenceFact:
+    if isinstance(value, EvidenceFact):
+        return value
+    return EvidenceFact(
+        fact_id=str(value.get("fact_id", "") or ""),
+        fact_range=(
+            tuple(value.get("fact_range", ()))  # type: ignore[arg-type]
+            if value.get("fact_range") is not None
+            else None
+        ),
+        fact_type=str(value.get("fact_type", "observation") or "observation"),
+        text=str(value.get("text", "") or ""),
+        confidence=float(value.get("confidence", 0.0) or 0.0),
+        source_attempt_id=str(value.get("source_attempt_id", "") or ""),
+    )
 
 
 def _valid_range(value: Sequence[float]) -> bool:

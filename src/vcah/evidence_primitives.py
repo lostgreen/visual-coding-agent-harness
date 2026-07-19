@@ -22,6 +22,7 @@ class GapCondition:
     quantifier: str = "auto"
     required_coverage: float = 0.0
     aggregation: str = "none"
+    evaluation_type: str = "auto"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "condition_id", str(self.condition_id or "").strip())
@@ -74,6 +75,19 @@ class GapCondition:
         elif aggregation == "none" and quantifier == "ordinal_2":
             aggregation = "ordinal"
         object.__setattr__(self, "aggregation", aggregation)
+        evaluation_type = str(self.evaluation_type or "auto").strip().casefold()
+        allowed_evaluators = {"observable", "aggregatable", "derivable", "interpretive", "counterfactual"}
+        if evaluation_type == "auto":
+            evaluation_type = classify_condition_evaluation(
+                self.description,
+                condition_type=self.condition_type,
+                aggregation=self.aggregation,
+            )
+        object.__setattr__(
+            self,
+            "evaluation_type",
+            evaluation_type if evaluation_type in allowed_evaluators else "observable",
+        )
 
 
 @dataclass(frozen=True)
@@ -375,6 +389,9 @@ def normalize_condition_results(
         row = by_id.get(condition.condition_id) or by_description.get(condition.description.casefold()) or {}
         status = str(row.get("status", "unknown") or "unknown").strip().casefold()
         observation = str(row.get("observation", "") or "").strip()
+        if condition.evaluation_type != "observable":
+            status = "unknown"
+            observation = "Resolved outside the Investigator by the condition owner."
         if status in {"satisfied", "resolved"} and not observation:
             status = "unknown"
         requires_target = condition.condition_type == "presence" or (
@@ -430,13 +447,46 @@ def derive_resolution(
     if not conditions:
         return "unresolved"
     by_id = {result.condition_id: result for result in results}
-    critical = tuple(condition for condition in conditions if condition.critical)
+    critical = tuple(
+        condition
+        for condition in conditions
+        if condition.critical and condition.evaluation_type == "observable"
+    )
     critical_results = tuple(by_id.get(condition.condition_id, ConditionResult(condition.condition_id, "unknown")) for condition in critical)
     if critical_results and all(result.status == "satisfied" for result in critical_results):
         return "resolved"
     if any(result.status in {"satisfied", "contradicted"} for result in results):
         return "partial"
     return "unresolved"
+
+
+def classify_condition_evaluation(
+    description: str,
+    *,
+    condition_type: str = "auto",
+    aggregation: str = "none",
+) -> str:
+    text = re.sub(r"\s+", " ", str(description or "").strip().casefold())
+    if re.search(r"\b(?:if|would|could|had)\b[^.]{0,100}\b(?:instead|otherwise|happen|occur|result)\b", text):
+        return "counterfactual"
+    if re.search(r"\b(?:most|best)\b[^.]{0,80}\b(?:fits?|explains?|consistent|appropriate)\b", text) or re.search(
+        r"\b(?:interpret|monologue|narrative meaning|thematic)\b", text
+    ):
+        return "interpretive"
+    if re.search(
+        r"\b(?:compared?|differs?|different from|consistent with|implies?|inferred?|conclusion|"
+        r"final decision|original plan|latest valid episode is selected|choice is consistent)\b",
+        text,
+    ):
+        return "derivable"
+    if aggregation not in {"", "none"} or re.search(
+        r"\b(?:count|enumerate|aggregate|deduplicate|all qualified|every counted|total number)\b",
+        text,
+    ):
+        return "aggregatable"
+    if condition_type in {"presence", "measurement", "relation", "temporal", "lexical_navigation"}:
+        return "observable"
+    return "observable"
 
 
 def _requires_global_scope(description: str) -> bool:

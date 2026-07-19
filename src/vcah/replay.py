@@ -14,6 +14,19 @@ from uuid import uuid4
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _FIVE_SEED_CASE_IDS = frozenset({"441-2", "441-4", "445-2", "445-3"})
+REPLAY_SCHEMA_VERSION = 2
+REPLAY_COMPATIBILITY_FIELDS = (
+    "case_id",
+    "seed",
+    "gold_option",
+    "raw_option",
+    "final_option",
+    "correct",
+    "answer_mode",
+    "grounding_status",
+    "investigation_ordering",
+    "execution_health",
+)
 
 
 def stable_hash(value: Any) -> str:
@@ -92,7 +105,7 @@ def create_immutable_run(
     _exclusive_json(
         root / "config.json",
         {
-            "schema_version": 1,
+            "schema_version": REPLAY_SCHEMA_VERSION,
             "run_id": normalized_id,
             "config_hash": config_hash,
             **normalized_config,
@@ -167,17 +180,47 @@ def replay_case_metadata(
     retry_count = 0
     costs: Counter[str] = Counter()
     visual_input_count = 0
+    length_count = 0
+    format_repair_count = 0
+    repair_failure_count = 0
+    images_requested = 0
+    images_attached = 0
+    images_dropped = 0
+    model_response_count = 0
     for row in interactions:
         metadata = dict(row.get("api_response", {}) or {})
         request_id = str(metadata.get("provider_request_id", "") or "")
+        duplicate_request = bool(request_id and request_id in request_ids)
         if request_id and request_id not in request_ids:
             request_ids.append(request_id)
+        if duplicate_request:
+            continue
         retry_count += int(metadata.get("retry_count", 0) or 0)
         for key in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
             value = metadata.get(key)
             if isinstance(value, (int, float)):
                 costs[key] += int(value)
         visual_input_count += len(tuple(row.get("image_paths", row.get("frame_paths", ())) or ()))
+        length_count += int(str(metadata.get("finish_reason", "") or "").casefold() == "length")
+        length_count += int(bool(metadata.get("truncated_then_retried")))
+        format_repair_count += int(bool(metadata.get("format_repaired")))
+        repair_failure_count += int(bool(metadata.get("repair_failed")))
+        images_requested += int(metadata.get("images_requested", 0) or 0)
+        images_attached += int(metadata.get("images_attached", 0) or 0)
+        images_dropped += int(metadata.get("images_dropped", 0) or 0)
+        finish_reason = str(metadata.get("finish_reason", "") or "").casefold()
+        is_model_response = finish_reason != "image_attachment_failed" and any(
+            key in metadata
+            for key in (
+                "finish_reason",
+                "prompt_tokens",
+                "completion_tokens",
+                "reasoning_tokens",
+                "provider_request_id",
+            )
+        )
+        if is_model_response:
+            model_response_count += 1 + int(metadata.get("truncation_retry_count", 0) or 0)
 
     logical_trace = tuple(
         dict(row) for row in tuple(case_summary.get("trace", ()) or ()) if isinstance(row, Mapping)
@@ -202,7 +245,77 @@ def replay_case_metadata(
     final_answer = str(case_summary.get("answer", outcome.get("answer", "")) or "")
     raw_option = _as_option(raw_answer)
     final_option = _as_option(final_answer)
+    investigator_batches = [row for row in logical_trace if row.get("type") == "investigator_batch"]
+    eligible_reasoner_rounds = {
+        int(row.get("round", 0) or 0)
+        for row in logical_trace
+        if row.get("type") == "reasoner_decision"
+        and str(row.get("action", "") or "") == "investigate"
+        and int(row.get("task_count", 0) or 0) > 0
+        and int(row.get("remaining_budget", 0) or 0) > 0
+    }
+    executed_reasoner_rounds = {
+        int(row.get("round", 0) or 0)
+        for row in investigator_batches
+        if int(row.get("requested_tasks", 0) or 0) > 0
+    }
+    proposed_reasoner_tasks = sum(
+        int(row.get("task_count", 0) or 0)
+        for row in logical_trace
+        if row.get("type") == "reasoner_decision"
+        and str(row.get("action", "") or "") == "investigate"
+        and int(row.get("remaining_budget", 0) or 0) > 0
+    )
+    dispatched_reasoner_tasks = sum(int(row.get("requested_tasks", 0) or 0) for row in investigator_batches)
+    system_tasks = sum(int(row.get("system_suggestion_tasks", 0) or 0) for row in investigator_batches)
+    accepted_tasks = sum(int(row.get("accepted_tasks", 0) or 0) for row in investigator_batches)
+    no_information_gain_tasks = sum(
+        int(row.get("no_information_gain_tasks", 0) or 0) for row in investigator_batches
+    )
+    override_count = sum(
+        1
+        for row in logical_trace
+        if row.get("type") in {"repair_override", "navigation_drilldown_override", "candidate_dispatch_conversion"}
+    )
+    budget_limit = int(outcome.get("investigation_budget_limit", 0) or 0)
+    cumulative_accepted = 0
+    budget_exhausted_round = 0
+    for row in sorted(investigator_batches, key=lambda item: int(item.get("round", 0) or 0)):
+        cumulative_accepted += int(row.get("accepted_tasks", 0) or 0)
+        if budget_limit > 0 and cumulative_accepted >= budget_limit:
+            budget_exhausted_round = int(row.get("round", 0) or 0)
+            break
+    execution_health = {
+        "model_response_count": model_response_count,
+        "finish_reason_length_count": length_count,
+        "finish_reason_length_ratio": round(length_count / max(1, model_response_count), 6),
+        "format_repair_count": format_repair_count,
+        "repair_failure_count": repair_failure_count,
+        "accepted_investigation_count": int(case_summary.get("accepted_investigations", accepted_tasks) or 0),
+        "no_information_gain_task_count": no_information_gain_tasks,
+        "system_suggestion_task_count": system_tasks,
+        "system_task_budget_ratio": round(
+            float(outcome.get("system_task_budget_ratio_actual", system_tasks / max(1, accepted_tasks)) or 0.0),
+            6,
+        ),
+        "system_override_count": override_count,
+        "reasoner_investigation_round_count": len(eligible_reasoner_rounds),
+        "reasoner_executed_round_count": len(eligible_reasoner_rounds & executed_reasoner_rounds),
+        "reasoner_task_execution_rate": round(
+            len(eligible_reasoner_rounds & executed_reasoner_rounds) / max(1, len(eligible_reasoner_rounds)),
+            6,
+        ),
+        "reasoner_task_count": proposed_reasoner_tasks,
+        "reasoner_dispatched_task_count": dispatched_reasoner_tasks,
+        "budget_exhausted_round": budget_exhausted_round,
+        "budget_exhausted_before_round3": bool(budget_exhausted_round and budget_exhausted_round < 3),
+        "images_requested": images_requested,
+        "images_attached": images_attached,
+        "images_dropped": images_dropped,
+        "forced_choice": str(case_summary.get("answer_mode", outcome.get("answer_mode", "")) or "") == "forced_choice",
+    }
     return {
+        "schema_version": REPLAY_SCHEMA_VERSION,
         "case_id": str(case_summary.get("case_id", root.name) or root.name),
         "seed": int(seed),
         "gold_option": str(gold_option or ""),
@@ -235,7 +348,50 @@ def replay_case_metadata(
             "reasoning_tokens": int(costs["reasoning_tokens"]),
             "visual_input_count": visual_input_count,
         },
+        "execution_health": execution_health,
         **dict(input_checksums),
+    }
+
+
+def compare_replay_records(
+    baseline: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    compatibility_fields: Sequence[str] = REPLAY_COMPATIBILITY_FIELDS,
+) -> dict[str, Any]:
+    """Compare replay format separately from behavior so schema churn cannot mask regressions."""
+    missing = [field for field in compatibility_fields if field not in current]
+    type_mismatches = [
+        field
+        for field in compatibility_fields
+        if field in baseline and field in current and type(baseline[field]) is not type(current[field])
+    ]
+    baseline_health = dict(baseline.get("execution_health", {}) or {})
+    current_health = dict(current.get("execution_health", {}) or {})
+    metric_keys = (
+        "finish_reason_length_ratio",
+        "format_repair_count",
+        "repair_failure_count",
+        "no_information_gain_task_count",
+        "system_task_budget_ratio",
+        "system_override_count",
+        "reasoner_task_execution_rate",
+        "budget_exhausted_before_round3",
+        "images_dropped",
+    )
+    semantic_delta = {
+        key: round(float(current_health.get(key, 0.0) or 0.0) - float(baseline_health.get(key, 0.0) or 0.0), 6)
+        for key in metric_keys
+    }
+    semantic_delta["correct"] = int(bool(current.get("correct"))) - int(bool(baseline.get("correct")))
+    semantic_delta["forced_choice"] = int(bool(current_health.get("forced_choice"))) - int(
+        bool(baseline_health.get("forced_choice"))
+    )
+    return {
+        "format_compatible": not missing and not type_mismatches,
+        "missing_fields": missing,
+        "type_mismatches": type_mismatches,
+        "semantic_delta": semantic_delta,
     }
 
 
@@ -248,6 +404,9 @@ def aggregate_seed_results(case_records: Sequence[Mapping[str, Any]]) -> dict[st
     total_raw_correct_to_final_wrong = 0
     total_same_evidence_drift = 0
     total_cost: Counter[str] = Counter()
+    total_health: Counter[str] = Counter()
+    total_correct = 0
+    total_forced = 0
     for case_id, rows in sorted(grouped.items()):
         raw_answers = [str(row.get("raw_option", "") or "") for row in rows]
         final_answers = [str(row.get("final_option", "") or "") for row in rows]
@@ -283,6 +442,15 @@ def aggregate_seed_results(case_records: Sequence[Mapping[str, Any]]) -> dict[st
             for key, value in dict(row.get("frame_vlm_cost", {}) or {}).items():
                 if isinstance(value, (int, float)):
                     total_cost[str(key)] += int(value)
+            for key, value in dict(row.get("execution_health", {}) or {}).items():
+                if isinstance(value, bool):
+                    total_health[str(key)] += int(value)
+                elif isinstance(value, (int, float)) and key not in {
+                    "finish_reason_length_ratio", "system_task_budget_ratio", "reasoner_task_execution_rate"
+                }:
+                    total_health[str(key)] += float(value)
+            total_correct += int(bool(row.get("correct", False)))
+            total_forced += int(str(row.get("answer_mode", "") or "") == "forced_choice")
         total_raw_correct_to_final_wrong += raw_correct_to_final_wrong
         total_same_evidence_drift += same_evidence_drift
         per_case[case_id] = {
@@ -295,6 +463,7 @@ def aggregate_seed_results(case_records: Sequence[Mapping[str, Any]]) -> dict[st
             "answer_mutation_source_distribution": _distribution((*mutation_sources, *selection_sources)),
             "raw_correct_to_final_wrong": raw_correct_to_final_wrong,
             "same_evidence_answer_drift": same_evidence_drift,
+            "accuracy": round(sum(bool(row.get("correct", False)) for row in rows) / max(1, len(rows)), 6),
         }
     protocol = {
         case_id: {
@@ -305,6 +474,21 @@ def aggregate_seed_results(case_records: Sequence[Mapping[str, Any]]) -> dict[st
     }
     for row in protocol.values():
         row["satisfied"] = row["actual_seed_count"] >= row["required_seed_count"]
+    overall_health = dict(sorted(total_health.items()))
+    overall_health["finish_reason_length_ratio"] = round(
+        float(total_health["finish_reason_length_count"]) / max(1.0, float(total_health["model_response_count"])),
+        6,
+    )
+    overall_health["system_task_budget_ratio"] = round(
+        float(total_health["system_suggestion_task_count"])
+        / max(1.0, float(total_health["accepted_investigation_count"])),
+        6,
+    )
+    overall_health["reasoner_task_execution_rate"] = round(
+        float(total_health["reasoner_executed_round_count"])
+        / max(1.0, float(total_health["reasoner_investigation_round_count"])),
+        6,
+    )
     return {
         "per_case": per_case,
         "targeted_seed_protocol": protocol,
@@ -313,6 +497,11 @@ def aggregate_seed_results(case_records: Sequence[Mapping[str, Any]]) -> dict[st
             "run_count": len(case_records),
             "raw_correct_to_final_wrong": total_raw_correct_to_final_wrong,
             "same_evidence_answer_drift": total_same_evidence_drift,
+            "correct_count": total_correct,
+            "accuracy": round(total_correct / max(1, len(case_records)), 6),
+            "forced_choice_count": total_forced,
+            "forced_choice_rate": round(total_forced / max(1, len(case_records)), 6),
             "frame_vlm_cost": dict(sorted(total_cost.items())),
+            "execution_health": overall_health,
         },
     }

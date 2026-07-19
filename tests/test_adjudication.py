@@ -124,7 +124,7 @@ def test_heuristic_only_provenance_blocks_hard_override() -> None:
     assert "provenance_insufficient" in guard.blockers
 
 
-def test_fresh_complete_guard_allows_single_final_adjudicator_mutation() -> None:
+def test_fresh_complete_guard_cannot_mutate_reasoner_answer() -> None:
     context = _context()
     result = final_adjudicate(
         options=OPTIONS,
@@ -138,10 +138,11 @@ def test_fresh_complete_guard_allows_single_final_adjudicator_mutation() -> None
         revision_context=context,
     )
 
-    assert result.answer == "H. stale recommendation"
-    assert result.selection_source == "final_adjudicator_hard_override"
-    assert len(result.answer_mutation_events) == 1
-    assert result.answer_selection_event["answer_mutation_event_count"] == 1
+    assert result.answer == "D. raw answer"
+    assert result.answer_mode == "forced_choice"
+    assert result.selection_source == "raw_reasoner"
+    assert result.answer_mutation_events == ()
+    assert result.answer_selection_event["answer_mutation_event_count"] == 0
 
 
 def test_required_invalid_audit_cannot_preserve_raw_answer_as_grounded() -> None:
@@ -208,7 +209,7 @@ def test_partial_supplied_audit_is_invalid_even_when_audit_is_optional() -> None
     assert "all_option_verdicts_incomplete" in audit["invalidity_flags"]
 
 
-def test_soft_audit_correction_is_forced_only_and_requires_admissible_predicate() -> None:
+def test_soft_audit_correction_is_telemetry_only() -> None:
     context = _context()
     table = _fresh_table(context)
     table["option_verdicts"]["H"].update({
@@ -232,11 +233,12 @@ def test_soft_audit_correction_is_forced_only_and_requires_admissible_predicate(
         revision_context=context,
     )
 
-    assert result.answer == "H. stale recommendation"
+    assert result.answer == "D. raw answer"
     assert result.answer_mode == "forced_choice"
     assert result.verified is False
-    assert result.selection_source == "soft_audit_correction"
-    assert result.answer_mutation_events[0]["source"] == "soft_audit_correction"
+    assert result.selection_source == "raw_reasoner"
+    assert result.answer_mutation_events == ()
+    assert result.soft_audit_guard.allowed is True
 
 
 def test_soft_audit_correction_fails_closed_for_heuristic_or_unresolved_episode() -> None:

@@ -11,7 +11,7 @@ from PIL import Image
 import vcah.multiround as multiround
 from vcah.evidence_primitives import ConditionResult, ConditionState
 from vcah.multiround import EvidenceGap, InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
-from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
+from vcah.investigator import InvestigationReport, ObservationAttempt, VirtualVideoInvestigator
 from vcah.types import CoverageSegment, EvidenceRecord, Frame
 from vcah.virtual_index import build_virtual_beat_index
 from vcah.virtual_video import (
@@ -626,6 +626,7 @@ def test_repair_tasks_inherit_gap_and_condition_ids() -> None:
         "Identify the second overtaker in the last qualified episode.",
         scope="full_video",
         quantifier="all_events",
+        evaluation_type="observable",
     )
     gap = EvidenceGap(
         "gap_last_episode",
@@ -1107,6 +1108,34 @@ def test_task_progress_fingerprint_ignores_reworded_query_id_but_allows_strategy
 
     assert multiround._task_progress_fingerprint(first) == multiround._task_progress_fingerprint(renamed)
     assert multiround._task_progress_fingerprint(first) != multiround._task_progress_fingerprint(denser)
+
+
+def test_task_clone_with_preserves_derived_and_lineage_fields() -> None:
+    task = InvestigationTask(
+        "q_event",
+        "Enumerate the selected event.",
+        segment_id="seg_1",
+        modality_hint=("visual", "ocr"),
+        expected_evidence="timestamped event occurrences",
+        inspection_mode="enumerate_events",
+        priority=0.75,
+        gap_id="gap_1",
+        source_candidate_ids=("candidate_1",),
+        target_condition_ids=("condition_1",),
+        reference_facts=({"fact_id": "anchor_1"},),
+    )
+
+    cloned = task.clone_with(time_range=(10.0, 20.0), inspection_mode="event_window")
+
+    assert cloned.query_id == task.query_id
+    assert cloned.time_range == (10.0, 20.0)
+    assert cloned.inspection_mode == "event_window"
+    assert cloned.modality_hint == task.modality_hint
+    assert cloned.source_candidate_ids == task.source_candidate_ids
+    assert cloned.target_requirement_ids == task.target_requirement_ids
+    assert cloned.reference_facts == task.reference_facts
+    assert cloned.priority == task.priority
+    assert cloned.sampling_floor_specified is task.sampling_floor_specified is False
 
 
 class ScriptedReasoner:
@@ -1889,20 +1918,43 @@ def _two_chunk_workspace(tmp_path: Path) -> VirtualVideoWorkspace:
     return VirtualVideoWorkspace.load(workspace.root_dir)
 
 
+def _full_visual_coverage_status(workspace: VirtualVideoWorkspace) -> dict[str, object]:
+    inspected_ranges = tuple(
+        (float(segment.virtual_start_sec), float(segment.virtual_end_sec))
+        for segment in workspace.manifest.segments
+    )
+    attempt = ObservationAttempt(
+        attempt_id="attempt_full_workspace",
+        task_id="q_full_workspace",
+        requested_range=(0.0, float(workspace.manifest.duration_sec)),
+        inspected_ranges=inspected_ranges,
+        attached_frame_times=tuple(start for start, _ in inspected_ranges),
+        sampling_config={"modality": "visual", "mode": "enumerate_events", "fps": 1.0},
+        images_requested=len(inspected_ranges),
+        images_attached=len(inspected_ranges),
+        parse_status="parsed",
+        outcome="found",
+    )
+    return {
+        "effective_scope": "full_video",
+        "ready_for_answer": True,
+        "source_coverage": multiround._source_coverage(workspace, (attempt,)),
+    }
+
+
 def test_source_coverage_requires_interval_coverage_not_only_segment_id(tmp_path: Path) -> None:
     workspace = _two_chunk_workspace(tmp_path)
-    partial = EvidenceRecord(
-        evidence_id="ev_partial_segment",
-        beat_id="",
-        start_sec=0.0,
-        end_sec=2.0,
-        modality="visual",
-        pointer="virtual://partial",
-        verbatim="Only the first two seconds were inspected.",
-        frame_refs=("frame.jpg",),
-        source_lineage=(
-            {"source_video_id": "target", "segment_id": "seg_target_a", "virtual_time_range": [0.0, 2.0]},
-        ),
+    partial = ObservationAttempt(
+        attempt_id="attempt_partial_segment",
+        task_id="q_partial_segment",
+        requested_range=(0.0, 5.0),
+        inspected_ranges=((0.0, 2.0),),
+        attached_frame_times=(0.0, 1.0),
+        sampling_config={"modality": "visual", "mode": "window", "fps": 1.0},
+        images_requested=2,
+        images_attached=2,
+        parse_status="parsed",
+        outcome="found",
     )
 
     coverage = multiround._source_coverage(workspace, (partial,))["target"]
@@ -1926,6 +1978,35 @@ def test_event_coverage_repair_requests_entire_segment_at_high_resolution(tmp_pa
     assert task.time_range == (10.0, 15.0)
     assert task.inspection_mode == "enumerate_events"
     assert task.sampling_floor_fps == 2.0
+
+
+def test_coverage_repair_requests_only_the_uninspected_interval(tmp_path: Path) -> None:
+    workspace = _two_chunk_workspace(tmp_path)
+    contract = multiround.compile_query_contract(workspace.case.question, workspace.case.options)
+    attempt = ObservationAttempt(
+        attempt_id="attempt_partial_a",
+        task_id="q_partial_a",
+        requested_range=(0.0, 5.0),
+        inspected_ranges=((0.0, 2.0),),
+        attached_frame_times=(0.0, 1.0),
+        sampling_config={"modality": "visual", "mode": "window", "fps": 1.0},
+        images_requested=2,
+        images_attached=2,
+        parse_status="parsed",
+        outcome="found",
+    )
+    coverage = multiround._source_coverage(workspace, (attempt,))
+
+    tasks = multiround._coverage_repair_tasks(
+        workspace,
+        2,
+        ("seg_target_a",),
+        contract,
+        limit=2,
+        coverage_status=coverage,
+    )
+
+    assert tuple(task.time_range for task in tasks) == ((2.0, 5.0),)
 
 
 def _identity_repair_workspace(tmp_path: Path) -> VirtualVideoWorkspace:
@@ -2041,10 +2122,14 @@ def test_multiround_driver_caps_tasks_and_requires_cited_visual_evidence(tmp_pat
 
     assert result.answer == "B. 11"
     assert result.correct is True
-    assert result.accepted_investigations == 4
+    assert result.accepted_investigations == 1
     assert result.rounds == 2
     assert result.citations == ("ev_q0_001",)
     assert result.evidence[0].source_lineage[0]["source_time_range"] == [10.0, 13.5]
+    batch = next(row for row in result.trace if row.get("type") == "investigator_batch")
+    assert batch["requested_tasks"] == 4
+    assert batch["accepted_tasks"] == 1
+    assert batch["no_information_gain_tasks"] == 3
     evidence_rows = [
         json.loads(line)
         for line in (workspace.root_dir / "evidence.jsonl").read_text(encoding="utf-8").splitlines()
@@ -2539,7 +2624,7 @@ def test_identity_completion_respects_explicit_negative_anchor_attestation(tmp_p
     assert completion["identity_anchor_evidence_ids"] == []
 
 
-def test_full_video_count_repairs_coverage_but_does_not_strictly_verify_unknown_condition(tmp_path: Path) -> None:
+def test_full_video_count_keeps_coverage_repair_advisory(tmp_path: Path) -> None:
     workspace = _two_chunk_workspace(tmp_path)
     reasoner = CoverageReasoner()
     investigator = VirtualVideoInvestigator(workspace, sampler=_sampler)
@@ -2562,22 +2647,25 @@ def test_full_video_count_repairs_coverage_but_does_not_strictly_verify_unknown_
     assert result.grounding_status == "insufficient"
     assert result.grounding_level == "none"
     assert result.retrieval_status == "failed"
-    assert result.verification_reason == "entity_cluster_evidence_invalid"
-    assert reasoner.calls >= 3
-    # Full-video obligations now take precedence in the first round, so the
-    # first post-dispatch status already reflects both mandatory repairs.
+    assert result.verification_reason == "full_source_coverage_missing"
+    assert reasoner.calls == 5
     assert reasoner.completion_statuses[0]["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
-    assert reasoner.completion_statuses[1]["missing_segment_ids"] == []
+    assert reasoner.completion_statuses[1]["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
     assert all(status["effective_scope"] == "full_video" for status in reasoner.completion_statuses)
     assert all(
         status["query_obligations"]["effective_scope"] == status["effective_scope"]
         for status in reasoner.completion_statuses
     )
-    repair = next(row for row in result.trace if row.get("type") == "repair_override")
-    assert repair["missing_segment_ids"] == ["seg_target_a", "seg_target_b"]
+    assert not [row for row in result.trace if row.get("type") == "repair_override"]
+    suggestions = [row for row in result.trace if row.get("type") == "policy_suggestions"]
+    assert any(
+        suggestion["reason"] == "uninspected_source_range"
+        for row in suggestions
+        for suggestion in row["suggestions"]
+    )
     gates = [row for row in result.trace if row.get("type") == "completion_gate"]
     assert gates[-1]["passed"] is False
-    assert gates[-1]["reason"] == "entity_cluster_evidence_invalid"
+    assert gates[-1]["reason"] == "full_source_coverage_missing"
     selections = [row for row in result.trace if row.get("type") == "answer_selection_event"]
     outcome = next(row for row in result.trace if row.get("type") == "answer_outcome")
     assert len(selections) == 1
@@ -2607,10 +2695,10 @@ def test_distinct_count_gate_rejects_answer_without_entity_reconciliation(tmp_pa
     assert result.selected_option == "B"
     assert result.answer_mode == "forced_choice"
     assert result.grounding_status == "insufficient"
-    assert result.verification_reason == "invalid_visual_citations"
+    assert result.verification_reason == "full_source_coverage_missing"
     gate = next(row for row in result.trace if row.get("type") == "completion_gate")
     assert gate["passed"] is False
-    assert gate["reason"] == "invalid_visual_citations"
+    assert gate["reason"] == "full_source_coverage_missing"
 
 
 def test_distinct_count_gate_rejects_free_text_entity_without_frame_witness(tmp_path: Path) -> None:
@@ -2653,7 +2741,7 @@ def test_distinct_count_gate_rejects_free_text_entity_without_frame_witness(tmp_
         (evidence.evidence_id,),
         clusters,
         (evidence,),
-        completion_status={"effective_scope": "full_video", "ready_for_answer": True},
+        completion_status=_full_visual_coverage_status(workspace),
     )
 
     assert gate["passed"] is False
@@ -2717,7 +2805,7 @@ def test_distinct_count_gate_accepts_explicit_witnessed_entity_observations(tmp_
         (evidence.evidence_id,),
         clusters,
         (evidence,),
-        completion_status={"effective_scope": "full_video", "ready_for_answer": True},
+        completion_status=_full_visual_coverage_status(workspace),
     )
 
     assert gate["passed"] is True
@@ -2797,7 +2885,7 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
         ("ev_title_card",),
         (),
         (positive, negative),
-        completion_status={"effective_scope": "full_video", "ready_for_answer": True},
+        completion_status=_full_visual_coverage_status(workspace),
     )
 
     assert gate["passed"] is True
@@ -2809,7 +2897,7 @@ def test_full_video_gate_uses_all_observations_for_coverage_but_positive_citatio
         ("ev_title_card",),
         (),
         (positive, negative),
-        completion_status={"effective_scope": "full_video", "ready_for_answer": True},
+        completion_status=_full_visual_coverage_status(workspace),
     )
     assert wrong_count["passed"] is False
     assert wrong_count["reason"] == "event_count_answer_mismatch"
@@ -3175,7 +3263,7 @@ def test_full_video_condition_stays_unknown_until_source_coverage_is_complete() 
     assert complete[state.condition_id].status == "satisfied"
 
 
-def test_driver_bootstraps_an_empty_investigation_decision(tmp_path: Path) -> None:
+def test_driver_does_not_override_an_empty_investigation_decision(tmp_path: Path) -> None:
     class NoTaskReasoner:
         def decide(self, **kwargs: object) -> ReasonerDecision:
             del kwargs
@@ -3189,9 +3277,27 @@ def test_driver_bootstraps_an_empty_investigation_decision(tmp_path: Path) -> No
         max_investigations=1,
     ).run(workspace)
 
-    assert result.accepted_investigations == 1
-    repair = next(row for row in result.trace if row.get("type") == "repair_override")
-    assert repair["reason"] == "empty_investigation_bootstrap"
+    assert result.accepted_investigations == 0
+    assert not [row for row in result.trace if row.get("type") == "repair_override"]
+
+
+def test_system_suggestion_budget_never_rejects_reasoner_owned_tasks() -> None:
+    suggested_a = InvestigationTask("system_a", "Inspect range A.", segment_id="seg_1")
+    suggested_b = InvestigationTask("system_b", "Inspect range B.", segment_id="seg_2")
+    reasoner_owned = InvestigationTask("reasoner_task", "Inspect the chosen clue.", segment_id="seg_3")
+    suggestions = (
+        {"task": {"query_id": "system_a"}},
+        {"task": {"query_id": "system_b"}},
+    )
+
+    accepted, rejected = multiround._enforce_system_task_budget(
+        ReasonerDecision(action="investigate", tasks=(suggested_a, suggested_b, reasoner_owned)),
+        suggestions,
+        remaining_slots=1,
+    )
+
+    assert tuple(task.query_id for task in accepted.tasks) == ("system_a", "reasoner_task")
+    assert tuple(task.query_id for task in rejected) == ("system_b",)
 
 
 def test_navigation_hint_does_not_satisfy_visual_completion(tmp_path: Path) -> None:
@@ -3362,96 +3468,6 @@ def test_candidate_status_requires_explicit_provenance_not_time_overlap() -> Non
     assert inspected[0]["resulting_evidence_ids"] == ["ev_explicit"]
 
 
-def test_contrastive_candidate_override_uses_at_most_one_slot() -> None:
-    hints = tuple(
-        EvidenceRecord(
-            evidence_id=f"ev_{name}", beat_id="", start_sec=start, end_sec=start + 20.0, modality="asr",
-            pointer=f"virtual://{name}", verbatim=" ".join(terms), evidence_kind="navigation_hint",
-            observation_polarity="positive", operation_metadata={"matched_terms": list(terms), "hit_count": 2},
-            source_lineage=({"segment_id": f"seg_{name}", "source_video_id": "source"},),
-        )
-        for name, start, terms in (("firework", 100.0, ("firework",)), ("dog", 20.0, ("dog", "father")))
-    )
-    requested = (
-        InvestigationTask("model_1", "Inspect another firework.", "seg_model_1"),
-        InvestigationTask("model_2", "Inspect a later firework.", "seg_model_2"),
-    )
-    tasks = multiround._prefer_navigation_repairs(
-        requested, hints, options={"A": "A firework explodes", "D": "A dog chases his father"}, round_id=2, limit=2,
-    )
-    assert len(tasks) == 2
-    assert sum(task.query_id.startswith("navigation_repair_") for task in tasks) == 1
-    assert tasks[0].source_candidate_ids == ("ev_dog",)
-
-
-def test_search_round_can_dispatch_one_new_option_linked_candidate() -> None:
-    hint = EvidenceRecord(
-        evidence_id="ev_dog", beat_id="", start_sec=20.0, end_sec=40.0, modality="asr",
-        pointer="virtual://dog", verbatim="dog and father", evidence_kind="navigation_hint",
-        observation_polarity="positive", operation_metadata={"matched_terms": ["dog", "father"], "hit_count": 2},
-        source_lineage=({"segment_id": "seg_dog", "source_video_id": "source"},),
-    )
-    search_tasks = (
-        InvestigationTask("search", "Search competing causes.", inspection_mode="search_asr", search_terms=("dog", "firework")),
-    )
-
-    followup = multiround._post_search_candidate_tasks(
-        search_tasks,
-        (hint,),
-        options={"A": "A firework explodes", "D": "A dog attacks his father"},
-        round_id=6,
-        remaining_round_slots=3,
-        remaining_budget=4,
-    )
-
-    assert len(followup) == 1
-    assert followup[0].source_candidate_ids == ("ev_dog",)
-
-
-def test_search_tasks_yield_to_unresolved_navigation_windows() -> None:
-    hint = EvidenceRecord(
-        evidence_id="ev_dog_hint",
-        beat_id="",
-        start_sec=20.0,
-        end_sec=40.0,
-        modality="asr",
-        pointer="virtual://dog",
-        verbatim="dog growls",
-        evidence_kind="navigation_hint",
-        observation_polarity="positive",
-        task_id="contrastive_search",
-        source_lineage=(
-            {
-                "segment_id": "seg_1",
-                "source_video_id": "source",
-                "source_time_range": [20.0, 40.0],
-                "virtual_time_range": [20.0, 40.0],
-            },
-        ),
-        operation_metadata={
-            "search_terms": ["firework", "fire", "chasing", "dog"],
-            "matched_terms": ["dog"],
-            "hit_count": 2,
-        },
-    )
-    requested = (
-        InvestigationTask("anchor", "Inspect the visual identity anchor.", "seg_7"),
-        InvestigationTask(
-            "search_again",
-            "Search for more candidate causes.",
-            inspection_mode="search_asr",
-            search_terms=("firework", "dog", "fall"),
-        ),
-    )
-
-    tasks = multiround._prefer_navigation_repairs(requested, (hint,), round_id=2, limit=4)
-
-    assert tasks[0] == requested[0]
-    assert all(task.inspection_mode != "search_asr" for task in tasks)
-    assert tasks[1].segment_id == "seg_1"
-    assert tasks[1].time_range == (20.0, 40.0)
-
-
 def test_evidence_digest_exposes_navigation_search_state() -> None:
     hint = EvidenceRecord(
         evidence_id="ev_nav",
@@ -3613,7 +3629,7 @@ def test_score_answer_does_not_treat_indefinite_article_as_option_label() -> Non
     assert multiround._score_answer(answer, "D", options) is True
 
 
-def test_driver_repairs_empty_answers_with_unvisited_identity_anchor_segments(tmp_path: Path) -> None:
+def test_driver_exposes_identity_repairs_as_advisory_only(tmp_path: Path) -> None:
     workspace = _identity_repair_workspace(tmp_path)
     investigator = NegativeAnchorInvestigator(workspace)
 
@@ -3630,10 +3646,14 @@ def test_driver_repairs_empty_answers_with_unvisited_identity_anchor_segments(tm
     assert result.forced_answer == ""
     assert result.selected_option == ""
     assert result.answer_mode == "insufficient"
-    assert result.accepted_investigations == 2
-    assert [task.segment_id for task in investigator.tasks] == ["seg_0", "seg_1"]
-    repairs = [row for row in result.trace if row.get("type") == "repair_override"]
-    assert [row["reason"] for row in repairs] == ["identity_anchor_missing", "identity_anchor_missing"]
+    assert result.accepted_investigations == 0
+    assert investigator.tasks == []
+    assert not [row for row in result.trace if row.get("type") == "repair_override"]
+    suggestions = [row for row in result.trace if row.get("type") == "policy_suggestions"]
+    assert all(
+        any(suggestion["reason"] == "identity_anchor_missing" for suggestion in row["suggestions"])
+        for row in suggestions
+    )
 
 
 def test_identity_gate_requires_anchor_and_event_evidence_in_same_cluster(tmp_path: Path) -> None:

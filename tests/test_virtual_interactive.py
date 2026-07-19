@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from PIL import Image
 
-from vcah.investigator import _choose_window_from_segment_packet
+from vcah.investigator import _choose_window_from_segment_packet, _observation_cache_key
 from vcah.multiround import InvestigationTask
 from vcah.types import EvidenceRecord, Frame
 from vcah import virtual_video
@@ -128,6 +128,22 @@ def test_load_case_group_preserves_order_and_default_construction(tmp_path: Path
     assert group["group_id"] == "diverse-v1"
     assert group["construction"] == "source_only"
     assert group["case_ids"] == ("606-3", "769-1")
+
+
+def test_phase0_smoke_group_is_fixed_and_contains_target4() -> None:
+    path = Path(__file__).resolve().parents[1] / "configs" / "eval_groups" / "videomme_v2_phase0_smoke_v1.json"
+    group = _load_case_group(path)
+
+    assert len(group["case_ids"]) == 10
+    assert tuple(row["case_id"] for row in group["cases"] if row.get("target4")) == (
+        "441-2",
+        "441-4",
+        "445-2",
+        "445-3",
+    )
+    assert group["baseline_policy"]["replay_schema_version"] == 2
+    assert "system_override_count" in group["hard_mechanism_metrics"]
+    assert "reasoner_task_execution_rate" in group["hard_mechanism_metrics"]
 
 
 def test_reasoner_task_normalization_keeps_enumeration_goals() -> None:
@@ -321,38 +337,123 @@ def test_gpt5_client_records_reasoning_token_exhaustion(monkeypatch) -> None:
         text = ""
         headers: dict[str, str] = {}
 
-        @staticmethod
-        def json() -> Mapping[str, Any]:
-            return {
-                "choices": [{"finish_reason": "length", "message": {"content": None}}],
-                "usage": {
-                    "prompt_tokens": 1200,
-                    "completion_tokens": 600,
-                    "completion_tokens_details": {"reasoning_tokens": 600},
-                },
-            }
+        def __init__(self, payload: Mapping[str, Any]) -> None:
+            self.payload = payload
 
-    monkeypatch.setattr(_interactive.requests, "post", lambda *args, **kwargs: Response())
+        def json(self) -> Mapping[str, Any]:
+            return self.payload
+
+    payloads = [
+        {
+            "choices": [{"finish_reason": "length", "message": {"content": None}}],
+            "usage": {
+                "prompt_tokens": 1200,
+                "completion_tokens": 600,
+                "completion_tokens_details": {"reasoning_tokens": 600},
+            },
+        },
+        {
+            "choices": [{"finish_reason": "stop", "message": {"content": '{"ok":true}'}}],
+            "usage": {
+                "prompt_tokens": 1200,
+                "completion_tokens": 40,
+                "completion_tokens_details": {"reasoning_tokens": 20},
+            },
+        },
+    ]
+    requests: list[dict[str, Any]] = []
+
+    def post(*args: Any, **kwargs: Any) -> Response:
+        del args
+        requests.append(dict(kwargs))
+        return Response(payloads.pop(0))
+
+    monkeypatch.setattr(_interactive.requests, "post", post)
     client = OpenAICompatibleVisionClient(
         {"base": "https://gateway.invalid/v1", "model": "gpt-5.5", "api_key": "secret"}
     )
 
-    assert client.chat("Return JSON.", max_tokens=600) == ""
-    assert client.last_response_metadata == {
-        "finish_reason": "length",
-        "prompt_tokens": 1200,
-        "completion_tokens": 600,
-        "reasoning_tokens": 600,
-        "content_chars": 0,
-        "requested_completion_tokens": 600,
-        "provider_request_id": "",
-        "retry_count": 0,
-        "temperature": None,
-        "top_p": None,
-        "requested_seed": None,
-        "provider_seed_supported": False,
-        "provider_reported_seed_support": "unknown",
-    }
+    assert client.chat("Return JSON.", max_tokens=600) == '{"ok":true}'
+    assert len(requests) == 2
+    assert requests[0]["json"]["messages"] == requests[1]["json"]["messages"]
+    assert requests[0]["json"]["max_completion_tokens"] == 600
+    assert requests[1]["json"]["max_completion_tokens"] == 4096
+    assert client.last_response_metadata["finish_reason"] == "stop"
+    assert client.last_response_metadata["truncated_then_retried"] is True
+    assert client.last_response_metadata["truncation_retry_count"] == 1
+    assert client.last_response_metadata["initial_truncated_response"]["reasoning_tokens"] == 600
+
+
+def test_vision_client_fails_before_request_when_an_image_is_missing(tmp_path: Path, monkeypatch) -> None:
+    called = False
+
+    def post(*args: Any, **kwargs: Any) -> None:
+        nonlocal called
+        del args, kwargs
+        called = True
+
+    monkeypatch.setattr(_interactive.requests, "post", post)
+    client = OpenAICompatibleVisionClient(
+        {"base": "https://gateway.invalid/v1", "model": "gemini-test", "api_key": "secret"}
+    )
+
+    try:
+        client.chat("Inspect this image.", image_paths=(str(tmp_path / "missing.jpg"),))
+    except RuntimeError as exc:
+        assert "Image attachment failed" in str(exc)
+    else:
+        raise AssertionError("missing visual input must fail the request")
+
+    assert called is False
+    assert client.last_response_metadata["images_requested"] == 1
+    assert client.last_response_metadata["images_attached"] == 0
+    assert client.last_response_metadata["images_dropped"] == 1
+    assert client.last_response_metadata["finish_reason"] == "image_attachment_failed"
+
+
+def test_investigator_records_missing_images_as_a_failed_attempt(tmp_path: Path, monkeypatch) -> None:
+    workspace = _workspace(tmp_path)
+
+    def missing_sampler(
+        video_path: str,
+        start_sec: float,
+        end_sec: float,
+        n_frames: int,
+        out_dir: Path,
+    ) -> tuple[Frame, ...]:
+        del video_path, end_sec, n_frames
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return (Frame("missing_frame", float(start_sec), str(out_dir / "missing.jpg")),)
+
+    def unexpected_post(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise AssertionError("the provider must not be called without the requested image")
+
+    monkeypatch.setattr(_interactive.requests, "post", unexpected_post)
+    client = OpenAICompatibleVisionClient(
+        {"base": "https://gateway.invalid/v1", "model": "gemini-test", "api_key": "secret"}
+    )
+    trace_path = workspace.root_dir / "interactions.jsonl"
+    investigator = GeminiInvestigator(workspace, api=client, trace_path=trace_path)
+    investigator.sampler = missing_sampler
+    task = InvestigationTask(
+        "q_missing_image",
+        "Inspect the visible label.",
+        segment_id="seg_0001",
+        time_range=(0.0, 5.0),
+    )
+
+    report = investigator.run_batch((task,))[0]
+
+    assert report.status == "failed"
+    assert report.evidence == ()
+    assert report.cost["consumes_budget"] is False
+    assert report.attempts[0].outcome == "failed"
+    assert report.attempts[0].images_dropped == report.attempts[0].images_requested
+    assert report.attempts[0].images_dropped > 0
+    trace = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert trace[-1]["type"] == "investigator_image_attachment_failure"
+    assert trace[-1]["api_response"]["images_dropped"] == report.attempts[0].images_dropped
 
 
 def test_run_case_assigns_text_only_reasoner_and_multimodal_investigator(tmp_path: Path, monkeypatch) -> None:
@@ -760,7 +861,7 @@ def test_model_investigator_records_empty_asr_search_as_negative_navigation(tmp_
     assert "No literal ASR matches" in record.verbatim
 
 
-def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> None:
+def test_gemini_reasoner_keeps_model_audit_repair_tasks_advisory(tmp_path: Path) -> None:
     frame_path = tmp_path / "audit_evidence.jpg"
     Image.new("RGB", (64, 36), color=(70, 80, 90)).save(frame_path)
     evidence_record = EvidenceRecord(
@@ -827,10 +928,14 @@ def test_gemini_reasoner_dispatches_model_audit_repair_tasks(tmp_path: Path) -> 
         ),
     )
 
-    assert decision.action == "investigate"
-    assert decision.tasks[0].query_id == "audit_r2_t1"
+    assert decision.action == "answer"
+    assert decision.answer == "D. A downstream benefit."
+    assert decision.tasks == ()
+    assert decision.support_status == "insufficient"
+    assert "consequence" in decision.support_reason
     assert len(api.calls) == 2
     assert "Do not reward citation relevance alone" in api.calls[1]["prompt"]
+    assert "non-planning and non-selecting" in api.calls[1]["prompt"]
     assert "strongest_alternative" in api.calls[1]["prompt"]
     assert '"option_assessments"' not in api.calls[1]["prompt"]
     assert api.calls[1]["max_tokens"] >= 1400
@@ -931,7 +1036,9 @@ def test_gemini_reasoner_preserves_candidate_when_forced_finalization_still_inve
     first = reasoner.decide(**kwargs, remaining_budget=2)
     final = reasoner.decide(**kwargs, remaining_budget=0, force_finalize=True)
 
-    assert first.action == "investigate"
+    assert first.action == "answer"
+    assert first.answer == "A. Five."
+    assert first.support_status == "insufficient"
     assert final.action == "answer"
     assert final.answer == "A. Five."
     assert final.support_status == "insufficient"
@@ -1462,7 +1569,7 @@ def test_reasoner_trace_keeps_original_response_metadata_when_json_repair_runs(t
     assert rows_by_type["reasoner_json_repair"]["api_response"]["finish_reason"] == "stop"
 
 
-def test_gemini_reasoner_records_audit_revision_as_unadopted_challenge(tmp_path: Path) -> None:
+def test_gemini_reasoner_treats_audit_as_non_selecting_contradiction_check(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (
             {"action": "answer", "answer": "A. Five.", "citations": ["ev_1"]},
@@ -1501,14 +1608,12 @@ def test_gemini_reasoner_records_audit_revision_as_unadopted_challenge(tmp_path:
     assert decision.action == "answer"
     assert decision.answer == "A. Five."
     assert decision.citations == ("ev_1",)
-    assert decision.support_status == "insufficient"
+    assert decision.support_status == "contradicted"
     rows = [json.loads(line) for line in (tmp_path / "interactions.jsonl").read_text().splitlines()]
-    challenge = next(row for row in rows if row["type"] == "reasoner_answer_challenge")
-    assert challenge["parsed"]["proposed_answer"] == "D. Six."
-    assert challenge["parsed"]["adopted"] is False
+    assert not [row for row in rows if row["type"] == "reasoner_answer_challenge"]
 
 
-def test_gemini_reasoner_dispatches_independent_claim_verification_for_relation_answers(tmp_path: Path) -> None:
+def test_gemini_reasoner_does_not_dispatch_independent_claim_verification(tmp_path: Path) -> None:
     api = ScriptedVisionClient(
         (
             {"action": "answer", "answer": "D. A downstream benefit.", "citations": ["ev_1"]},
@@ -1538,12 +1643,10 @@ def test_gemini_reasoner_dispatches_independent_claim_verification_for_relation_
         ),
     )
 
-    assert decision.action == "investigate"
-    assert decision.tasks[0].inspection_mode == "verify_claim"
-    assert decision.tasks[0].claim_to_verify.startswith("D.")
-    assert decision.tasks[0].claim_relation == "decision_motive"
-    assert decision.tasks[0].segment_id == "seg_0002"
-    assert decision.tasks[0].time_range == (0.0, 300.0)
+    assert decision.action == "answer"
+    assert decision.answer == "D. A downstream benefit."
+    assert decision.tasks == ()
+    assert len(api.calls) == 2
 
 
 def test_comparison_and_sequence_contracts_require_independent_claim_verification() -> None:
@@ -2438,11 +2541,66 @@ def test_model_investigator_enumerates_each_beat_within_one_event_count_task(tmp
     assert sum(len(record.operation_metadata["events"]) for record in report.evidence) == 1
     assert report.cost["beat_windows"] == 1
 
-    reused = investigator.run_batch((replace(task, query_id="q_title_cards_repeat"),))[0]
+    reused = investigator.run_batch((task,))[0]
 
     assert len(api.calls) == 1
     assert reused.cost["reused"] is True
     assert reused.cost["vlm_calls"] == 0
+
+
+def test_event_enumeration_intersects_the_declared_task_window() -> None:
+    packet = {"virtual_time_range": [0.0, 180.0]}
+    full = InvestigationTask(
+        "q_full", "Enumerate events.", segment_id="seg_1", inspection_mode="enumerate_events"
+    )
+    partial = full.clone_with(query_id="q_partial", time_range=(40.0, 75.0))
+    outside = full.clone_with(query_id="q_outside", time_range=(190.0, 220.0))
+
+    assert _interactive._event_enumeration_windows(full, packet) == ((0.0, 180.0),)
+    assert _interactive._event_enumeration_windows(partial, packet) == ((40.0, 75.0),)
+    assert _interactive._event_enumeration_windows(outside, packet) == ()
+
+
+def test_event_cache_key_separates_range_mode_and_target_identity() -> None:
+    packet = {"virtual_time_range": [0.0, 180.0]}
+    base = InvestigationTask(
+        "q_base",
+        "Enumerate title cards.",
+        segment_id="seg_1",
+        time_range=(0.0, 60.0),
+        inspection_mode="enumerate_events",
+        target_requirement_ids=("title_card",),
+    )
+    reworded = base.clone_with(query_id="q_reworded", goal="Find every title card occurrence.")
+    shifted = base.clone_with(time_range=(60.0, 120.0))
+    different_mode = base.clone_with(inspection_mode="event_window")
+    different_target = base.clone_with(target_requirement_ids=("speaker_entry",))
+
+    base_key = _interactive._event_cache_key(base, packet)
+    assert _interactive._event_cache_key(reworded, packet) == base_key
+    assert _interactive._event_cache_key(shifted, packet) != base_key
+    assert _interactive._event_cache_key(different_mode, packet) != base_key
+    assert _interactive._event_cache_key(different_target, packet) != base_key
+
+
+def test_general_observation_cache_key_is_structural() -> None:
+    base = InvestigationTask(
+        "q_base",
+        "Read the visible label.",
+        segment_id="seg_1",
+        time_range=(10.0, 20.0),
+        target_requirement_ids=("label_text",),
+    )
+    reworded = base.clone_with(query_id="q_reworded", goal="Transcribe the label exactly.")
+    shifted = base.clone_with(time_range=(20.0, 30.0))
+    different_mode = base.clone_with(inspection_mode="verify_claim")
+    different_target = base.clone_with(target_requirement_ids=("score_text",))
+
+    base_key = _observation_cache_key(base, *base.time_range)
+    assert _observation_cache_key(reworded, *reworded.time_range) == base_key
+    assert _observation_cache_key(shifted, *shifted.time_range) != base_key
+    assert _observation_cache_key(different_mode, *different_mode.time_range) != base_key
+    assert _observation_cache_key(different_target, *different_target.time_range) != base_key
 
 
 def test_model_investigator_stops_after_sufficient_preview(tmp_path: Path) -> None:
@@ -2604,19 +2762,10 @@ def test_anchor_event_window_uses_compact_schema_and_keeps_anchor(tmp_path: Path
     ]
 
 
-def test_model_investigator_adapts_not_found_across_fps_and_phase(tmp_path: Path) -> None:
+def test_model_investigator_returns_not_found_to_reasoner_without_densifying(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(
-        (
-            {"summary": "Target absent on the first grid.", "finding": "not_found", "confidence": 0.9},
-            {"summary": "Target absent on the shifted grid.", "finding": "not_found", "confidence": 0.9},
-            {
-                "summary": "The brief target is visible after densification.",
-                "finding": "found",
-                "confidence": 0.95,
-                "structured_slots": [{"slot_id": "target_state", "value": "visible", "frame_indices": [0]}],
-            },
-        )
+        ({"summary": "Target absent on the first grid.", "finding": "not_found", "confidence": 0.9},)
     )
     investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
     investigator.sampler = _sampler
@@ -2630,28 +2779,18 @@ def test_model_investigator_adapts_not_found_across_fps_and_phase(tmp_path: Path
     report = investigator.run_batch((task,))[0]
     policy = report.evidence[0].operation_metadata["sampling_policy"]
 
-    assert report.cost["tool_trace"] == (
-        "open_segment",
-        "inspect_window:0.5",
-        "inspect_window:1.0:phase=0.500",
-        "inspect_window:2.0:phase=0.333",
-    )
-    assert report.evidence[0].sampling_fps == 2.0
-    assert report.evidence[0].observation_polarity == "positive"
-    assert policy["adaptive_attempt_count"] == 3
-    assert policy["adaptive_trigger_reasons"] == ["not_found"]
+    assert report.cost["tool_trace"] == ("open_segment", "inspect_window:0.5")
+    assert report.evidence[0].sampling_fps == 0.5
+    assert report.evidence[0].observation_polarity == "negative"
+    assert policy["adaptive_attempt_count"] == 1
+    assert policy["adaptive_trigger_reasons"] == []
 
 
-def test_model_investigator_caps_repeated_negative_window_at_three_attempts(tmp_path: Path) -> None:
+def test_model_investigator_reuses_repeated_negative_window_without_budget(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     api = ScriptedVisionClient(
-        tuple(
-            {
-                "summary": f"Negative phase {index}.", "finding": "not_found", "confidence": 0.9,
-                "visibility_status": "clear",
-            }
-            for index in range(3)
-        )
+        ({"summary": "Target is absent.", "finding": "not_found", "confidence": 0.9,
+          "visibility_status": "clear"},)
     )
     investigator = GeminiInvestigator(workspace, api=api, trace_path=workspace.root_dir / "interactions.jsonl")
     investigator.sampler = _sampler
@@ -2661,12 +2800,13 @@ def test_model_investigator_caps_repeated_negative_window_at_three_attempts(tmp_
     )
 
     first = investigator.run_batch((task,))[0]
-    repeated = investigator.run_batch((replace(task, query_id="q_negative_cap_repeat"),))[0]
+    repeated = investigator.run_batch((task,))[0]
 
-    assert len(api.calls) == 3
-    assert first.evidence[0].operation_metadata["qualified_absence"] is True
+    assert len(api.calls) == 1
+    assert first.evidence[0].observation_polarity == "negative"
     assert repeated.cost["reused"] is True
-    assert repeated.cost["tool_trace"] == ("open_segment", "adaptive_attempt_cap")
+    assert repeated.cost["consumes_budget"] is False
+    assert repeated.attempts[0].outcome == "duplicate"
 
 
 def test_model_investigator_blocks_unresolved_structured_slot_conflict(tmp_path: Path) -> None:
@@ -2694,6 +2834,7 @@ def test_model_investigator_blocks_unresolved_structured_slot_conflict(tmp_path:
         query_id="q_color_a", goal="Observe the jacket color.", segment_id="seg_0001",
         time_range=(0.0, 30.0), sampling_floor_fps=0.5,
         temporal_resolution_rationale="The clothing remains visible for several seconds.",
+        target_requirement_ids=("jacket_color",),
     )
     denser = replace(base, query_id="q_color_b", sampling_floor_fps=1.0)
 
@@ -2854,7 +2995,7 @@ def test_incomplete_narrative_fact_cannot_support_an_option() -> None:
     assert facts[0]["hypothesis_assessments"][0]["status"] == "unknown"
 
 
-def test_negative_observation_is_not_reused_as_positive_support(tmp_path: Path) -> None:
+def test_negative_observation_is_reused_only_as_a_negative_result(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     investigator = GeminiInvestigator(
         workspace,
@@ -2878,7 +3019,8 @@ def test_negative_observation_is_not_reused_as_positive_support(tmp_path: Path) 
 
     reused = investigator._find_reusable_evidence(task, 0.0, 30.0, required_fps=0.5)
 
-    assert reused is None
+    assert reused is negative
+    assert reused.observation_polarity == "negative"
 
 
 def test_model_investigator_does_not_force_detail_from_keywords(tmp_path: Path) -> None:

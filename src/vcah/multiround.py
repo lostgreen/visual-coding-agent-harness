@@ -21,7 +21,12 @@ from vcah.evidence_primitives import (
     normalize_relations,
 )
 from vcah.enumeration import build_enumeration_manifest
-from vcah.investigator import InvestigationReport, VirtualVideoInvestigator
+from vcah.investigator import (
+    EvidenceFact,
+    InvestigationReport,
+    ObservationAttempt,
+    VirtualVideoInvestigator,
+)
 from vcah.memory import EvidenceStore
 from vcah.obligations import (
     QueryObligations,
@@ -213,6 +218,15 @@ class InvestigationTask:
             "entity_association", "narrative_bridge",
         }:
             object.__setattr__(self, "inspection_mode", "window")
+
+    def clone_with(self, **overrides: Any) -> "InvestigationTask":
+        """Clone a task without manually copying its evolving field set."""
+        cloned = replace(self, **overrides)
+        if "sampling_floor_fps" not in overrides:
+            object.__setattr__(cloned, "sampling_floor_specified", self.sampling_floor_specified)
+        if "priority" not in overrides:
+            object.__setattr__(cloned, "priority", self.priority)
+        return cloned
 
 
 def _task_replay_descriptor(task: InvestigationTask) -> dict[str, Any]:
@@ -1290,12 +1304,14 @@ class VirtualVideoMultiRoundDriver:
         max_rounds: int = 4,
         max_investigations: int = 20,
         max_tasks_per_round: int = 4,
+        system_task_budget_ratio: float = 0.4,
     ) -> None:
         self.reasoner = reasoner or HeuristicReasoner()
         self.investigator = investigator
         self.max_rounds = max(1, int(max_rounds))
         self.max_investigations = max(1, int(max_investigations))
         self.max_tasks_per_round = max(1, int(max_tasks_per_round))
+        self.system_task_budget_ratio = max(0.0, min(1.0, float(system_task_budget_ratio)))
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         investigator = self.investigator or VirtualVideoInvestigator(workspace)
@@ -1328,11 +1344,15 @@ class VirtualVideoMultiRoundDriver:
         gate_feedback: dict[str, Any] = {}
         condition_registry: tuple[GapCondition, ...] = compiled_conditions
         active_condition_ids: tuple[str, ...] = tuple(
-            condition.condition_id for condition in compiled_conditions
+            condition.condition_id
+            for condition in compiled_conditions
+            if condition.evaluation_type == "observable"
         )
         last_rejected_submission: tuple[str, tuple[str, ...], tuple[str, ...]] | None = None
         stagnant_task_attempts: dict[tuple[Any, ...], int] = {}
         stagnation_actions: list[dict[str, Any]] = []
+        system_task_budget_limit = int(self.max_investigations * self.system_task_budget_ratio)
+        system_tasks_accepted = 0
         rounds_run = 0
 
         for round_id in range(1, self.max_rounds + 1):
@@ -1352,6 +1372,15 @@ class VirtualVideoMultiRoundDriver:
             navigation_candidates = _navigation_candidates(evidence_store.records, workspace.case.options)
             stagnation_status = _stagnation_status(reports)
             stagnation_status["actions"] = list(stagnation_actions[-8:])
+            policy_suggestions = _policy_suggestions(
+                workspace,
+                query_contract,
+                query_requirements,
+                completion_status,
+                evidence_store.records,
+                round_id=round_id,
+                limit=min(self.max_tasks_per_round, remaining),
+            )
             decision, condition_registry = _align_decision_conditions(_decision(
                 self.reasoner.decide(
                     question=workspace.case.question,
@@ -1372,6 +1401,13 @@ class VirtualVideoMultiRoundDriver:
                     navigation_candidates=navigation_candidates,
                     stagnation_status=stagnation_status,
                     answer_gate_feedback=gate_feedback,
+                    policy_suggestions=policy_suggestions,
+                    policy_limits={
+                        "system_task_budget_ratio": self.system_task_budget_ratio,
+                        "system_task_budget_limit": system_task_budget_limit,
+                        "system_tasks_accepted": system_tasks_accepted,
+                        "system_tasks_remaining": max(0, system_task_budget_limit - system_tasks_accepted),
+                    },
                     remaining_budget=remaining,
                     pre_final_checkpoint=round_id == self.max_rounds,
                 )
@@ -1390,227 +1426,6 @@ class VirtualVideoMultiRoundDriver:
                         }
                     )
                     decision = replace(decision, tasks=executable_tasks)
-            missing_segments = tuple(completion_status.get("missing_segment_ids", ()) or ())
-            missing_identity_terms = tuple(completion_status.get("missing_identity_anchor_terms", ()) or ())
-            unresolved_entity_candidates = tuple(
-                completion_status.get("unresolved_candidate_entity_observation_ids", ()) or ()
-            )
-            if missing_segments and remaining > 0:
-                repair_tasks = _coverage_repair_tasks(
-                    workspace,
-                    round_id,
-                    missing_segments,
-                    query_contract,
-                    limit=min(self.max_tasks_per_round, remaining),
-                )
-                trace.append(
-                    {
-                        "type": "repair_override",
-                        "round": round_id,
-                        "reason": "mandatory_full_source_coverage",
-                        "missing_segment_ids": list(missing_segments),
-                        "task_count": len(repair_tasks),
-                    }
-                )
-                decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
-            elif (
-                bool(completion_status.get("enumeration_required"))
-                and not bool(completion_status.get("enumeration_complete"))
-                and remaining > 0
-            ):
-                repair_tasks = _enumeration_repair_tasks(
-                    workspace,
-                    completion_status,
-                    round_id=round_id,
-                    limit=min(self.max_tasks_per_round, remaining),
-                )
-                if repair_tasks:
-                    trace.append(
-                        {
-                            "type": "repair_override",
-                            "round": round_id,
-                            "reason": "enumeration_incomplete",
-                            "unprocessed_ranges": list(
-                                completion_status.get("enumeration_manifest", {}).get("unprocessed_ranges", ())
-                                if isinstance(completion_status.get("enumeration_manifest"), Mapping)
-                                else ()
-                            ),
-                            "task_count": len(repair_tasks),
-                        }
-                    )
-                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
-            elif missing_identity_terms and remaining > 0 and (decision.action != "investigate" or not decision.tasks):
-                repair_tasks = _navigation_repair_tasks(
-                    evidence_store.records,
-                    round_id=round_id,
-                    limit=min(self.max_tasks_per_round, remaining),
-                )
-                repair_reason = "unverified_navigation_hint"
-                if not repair_tasks:
-                    repair_tasks = _identity_repair_tasks(
-                        workspace,
-                        evidence_store.records,
-                        missing_identity_terms,
-                        round_id=round_id,
-                        limit=min(self.max_tasks_per_round, remaining),
-                    )
-                    repair_reason = "identity_anchor_missing"
-                if repair_tasks:
-                    trace.append(
-                        {
-                            "type": "repair_override",
-                            "round": round_id,
-                            "reason": repair_reason,
-                            "identity_anchor_terms": list(missing_identity_terms),
-                            "task_count": len(repair_tasks),
-                        }
-                    )
-                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
-            elif unresolved_entity_candidates and remaining > 0 and (
-                decision.action != "investigate" or not decision.tasks
-            ):
-                repair_tasks = _entity_candidate_repair_tasks(
-                    workspace,
-                    evidence_store.records,
-                    unresolved_entity_candidates,
-                    round_id=round_id,
-                    limit=min(self.max_tasks_per_round, remaining),
-                )
-                if repair_tasks:
-                    trace.append(
-                        {
-                            "type": "repair_override",
-                            "round": round_id,
-                            "reason": "entity_candidate_unresolved",
-                            "entity_observation_ids": list(unresolved_entity_candidates),
-                            "task_count": len(repair_tasks),
-                        }
-                    )
-                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
-            elif (
-                bool(query_requirements.get("requires_event_participant_link"))
-                and not bool(completion_status.get("event_participant_link_ready"))
-                and remaining > 0
-            ):
-                repair_tasks = _event_participant_association_tasks(
-                    workspace,
-                    evidence_store.records,
-                    round_id=round_id,
-                    limit=min(self.max_tasks_per_round, remaining),
-                )
-                if repair_tasks:
-                    trace.append(
-                        {
-                            "type": "repair_override",
-                            "round": round_id,
-                            "reason": "event_participant_link_missing",
-                            "task_count": len(repair_tasks),
-                        }
-                    )
-                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
-            elif (
-                bool(query_requirements.get("requires_narrative_inference"))
-                and not bool(completion_status.get("narrative_inference_ready"))
-                and remaining > 0
-            ):
-                repair_tasks = _narrative_bridge_repair_tasks(
-                    workspace,
-                    evidence_store.records,
-                    round_id=round_id,
-                    limit=min(2, self.max_tasks_per_round, remaining),
-                )
-                if repair_tasks:
-                    trace.append(
-                        {
-                            "type": "repair_override",
-                            "round": round_id,
-                            "reason": "narrative_inference_missing",
-                            "task_count": len(repair_tasks),
-                        }
-                    )
-                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
-            elif remaining > 0:
-                repair_reason, repair_tasks = _semantic_contract_repair_tasks(
-                    workspace,
-                    query_contract,
-                    query_requirements,
-                    completion_status,
-                    evidence_store.records,
-                    round_id=round_id,
-                    limit=min(self.max_tasks_per_round, remaining),
-                )
-                if repair_tasks:
-                    trace.append(
-                        {
-                            "type": "repair_override",
-                            "round": round_id,
-                            "reason": repair_reason,
-                            "task_count": len(repair_tasks),
-                        }
-                    )
-                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
-            if decision.action == "answer" and remaining > 0:
-                candidate_repairs = _navigation_repair_tasks(
-                    evidence_store.records,
-                    options=workspace.case.options,
-                    round_id=round_id,
-                    limit=1,
-                    require_hypothesis=True,
-                )
-                if candidate_repairs:
-                    trace.append({
-                        "type": "repair_override",
-                        "round": round_id,
-                        "reason": "high_value_candidate_uninspected",
-                        "source_candidate_ids": list(candidate_repairs[0].source_candidate_ids),
-                        "task_count": 1,
-                    })
-                    decision = ReasonerDecision(action="investigate", tasks=candidate_repairs)
-            if decision.action == "investigate" and not decision.tasks and remaining > 0:
-                bootstrap_tasks = _bootstrap_investigation_tasks(
-                    workspace,
-                    query_contract,
-                    round_id=round_id,
-                    limit=min(self.max_tasks_per_round, remaining),
-                    effective_scope=completion_status["effective_scope"],
-                )
-                if bootstrap_tasks:
-                    trace.append(
-                        {
-                            "type": "repair_override",
-                            "round": round_id,
-                            "reason": "empty_investigation_bootstrap",
-                            "task_count": len(bootstrap_tasks),
-                        }
-                    )
-                    decision = ReasonerDecision(action="investigate", tasks=bootstrap_tasks)
-            submission_fingerprint = _submission_fingerprint(decision, evidence_store.records)
-            if (
-                decision.action == "answer"
-                and remaining > 0
-                and last_rejected_submission is not None
-                and submission_fingerprint == last_rejected_submission
-            ):
-                repair_tasks = _rejected_answer_repair_tasks(
-                    workspace,
-                    query_contract,
-                    decision,
-                    evidence_store.records,
-                    gate_feedback,
-                    round_id=round_id,
-                    limit=min(self.max_tasks_per_round, remaining),
-                )
-                if repair_tasks:
-                    trace.append(
-                        {
-                            "type": "repair_override",
-                            "round": round_id,
-                            "reason": "repeated_rejected_submission",
-                            "previous_gate_reason": str(gate_feedback.get("reason", "") or ""),
-                            "task_count": len(repair_tasks),
-                        }
-                    )
-                    decision = ReasonerDecision(action="investigate", tasks=repair_tasks)
             if decision.action == "investigate":
                 decision = _inherit_repair_lineage(
                     decision,
@@ -1620,6 +1435,29 @@ class VirtualVideoMultiRoundDriver:
                     reports=reports,
                     options=workspace.case.options,
                 )
+                decision, rejected_system_tasks = _enforce_system_task_budget(
+                    decision,
+                    policy_suggestions,
+                    remaining_slots=max(0, system_task_budget_limit - system_tasks_accepted),
+                )
+                if rejected_system_tasks:
+                    trace.append({
+                        "type": "policy_budget_enforcement",
+                        "round": round_id,
+                        "system_task_budget_ratio": self.system_task_budget_ratio,
+                        "system_task_budget_limit": system_task_budget_limit,
+                        "rejected_query_ids": [task.query_id for task in rejected_system_tasks],
+                    })
+            trace.append({
+                "type": "policy_suggestions",
+                "round": round_id,
+                "advisory_only": True,
+                "suggestion_count": len(policy_suggestions),
+                "suggestions": list(policy_suggestions),
+                "system_task_budget_ratio": self.system_task_budget_ratio,
+                "system_task_budget_limit": system_task_budget_limit,
+                "system_tasks_accepted": system_tasks_accepted,
+            })
             trace.append(
                 {
                     "type": "reasoner_decision",
@@ -1741,34 +1579,16 @@ class VirtualVideoMultiRoundDriver:
                     }
                 )
             if not resolved_tasks:
-                resolved_tasks = _bootstrap_investigation_tasks(
-                    workspace,
-                    query_contract,
-                    round_id=round_id,
-                    limit=min(self.max_tasks_per_round, remaining),
-                    effective_scope=completion_status["effective_scope"],
-                )
+                trace.append({
+                    "type": "task_validation",
+                    "round": round_id,
+                    "accepted_task_count": 0,
+                    "rejected_task_count": len(raw_tasks),
+                    "reason": "reasoner_tasks_not_executable",
+                })
+                continue
             requested_tasks = tuple(_task_for_contract(task, query_contract) for task in resolved_tasks)
-            tasks = _prefer_navigation_repairs(
-                requested_tasks,
-                evidence_store.records,
-                options=workspace.case.options,
-                round_id=round_id,
-                limit=dispatch_limit,
-            )
-            if tasks != requested_tasks:
-                trace.append(
-                    {
-                        "type": "navigation_drilldown_override",
-                        "round": round_id,
-                        "requested_search_tasks": sum(
-                            task.inspection_mode == "search_asr" for task in requested_tasks
-                        ),
-                        "visual_repair_tasks": sum(
-                            task.query_id.startswith("navigation_repair_") for task in tasks
-                        ),
-                    }
-                )
+            tasks = requested_tasks
             allowed_tasks = tuple(
                 task for task in tasks if stagnant_task_attempts.get(_task_progress_fingerprint(task), 0) < 2
             )
@@ -1790,7 +1610,7 @@ class VirtualVideoMultiRoundDriver:
                     condition.condition_id
                     for task in tasks
                     for condition in task.conditions
-                    if condition.condition_id
+                    if condition.condition_id and condition.evaluation_type == "observable"
                 )
             )
             if task_condition_ids:
@@ -1802,8 +1622,15 @@ class VirtualVideoMultiRoundDriver:
                 for result in report.condition_results
                 if result.status == "satisfied" and result.condition_id
             }
-            accepted += len(tasks)
             batch = _annotate_batch_progress(investigator.run_batch(tasks), reports)
+            charged_tasks = sum(_report_consumes_budget(report) for report in batch)
+            system_charged_tasks = sum(
+                _report_consumes_budget(report)
+                for task, report in zip(tasks, batch)
+                if _task_adopts_policy_suggestion(task, policy_suggestions)
+            )
+            accepted += charged_tasks
+            system_tasks_accepted += system_charged_tasks
             reports.extend(batch)
             known_evidence = {record.evidence_id for record in evidence_store.records}
             for report in batch:
@@ -1826,7 +1653,15 @@ class VirtualVideoMultiRoundDriver:
             for task in tasks:
                 fingerprint = _task_progress_fingerprint(task)
                 stagnant_task_attempts[fingerprint] = 0 if batch_progress else stagnant_task_attempts.get(fingerprint, 0) + 1
-            trace.append({"type": "investigator_batch", "round": round_id, "accepted_tasks": len(tasks)})
+            trace.append({
+                "type": "investigator_batch",
+                "round": round_id,
+                "requested_tasks": len(tasks),
+                "accepted_tasks": charged_tasks,
+                "no_information_gain_tasks": len(batch) - charged_tasks,
+                "system_suggestion_tasks": system_charged_tasks,
+                "system_task_budget_ratio": self.system_task_budget_ratio,
+            })
             trace.append(
                 {
                     "type": "investigation_outcomes",
@@ -1834,31 +1669,6 @@ class VirtualVideoMultiRoundDriver:
                     "outcomes": list(_outcome_digest(batch)),
                 }
             )
-            followup_tasks = _post_search_candidate_tasks(
-                tasks,
-                evidence_store.records,
-                options=workspace.case.options,
-                round_id=round_id,
-                remaining_round_slots=max(0, self.max_tasks_per_round - len(tasks)),
-                remaining_budget=max(0, self.max_investigations - accepted),
-            )
-            if followup_tasks:
-                accepted += len(followup_tasks)
-                followup_batch = _annotate_batch_progress(investigator.run_batch(followup_tasks), reports)
-                reports.extend(followup_batch)
-                known_evidence = {record.evidence_id for record in evidence_store.records}
-                for report in followup_batch:
-                    for record in report.evidence:
-                        if record.evidence_id not in known_evidence:
-                            evidence_store.add(record)
-                            known_evidence.add(record.evidence_id)
-                trace.append({
-                    "type": "candidate_dispatch_conversion",
-                    "round": round_id,
-                    "candidate_ids": [candidate_id for task in followup_tasks for candidate_id in task.source_candidate_ids],
-                    "accepted_tasks": len(followup_tasks),
-                    "outcomes": list(_outcome_digest(followup_batch)),
-                })
             if accepted >= self.max_investigations:
                 continue
 
@@ -2121,6 +1931,14 @@ class VirtualVideoMultiRoundDriver:
                 "forced_reason": verification_reason if answer_mode == "forced_choice" else None,
                 "forced_fact_source": "canonical_fact_snapshot" if answer_mode == "forced_choice" else None,
                 "stagnation_actions": stagnation_actions,
+                "system_task_budget_ratio_limit": self.system_task_budget_ratio,
+                "system_task_budget_limit": system_task_budget_limit,
+                "system_tasks_accepted": system_tasks_accepted,
+                "system_task_budget_ratio_actual": round(system_tasks_accepted / self.max_investigations, 6),
+                "system_task_share_of_executed": round(system_tasks_accepted / max(1, accepted), 6),
+                "system_override_count": 0,
+                "investigation_budget_limit": self.max_investigations,
+                "round_limit": self.max_rounds,
             }
         )
         result = MultiRoundResult(
@@ -2147,6 +1965,163 @@ class VirtualVideoMultiRoundDriver:
         return result
 
 
+def _policy_suggestions(
+    workspace: VirtualVideoWorkspace,
+    contract: ClaimContract,
+    query_requirements: Mapping[str, Any],
+    completion_status: Mapping[str, Any],
+    evidence: Sequence[EvidenceRecord],
+    *,
+    round_id: int,
+    limit: int,
+) -> tuple[dict[str, Any], ...]:
+    """Build advisory tasks without mutating or replacing the Reasoner's decision."""
+    task_limit = max(0, int(limit))
+    if task_limit <= 0:
+        return ()
+    candidates: list[tuple[str, InvestigationTask]] = []
+    missing_segments = tuple(completion_status.get("missing_segment_ids", ()) or ())
+    if missing_segments:
+        candidates.extend(
+            ("uninspected_source_range", task)
+            for task in _coverage_repair_tasks(
+                workspace,
+                round_id,
+                missing_segments,
+                contract,
+                limit=task_limit,
+                coverage_status=completion_status.get("source_coverage", {}),
+            )
+        )
+    if bool(completion_status.get("enumeration_required")) and not bool(
+        completion_status.get("enumeration_complete")
+    ):
+        candidates.extend(
+            ("enumeration_incomplete", task)
+            for task in _enumeration_repair_tasks(
+                workspace,
+                completion_status,
+                round_id=round_id,
+                limit=task_limit,
+            )
+        )
+    missing_identity_terms = tuple(completion_status.get("missing_identity_anchor_terms", ()) or ())
+    if missing_identity_terms:
+        navigation = _navigation_repair_tasks(evidence, round_id=round_id, limit=task_limit)
+        identity = navigation or _identity_repair_tasks(
+            workspace,
+            evidence,
+            missing_identity_terms,
+            round_id=round_id,
+            limit=task_limit,
+        )
+        candidates.extend(("identity_anchor_missing", task) for task in identity)
+    unresolved_entities = tuple(completion_status.get("unresolved_candidate_entity_observation_ids", ()) or ())
+    if unresolved_entities:
+        candidates.extend(
+            ("entity_candidate_unresolved", task)
+            for task in _entity_candidate_repair_tasks(
+                workspace,
+                evidence,
+                unresolved_entities,
+                round_id=round_id,
+                limit=task_limit,
+            )
+        )
+    if bool(query_requirements.get("requires_event_participant_link")) and not bool(
+        completion_status.get("event_participant_link_ready")
+    ):
+        candidates.extend(
+            ("event_participant_link_missing", task)
+            for task in _event_participant_association_tasks(
+                workspace,
+                evidence,
+                round_id=round_id,
+                limit=task_limit,
+            )
+        )
+    if bool(query_requirements.get("requires_narrative_inference")) and not bool(
+        completion_status.get("narrative_inference_ready")
+    ):
+        candidates.extend(
+            ("narrative_fact_missing", task)
+            for task in _narrative_bridge_repair_tasks(
+                workspace,
+                evidence,
+                round_id=round_id,
+                limit=min(2, task_limit),
+            )
+        )
+    semantic_reason, semantic_tasks = _semantic_contract_repair_tasks(
+        workspace,
+        contract,
+        query_requirements,
+        completion_status,
+        evidence,
+        round_id=round_id,
+        limit=task_limit,
+    )
+    candidates.extend((semantic_reason or "semantic_fact_missing", task) for task in semantic_tasks)
+
+    suggestions = []
+    seen = set()
+    for reason, task in candidates:
+        fingerprint = _task_progress_fingerprint(task)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        suggestions.append({
+            "reason": reason,
+            "expected_information_gain": "new inspected range, typed fact, or justified density increase",
+            "task": {
+                "query_id": task.query_id,
+                "goal": task.goal,
+                "segment_id": task.segment_id,
+                "time_range": list(task.time_range) if task.time_range is not None else None,
+                "modality_hint": list(task.modality_hint),
+                "expected_evidence": task.expected_evidence,
+                "inspection_mode": task.inspection_mode,
+                "sampling_floor_fps": task.sampling_floor_fps,
+                "target_requirement_ids": list(task.target_requirement_ids),
+                "source_candidate_ids": list(task.source_candidate_ids),
+            },
+        })
+        if len(suggestions) >= task_limit:
+            break
+    return tuple(suggestions)
+
+
+def _task_adopts_policy_suggestion(
+    task: InvestigationTask,
+    suggestions: Sequence[Mapping[str, Any]],
+) -> bool:
+    query_id = str(task.query_id or "")
+    return any(
+        query_id == str(dict(suggestion.get("task", {}) or {}).get("query_id", "") or "")
+        for suggestion in suggestions
+    )
+
+
+def _enforce_system_task_budget(
+    decision: ReasonerDecision,
+    suggestions: Sequence[Mapping[str, Any]],
+    *,
+    remaining_slots: int,
+) -> tuple[ReasonerDecision, tuple[InvestigationTask, ...]]:
+    slots = max(0, int(remaining_slots))
+    accepted = []
+    rejected = []
+    for task in decision.tasks:
+        if not _task_adopts_policy_suggestion(task, suggestions):
+            accepted.append(task)
+        elif slots > 0:
+            accepted.append(task)
+            slots -= 1
+        else:
+            rejected.append(task)
+    return replace(decision, tasks=tuple(accepted)), tuple(rejected)
+
+
 def _coverage_repair_tasks(
     workspace: VirtualVideoWorkspace,
     round_id: int,
@@ -2154,39 +2129,56 @@ def _coverage_repair_tasks(
     contract: ClaimContract,
     *,
     limit: int,
+    coverage_status: Mapping[str, Any] | None = None,
 ) -> tuple[InvestigationTask, ...]:
     modalities = tuple(contract.required_observability or ("visual",))
     tasks = []
     by_id = {segment.segment_id: segment for segment in workspace.manifest.segments}
-    for index, segment_id in enumerate(tuple(segment_ids)[: max(0, int(limit))], start=1):
+    task_limit = max(0, int(limit))
+    coverage_rows = tuple(dict(row) for row in dict(coverage_status or {}).values() if isinstance(row, Mapping))
+    for segment_id in tuple(segment_ids):
         segment = by_id.get(str(segment_id))
-        full_range = (
+        full_range: tuple[float, float] | None = (
             (float(segment.virtual_start_sec), float(segment.virtual_end_sec))
             if segment is not None
             else None
         )
+        uncovered_ranges = tuple(
+            tuple(float(value) for value in item)
+            for source_row in coverage_rows
+            for item in tuple(
+                dict(dict(source_row.get("segment_coverage", {}) or {}).get(str(segment_id), {}) or {}).get(
+                    "uncovered_ranges", ()
+                )
+            )
+            if isinstance(item, Sequence) and not isinstance(item, (str, bytes)) and len(item) == 2
+        )
+        requested_ranges = uncovered_ranges or ((full_range,) if full_range is not None else ())
         event_sweep = contract.quantifier == "total_count" and contract.observation_target == "event"
-        tasks.append(InvestigationTask(
-            query_id=f"repair_r{round_id}_{index:03d}",
-            goal=f"Inspect remaining source segment {segment_id} for evidence required by the full-video claim.",
-            segment_id=str(segment_id),
-            time_range=full_range,
-            modality_hint=modalities,
-            expected_evidence=(
-                "exhaustive question-relevant event occurrences across the entire segment"
-                if event_sweep
-                else "entity observations and topic evidence needed for full-source coverage"
-            ),
-            inspection_mode="enumerate_events" if event_sweep else "window",
-            sampling_floor_fps=2.0 if event_sweep else None,
-            expected_event_dwell_sec=1.0 if event_sweep else None,
-            temporal_resolution_rationale=(
-                "Full-segment count repair must resolve brief event boundaries."
-                if event_sweep
-                else ""
-            ),
-            priority=1.0,
-        ))
+        for requested_range in requested_ranges:
+            if len(tasks) >= task_limit:
+                return tuple(tasks)
+            tasks.append(InvestigationTask(
+                query_id=f"repair_r{round_id}_{len(tasks) + 1:03d}",
+                goal=f"Inspect only the uninspected range in source segment {segment_id}.",
+                segment_id=str(segment_id),
+                time_range=requested_range,
+                modality_hint=modalities,
+                expected_evidence=(
+                    "question-relevant event occurrences in this uninspected range"
+                    if event_sweep
+                    else "entity observations and topic evidence in this uninspected range"
+                ),
+                inspection_mode="enumerate_events" if event_sweep else "window",
+                sampling_floor_fps=2.0 if event_sweep else None,
+                expected_event_dwell_sec=1.0 if event_sweep else None,
+                temporal_resolution_rationale=(
+                    "The remaining event range must resolve brief event boundaries."
+                    if event_sweep
+                    else ""
+                ),
+                priority=1.0,
+            ))
     return tuple(tasks)
 
 
@@ -2749,53 +2741,6 @@ def _navigation_repair_tasks(
     )
 
 
-def _prefer_navigation_repairs(
-    requested: Sequence[InvestigationTask],
-    evidence: Sequence[EvidenceRecord],
-    *,
-    options: Mapping[str, str] | None = None,
-    round_id: int,
-    limit: int,
-) -> tuple[InvestigationTask, ...]:
-    bounded = tuple(requested[: max(0, int(limit))])
-    has_search = any(task.inspection_mode == "search_asr" for task in bounded)
-    repairs = _navigation_repair_tasks(
-        evidence,
-        options=options,
-        round_id=round_id,
-        limit=1,
-        require_hypothesis=not has_search,
-    )
-    if not repairs:
-        return bounded
-    kept = tuple(task for task in bounded if task.inspection_mode != "search_asr")
-    if has_search:
-        return (*kept[: max(0, int(limit) - 1)], *repairs)
-    return (*repairs, *kept[: max(0, int(limit) - 1)])
-
-
-def _post_search_candidate_tasks(
-    completed_tasks: Sequence[InvestigationTask],
-    evidence: Sequence[EvidenceRecord],
-    *,
-    options: Mapping[str, str],
-    round_id: int,
-    remaining_round_slots: int,
-    remaining_budget: int,
-) -> tuple[InvestigationTask, ...]:
-    if not any(task.inspection_mode == "search_asr" for task in completed_tasks):
-        return ()
-    if min(int(remaining_round_slots), int(remaining_budget)) <= 0:
-        return ()
-    return _navigation_repair_tasks(
-        evidence,
-        options=options,
-        round_id=round_id,
-        limit=1,
-        require_hypothesis=True,
-    )
-
-
 def _navigation_hint_is_observed(hint: EvidenceRecord, visual: Sequence[EvidenceRecord]) -> bool:
     return any(hint.evidence_id in tuple(record.operation_metadata.get("source_candidate_ids", ()) or ()) for record in visual)
 
@@ -2954,12 +2899,8 @@ def _completion_status(
     effective_scope = obligations.effective_scope
     answer_evidence = tuple(record for record in evidence if record.evidence_kind != "navigation_hint")
     navigation_evidence = tuple(record for record in evidence if record.evidence_kind == "navigation_hint")
-    coverage_evidence = (
-        _entity_census_coverage_evidence(answer_evidence)
-        if contract.quantifier == "distinct_count"
-        else answer_evidence
-    )
-    coverage = _source_coverage(workspace, coverage_evidence)
+    observation_attempts = tuple(attempt for report in reports for attempt in report.attempts)
+    coverage = _source_coverage(workspace, observation_attempts)
     if effective_scope != "full_video":
         base = _apply_identity_completion(
             {
@@ -2969,7 +2910,7 @@ def _completion_status(
                 "effective_scope": effective_scope,
                 "scope_escalation_requirement_ids": list(obligations.scope_escalation_requirement_ids),
                 "query_obligations": obligations.to_dict(),
-                "range_coverage_complete": bool(answer_evidence) if effective_scope == "window" else False,
+                "range_coverage_complete": bool(_visual_inspection_attempts(observation_attempts)) if effective_scope == "window" else False,
                 "missing_segment_ids": [],
                 "source_coverage": coverage,
             },
@@ -4021,9 +3962,22 @@ def _entity_census_coverage_evidence(evidence: Sequence[EvidenceRecord]) -> tupl
     )
 
 
+def _visual_inspection_attempts(
+    attempts: Sequence[ObservationAttempt],
+) -> tuple[ObservationAttempt, ...]:
+    return tuple(
+        attempt
+        for attempt in attempts
+        if str(attempt.sampling_config.get("modality", "visual") or "visual").casefold() in {"visual", "ocr"}
+        and attempt.outcome not in {"failed", "duplicate"}
+        and bool(attempt.inspected_ranges)
+        and (attempt.images_attached > 0 or str(attempt.sampling_config.get("modality", "")).casefold() == "ocr")
+    )
+
+
 def _source_coverage(
     workspace: VirtualVideoWorkspace,
-    evidence: Sequence[EvidenceRecord],
+    attempts: Sequence[ObservationAttempt],
 ) -> dict[str, dict[str, Any]]:
     required: dict[str, list[Any]] = {}
     segments_by_id = {}
@@ -4032,23 +3986,26 @@ def _source_coverage(
         segments_by_id[segment.segment_id] = segment
     covered_ranges: dict[str, dict[str, list[tuple[float, float]]]] = {}
     confidence: dict[str, float] = {}
-    for record in evidence:
-        if record.modality not in {"visual", "ocr"}:
+    attempt_ids: dict[str, set[str]] = {}
+    for attempt in attempts:
+        modality = str(attempt.sampling_config.get("modality", "visual") or "visual").casefold()
+        if modality not in {"visual", "ocr"} or attempt.outcome in {"failed", "duplicate"}:
             continue
-        for lineage in record.source_lineage:
-            source_id = str(lineage.get("source_video_id", "") or "")
-            segment_id = str(lineage.get("segment_id", "") or "")
-            if not source_id or not segment_id:
-                continue
-            segment = segments_by_id.get(segment_id)
-            if segment is None or record.start_sec is None or record.end_sec is None:
-                continue
-            start = max(float(segment.virtual_start_sec), float(record.start_sec))
-            end = min(float(segment.virtual_end_sec), float(record.end_sec))
-            if end <= start:
-                continue
-            covered_ranges.setdefault(source_id, {}).setdefault(segment_id, []).append((start, end))
-            confidence[source_id] = max(confidence.get(source_id, 0.0), record.confidence)
+        if modality == "visual" and attempt.images_attached <= 0:
+            continue
+        for inspected_start, inspected_end in attempt.inspected_ranges:
+            for segment_id, segment in segments_by_id.items():
+                start = max(float(segment.virtual_start_sec), float(inspected_start))
+                end = min(float(segment.virtual_end_sec), float(inspected_end))
+                if end <= start:
+                    continue
+                source_id = str(segment.source_video_id)
+                covered_ranges.setdefault(source_id, {}).setdefault(segment_id, []).append((start, end))
+                confidence[source_id] = max(
+                    confidence.get(source_id, 0.0),
+                    1.0 if attempt.parse_status not in {"failed", "unknown"} else 0.5,
+                )
+                attempt_ids.setdefault(source_id, set()).add(attempt.attempt_id)
     result: dict[str, dict[str, Any]] = {}
     for source_id, required_segments_raw in required.items():
         segment_ranges = covered_ranges.get(source_id, {})
@@ -4062,6 +4019,7 @@ def _source_coverage(
             duration = max(0.0, interval[1] - interval[0])
             ranges = tuple(segment_ranges.get(segment.segment_id, ()))
             covered_sec = max(0.0, duration - _uncovered_duration(interval, ranges))
+            uncovered_ranges = _uncovered_ranges(interval, ranges)
             ratio = covered_sec / duration if duration > 0 else 0.0
             total_required += duration
             total_covered += covered_sec
@@ -4069,6 +4027,7 @@ def _source_coverage(
                 "covered_sec": round(covered_sec, 3),
                 "required_sec": round(duration, 3),
                 "coverage_ratio": round(min(1.0, ratio), 6),
+                "uncovered_ranges": [list(item) for item in uncovered_ranges],
             }
             if ratio + 1e-9 >= 0.95:
                 covered_ids.append(segment.segment_id)
@@ -4085,6 +4044,7 @@ def _source_coverage(
             "coverage_ratio": round(total_covered / total_required, 6) if total_required > 0 else 0.0,
             "segment_coverage": segment_coverage,
             "confidence": confidence.get(source_id, 0.0),
+            "inspection_attempt_ids": sorted(attempt_ids.get(source_id, set())),
         }
     return result
 
@@ -4152,8 +4112,14 @@ def _answer_completion_gate(
     }
     if not cited_sources:
         return {"passed": False, "reason": "source_not_identified", "missing_segment_ids": []}
-    coverage_evidence = _entity_census_coverage_evidence(evidence) if contract.quantifier == "distinct_count" else evidence
-    source_coverage = _source_coverage(workspace, coverage_evidence)
+    source_coverage = dict((completion_status or {}).get("source_coverage", {}) or {})
+    if not source_coverage:
+        return {
+            "passed": False,
+            "reason": "inspection_coverage_missing",
+            "source_video_ids": sorted(cited_sources),
+            "missing_segment_ids": [],
+        }
     missing = sorted(
         {
             segment_id
@@ -5269,6 +5235,7 @@ def _gap_condition(value: GapCondition | Mapping[str, Any] | str) -> GapConditio
             quantifier=str(value.get("quantifier", "auto") or "auto"),
             required_coverage=float(value.get("required_coverage", 0.0) or 0.0),
             aggregation=str(value.get("aggregation", "none") or "none"),
+            evaluation_type=str(value.get("evaluation_type", "auto") or "auto"),
         )
     return GapCondition("", str(value or ""))
 
@@ -5277,16 +5244,23 @@ def _bind_gap_to_tasks(decision: ReasonerDecision) -> ReasonerDecision:
     gap = decision.primary_gap
     if decision.action != "investigate" or gap is None:
         return decision
+    gap_conditions = _investigator_conditions(gap.conditions)
     tasks = tuple(
         replace(
             task,
             gap_id=task.gap_id or gap.gap_id,
-            success_conditions=task.success_conditions or gap.success_conditions,
-            conditions=gap.conditions or task.conditions,
+            success_conditions=task.success_conditions or tuple(
+                condition.description for condition in gap_conditions if condition.description
+            ),
+            conditions=gap_conditions or _investigator_conditions(task.conditions),
         )
         for task in decision.tasks
     )
     return replace(decision, tasks=tasks)
+
+
+def _investigator_conditions(conditions: Sequence[GapCondition]) -> tuple[GapCondition, ...]:
+    return tuple(condition for condition in conditions if condition.evaluation_type == "observable")
 
 
 def _inherit_repair_lineage(
@@ -5303,12 +5277,13 @@ def _inherit_repair_lineage(
     active = {str(item) for item in active_condition_ids if str(item)}
     registry_conditions = tuple(
         condition for condition in condition_registry
-        if not active or condition.condition_id in active
+        if condition.evaluation_type == "observable"
+        and (not active or condition.condition_id in active)
     )
     conditions = tuple({
         condition.condition_id: condition
         for condition in (*registry_conditions, *(origin_gap.conditions if origin_gap is not None else ()))
-        if condition.condition_id
+        if condition.condition_id and condition.evaluation_type == "observable"
     }.values())
     condition_ids = tuple(dict.fromkeys(
         condition.condition_id for condition in conditions if condition.condition_id
@@ -5329,7 +5304,7 @@ def _inherit_repair_lineage(
         merged_conditions = tuple({
             condition.condition_id: condition
             for condition in (*conditions, *task.conditions)
-            if condition.condition_id
+            if condition.condition_id and condition.evaluation_type == "observable"
         }.values())
         boundary_episode_id = task.boundary_episode_id or next(
             (
@@ -5377,7 +5352,11 @@ def _align_decision_conditions(
             aligned_condition = condition
             known.append(condition)
         else:
-            aligned_condition = replace(condition, condition_id=match.condition_id)
+            aligned_condition = replace(
+                condition,
+                condition_id=match.condition_id,
+                evaluation_type=match.evaluation_type,
+            )
         aligned.append(aligned_condition)
     updated_gap = replace(gap, conditions=tuple(aligned))
     return replace(decision, primary_gap=updated_gap), tuple(known)
@@ -6553,14 +6532,50 @@ def _annotate_batch_progress(
     batch: Sequence[InvestigationReport],
     previous: Sequence[InvestigationReport],
 ) -> tuple[InvestigationReport, ...]:
-    covered: dict[str, list[tuple[float, float]]] = {}
-    for report in previous:
-        covered.setdefault(report.gap_id, []).extend(report.coverage_delta)
+    prior_attempts = [attempt for report in previous for attempt in report.attempts]
+    covered = [
+        interval
+        for attempt in _visual_inspection_attempts(prior_attempts)
+        for interval in attempt.inspected_ranges
+    ]
+    known_facts = {
+        _fact_progress_signature(fact)
+        for report in previous
+        for fact in report.facts
+    }
     result = []
     for report in batch:
-        intervals = tuple(report.coverage_delta)
-        prior = covered.setdefault(report.gap_id, [])
-        adds_frontier = any(_uncovered_duration(interval, prior) >= 0.5 for interval in intervals)
+        attempts = tuple(report.attempts)
+        visual_attempts = _visual_inspection_attempts(attempts)
+        novel_ranges = tuple(
+            fragment
+            for attempt in visual_attempts
+            for interval in attempt.inspected_ranges
+            for fragment in _uncovered_ranges(interval, covered)
+        )
+        if not attempts and report.coverage_delta:
+            # Compatibility for pre-attempt test doubles and archived replay data.
+            novel_ranges = tuple(
+                fragment
+                for interval in report.coverage_delta
+                for fragment in _uncovered_ranges(interval, covered)
+            )
+        adds_frontier = sum(end - start for start, end in novel_ranges) >= 0.5
+        density_increased = any(_attempt_increases_density(attempt, prior_attempts) for attempt in visual_attempts)
+        new_fact_signatures = {
+            signature
+            for fact in report.facts
+            if (signature := _fact_progress_signature(fact)) not in known_facts
+        }
+        if not report.facts and report.evidence and not bool(report.cost.get("reused")):
+            new_fact_signatures = {
+                (
+                    record.evidence_kind,
+                    re.sub(r"\s+", " ", str(record.verbatim or "").strip().casefold()),
+                    (record.start_sec, record.end_sec),
+                )
+                for record in report.evidence
+            }.difference(known_facts)
         goal_progress = tuple(report.goal_progress) or tuple(
             dict.fromkeys(
                 f"condition_{item.status}:{item.condition_id}"
@@ -6571,16 +6586,83 @@ def _annotate_batch_progress(
         coverage_progress = tuple(report.coverage_progress)
         if adds_frontier and "new_frontier_coverage" not in coverage_progress:
             coverage_progress = (*coverage_progress, "new_frontier_coverage")
-        progress_flags = tuple(dict.fromkeys((*report.progress_flags, *goal_progress, *coverage_progress)))
+        if density_increased and "sampling_density_increased" not in coverage_progress:
+            coverage_progress = (*coverage_progress, "sampling_density_increased")
+        information_gain = bool(adds_frontier or density_increased or new_fact_signatures or goal_progress)
+        cost = {
+            **dict(report.cost),
+            "consumes_budget": information_gain,
+            "information_gain": (
+                "coverage"
+                if adds_frontier
+                else "density"
+                if density_increased
+                else "fact"
+                if new_fact_signatures or goal_progress
+                else "none"
+            ),
+            "new_coverage_sec": round(sum(end - start for start, end in novel_ranges), 3),
+            "new_fact_count": len(new_fact_signatures),
+            "density_increased": density_increased,
+        }
+        status = report.status if information_gain else "duplicate"
+        progress_flags_base = report.progress_flags
+        normalized_attempts = attempts
+        if not information_gain:
+            progress_flags_base = (*progress_flags_base, "duplicate", "no_information_gain")
+            normalized_attempts = tuple(
+                replace(attempt, outcome="duplicate")
+                if attempt.outcome != "failed"
+                else attempt
+                for attempt in attempts
+            )
+        progress_flags = tuple(dict.fromkeys((*progress_flags_base, *goal_progress, *coverage_progress)))
         normalized = replace(
             report,
+            status=status,
+            attempts=normalized_attempts,
+            cost=cost,
             goal_progress=goal_progress,
             coverage_progress=coverage_progress,
             progress_flags=progress_flags,
+            coverage_delta=novel_ranges,
         )
         result.append(normalized)
-        prior.extend(intervals)
+        prior_attempts.extend(attempts)
+        covered.extend(interval for attempt in visual_attempts for interval in attempt.inspected_ranges)
+        known_facts.update(new_fact_signatures)
     return tuple(result)
+
+
+def _report_consumes_budget(report: InvestigationReport) -> int:
+    return int(bool(report.cost.get("consumes_budget", report.status not in {"duplicate", "failed"})))
+
+
+def _fact_progress_signature(fact: EvidenceFact) -> tuple[Any, ...]:
+    return (
+        fact.fact_type,
+        re.sub(r"\s+", " ", fact.text.strip().casefold()),
+        fact.fact_range,
+    )
+
+
+def _attempt_increases_density(
+    attempt: ObservationAttempt,
+    previous: Sequence[ObservationAttempt],
+) -> bool:
+    if attempt.sampling_fps <= 0.0 or not attempt.inspected_ranges:
+        return False
+    mode = str(attempt.sampling_config.get("mode", "") or "")
+    comparable = tuple(
+        prior
+        for prior in _visual_inspection_attempts(previous)
+        if str(prior.sampling_config.get("mode", "") or "") == mode
+        and any(
+            _uncovered_duration(current_range, prior.inspected_ranges) <= 1e-6
+            for current_range in attempt.inspected_ranges
+        )
+    )
+    return bool(comparable) and attempt.sampling_fps > max(prior.sampling_fps for prior in comparable) + 1e-6
 
 
 def _uncovered_duration(
@@ -6603,6 +6685,28 @@ def _uncovered_duration(
         if not fragments:
             return 0.0
     return sum(max(0.0, frag_end - frag_start) for frag_start, frag_end in fragments)
+
+
+def _uncovered_ranges(
+    interval: tuple[float, float],
+    covered: Sequence[tuple[float, float]],
+) -> tuple[tuple[float, float], ...]:
+    start, end = sorted((float(interval[0]), float(interval[1])))
+    fragments = [(start, end)]
+    for left, right in sorted((sorted((float(left), float(right))) for left, right in covered)):
+        next_fragments = []
+        for frag_start, frag_end in fragments:
+            if right <= frag_start or left >= frag_end:
+                next_fragments.append((frag_start, frag_end))
+                continue
+            if left > frag_start:
+                next_fragments.append((frag_start, min(left, frag_end)))
+            if right < frag_end:
+                next_fragments.append((max(right, frag_start), frag_end))
+        fragments = next_fragments
+        if not fragments:
+            break
+    return tuple((round(left, 3), round(right, 3)) for left, right in fragments if right - left > 1e-6)
 
 
 def _stagnation_status(reports: Sequence[InvestigationReport]) -> dict[str, Any]:

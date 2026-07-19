@@ -32,9 +32,12 @@ from vcah.evidence_primitives import (
     normalize_target_presence,
 )
 from vcah.investigator import (
+    EvidenceFact,
     InvestigationReport,
+    ObservationAttempt,
     VirtualVideoInvestigator,
     _choose_window_from_segment_packet,
+    _fact_from_evidence,
     _task_terms,
 )
 from vcah.multiround import (
@@ -456,6 +459,10 @@ def _optional_int(value: Any) -> int | None:
         return None
 
 
+def _completion_budget(default: int) -> int:
+    return max(4096, int(default))
+
+
 def _as_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().casefold() in {"1", "true", "yes", "on", "supported"}
@@ -481,6 +488,12 @@ def _provider_request_id(response: Any, payload: Mapping[str, Any]) -> str:
     return str(dict(payload).get("id", "") or "")
 
 
+class ImageAttachmentError(RuntimeError):
+    def __init__(self, message: str, metadata: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.metadata = dict(metadata)
+
+
 class OpenAICompatibleVisionClient:
     def __init__(self, planner: Mapping[str, Any]) -> None:
         self.base = str(planner["base"]).rstrip("/")
@@ -494,6 +507,7 @@ class OpenAICompatibleVisionClient:
         self.retry_base_sec = max(0.0, float(planner.get("retry_base_sec", 1.0)))
         self.retry_max_sec = max(self.retry_base_sec, float(planner.get("retry_max_sec", 30.0)))
         self.retry_jitter = max(0.0, min(1.0, float(planner.get("retry_jitter", 0.2))))
+        self.max_dropped_images = max(0, int(planner.get("max_dropped_images", 0) or 0))
         self.temperature = _optional_float(planner.get("temperature"))
         self.top_p = _optional_float(planner.get("top_p"))
         self.provider_reported_seed_support = _seed_support_status(
@@ -514,11 +528,37 @@ class OpenAICompatibleVisionClient:
         planner = payload.get(section) if section else None
         return cls(planner or payload.get("planner_api") or payload)
 
-    def chat(self, prompt: str, *, image_paths: Sequence[str] = (), max_tokens: int = 900) -> str:
+    def chat(
+        self,
+        prompt: str,
+        *,
+        image_paths: Sequence[str] = (),
+        max_tokens: int = 900,
+        _retry_truncation: bool = True,
+    ) -> str:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-        for path in image_paths:
-            if Path(path).exists():
-                content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
+        requested_paths = tuple(str(path) for path in image_paths)
+        attached_paths = tuple(path for path in requested_paths if Path(path).is_file())
+        dropped_paths = tuple(path for path in requested_paths if not Path(path).is_file())
+        attachment_metadata = {
+            "images_requested": len(requested_paths),
+            "images_attached": len(attached_paths),
+            "images_dropped": len(dropped_paths),
+            "image_attachment_warning": bool(dropped_paths),
+        }
+        if len(dropped_paths) > self.max_dropped_images:
+            self.last_response_metadata = {
+                **attachment_metadata,
+                "finish_reason": "image_attachment_failed",
+                "requested_completion_tokens": int(max_tokens),
+                "dropped_image_paths": list(dropped_paths),
+            }
+            raise ImageAttachmentError(
+                f"Image attachment failed: {len(dropped_paths)} of {len(requested_paths)} requested images are missing",
+                self.last_response_metadata,
+            )
+        for path in attached_paths:
+            content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
@@ -574,6 +614,38 @@ class OpenAICompatibleVisionClient:
                     "requested_seed": requested_seed,
                     "provider_seed_supported": self.provider_seed_supported,
                     "provider_reported_seed_support": self.provider_reported_seed_support,
+                    **attachment_metadata,
+                }
+                if str(choice.get("finish_reason") or "").casefold() == "length" and _retry_truncation:
+                    initial_metadata = self.last_response_metadata
+                    retry_budget = max(4096, int(max_tokens) * 2)
+                    retried_content = self.chat(
+                        prompt,
+                        image_paths=requested_paths,
+                        max_tokens=retry_budget,
+                        _retry_truncation=False,
+                    )
+                    retry_metadata = self.last_response_metadata
+                    combined_metadata = {
+                        **retry_metadata,
+                        "truncated_then_retried": True,
+                        "truncation_retry_count": 1,
+                        "initial_truncated_response": initial_metadata,
+                        "retry_count": int(initial_metadata.get("retry_count", 0) or 0)
+                        + int(retry_metadata.get("retry_count", 0) or 0),
+                    }
+                    for key in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
+                        values = (initial_metadata.get(key), retry_metadata.get(key))
+                        if any(isinstance(value, (int, float)) for value in values):
+                            combined_metadata[key] = sum(
+                                int(value) for value in values if isinstance(value, (int, float))
+                            )
+                    self.last_response_metadata = combined_metadata
+                    return retried_content
+                self.last_response_metadata = {
+                    **self.last_response_metadata,
+                    "truncated_then_retried": False,
+                    "truncation_retry_count": 0,
                 }
                 return content
             if response.status_code in retryable_statuses and attempt < self.max_retries:
@@ -735,7 +807,7 @@ class GeminiReasoner:
                 )
             self._last_candidate = candidate
             if not _should_audit_answer(kwargs):
-                return candidate
+                return self._maybe_verify_claim(kwargs, evidence_digest, candidate)
             audit_fingerprint = _answer_audit_fingerprint(kwargs, candidate, evidence_digest)
             if audit_fingerprint in self._audit_fingerprints:
                 return ReasonerDecision(
@@ -804,55 +876,17 @@ class GeminiReasoner:
                 "audit_reason": audit_reason,
             }
             self._last_audit_reason = audit_reason
-            revised_answer, revised_nested_citations = _normalize_answer_payload(
-                audit.get("revised_answer"),
-                kwargs.get("options") or {},
-            )
-            if revised_answer and _valid_option_answer(revised_answer, kwargs.get("options") or {}):
-                challenge = {
-                    "original_answer": candidate.answer,
-                    "proposed_answer": revised_answer,
-                    "proposed_citations": list(
-                        audit.get("revised_citations") or revised_nested_citations or candidate.citations
-                    ),
-                    "proposed_support_status": str(
-                        audit.get("revised_support_status", "insufficient") or "insufficient"
-                    ).casefold(),
-                    "reason": audit_reason,
-                    "adopted": False,
-                }
-                self._trace(
-                    "reasoner_answer_challenge",
-                    audit_prompt,
-                    audit_raw,
-                    challenge,
-                    image_paths=image_paths,
-                    visual_manifest=visual_manifest,
-                    api_response=audit_api_response,
-                )
-                audit_reason = (
-                    f"{audit_reason} Audit proposed {revised_answer}, but audit revisions are advisory and were not "
-                    "adopted without a new Reasoner decision."
-                ).strip()
-            audit_tasks = tuple(audit.get("tasks") or ())[:2]
-            if (
-                verdict in {"insufficient", "contradicted"}
-                and audit_tasks
-                and int(kwargs.get("remaining_budget", 0) or 0) > 0
-                and not kwargs.get("force_finalize")
-            ):
-                return ReasonerDecision(action="investigate", tasks=audit_tasks)
             decision = ReasonerDecision(
                 action="answer",
                 answer=candidate.answer,
                 citations=candidate.citations,
                 entity_clusters=candidate.entity_clusters,
-                support_status="insufficient" if revised_answer else verdict,
+                support_status=verdict,
                 support_reason=audit_reason,
                 option_verdicts=audit_verdicts,
                 audit_record=audit_record,
             )
-            return self._maybe_verify_claim(kwargs, evidence_digest, decision) if verdict == "supported" else decision
+            return self._maybe_verify_claim(kwargs, evidence_digest, decision)
         image_paths, visual_manifest = self._visual_context(kwargs)
         prompt = _investigate_prompt(kwargs, visual_manifest=visual_manifest)
         raw = self.api.chat(prompt, image_paths=image_paths, max_tokens=self._completion_budget(1400))
@@ -955,7 +989,11 @@ class GeminiReasoner:
             repair_prompt,
             repaired_raw,
             repaired,
-            api_response=repaired_api_response,
+            api_response={
+                **repaired_api_response,
+                "format_repaired": bool(repaired),
+                "repair_failed": not bool(repaired),
+            },
         )
         return repaired
 
@@ -980,8 +1018,7 @@ class GeminiReasoner:
         return replace(candidate, answer=f"{label}. {text}")
 
     def _completion_budget(self, default: int) -> int:
-        model = str(getattr(self.api, "model", "") or "").casefold()
-        return max(int(default), 4096) if "gpt-5" in model else int(default)
+        return _completion_budget(default)
 
     def _response_metadata(self) -> dict[str, Any]:
         return dict(getattr(self.api, "last_response_metadata", {}) or {})
@@ -1012,10 +1049,7 @@ class GeminiReasoner:
                     audit_record=decision.audit_record,
                 )
             return decision
-        if int(kwargs.get("remaining_budget", 0) or 0) <= 0 or kwargs.get("force_finalize"):
-            return decision
-        task = _claim_verification_task(kwargs, decision, evidence_digest, round_id=self.calls)
-        return decision if task is None else ReasonerDecision(action="investigate", tasks=(task,))
+        return decision
 
     def _trace(
         self,
@@ -1061,7 +1095,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         self.api = api
         self.trace_path = trace_path
         self._query_calls: dict[str, int] = {}
-        self._event_segment_cache: dict[tuple[str, str, float], InvestigationReport] = {}
+        self._event_segment_cache: dict[tuple[Any, ...], InvestigationReport] = {}
         self._window_observation_history: dict[tuple[str, float, float, str, str], list[dict[str, Any]]] = {}
         self._terminal_window_evidence: dict[tuple[str, float, float, str, str], EvidenceRecord] = {}
 
@@ -1079,17 +1113,21 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         query_id: str,
         prompt: str,
         image_paths: Sequence[str],
+        allow_repair: bool = True,
     ) -> tuple[dict[str, Any], str, str, int]:
         parsed = _parse_json(raw)
         if parsed:
             return parsed, "parsed", "", 0
         error = "invalid_or_truncated_json"
+        if not allow_repair:
+            fallback = _recover_closed_json_fields(raw)
+            return fallback, "fallback_extracted" if fallback else "failed", error, 0
         repair_prompt = (
             "Recover the following investigator response as one compact valid JSON object. Preserve only facts explicitly "
             "present in the response. Do not infer identity or causality. Return JSON only.\n"
             f"Investigation prompt: {prompt[:2400]}\nTruncated response: {str(raw or '')[:5000]}"
         )
-        repaired_raw = self.api.chat(repair_prompt, image_paths=(), max_tokens=1800)
+        repaired_raw = self.api.chat(repair_prompt, image_paths=(), max_tokens=_completion_budget(1800))
         repaired_api_response = dict(getattr(self.api, "last_response_metadata", {}) or {})
         repaired = _parse_json(repaired_raw)
         _append_jsonl(self.trace_path, {
@@ -1101,7 +1139,12 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             "frame_paths": [],
             "raw": repaired_raw,
             "parsed": repaired,
-            "api_response": repaired_api_response,
+            "api_response": {
+                **repaired_api_response,
+                "format_repaired": bool(repaired),
+                "repair_failed": not bool(repaired),
+            },
+            "retry_disposition": "format_repaired" if repaired else "repair_failed",
             "time": time.time(),
         })
         if repaired:
@@ -1110,6 +1153,62 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         return fallback, "fallback_extracted" if fallback else "failed", error, 1
 
     def _investigate_task(
+        self,
+        task: Any,
+        *,
+        prior_events: Sequence[Mapping[str, Any]] = (),
+    ) -> InvestigationReport:
+        try:
+            return self._investigate_task_inner(task, prior_events=prior_events)
+        except ImageAttachmentError as exc:
+            query_id = str(getattr(task, "query_id", "") or "query")
+            metadata = dict(exc.metadata)
+            _append_jsonl(
+                self.trace_path,
+                {
+                    "type": "investigator_image_attachment_failure",
+                    "agent_role": "investigator",
+                    "model": str(getattr(self.api, "model", type(self.api).__name__)),
+                    "query_id": query_id,
+                    "warning": str(exc),
+                    "api_response": metadata,
+                    "time": time.time(),
+                },
+            )
+            attempt = ObservationAttempt(
+                attempt_id=f"{query_id}:image_attachment_failed",
+                task_id=query_id,
+                requested_range=getattr(task, "time_range", None),
+                inspected_ranges=(),
+                sampling_config={
+                    "fps": float(getattr(task, "sampling_floor_fps", 0.5) or 0.5),
+                    "mode": str(getattr(task, "inspection_mode", "window") or "window"),
+                    "modality": "visual",
+                },
+                images_requested=int(metadata.get("images_requested", 0) or 0),
+                images_attached=int(metadata.get("images_attached", 0) or 0),
+                images_dropped=int(metadata.get("images_dropped", 0) or 0),
+                parse_status="failed",
+                outcome="failed",
+            )
+            return InvestigationReport(
+                query_id=query_id,
+                status="failed",
+                attempts=(attempt,),
+                cost={
+                    "tool_trace": ("image_attachment_failed",),
+                    "frames": 0,
+                    "vlm_calls": 0,
+                    "reused": False,
+                    "consumes_budget": False,
+                    "information_gain": "none",
+                },
+                gap_id=str(getattr(task, "gap_id", "") or ""),
+                failure_reason=str(exc),
+                progress_flags=("image_attachment_failed", "no_information_gain"),
+            )
+
+    def _investigate_task_inner(
         self,
         task: Any,
         *,
@@ -1180,6 +1279,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         preview_raws: list[str] = []
         preview_payloads: list[dict[str, Any]] = []
         preview_api_responses: list[dict[str, Any]] = []
+        preview_parse_statuses: list[str] = []
         parse_status = "failed"
         parse_error = ""
         parse_repair_calls = 0
@@ -1188,9 +1288,11 @@ class GeminiInvestigator(VirtualVideoInvestigator):
         max_adaptive_attempts = max(1, 3 - min(2, len(prior_window_observations)))
         for adaptive_index in range(max_adaptive_attempts):
             preview_query_id = f"{observation_id}_preview_a{adaptive_index + 1}"
+            preview_frame_limit = 16 if required_fps <= 0.5 else 32 if required_fps <= 1.0 else 64
             preview_max_frames = min(
-                512 if adaptive_index == 0 else max(1, 154 - adaptive_extra_frames),
-                max(64, int(max(0.0, float(window[1]) - float(window[0])) * required_fps + 0.999)),
+                preview_frame_limit,
+                max(1, int(max(0.0, float(window[1]) - float(window[0])) * required_fps + 0.999)),
+                max(1, 154 - adaptive_extra_frames),
             )
             low = self.inspect_window(
                 window[0],
@@ -1200,8 +1302,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 query_id=preview_query_id,
                 phase_offset_sec=phase_offset_sec,
             )
-            preview_frame_limit = 16 if required_fps <= 0.5 else 32 if required_fps <= 1.0 else 64
-            preview_frames = select_uniform_items(tuple(low["frames"]), preview_frame_limit)
+            preview_frames = tuple(low["frames"])
             preview_paths = tuple(str(row["path"]) for row in preview_frames)
             arbitration_context = (*prior_window_observations, *adaptive_rows)
             if event_window:
@@ -1224,10 +1325,18 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                     self.workspace, task, segment_packet, low,
                     prior_observations=arbitration_context,
                 )
-            preview_raw = self.api.chat(preview_prompt, image_paths=preview_paths, max_tokens=1400)
+            preview_raw = self.api.chat(
+                preview_prompt,
+                image_paths=preview_paths,
+                max_tokens=_completion_budget(1400),
+            )
             preview_api_response = dict(getattr(self.api, "last_response_metadata", {}) or {})
             preview, attempt_parse_status, attempt_parse_error, attempt_repair_calls = self._parse_structured_observation(
-                preview_raw, query_id=query_id, prompt=preview_prompt, image_paths=preview_paths,
+                preview_raw,
+                query_id=query_id,
+                prompt=preview_prompt,
+                image_paths=preview_paths,
+                allow_repair=parse_repair_calls == 0,
             )
             parse_status = attempt_parse_status
             parse_error = attempt_parse_error
@@ -1244,6 +1353,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             preview_raws.append(preview_raw)
             preview_payloads.append(preview)
             preview_api_responses.append(preview_api_response)
+            preview_parse_statuses.append(attempt_parse_status)
             _append_jsonl(
                 self.trace_path,
                 {
@@ -1438,7 +1548,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             raw = self.api.chat(
                 final_prompt,
                 image_paths=model_image_paths,
-                max_tokens=2200 if anchor_event_window else 1400,
+                max_tokens=_completion_budget(2200 if anchor_event_window else 1400),
             )
             final_api_response = dict(getattr(self.api, "last_response_metadata", {}) or {})
             parsed, parse_status, parse_error, detail_repair_calls = self._parse_structured_observation(
@@ -1446,8 +1556,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 query_id=query_id,
                 prompt=final_prompt,
                 image_paths=model_image_paths,
+                allow_repair=parse_repair_calls == 0,
             )
             tool_trace.append(f"inspect_window:{detail_fps:.1f}:{len(selected_frames)}")
+            parse_repair_calls += detail_repair_calls
             vlm_calls += 1 + detail_repair_calls
 
         parsed, fallback_used = _with_explicit_measurement_fallback(
@@ -1673,10 +1785,71 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             evidence.observation_polarity != "positive" or conflicted_slot_ids
         ):
             self._terminal_window_evidence[window_key] = evidence
+        attempts = []
+        for packet, attempt_frames, attempt_paths, attempt_id, attempt_payload, attempt_metadata, attempt_status in zip(
+            preview_packets,
+            preview_frames_by_attempt,
+            preview_paths_by_attempt,
+            preview_query_ids,
+            preview_payloads,
+            preview_api_responses,
+            preview_parse_statuses,
+        ):
+            image_counts = _image_attachment_counts(attempt_metadata, attempt_paths)
+            packet_range = tuple(float(value) for value in packet["virtual_time_range"])
+            attempts.append(
+                ObservationAttempt(
+                    attempt_id=attempt_id,
+                    task_id=query_id,
+                    requested_range=tuple(float(value) for value in window),
+                    inspected_ranges=(packet_range,) if image_counts["attached"] else (),
+                    attached_frame_times=tuple(
+                        float(row["virtual_time_sec"])
+                        for row in attempt_frames
+                        if row.get("virtual_time_sec") is not None
+                    ),
+                    sampling_config={
+                        **dict(packet.get("sampling", {}) or {}),
+                        "mode": str(getattr(task, "inspection_mode", "window") or "window"),
+                        "modality": "visual",
+                        "phase": "preview",
+                    },
+                    images_requested=image_counts["requested"],
+                    images_attached=image_counts["attached"],
+                    images_dropped=image_counts["dropped"],
+                    parse_status=attempt_status,
+                    outcome=_normalize_attempt_outcome(attempt_payload, attempt_status),
+                )
+            )
+        if detail_query_id:
+            image_counts = _image_attachment_counts(final_api_response, frame_paths)
+            attempts.append(
+                ObservationAttempt(
+                    attempt_id=detail_query_id,
+                    task_id=query_id,
+                    requested_range=tuple(float(value) for value in selected_window),
+                    inspected_ranges=(tuple(float(value) for value in selected_window),) if image_counts["attached"] else (),
+                    attached_frame_times=tuple(value for value in frame_times if value is not None),
+                    sampling_config={
+                        **dict(selected_packet.get("sampling", {}) or {}),
+                        "mode": str(getattr(task, "inspection_mode", "window") or "window"),
+                        "modality": "visual",
+                        "phase": "detail",
+                    },
+                    images_requested=image_counts["requested"],
+                    images_attached=image_counts["attached"],
+                    images_dropped=image_counts["dropped"],
+                    parse_status=parse_status,
+                    outcome=_normalize_attempt_outcome(parsed, parse_status),
+                )
+            )
+        source_attempt_id = detail_query_id or preview_query_id
         return InvestigationReport(
             query_id=query_id,
             status="satisfied" if frame_paths else "empty",
             evidence=(evidence,) if frame_paths else (),
+            attempts=tuple(attempts),
+            facts=(_fact_from_evidence(evidence, source_attempt_id),) if frame_paths else (),
             cost={
                 "tool_trace": tuple(tool_trace),
                 "preview_frames": len(preview_paths),
@@ -1685,6 +1858,10 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "region_frames": len(region_frame_paths),
                 "vlm_calls": vlm_calls,
                 "reused": False,
+                "images_requested": sum(attempt.images_requested for attempt in attempts),
+                "images_attached": sum(attempt.images_attached for attempt in attempts),
+                "images_dropped": sum(attempt.images_dropped for attempt in attempts),
+                "consumes_budget": bool(frame_paths),
             },
             gap_id=str(getattr(task, "gap_id", "") or ""),
             resolution=str(outcome["resolution"]),
@@ -1803,16 +1980,31 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             for result in condition_results
             if result.status == "satisfied"
         )
+        attempt = ObservationAttempt(
+            attempt_id=f"{query_id}:asr",
+            task_id=query_id,
+            inspected_ranges=tuple(
+                (float(record.start_sec), float(record.end_sec))
+                for record in evidence
+                if record.start_sec is not None and record.end_sec is not None
+            ),
+            sampling_config={"mode": "search_asr", "modality": "asr", "terms": list(terms)},
+            parse_status="deterministic",
+            outcome="found" if has_hits else "not_found",
+        )
         return InvestigationReport(
             query_id=query_id,
             status="satisfied",
             evidence=tuple(evidence),
+            attempts=(attempt,),
+            facts=tuple(_fact_from_evidence(record, attempt.attempt_id) for record in evidence),
             cost={
                 "tool_trace": ("search_asr",),
                 "frames": 0,
                 "vlm_calls": 0,
                 "reused": False,
                 "hit_clusters": len(evidence),
+                "consumes_budget": True,
             },
             gap_id=str(getattr(task, "gap_id", "") or ""),
             resolution=resolution,
@@ -1830,11 +2022,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
 
     def _investigate_event_beats(self, task: Any, segment_packet: Mapping[str, Any]) -> InvestigationReport:
         segment_id = str(getattr(task, "segment_id", "") or "")
-        cache_key = (
-            segment_id,
-            _sampling_goal_key(task),
-            float(getattr(task, "sampling_floor_fps", 0.5) or 0.5),
-        )
+        cache_key = _event_cache_key(task, segment_packet)
         cached = self._event_segment_cache.get(cache_key)
         if cached is not None and any(
             record.observation_polarity != "positive"
@@ -1846,6 +2034,24 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             return replace(
                 cached,
                 query_id=str(getattr(task, "query_id", "") or cached.query_id),
+                status="duplicate",
+                attempts=(
+                    ObservationAttempt(
+                        attempt_id=f"{getattr(task, 'query_id', cached.query_id)}:event_cache",
+                        task_id=str(getattr(task, "query_id", "") or cached.query_id),
+                        requested_range=getattr(task, "time_range", None),
+                        inspected_ranges=(),
+                        sampling_config={
+                            "fps": float(getattr(task, "sampling_floor_fps", 0.5) or 0.5),
+                            "mode": "enumerate_events",
+                            "modality": "visual",
+                            "cache_key": list(cache_key),
+                        },
+                        parse_status="reused",
+                        outcome="duplicate",
+                    ),
+                ),
+                facts=(),
                 cost={
                     "beat_windows": 0,
                     "tool_trace": ("reuse_segment_event_observation",),
@@ -1854,48 +2060,19 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                     "frames": 0,
                     "vlm_calls": 0,
                     "reused": True,
+                    "consumes_budget": False,
+                    "information_gain": "none",
                 },
                 progress_flags=tuple(dict.fromkeys((*cached.progress_flags, "segment_event_observation_reused"))),
                 coverage_delta=(),
             )
-        windows = _event_enumeration_windows(segment_packet)
+        windows = _event_enumeration_windows(task, segment_packet)
         reports = []
         prior_events: tuple[Mapping[str, Any], ...] = ()
         for window in windows:
-            beat_task = InvestigationTask(
-                query_id=str(getattr(task, "query_id", "") or "query"),
-                goal=str(getattr(task, "goal", "") or ""),
-                segment_id=str(getattr(task, "segment_id", "") or ""),
+            beat_task = task.clone_with(
                 time_range=window,
-                modality_hint=tuple(getattr(task, "modality_hint", ()) or ()),
-                expected_evidence=str(getattr(task, "expected_evidence", "") or ""),
                 inspection_mode="event_window",
-                priority=float(getattr(task, "priority", 0.0) or 0.0),
-                gap_id=str(getattr(task, "gap_id", "") or ""),
-                success_conditions=tuple(getattr(task, "success_conditions", ()) or ()),
-                conditions=tuple(getattr(task, "conditions", ()) or ()),
-                source_candidate_ids=tuple(getattr(task, "source_candidate_ids", ()) or ()),
-                inspection_intent=str(getattr(task, "inspection_intent", "") or ""),
-                origin_gap_id=str(getattr(task, "origin_gap_id", "") or ""),
-                target_condition_ids=tuple(getattr(task, "target_condition_ids", ()) or ()),
-                boundary_episode_id=str(getattr(task, "boundary_episode_id", "") or ""),
-                target_option_predicates=tuple(getattr(task, "target_option_predicates", ()) or ()),
-                target_requirement_ids=tuple(getattr(task, "target_requirement_ids", ()) or ()),
-                candidate_id=str(getattr(task, "candidate_id", "") or ""),
-                episode_id=str(getattr(task, "episode_id", "") or ""),
-                entity_hypothesis_id=str(getattr(task, "entity_hypothesis_id", "") or ""),
-                target_option_predicate_ids=tuple(getattr(task, "target_option_predicate_ids", ()) or ()),
-                sampling_floor_fps=(
-                    float(getattr(task, "sampling_floor_fps", 0.5) or 0.5)
-                    if bool(getattr(task, "sampling_floor_specified", False))
-                    else None
-                ),
-                temporal_resolution_rationale=str(
-                    getattr(task, "temporal_resolution_rationale", "") or ""
-                ),
-                direction=str(getattr(task, "direction", "") or ""),
-                preferred_ranges=tuple(getattr(task, "preferred_ranges", ()) or ()),
-                excluded_ranges=tuple(getattr(task, "excluded_ranges", ()) or ()),
             )
             report = self._investigate_task(beat_task, prior_events=prior_events)
             reports.append(report)
@@ -1911,6 +2088,8 @@ class GeminiInvestigator(VirtualVideoInvestigator):
             query_id=str(getattr(task, "query_id", "") or ""),
             status="satisfied" if evidence else "empty",
             evidence=evidence,
+            attempts=tuple(attempt for report in reports for attempt in report.attempts),
+            facts=tuple(fact for report in reports for fact in report.facts),
             cost={
                 "beat_windows": len(windows),
                 "tool_trace": tuple(step for report in reports for step in report.cost.get("tool_trace", ())),
@@ -1919,6 +2098,7 @@ class GeminiInvestigator(VirtualVideoInvestigator):
                 "frames": sum(int(report.cost.get("frames", 0) or 0) for report in reports),
                 "vlm_calls": sum(int(report.cost.get("vlm_calls", 0) or 0) for report in reports),
                 "reused": bool(reports) and all(bool(report.cost.get("reused")) for report in reports),
+                "consumes_budget": any(bool(report.cost.get("consumes_budget", True)) for report in reports),
             },
             gap_id=str(getattr(task, "gap_id", "") or ""),
             resolution=(
@@ -1970,7 +2150,7 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
     beats = select_uniform_items(tuple(segment_packet.get("beats", ()) or ()), 12)
     for beat in beats:
         image_paths.extend(str(path) for path in beat.get("thumbnail_grid_paths", ())[:1])
-    raw = api.chat(prompt, image_paths=image_paths, max_tokens=400)
+    raw = api.chat(prompt, image_paths=image_paths, max_tokens=_completion_budget(400))
     api_response = dict(getattr(api, "last_response_metadata", {}) or {})
     parsed = _parse_json(raw)
     seg_start, seg_end = segment_packet["virtual_time_range"]
@@ -2004,10 +2184,55 @@ def _select_window_with_model(api: OpenAICompatibleVisionClient, task: Any, segm
 
 
 def _event_enumeration_windows(
+    task: Any,
     segment_packet: Mapping[str, Any],
 ) -> tuple[tuple[float, float], ...]:
-    start, end = segment_packet["virtual_time_range"]
-    return ((float(start), float(end)),) if float(end) > float(start) else ()
+    segment_start, segment_end = (float(value) for value in segment_packet["virtual_time_range"])
+    requested = getattr(task, "time_range", None)
+    if requested is None:
+        start, end = segment_start, segment_end
+    else:
+        requested_start, requested_end = sorted((float(requested[0]), float(requested[1])))
+        start = max(segment_start, requested_start)
+        end = min(segment_end, requested_end)
+    return ((round(start, 3), round(end, 3)),) if end > start else ()
+
+
+def _event_cache_key(task: Any, segment_packet: Mapping[str, Any]) -> tuple[Any, ...]:
+    windows = _event_enumeration_windows(task, segment_packet)
+    target_ids = tuple(
+        dict.fromkeys(
+            str(item).strip()
+            for name in (
+                "target_requirement_ids",
+                "target_condition_ids",
+                "target_option_predicate_ids",
+                "source_candidate_ids",
+            )
+            for item in tuple(getattr(task, name, ()) or ())
+            if str(item).strip()
+        )
+    )
+    scalar_targets = tuple(
+        str(getattr(task, name, "") or "").strip()
+        for name in ("candidate_id", "episode_id", "entity_hypothesis_id", "inspection_intent")
+        if str(getattr(task, name, "") or "").strip()
+    )
+    stable_targets = (*target_ids, *scalar_targets) or (str(getattr(task, "query_id", "") or ""),)
+    profile = str(
+        getattr(task, "schema_profile", "")
+        or getattr(task, "task_profile", "")
+        or getattr(task, "inspection_mode", "enumerate_events")
+    ).strip().casefold()
+    return (
+        str(getattr(task, "segment_id", "") or ""),
+        tuple(windows),
+        str(getattr(task, "inspection_mode", "enumerate_events") or "enumerate_events").casefold(),
+        round(float(getattr(task, "sampling_floor_fps", 0.5) or 0.5), 3),
+        round(float(getattr(task, "sampling_phase", 0.0) or 0.0), 6),
+        profile,
+        tuple(stable_targets),
+    )
 
 
 def _ending_event_context(
@@ -3137,6 +3362,10 @@ def _investigate_prompt(
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
+        "Policy suggestions are advisory candidates only. You are the sole investigation-task decision maker: adopt, modify, or ignore them "
+        "based on expected information gain. Returning answer early or fewer tasks is valid.\n"
+        f"Policy suggestions: {json.dumps(list(kwargs.get('policy_suggestions') or ()), ensure_ascii=False)}\n"
+        f"Policy limits: {json.dumps(kwargs.get('policy_limits') or {}, ensure_ascii=False)}\n"
         f"workspace_duration_sec: {float(kwargs.get('workspace_duration_sec', 0.0) or 0.0)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
         f"Workspace overview: {json.dumps(kwargs['workspace_overview'], ensure_ascii=False)[:6000]}"
@@ -3214,6 +3443,10 @@ def _followup_prompt(
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"Query requirements: {json.dumps(kwargs.get('query_requirements') or {}, ensure_ascii=False)}\n"
+        "Policy suggestions are advisory candidates only. You are the sole investigation-task decision maker: adopt, modify, or ignore them "
+        "based on expected information gain. Returning answer early or fewer tasks is valid.\n"
+        f"Policy suggestions: {json.dumps(list(kwargs.get('policy_suggestions') or ()), ensure_ascii=False)}\n"
+        f"Policy limits: {json.dumps(kwargs.get('policy_limits') or {}, ensure_ascii=False)}\n"
         f"workspace_duration_sec: {float(kwargs.get('workspace_duration_sec', 0.0) or 0.0)}\n"
         f"Completion status: {json.dumps(kwargs.get('completion_status') or {}, ensure_ascii=False)}\n"
         f"Temporal navigation: {json.dumps(kwargs.get('temporal_navigation') or {}, ensure_ascii=False)}\n"
@@ -3410,77 +3643,6 @@ def _valid_option_answer(answer: str, options: Mapping[str, Any]) -> bool:
     return matches == 1
 
 
-def _claim_verification_task(
-    kwargs: Mapping[str, Any],
-    candidate: ReasonerDecision,
-    evidence_digest: Sequence[Mapping[str, Any]],
-    *,
-    round_id: int,
-) -> InvestigationTask | None:
-    cited_ids = set(candidate.citations)
-    cited = [row for row in evidence_digest if str(row.get("evidence_id", "")) in cited_ids]
-    if not cited:
-        cited = list(evidence_digest[-2:])
-    ranges = [tuple(row.get("virtual_time_range", ()) or ()) for row in cited]
-    ranges = [row for row in ranges if len(row) == 2 and row[0] is not None and row[1] is not None]
-    if not ranges:
-        return None
-    start = min(float(row[0]) for row in ranges) - 180.0
-    end = max(float(row[1]) for row in ranges) + 180.0
-    duration = max(0.0, float(kwargs.get("workspace_duration_sec", end) or end))
-    start = max(0.0, start)
-    end = min(duration, end)
-    if end - start > 360.0:
-        center = (start + end) / 2.0
-        start, end = max(0.0, center - 180.0), min(duration, center + 180.0)
-    lineage = next(
-        (
-            item
-            for row in cited
-            for item in (row.get("source_lineage", ()) or ())
-            if isinstance(item, Mapping) and str(item.get("segment_id", "") or "")
-        ),
-        {},
-    )
-    segment_id = str(lineage.get("segment_id", "") or "")
-    if not segment_id:
-        return None
-    selected = re.match(r"\s*([A-H])(?:\.|\)|:|\s|$)", candidate.answer.upper())
-    selected_label = selected.group(1) if selected else ""
-    alternatives = tuple(
-        f"{label}. {text}"
-        for label, text in dict(kwargs.get("options") or {}).items()
-        if str(label).upper() != selected_label
-    )
-    return InvestigationTask(
-        query_id=f"verify_r{int(round_id)}_candidate",
-        goal="Independently verify or refute the proposed answer using the cited scene and adjacent context.",
-        segment_id=segment_id,
-        time_range=(round(start, 3), round(end, 3)),
-        modality_hint=("visual", "asr"),
-        expected_evidence="direct evidence that distinguishes the proposed answer from the strongest alternative",
-        inspection_mode="verify_claim",
-        priority=1.0,
-        claim_to_verify=candidate.answer,
-        claim_relation=_claim_relation_for_question(kwargs),
-        alternative_answers=alternatives,
-    )
-
-
-def _claim_relation_for_question(kwargs: Mapping[str, Any]) -> str:
-    question = str(kwargs.get("question", "") or "").casefold()
-    requires_identity = bool(dict(kwargs.get("query_requirements") or {}).get("requires_identity_link"))
-    if re.search(r"\bwhy\b", question):
-        return "decision_motive"
-    if re.search(r"\bhow\s+(?:did|does|do|was|were)\b", question):
-        return "identity_linked_cause" if requires_identity else "initiating_cause_or_mechanism"
-    if re.search(r"\b(?:view|opinion|believ\w*)\b", question):
-        return "opinion"
-    if requires_identity:
-        return "identity_link"
-    return "direct_relation"
-
-
 def _answer_audit_prompt(
     kwargs: Mapping[str, Any],
     candidate: ReasonerDecision,
@@ -3496,12 +3658,6 @@ def _answer_audit_prompt(
         if str(row.get("evidence_id", "")) not in cited_ids
     ][-8:]
     context = (cited + surrounding)[:12]
-    budget = int(kwargs.get("remaining_budget", 0) or 0)
-    task_instruction = (
-        "If evidence is insufficient or contradictory, return 1-2 targeted investigation tasks."
-        if budget > 0 and not kwargs.get("force_finalize")
-        else "No investigation budget remains; return no tasks and assess the best-effort answer honestly."
-    )
     claim_contract = _compile_option_claim_contract(
         str(kwargs.get("question", "") or ""),
         dict(kwargs.get("options") or {}),
@@ -3525,11 +3681,10 @@ def _answer_audit_prompt(
         "plausibility as evidence. For contrastive measurements, require the value to be explicitly bound to the participant "
         "named by the question; a visible but subject-unbound counter is insufficient. For event counts, use "
         "completion_status.confirmed_event_candidates as the canonical ledger. Do not replace its count by recounting a sampled "
-        "evidence digest; when candidate identity is disputed, return insufficient with a reconciliation task. "
-        f"{task_instruction}\n"
-        "Identify the single strongest_alternative after comparing every option internally. If that alternative is directly "
-        "supported, provide revised_answer and its citations. Do not revise based only on plausibility or elimination. Keep the "
-        "reason under 100 words and each task goal under 40 words. Every option key must appear exactly once in option_verdicts; "
+        "evidence digest; when candidate identity is disputed, return insufficient. This audit is non-planning and non-selecting: "
+        "do not request investigation, emit tasks, or choose a replacement answer. "
+        "Identify the single strongest_alternative after comparing every option internally. Keep the reason under 100 words. "
+        "Every option key must appear exactly once in option_verdicts; "
         "use unknown for an undecidable option rather than omitting it. "
         f"{_sampling_plan_instruction()}"
         "Return compact JSON only: "
@@ -3539,13 +3694,7 @@ def _answer_audit_prompt(
         "\"canonical_fact_ids\":[\"event_candidate_001\"],\"reason\":\"...\"}},"
         "\"evidence_relation\":\"direct|causal_chain|consequence_only|cooccurrence_only|unclear\","
         "\"strongest_alternative\":{\"option\":\"A\",\"support\":\"direct|indirect|contradicted|missing\","
-        "\"evidence_ids\":[\"ev_...\"],\"reason\":\"...\"},"
-        "\"revised_answer\":null,\"revised_citations\":[],\"revised_entity_clusters\":[{\"entity_id\":\"entity_1\","
-        "\"description\":\"...\",\"evidence_ids\":[\"ev_...\"],\"entity_observation_ids\":[\"obs:person_1\"]}],"
-        "\"revised_support_status\":\"supported|insufficient\",\"tasks\":[{\"query_id\":\"audit_r2_t1\","
-        "\"goal\":\"...\",\"segment_id\":\"seg_0001\",\"time_range\":[0.0,60.0],"
-        "\"modality_hint\":[\"visual\",\"asr\"],\"expected_evidence\":\"...\","
-        "\"sampling_floor_fps\":1.0,\"temporal_resolution_rationale\":\"Expected dwell time and interval.\"}]}.\n"
+        "\"evidence_ids\":[\"ev_...\"],\"reason\":\"...\"}}.\n"
         f"Question: {kwargs['question']}\nOptions: {json.dumps(kwargs['options'], ensure_ascii=False)}\n"
         f"Query contract: {json.dumps(kwargs.get('query_contract') or {}, ensure_ascii=False)}\n"
         f"workspace_duration_sec: {float(kwargs.get('workspace_duration_sec', 0.0) or 0.0)}\n"
@@ -3691,13 +3840,22 @@ def _canonical_finalization_context(kwargs: Mapping[str, Any]) -> dict[str, Any]
 
 
 def _sampling_goal_key(task: Any) -> str:
-    text = " ".join(
-        (
-            str(getattr(task, "goal", "") or ""),
-            str(getattr(task, "expected_evidence", "") or ""),
-        )
-    ).casefold()
-    return re.sub(r"[^a-z0-9]+", " ", text).strip()[:240]
+    values = []
+    for name in (
+        "target_requirement_ids",
+        "target_condition_ids",
+        "target_option_predicate_ids",
+        "source_candidate_ids",
+    ):
+        values.extend(str(item).strip() for item in tuple(getattr(task, name, ()) or ()) if str(item).strip())
+    values.extend(
+        str(getattr(task, name, "") or "").strip()
+        for name in ("candidate_id", "episode_id", "entity_hypothesis_id", "inspection_intent", "claim_to_verify")
+        if str(getattr(task, name, "") or "").strip()
+    )
+    if not values:
+        values.append(str(getattr(task, "query_id", "") or ""))
+    return "|".join(dict.fromkeys(values))
 
 
 _SEMANTIC_EMPTY_SLOT_VALUES = {
@@ -3762,6 +3920,32 @@ def _normalize_finding(value: Mapping[str, Any]) -> str:
     return "uncertain"
 
 
+def _normalize_attempt_outcome(value: Mapping[str, Any], parse_status: str) -> str:
+    if str(parse_status or "").casefold() == "failed":
+        return "failed"
+    finding = _normalize_finding(value)
+    return finding if finding in {"found", "not_found"} else "uncertain"
+
+
+def _image_attachment_counts(
+    response_metadata: Mapping[str, Any],
+    image_paths: Sequence[str],
+) -> dict[str, int]:
+    metadata = dict(response_metadata or {})
+    requested = int(metadata.get("images_requested", len(tuple(image_paths))) or 0)
+    attached = metadata.get("images_attached")
+    if attached is None:
+        attached = sum(Path(str(path)).is_file() for path in image_paths)
+    dropped = metadata.get("images_dropped")
+    if dropped is None:
+        dropped = max(0, requested - int(attached))
+    return {
+        "requested": max(0, requested),
+        "attached": max(0, int(attached)),
+        "dropped": max(0, int(dropped)),
+    }
+
+
 def _observation_governance_row(
     value: Mapping[str, Any],
     sampling_fps: float,
@@ -3779,6 +3963,9 @@ def _observation_governance_row(
             if isinstance(item, Mapping)
         ],
         "need_detail": _truthy(value.get("need_detail")),
+        "visibility_status": str(value.get("visibility_status", "") or "").strip().casefold(),
+        "ocr_status": str(value.get("ocr_status", "") or "").strip().casefold(),
+        "boundary_status": str(value.get("boundary_status", "") or "").strip().casefold(),
         "sampling_fps": float(sampling_fps),
         "phase_offset_sec": float(phase_offset_sec),
     }
@@ -3841,9 +4028,18 @@ def _adaptive_sampling_triggers(
     if bool(current.get("need_detail")):
         return ()
     if str(current.get("finding", "") or "") == "not_found":
-        reasons.append("not_found")
+        # Absence in this window is a localization result. The Reasoner must
+        # choose a new range instead of repeatedly phase-shifting the same one.
+        return ()
     if bool(current.get("confidence_explicit")) and float(current.get("confidence", 0.0) or 0.0) < 0.7:
         reasons.append("low_confidence")
+    visibility = str(current.get("visibility_status", "") or "").strip().casefold()
+    if visibility in {"occluded", "motion_blur", "blurred"}:
+        reasons.append("motion_blur" if "blur" in visibility else "occluded")
+    if str(current.get("ocr_status", "") or "").strip().casefold() in {"unresolved", "uncertain"}:
+        reasons.append("ocr_unresolved")
+    if str(current.get("boundary_status", "") or "").strip().casefold() in {"uncertain", "unresolved"}:
+        reasons.append("boundary_uncertain")
     if _conflicted_slot_ids((*prior, current)):
         reasons.append("structured_slot_conflict")
     return tuple(reasons)
