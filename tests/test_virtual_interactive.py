@@ -167,8 +167,6 @@ def test_reasoner_repairs_schema_invalid_json_object(tmp_path: Path) -> None:
                     "action": "answer",
                     "answer": "B",
                     "supporting_claim_ids": ["claim_cup"],
-                    "support_status": "direct",
-                    "unsupported_option_details": [],
                 }
             ),
         )
@@ -187,49 +185,10 @@ def test_reasoner_repairs_schema_invalid_json_object(tmp_path: Path) -> None:
     )
 
     assert decision.answer == "B. A cup"
-    assert decision.support_status == "direct"
     assert len(api.calls) == 2
     rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
     assert [row["type"] for row in rows] == ["reasoner_json_repair", "reasoner_workspace"]
     assert rows[-1]["format_repaired"] is True
-
-
-def test_reasoner_support_audit_unwraps_and_rejects_semantic_leap(tmp_path: Path) -> None:
-    api = FakeAPI(
-        (
-            json.dumps(
-                {
-                    "response": [
-                        {
-                            "support_status": "partial",
-                            "unsupported_option_details": ["who called the police"],
-                            "residual_uncertainty": "The caller is not directly observed.",
-                        }
-                    ]
-                }
-            ),
-        )
-    )
-    trace_path = tmp_path / "audit.jsonl"
-    reasoner = WorkspaceReasoner(api, trace_path=trace_path)
-
-    audit = reasoner.audit_answer(
-        round_id=3,
-        question="Who called the police?",
-        options={"A": "Joe", "B": "His mother"},
-        answer="B. His mother",
-        supporting_claim_ids=("derived_caller",),
-        residual_uncertainty="",
-        working_document_view="The observation says the caller is not visible.",
-    )
-
-    assert audit["support_status"] == "partial"
-    assert audit["unsupported_option_details"] == ("who called the police",)
-    assert "not directly observed" in audit["residual_uncertainty"]
-    trace = json.loads(trace_path.read_text(encoding="utf-8"))
-    assert trace["type"] == "reasoner_support_audit"
-    assert trace["round"] == 3
-    assert "Derived claims are conclusions to verify" in api.calls[0]["prompt"]
 
 
 def test_reasoner_prompt_retains_first_and_last_overviews(tmp_path: Path) -> None:
@@ -259,6 +218,8 @@ def test_reasoner_prompt_retains_first_and_last_overviews(tmp_path: Path) -> Non
     assert "overview_0000" in prompt
     assert "overview_0039" in prompt
     assert "seg_0039" in prompt
+    assert '"residual_uncertainty":""' in prompt
+    assert "support_status" not in prompt
 
 
 def test_reasoner_preserves_its_answer_and_workspace_operations(tmp_path: Path) -> None:
@@ -278,8 +239,6 @@ def test_reasoner_preserves_its_answer_and_workspace_operations(tmp_path: Path) 
                         }
                     ],
                     "supporting_claim_ids": ["c1"],
-                    "support_status": "direct",
-                    "unsupported_option_details": [],
                     "residual_uncertainty": "The object is briefly occluded.",
                 }
             ),
@@ -300,8 +259,6 @@ def test_reasoner_preserves_its_answer_and_workspace_operations(tmp_path: Path) 
     assert decision.answer == "B. A cup"
     assert decision.workspace_ops[0]["claim_id"] == "c1"
     assert decision.supporting_claim_ids == ("c1",)
-    assert decision.support_status == "direct"
-    assert not decision.unsupported_option_details
     assert decision.residual_uncertainty == "The object is briefly occluded."
 
 

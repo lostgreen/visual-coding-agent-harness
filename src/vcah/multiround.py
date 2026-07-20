@@ -21,7 +21,6 @@ from vcah.workspace import (
 
 
 _INSPECTION_MODES = {"window", "search_asr", "arbitrate_observation"}
-_SUPPORT_STATUSES = {"direct", "partial", "insufficient", "contradicted"}
 RUN_ARTIFACT_NAMES = (
     "evidence.jsonl",
     "observation_log.jsonl",
@@ -75,8 +74,6 @@ class ReasonerDecision:
     citations: tuple[str, ...] = ()
     workspace_ops: tuple[Mapping[str, Any], ...] = ()
     supporting_claim_ids: tuple[str, ...] = ()
-    support_status: str = ""
-    unsupported_option_details: tuple[str, ...] = ()
     residual_uncertainty: str = ""
     observation_requests: tuple[Mapping[str, Any], ...] = ()
 
@@ -101,21 +98,6 @@ class ReasonerDecision:
             self,
             "supporting_claim_ids",
             tuple(dict.fromkeys(str(item).strip() for item in self.supporting_claim_ids if str(item).strip())),
-        )
-        support_status = str(self.support_status or "").strip().casefold()
-        if support_status and support_status not in _SUPPORT_STATUSES:
-            raise ValueError(f"unsupported answer support status: {support_status}")
-        object.__setattr__(self, "support_status", support_status)
-        object.__setattr__(
-            self,
-            "unsupported_option_details",
-            tuple(
-                dict.fromkeys(
-                    str(item).strip()
-                    for item in self.unsupported_option_details
-                    if str(item).strip()
-                )
-            ),
         )
         object.__setattr__(self, "residual_uncertainty", str(self.residual_uncertainty or "").strip())
         object.__setattr__(
@@ -235,8 +217,6 @@ class VirtualVideoMultiRoundDriver:
                     "workspace_ops_accepted": apply_result.accepted,
                     "workspace_errors": list(apply_result.errors),
                     "supporting_claim_ids": list(decision.supporting_claim_ids),
-                    "support_status": decision.support_status,
-                    "unsupported_option_details": list(decision.unsupported_option_details),
                     "remaining_budget": remaining,
                     "force_finalize": force_finalize,
                     "final_attempt": forced_calls if force_finalize else 0,
@@ -259,37 +239,8 @@ class VirtualVideoMultiRoundDriver:
                     decision,
                     citations=_answer_citations(decision, document, evidence_store.records),
                 )
-                validation = _validate_answer(
-                    candidate,
-                    document,
-                    observation_log.attempt_ids,
-                    workspace.case.options,
-                    require_consistency=False,
-                )
-                if validation.passed:
-                    candidate = _audit_answer(
-                        self.reasoner,
-                        candidate,
-                        round_id=round_id,
-                        question=workspace.case.question,
-                        options=workspace.case.options,
-                        working_document_view=render_working_view(document, observation_log),
-                    )
-                    validation = _validate_answer(
-                        candidate,
-                        document,
-                        observation_log.attempt_ids,
-                        workspace.case.options,
-                    )
-                trace.append(
-                    {
-                        "type": "reference_integrity_check",
-                        "round": round_id,
-                        "support_status": candidate.support_status,
-                        "unsupported_option_details": list(candidate.unsupported_option_details),
-                        **validation.to_dict(),
-                    }
-                )
+                validation = _validate_answer(candidate, document, observation_log.attempt_ids, workspace.case.options)
+                trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
                 if validation.passed:
                     final_answer = candidate
                     break
@@ -405,8 +356,6 @@ class VirtualVideoMultiRoundDriver:
                 "reference_valid": reference_valid,
                 "reference_reason": reference_reason,
                 "supporting_claim_ids": list(selected.supporting_claim_ids),
-                "support_status": selected.support_status,
-                "unsupported_option_details": list(selected.unsupported_option_details),
                 "residual_uncertainty": selected.residual_uncertainty,
                 "answer_owner": "reasoner",
                 "framework_answer_mutation": False,
@@ -616,8 +565,6 @@ def _validate_answer(
     document: WorkingDocument,
     observation_ids: Sequence[str],
     options: Mapping[str, str],
-    *,
-    require_consistency: bool = True,
 ) -> AnswerValidation:
     validation = document.validate_answer(
         decision.supporting_claim_ids,
@@ -634,54 +581,9 @@ def _validate_answer(
         )
     if not validation.passed:
         return validation
-    if not require_consistency:
-        return validation
-    if decision.support_status != "direct":
-        return _answer_rejected(validation, "answer_support_not_direct")
-    if decision.unsupported_option_details:
-        return _answer_rejected(validation, "answer_option_details_unsupported")
     if _material_uncertainty(decision.residual_uncertainty):
         return _answer_rejected(validation, "answer_support_uncertain")
     return validation
-
-
-def _audit_answer(
-    reasoner: Any,
-    decision: ReasonerDecision,
-    *,
-    round_id: int,
-    question: str,
-    options: Mapping[str, str],
-    working_document_view: str,
-) -> ReasonerDecision:
-    audit = getattr(reasoner, "audit_answer", None)
-    if not callable(audit):
-        return decision
-    result = audit(
-        round_id=round_id,
-        question=question,
-        options=dict(options),
-        answer=decision.answer,
-        supporting_claim_ids=decision.supporting_claim_ids,
-        residual_uncertainty=decision.residual_uncertainty,
-        working_document_view=working_document_view,
-    )
-    payload = dict(result) if isinstance(result, Mapping) else {}
-    status = str(payload.get("support_status", "") or "").strip().casefold()
-    if status not in _SUPPORT_STATUSES:
-        status = "insufficient"
-    unsupported = payload.get("unsupported_option_details", ()) or ()
-    if isinstance(unsupported, str):
-        unsupported = (unsupported,)
-    return replace(
-        decision,
-        support_status=status,
-        unsupported_option_details=tuple(
-            dict.fromkeys((*decision.unsupported_option_details, *(str(item) for item in unsupported)))
-        ),
-        residual_uncertainty=decision.residual_uncertainty
-        or str(payload.get("residual_uncertainty", "") or ""),
-    )
 
 
 def _answer_rejected(validation: AnswerValidation, reason: str) -> AnswerValidation:
@@ -802,8 +704,6 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         citations=tuple(value.get("citations", ()) or ()),
         workspace_ops=tuple(value.get("workspace_ops", value.get("ops", ())) or ()),
         supporting_claim_ids=tuple(value.get("supporting_claim_ids", ()) or ()),
-        support_status=str(value.get("support_status", "") or ""),
-        unsupported_option_details=tuple(value.get("unsupported_option_details", ()) or ()),
         residual_uncertainty=str(value.get("residual_uncertainty", "") or ""),
         observation_requests=tuple(value.get("observation_requests", ()) or ()),
     )

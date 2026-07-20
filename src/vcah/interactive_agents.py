@@ -20,7 +20,6 @@ from vcah.workspace import prompt_digest, stable_attempt_id
 
 _DECISION_ACTIONS = {"investigate", "read_observations", "update_workspace", "answer"}
 _DECISION_WRAPPERS = ("response", "responses", "items")
-_SUPPORT_STATUSES = {"direct", "partial", "insufficient", "contradicted"}
 
 
 def _completion_budget(default: int) -> int:
@@ -58,21 +57,6 @@ def _decision_payload(value: Mapping[str, Any]) -> dict[str, Any]:
             continue
         for candidate in candidates:
             if isinstance(candidate, Mapping) and (payload := _decision_payload(candidate)):
-                return payload
-    return {}
-
-
-def _support_payload(value: Mapping[str, Any]) -> dict[str, Any]:
-    status = str(value.get("support_status") or value.get("status") or "").strip().casefold()
-    if status in _SUPPORT_STATUSES:
-        return dict(value)
-    for key in _DECISION_WRAPPERS:
-        nested = value.get(key)
-        candidates = (nested,) if isinstance(nested, Mapping) else nested
-        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
-            continue
-        for candidate in candidates:
-            if isinstance(candidate, Mapping) and (payload := _support_payload(candidate)):
                 return payload
     return {}
 
@@ -145,14 +129,6 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
     action = str(payload.get("action", "") or "").strip().casefold()
     if action not in _DECISION_ACTIONS:
         action = "update_workspace"
-    raw_support = payload.get("support_assessment")
-    support = dict(raw_support) if isinstance(raw_support, Mapping) else {}
-    support_status = str(payload.get("support_status") or support.get("status") or "").strip().casefold()
-    if support_status not in _SUPPORT_STATUSES:
-        support_status = ""
-    unsupported = payload.get("unsupported_option_details", support.get("unsupported_option_details", ())) or ()
-    if isinstance(unsupported, str):
-        unsupported = (unsupported,)
     return {
         "action": action,
         "tasks": tuple(tasks),
@@ -160,8 +136,6 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
         "citations": tuple(str(item) for item in payload.get("citations", ()) or () if str(item).strip()),
         "workspace_ops": tuple(dict(item) for item in payload.get("workspace_ops", payload.get("ops", ())) or () if isinstance(item, Mapping)),
         "supporting_claim_ids": tuple(str(item) for item in payload.get("supporting_claim_ids", ()) or () if str(item).strip()),
-        "support_status": support_status,
-        "unsupported_option_details": tuple(str(item) for item in unsupported if str(item).strip()),
         "residual_uncertainty": str(payload.get("residual_uncertainty", "") or ""),
         "observation_requests": tuple(dict(item) for item in payload.get("observation_requests", ()) or () if isinstance(item, Mapping)),
     }
@@ -234,37 +208,6 @@ class WorkspaceReasoner:
             },
         )
         return decision
-
-    def audit_answer(self, **kwargs: Any) -> Mapping[str, Any]:
-        prompt = _support_audit_prompt(kwargs)
-        raw = self.api.chat(prompt, max_tokens=_completion_budget(1400))
-        parsed = _parse_json(raw)
-        payload = _support_payload(parsed)
-        unsupported = payload.get("unsupported_option_details", payload.get("unsupported_details", ())) or ()
-        if isinstance(unsupported, str):
-            unsupported = (unsupported,)
-        result = {
-            "support_status": str(payload.get("support_status") or payload.get("status") or "insufficient")
-            .strip()
-            .casefold(),
-            "unsupported_option_details": tuple(str(item) for item in unsupported if str(item).strip()),
-            "residual_uncertainty": str(payload.get("residual_uncertainty", "") or ""),
-        }
-        _append_jsonl(
-            self.trace_path,
-            {
-                "type": "reasoner_support_audit",
-                "round": int(kwargs.get("round_id", self.calls) or self.calls),
-                "model": self.api.model,
-                "prompt": prompt,
-                "raw": raw,
-                "parsed": parsed,
-                "audit": result,
-                "api_response": self.api.last_response_metadata,
-                "time": time.time(),
-            },
-        )
-        return result
 
 class VisionInvestigator(VirtualVideoInvestigator):
     """Observation-only visual agent; it never evaluates options or claims."""
@@ -715,32 +658,14 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "narrow 2 fps visual window before answering; ASR cannot resolve visual attributes.\n"
         "Answer schema: {\"action\":\"answer\",\"answer\":\"A. exact option text\",\"workspace_ops\":[],"
         "\"supporting_claim_ids\":[\"c1\"],\"residual_uncertainty\":\"\"}. "
-        "Never answer by closest match or add a fact absent from the supporting observation lineage.\n"
+        "Never answer by closest match or add facts absent from the supporting observation lineage. If any selected-option "
+        "detail is mismatched or unconfirmed, record it in residual_uncertainty instead of answering.\n"
         f"Question: {kwargs.get('question', '')}\n"
         f"Options: {json.dumps(kwargs.get('options') or {}, ensure_ascii=False)}\n"
         f"Remaining investigation budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
         f"Mechanical status: {json.dumps(kwargs.get('mechanical_status') or {}, ensure_ascii=False)}\n"
         f"Working view:\n{kwargs.get('working_document_view', '')}\n"
         f"Workspace overview: {json.dumps(_prompt_overview(kwargs.get('workspace_overview') or {}), ensure_ascii=False)}"
-    )
-
-
-def _support_audit_prompt(kwargs: Mapping[str, Any]) -> str:
-    return (
-        "You are the Reasoner's independent final support-audit pass. Do not choose, suggest, or compare an alternative "
-        "answer. Check whether every detail in the exact candidate option is entailed by the named active supporting claims "
-        "and their underlying observation previews. Derived claims are conclusions to verify, never evidence by themselves. "
-        "Reject hidden causality, caller identity, event counts, ordering, clothing attributes, or color mappings that are "
-        "merely implied, closest-match, contradicted, or uncertain. Return compact JSON only: "
-        "{\"support_status\":\"direct|partial|insufficient|contradicted\","
-        "\"unsupported_option_details\":[\"exact unsupported detail\"],\"residual_uncertainty\":\"...\"}. "
-        "Use direct only when every option detail is explicit in observation-grounded lineage; otherwise list the gap.\n"
-        f"Question: {kwargs.get('question', '')}\n"
-        f"Options: {json.dumps(kwargs.get('options') or {}, ensure_ascii=False)}\n"
-        f"Candidate answer: {kwargs.get('answer', '')}\n"
-        f"Supporting claim IDs: {json.dumps(kwargs.get('supporting_claim_ids') or (), ensure_ascii=False)}\n"
-        f"Candidate residual uncertainty: {kwargs.get('residual_uncertainty', '')}\n"
-        f"Working view after candidate operations:\n{kwargs.get('working_document_view', '')}"
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 import pytest
 
@@ -148,7 +148,6 @@ def test_driver_keeps_semantic_authority_with_reasoner(tmp_path: Path) -> None:
             ReasonerDecision(
                 action="answer",
                 answer="B. A cup",
-                support_status="direct",
                 workspace_ops=(
                     {
                         "op": "add_claim",
@@ -192,7 +191,6 @@ def test_invalid_workspace_reference_is_returned_to_reasoner_without_answer_over
     invalid = ReasonerDecision(
         action="answer",
         answer="A. A book",
-        support_status="direct",
         workspace_ops=(
             {
                 "op": "add_claim",
@@ -207,7 +205,6 @@ def test_invalid_workspace_reference_is_returned_to_reasoner_without_answer_over
     valid = ReasonerDecision(
         action="answer",
         answer="B. A cup",
-        support_status="direct",
         workspace_ops=(
             {
                 "op": "add_claim",
@@ -243,7 +240,6 @@ def test_forced_final_reference_repair_does_not_spend_investigation_budget(tmp_p
             ReasonerDecision(
                 action="answer",
                 answer="B. A cup",
-                support_status="direct",
                 workspace_ops=(
                     {
                         "op": "add_claim",
@@ -258,7 +254,6 @@ def test_forced_final_reference_repair_does_not_spend_investigation_budget(tmp_p
             ReasonerDecision(
                 action="answer",
                 answer="B. A cup",
-                support_status="direct",
                 supporting_claim_ids=("claim_cup",),
             ),
         )
@@ -284,7 +279,6 @@ def test_reference_invalid_forced_answer_is_not_returned(tmp_path: Path) -> None
     invalid = ReasonerDecision(
         action="answer",
         answer="A. A book",
-        support_status="direct",
         supporting_claim_ids=("claim_missing",),
     )
     reasoner = ScriptedReasoner((_investigate(), invalid, invalid))
@@ -303,26 +297,7 @@ def test_reference_invalid_forced_answer_is_not_returned(tmp_path: Path) -> None
     assert result.reference_reason == "answer_missing"
 
 
-@pytest.mark.parametrize(
-    ("support_status", "unsupported_details", "residual_uncertainty", "expected_reason"),
-    (
-        ("partial", (), "", "answer_support_not_direct"),
-        ("direct", ("hood up",), "", "answer_option_details_unsupported"),
-        (
-            "direct",
-            (),
-            "The evidence does not confirm the option's extra detail.",
-            "answer_support_uncertain",
-        ),
-    ),
-)
-def test_answer_with_inconsistent_support_requires_repair(
-    tmp_path: Path,
-    support_status: str,
-    unsupported_details: tuple[str, ...],
-    residual_uncertainty: str,
-    expected_reason: str,
-) -> None:
+def test_answer_with_residual_uncertainty_requires_repair(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
     claim = {
@@ -339,16 +314,13 @@ def test_answer_with_inconsistent_support_requires_repair(
             ReasonerDecision(
                 action="answer",
                 answer="B. A cup",
-                support_status=support_status,
-                unsupported_option_details=unsupported_details,
                 workspace_ops=(claim,),
                 supporting_claim_ids=("claim_cup",),
-                residual_uncertainty=residual_uncertainty,
+                residual_uncertainty="The evidence does not confirm the option's extra detail.",
             ),
             ReasonerDecision(
                 action="answer",
                 answer="B. A cup",
-                support_status="direct",
                 supporting_claim_ids=("claim_cup",),
             ),
         )
@@ -363,66 +335,7 @@ def test_answer_with_inconsistent_support_requires_repair(
 
     assert result.reference_valid
     assert result.answer == "B. A cup"
-    assert expected_reason in reasoner.calls[2]["working_document_view"]
-
-
-def test_reasoner_support_audit_can_reject_then_accept_repaired_answer(tmp_path: Path) -> None:
-    workspace = _workspace(tmp_path)
-    attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
-    claim = {
-        "op": "add_claim",
-        "claim_id": "claim_cup",
-        "text": "The person raises a cup.",
-        "source": "observation",
-        "cites": (attempt_id,),
-        "confidence": "high",
-    }
-
-    class AuditingReasoner(ScriptedReasoner):
-        def __init__(self) -> None:
-            super().__init__(
-                (
-                    _investigate(),
-                    ReasonerDecision(
-                        action="answer",
-                        answer="B. A cup",
-                        workspace_ops=(claim,),
-                        supporting_claim_ids=("claim_cup",),
-                    ),
-                    ReasonerDecision(
-                        action="answer",
-                        answer="B. A cup",
-                        supporting_claim_ids=("claim_cup",),
-                    ),
-                )
-            )
-            self.audits = [
-                {
-                    "support_status": "partial",
-                    "unsupported_option_details": ("object identity",),
-                    "residual_uncertainty": "The first pass did not establish identity.",
-                },
-                {"support_status": "direct"},
-            ]
-            self.audit_calls: list[dict[str, Any]] = []
-
-        def audit_answer(self, **kwargs: Any) -> Mapping[str, Any]:
-            self.audit_calls.append(dict(kwargs))
-            return self.audits.pop(0)
-
-    reasoner = AuditingReasoner()
-    result = VirtualVideoMultiRoundDriver(
-        reasoner=reasoner,
-        investigator=FakeInvestigator(),
-        max_rounds=2,
-        max_investigations=4,
-    ).run(workspace)
-
-    assert result.reference_valid
-    assert result.answer == "B. A cup"
-    assert len(reasoner.audit_calls) == 2
-    assert "answer_support_not_direct" in reasoner.calls[2]["working_document_view"]
-    assert "claim_cup" in reasoner.audit_calls[0]["working_document_view"]
+    assert "answer_support_uncertain" in reasoner.calls[2]["working_document_view"]
 
 
 def test_task_schema_rejects_old_inspection_modes() -> None:
