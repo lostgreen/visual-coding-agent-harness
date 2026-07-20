@@ -20,7 +20,7 @@ from vcah.video import probe_duration
 from vcah.virtual_video import VirtualVideoSegment, load_srt_as_virtual_cues
 
 from run_virtual_videomme_interactive import (
-    OpenAICompatibleVisionClient,
+    OpenAICompatibleClient,
     _load_case_group,
     _load_rows,
     _options_mapping,
@@ -159,7 +159,7 @@ def main() -> None:
     missing = [case_id for case_id in case_ids if case_id not in by_id]
     if missing:
         raise KeyError(f"Unknown VideoMME case ids: {missing}")
-    api = OpenAICompatibleVisionClient.from_yaml(Path(args.config))
+    api = OpenAICompatibleClient.from_yaml(Path(args.config), section="investigator_api")
 
     def run_one(case_id: str) -> Mapping[str, Any]:
         try:

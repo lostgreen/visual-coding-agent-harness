@@ -1,206 +1,128 @@
 # VCAH
 
-**Visual Coding Agent Harness** is a research framework for agentic long-video
-understanding. Its main path treats a video collection like an unfamiliar codebase:
-the Agent starts from a compact map, explores selected regions, records immutable
-evidence, and verifies whether the evidence is sufficient before answering.
+VCAH is a long-video QA harness built around virtual timelines. It indexes source
+videos without concatenating them, lets a Reasoner request targeted observations,
+and keeps every observation traceable to the exact source material inspected.
 
-The current system is the **Virtual Video Multi-Round Investigation** framework. It
-supports complete videos, virtual concatenations, and interleaved multi-video
-timelines through the same workspace abstraction.
+The active architecture has one semantic owner: the Reasoner. The framework is a
+mechanical custodian. It stores observations, validates references, tracks temporal
+coverage, and applies explicit Working Document edits. It does not decide whether a
+claim is true, qualify events, score answer options, audit an answer, or replace the
+Reasoner's choice.
 
-> Browse, observe, commit, and verify. Do not replace watching with a precomputed
-> semantic summary.
+## Authority Boundary
 
-## Research Goal
+The framework performs only mechanically decidable work:
 
-Most long-video systems first caption or summarize every clip, build a semantic
-index, and retrieve from that derived memory. This is efficient for broad queries,
-but details omitted during preprocessing cannot be recovered later.
+1. Compute a prompt-independent `attempt_id` from source video identity, frame
+   times or frame references, sampling density, and modality.
+2. Append observation interpretations to an immutable log without filtering or
+   rewriting the Investigator's raw output.
+3. Enforce reference integrity between Working Document claims, observation
+   attempts, and derived claims.
+4. Report inspected time ranges and sampling density as a coverage ledger.
+5. Create the question premise as a framework-owned source record.
 
-VCAH studies a different operating point:
-
-- No query-independent semantic captions, summaries, or embedding memory are
-  required before a question arrives.
-- Mechanical cold assets are allowed: virtual-time manifests, low-fps frames,
-  thumbnail grids, and timestamped raw ASR.
-- The Reasoner starts from a coarse segment map rather than top-k retrieved beats.
-- The Investigator owns all beat- and frame-level access.
-- Runtime memory is built from observations made for the current question.
-- Every accepted claim retains virtual-time and source-time lineage.
-
-Raw ASR is treated like repository-wide lexical `grep`: it is optional navigation
-over original timestamped data, not semantic evidence by itself. Visual or joint
-claims still require inspected visual evidence.
+All interpretation stays with the Reasoner: claim wording, confidence, conflicts,
+supersession, remaining uncertainty, investigation sufficiency, and the final answer.
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    A["Source videos + timestamped ASR"] --> B["VirtualVideoWorkspace"]
-    B --> C["Cold navigation assets"]
-    C --> C1["Segment 4x4 overviews"]
-    C --> C2["Beat thumbnail pages"]
-    C --> C3["Low-fps frame cache"]
-
-    C --> M["Segment map metadata + raw ASR excerpts"]
-    M --> R["Text-only Reasoner"]
-    R -->|"EvidenceGap + InvestigationTask"| I["Multimodal Investigator"]
-    C1 --> I
-    I -->|"open_segment / inspect_window"| C2
-    I -->|"uniform low/high-fps observation"| C3
-    I --> E["EvidenceRecord + typed facts"]
-    E --> S["Canonical condition/entity/event state"]
-    S --> G{"Completion and citation gate"}
-    G -->|"missing or conflicting evidence"| R
-    G -->|"complete"| GA["Grounded answer"]
-    G -->|"budget exhausted"| FA["Marked forced-choice answer"]
+```text
+VirtualVideoWorkspace
+  -> segment and beat overview
+  -> Reasoner reads Rendered View
+       -> investigate window / literal ASR search / same-frame arbitration
+       -> edit Working Document
+       -> read raw observations
+       -> answer
+  -> framework appends Observation Log and validates Working Document operations
+  -> repeat until the Reasoner answers or the mechanical budget ends
 ```
 
-### 1. Virtual video workspace
+### Observation Log
 
-`VirtualVideoWorkspace` maps every virtual interval back to one or more source
-videos. No concatenated MP4 is required. A complete video is simply a workspace
-with one segment; a six-hour interleaved case may contain many segments from
-different source videos.
+`ObservationAttempt` records the inspected material and the Investigator's exact raw
+response. Multiple prompts over the same frames share one `attempt_id` and produce
+separate interpretations under that identity. This exposes repeated or conflicting
+reads without treating them as independent visual sources.
 
-All navigation uses virtual time. Frames, ASR cues, observations, and final
-evidence also preserve source video ids and source timestamps.
+The Investigator has a deliberately small contract. It reports a free description,
+timestamped observations, optional locally named entities and events, and explicit
+uncertainties. It does not emit condition results, qualification status, option
+predicates, or answer verdicts.
 
-### 2. Overview-first Reasoner
+### Working Document
 
-The initial workspace overview is capped at 40 uniformly sampled 4x4 segment or
-overview-group grids. The current text-only Reasoner receives the corresponding
-coarse map metadata rather than image pixels:
+The persistent document uses three general primitives:
 
-- question and answer options;
-- workspace duration;
-- generic segment ids and virtual ranges;
-- short raw ASR excerpts associated with those coarse ranges;
-- paths identifying the bounded overview packet;
-- the current evidence dashboard and remaining task budget.
+- `Claim`: premise, observation, derived, or hypothesis; active, contested,
+  superseded, or retracted.
+- `Entity`: a Reasoner-maintained identity and aliases.
+- `IntervalNote`: a time range linked to claims.
 
-It does **not** receive the gold answer, target/distractor roles, target interval,
-all beat thumbnails, frame paths, or default top-k retrieval results. Overview
-images remain available to the multimodal Investigator and trace viewer rather
-than being sent to the Reasoner API.
+Unresolved questions remain explicit as hypothesis or contested claims, so every
+persistent semantic statement uses the same revision and provenance rules.
 
-The Reasoner emits an `EvidenceGap` and up to four `InvestigationTask` objects per
-round. A task states what must be established, where to inspect, the expected
-evidence, and any coverage or aggregation requirement.
+The Reasoner edits it with six operations: `add_claim`, `supersede`, `set_status`,
+`link_conflict`, `note_interval`, and `update_entity`. Operations are transactional.
+An observation claim must cite a known `attempt_id`; a derived claim must reference
+existing parent claims. The framework checks those foreign keys but never evaluates
+the claim text.
 
-### 3. Investigator-owned detail access
+### Rendered View
 
-The public visual protocol is deliberately small:
+Each Reasoner turn contains the question and options, the compact Working Document,
+the observation catalog, the coverage ledger, and raw observations explicitly
+requested on the prior turn. Full raw output remains addressable through
+`read_observations(attempt_ids | time_range)` rather than being copied into every
+prompt.
 
-- `open_segment(segment_id)`: returns local ASR, beat ranges, beat thumbnail
-  grids, and lineage for navigation.
-- `inspect_window(start, end, fps)`: uniformly samples the requested virtual
-  window, returns timestamped frames and local ASR, and writes an observation.
+### Same-Frame Arbitration
 
-The Investigator first uses coarse 0.5-fps evidence, chooses a narrower region,
-and escalates to 1 or 2 fps when fine action, OCR, number, spatial, or identity
-evidence is needed. A window is capped at 64 uniformly distributed frames. Detail
-frames are materialized on demand under `observations/`; they never pollute the
-low-fps cold cache.
+When interpretations conflict, the Reasoner can request
+`inspection_mode=arbitrate_observation` with an `arbitration_attempt_id`. The
+framework verifies the material identity and resends exactly those stored frames with
+the competing raw interpretations. The new output is another interpretation under
+the same attempt, not an extra vote.
 
-Literal `search_asr` is available as a bounded navigation action. Its result is a
-`navigation_hint`, so the Reasoner must dispatch a visual inspection before using
-it to close a visual evidence gap.
+## Artifacts
 
-### 4. Typed evidence and state
-
-Free-form summaries are retained for readability, but verification is based on
-structured records:
-
-- `EvidenceRecord`: modality, claim, polarity, temporal scope, coverage, frame
-  witnesses, parent evidence, confidence, and source lineage.
-- `GapCondition` / `ConditionState`: monotonic satisfied, refuted, conflicted, or
-  unresolved state with explicit scope and quantifier.
-- `MeasurementFact`: value, unit, cumulative/delta semantics, subject, event, and
-  boundary relation.
-- `RelationFact`: subject, object, relation type, reference frame, and same-frame
-  witnesses.
-- Entity observations and clusters for distinct-person questions.
-- Event observations and conservative event clusters for total-count questions,
-  including participant ids, event class, counting unit, and phase.
-
-The query compiler identifies broad contracts such as local-window lookup,
-full-video coverage, distinct-entity counting, event aggregation, scalar
-measurement, temporal transition, and spatial relation. A local observation cannot
-silently satisfy a full-video condition, and conflicting observations remain
-visible rather than being overwritten by the latest summary.
-
-### 5. Multi-round control
-
-`VirtualVideoMultiRoundDriver` maintains a bounded evidence dashboard and repeats:
-
-1. Compile or update the unresolved evidence gap.
-2. Ask the Reasoner for bounded investigation tasks.
-3. Split cross-segment windows into source-contained child tasks.
-4. Run the Investigator and append immutable evidence.
-5. Update condition, candidate-option, entity, event, and coverage state.
-6. Answer, repair a failed proof, or continue exploring.
-
-The default library budget is four rounds, at most four tasks per round, and at
-most 20 accepted tasks total. Frame count and VLM calls are recorded as cost but do
-not consume the task budget. Equivalent observations can be reused using
-goal-aware source-window overlap rather than exact floating-point cache keys.
-
-## Answer Semantics
-
-Answer accuracy and evidence completeness are reported separately:
-
-| Mode | Meaning |
-| --- | --- |
-| `grounded` | The selected answer, citations, modality, scope, coverage, and typed facts pass the deterministic completion gate and final audit. |
-| `forced_choice` | The task budget ended without a complete proof; the model still returns its best benchmark option, explicitly marked unverified. |
-| `insufficient` | No usable final answer was produced. |
-
-The run summary includes `selected_option`, `answer_mode`, `grounding_status`,
-`retrieval_status`, `verified`, citations, and the verification reason. A forced
-choice is never presented as grounded evidence.
-
-## Workspace Artifacts
+Each workspace writes:
 
 ```text
-workspace/
-  virtual_timeline.json       segment order and virtual/source offsets
-  case.json                   question, options, and evaluator-only metadata
-  frame_manifest.jsonl        low-fps frame cache only
-  asr_virtual_cues.json       raw ASR remapped to virtual time
-  segment_overviews/          coarse 4x4 workspace navigation maps
-  beat_thumbnails/            Investigator beat-level navigation grids
-  beat_index.json             beat metadata and source lineage
-  cold_index/                 derived runtime navigation artifact
-  observations/
-    window_frame_manifest.jsonl  on-demand observation frames
-  evidence.jsonl              immutable evidence records
-  exploration_ledger.jsonl    visits, reuse, and source coverage
-  interactions.jsonl          prompts, model outputs, usage, and tool trace
-  run_summary.json            final answer, grounding status, cost, and metrics
+case.json                         question, options, and target metadata
+timeline.json                     virtual-to-source segment mapping
+beat_index.json                   navigational beat index
+observation_log.jsonl             immutable raw observation interpretations
+working_document.json             current Reasoner-owned document
+workspace_ops.jsonl               accepted/rejected edit history
+exploration_ledger.jsonl          mechanical inspection visits
+evidence.jsonl                    compatibility pointers to observed material
+interactions.jsonl                model prompts, raw responses, and usage metadata
+run_summary.json                  answer, reference status, cost, and compact trace
 ```
 
-The manifest, frame manifest, ASR cues, beat index, and observation manifest are
-the lineage truth sources. The cold index is rebuildable.
+`reference_valid` means only that the selected answer names existing supporting
+claims and that their claim and attempt references have no dangling IDs. It is not a
+semantic correctness verdict. The framework never changes one Reasoner option into
+another.
 
 ## Quick Start
 
-### Requirements
+Requirements:
 
 - Python 3.9+
 - `ffmpeg` and `ffprobe`
-- `requests` and `PyYAML` for the interactive API runner
-- An OpenAI-compatible text Reasoner endpoint and multimodal Investigator endpoint
-  for real evaluation
+- an OpenAI-compatible text Reasoner endpoint
+- an OpenAI-compatible multimodal Investigator endpoint
 
 ```bash
-python -m pip install -e '.[dev]'
-python -m pip install requests PyYAML
-pytest -q
+python -m pip install -e '.[dev,interactive]'
+PYTHONPATH=src:. pytest -q
 ```
 
-### Build and index the three Video-MME smoke workspaces
+Build and index a Video-MME workspace:
 
 ```bash
 python main.py vv-build-videomme \
@@ -214,32 +136,26 @@ python main.py vv-index \
   --beat-sec 60
 ```
 
-`main.py vv-run` exercises the deterministic library protocol. Real dual-model
-experiments use the interactive runner below.
-
-### Configure separate Reasoner and Investigator models
-
-Each role accepts a small YAML file:
+Use explicit sections in a shared YAML file. A separate role-specific file may put
+the same fields at its root.
 
 ```yaml
-planner_api:
+reasoner_api:
   base: https://example.invalid/v1
-  model: your-model-name
+  model: your-reasoner-model
   api_key: your-api-key
   timeout: 300
   max_retries: 5
-  retry_base_sec: 1
-  retry_max_sec: 30
-  retry_jitter: 0.2
+
+investigator_api:
+  base: https://example.invalid/v1
+  model: your-vision-model
+  api_key: your-api-key
+  timeout: 300
+  max_retries: 5
 ```
 
-The current evaluation setup uses a GPT reasoning model for the text-only
-Reasoner and Gemini 2.5 Pro for the multimodal Investigator. They may point to
-different OpenAI-compatible gateways. GPT-5-family completion usage, finish
-reason, and hidden reasoning-token counts are preserved in the trace so a token
-budget failure is not misclassified as evidence failure.
-
-### Run one or more Video-MME Long cases
+Run source-only cases:
 
 ```bash
 python tools/run_virtual_videomme_interactive.py \
@@ -256,25 +172,11 @@ python tools/run_virtual_videomme_interactive.py \
   --workers 2
 ```
 
-For a reproducible group, pass `--case-group`, for example:
+For a reproducible case group, replace `--case-ids` with `--case-group PATH`.
+Runs are immutable: use a new `--run-id` instead of resuming or overwriting an old
+run. Workers are clamped to 1-16.
 
-```bash
-python tools/run_virtual_videomme_interactive.py \
-  --dataset-root /path/to/Video-MME/snapshot \
-  --out-root runs/regression50 \
-  --case-group configs/eval_groups/videomme_long_regression50_v1.json \
-  --reasoner-config /path/to/reasoner.yaml \
-  --investigator-config /path/to/investigator.yaml \
-  --max-rounds 6 \
-  --max-investigations 20 \
-  --workers 8
-```
-
-Workers are clamped to 1-16. API calls use exponential backoff with jitter. Use
-`--skip-completed` to resume a partially completed batch.
-
-To construct a 6-7 hour interleaved virtual timeline without writing a combined
-MP4:
+Build a 6-7 hour interleaved virtual timeline without writing a combined MP4:
 
 ```bash
 python tools/run_virtual_videomme_interactive.py \
@@ -289,10 +191,7 @@ python tools/run_virtual_videomme_interactive.py \
   --investigator-config /path/to/investigator.yaml
 ```
 
-### Build an interaction viewer
-
-The viewer shows every Reasoner prompt and response, Investigator task, segment
-and beat thumbnails, inspected windows, evidence records, and final audit.
+Build a self-contained interaction viewer:
 
 ```bash
 python tools/build_virtual_trace_viewer.py \
@@ -301,46 +200,21 @@ python tools/build_virtual_trace_viewer.py \
   --light
 ```
 
-The command creates a self-contained `index.html` and zip bundle. `--light` keeps
-the reasoning/evidence trace and navigation thumbnails while omitting raw preview
-and detail frames.
-
 ## Code Map
 
 ```text
-src/vcah/virtual_video.py       workspace, timeline mapping, ASR and frame materialization
-src/vcah/virtual_index.py       segment overviews, beat thumbnails, runtime ColdIndex
-src/vcah/multiround.py          query contracts, task scheduling, state, gates, driver loop
-src/vcah/investigator.py        two-tool observation protocol and observation reuse
-src/vcah/evidence_primitives.py conditions, measurements, relations, typed state
-src/vcah/semantic_evidence.py   repair requests and conservative event resolution
-src/vcah/types.py               EvidenceRecord and shared dataclasses
-tools/run_virtual_videomme_interactive.py  dual-model Video-MME runner and trace capture
-tools/build_virtual_trace_viewer.py        self-contained HTML/zip trace viewer
+src/vcah/workspace.py            attempt identity, immutable log, Working Document, renderer
+src/vcah/multiround.py           mechanical task loop and answer-reference validation
+src/vcah/investigator.py         generic segment, window, and literal-ASR tools
+src/vcah/interactive_agents.py   model Reasoner and observation-only Investigator
+src/vcah/model_client.py         OpenAI-compatible client and usage metadata
+src/vcah/virtual_video.py        timeline mapping, ASR, and frame materialization
+src/vcah/virtual_index.py        overview and beat navigation index
+src/vcah/replay.py               immutable runs and content-free reproducibility records
+tools/run_virtual_videomme_interactive.py  Video-MME evaluation orchestration
+tools/build_virtual_trace_viewer.py        HTML/zip trace viewer
 ```
 
-`src/vcah/agent.py` is the earlier slim single-agent path. The active long-video
-research path is `VirtualVideoWorkspace` plus `VirtualVideoMultiRoundDriver`.
-Legacy XLE/LifeLog experiments are kept under `archive/` and are not part of the
-active CLI protocol.
-
-## Current Status
-
-VCAH is a research prototype, not a production video QA system. The fixed
-50-case Video-MME Long development regression currently scores 36/50. Of 26
-answers that passed the grounding gate, 24 were correct; forced-choice answers
-were 12/24. This set has been used for development and is **not held out**, so the
-numbers are regression indicators rather than a benchmark claim.
-
-The remaining hard cases expose the current research problems rather than just
-navigation failures:
-
-- identity and event deduplication across shots and windows;
-- event subtype and counting-unit ambiguity;
-- spatial relations that require a single reliable reference frame;
-- scoreboard, cumulative/delta, and before/after boundary binding;
-- title or central-theme questions that need broad semantic synthesis;
-- balancing full-video coverage against a bounded investigation budget.
-
-The detailed design and ReMA/MM-Lifelong comparison are documented in
-[`docs/superpowers/specs/2026-07-10-agentic-video-exploration-design.md`](docs/superpowers/specs/2026-07-10-agentic-video-exploration-design.md).
+The earlier generic single-agent harness remains available in `src/vcah/agent.py`.
+The active long-video path is `VirtualVideoWorkspace` plus
+`VirtualVideoMultiRoundDriver`.

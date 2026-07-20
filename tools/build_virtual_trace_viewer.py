@@ -84,12 +84,11 @@ def _render_case(workspace: Path, bundle: AssetBundler, *, light: bool = False) 
         "question": case.get("question", ""),
         "gold": case.get("gold", ""),
         "answer": run_summary.get("answer", ""),
-        "answer_mode": run_summary.get("answer_mode", ""),
-        "grounding_status": run_summary.get("grounding_status", ""),
-        "retrieval_status": run_summary.get("retrieval_status", ""),
+        "reference_valid": run_summary.get("reference_valid", False),
+        "reference_reason": run_summary.get("reference_reason", ""),
         "correct": run_summary.get("correct"),
         "rounds": run_summary.get("rounds"),
-        "accepted_investigations": run_summary.get("accepted_investigations"),
+        "investigation_count": run_summary.get("investigation_count"),
         "models": dict(run_summary.get("models", {}) or {}),
         "trace_lines": len(trace_rows),
         "evidence_records": len(evidence_rows),
@@ -113,7 +112,7 @@ def _render_case(workspace: Path, bundle: AssetBundler, *, light: bool = False) 
     preview_by_query = {str(row.get("query_id")): row for row in preview_events}
     evidence_event_by_query = {str(row.get("query_id")): row for row in evidence_events}
 
-    reasoner_events = [row for row in trace_rows if row.get("type") in {"reasoner_investigate", "reasoner_answer"}]
+    reasoner_events = [row for row in trace_rows if row.get("type") == "reasoner_workspace"]
     for event_index, reasoner_event in enumerate(reasoner_events, start=1):
         round_id = int(reasoner_event.get("round") or event_index)
         parsed = dict(reasoner_event.get("parsed") or {})
@@ -192,12 +191,11 @@ def _summary_card(case: Mapping[str, Any], run_summary: Mapping[str, Any], timel
         "<div class='summary'>"
         f"<div><b>Gold</b>: {_e(case.get('gold', ''))}</div>"
         f"<div><b>Answer</b>: {_e(run_summary.get('answer', ''))}</div>"
-        f"<div><b>Answer mode</b>: {_e(run_summary.get('answer_mode', 'legacy'))}</div>"
-        f"<div><b>Grounding</b>: {_e(run_summary.get('grounding_status', ''))}</div>"
-        f"<div><b>Retrieval</b>: {_e(run_summary.get('retrieval_status', ''))}</div>"
+        f"<div><b>References valid</b>: {_e(run_summary.get('reference_valid', ''))}</div>"
+        f"<div><b>Reference status</b>: {_e(run_summary.get('reference_reason', ''))}</div>"
         f"<div><b>Correct</b>: {_e(run_summary.get('correct', ''))}</div>"
         f"<div><b>Rounds</b>: {_e(run_summary.get('rounds', ''))}</div>"
-        f"<div><b>Accepted investigations</b>: {_e(run_summary.get('accepted_investigations', ''))}</div>"
+        f"<div><b>Investigations</b>: {_e(run_summary.get('investigation_count', ''))}</div>"
         f"<div><b>Reasoner model</b>: {_e(models.get('reasoner', ''))}</div>"
         f"<div><b>Investigator model</b>: {_e(models.get('investigator', ''))}</div>"
         f"<div><b>Virtual duration</b>: {_fmt_time(float(timeline.get('duration_sec') or 0.0))}</div>"
@@ -298,7 +296,7 @@ def _page_html(run_root: Path, summaries: Sequence[Mapping[str, Any]], cases_htm
         f"<td>{_e(row.get('correct'))}</td>"
         f"<td>{_e(row.get('answer'))}</td>"
         f"<td>{_e(row.get('rounds'))}</td>"
-        f"<td>{_e(row.get('accepted_investigations'))}</td>"
+        f"<td>{_e(row.get('investigation_count'))}</td>"
         f"<td>{_e(row.get('trace_lines'))}</td>"
         "</tr>"
         for row in summaries
@@ -317,7 +315,7 @@ def _page_html(run_root: Path, summaries: Sequence[Mapping[str, Any]], cases_htm
         "</style></head><body>"
         "<h1>Virtual Video Multi-Round Interaction Trace Viewer</h1>"
         f"<p>Run root: <code>{_e(str(run_root))}</code></p>"
-        "<table><thead><tr><th>Case</th><th>Correct</th><th>Answer</th><th>Rounds</th><th>Accepted</th><th>Trace Lines</th></tr></thead>"
+        "<table><thead><tr><th>Case</th><th>Correct</th><th>Answer</th><th>Rounds</th><th>Investigations</th><th>Trace Lines</th></tr></thead>"
         f"<tbody>{rows}</tbody></table>"
         + "\n".join(cases_html)
         + "</body></html>"

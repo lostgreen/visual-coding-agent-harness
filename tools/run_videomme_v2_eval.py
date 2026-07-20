@@ -35,7 +35,7 @@ from vcah.virtual_video import (
 )
 
 from run_virtual_videomme_interactive import (
-    OpenAICompatibleVisionClient,
+    OpenAICompatibleClient,
     _run_case_batch,
     ensure_index,
     load_role_clients,
@@ -63,7 +63,7 @@ def main() -> None:
     if args.method == "direct":
         if not args.config and not args.investigator_config:
             raise ValueError("Direct mode requires --config or --investigator-config")
-        api = OpenAICompatibleVisionClient.from_yaml(
+        api = OpenAICompatibleClient.from_yaml(
             Path(args.investigator_config or args.config),
             section="investigator_api",
         )
@@ -184,7 +184,7 @@ def _run_direct_case(
     out_root: Path,
     cache_root: Path,
     video_context: Mapping[str, Mapping[str, Any]],
-    api: OpenAICompatibleVisionClient,
+    api: OpenAICompatibleClient,
     max_frames: int,
     max_fps: float,
     max_image_edge: int,
@@ -262,8 +262,8 @@ def _run_agent_case(
     *,
     out_root: Path,
     video_context: Mapping[str, Mapping[str, Any]],
-    reasoner_api: OpenAICompatibleVisionClient,
-    investigator_api: OpenAICompatibleVisionClient,
+    reasoner_api: OpenAICompatibleClient,
+    investigator_api: OpenAICompatibleClient,
     segment_sec: float,
     low_fps: float,
     beat_sec: float,
@@ -320,7 +320,7 @@ def _run_agent_case(
             "correct": False,
             "answer": "",
             "selected_option": "",
-            "verified": False,
+            "reference_valid": False,
             "error": error,
         }
     return {
@@ -332,14 +332,10 @@ def _run_agent_case(
         "answer": result.answer,
         "selected_option": result.selected_option,
         "correct": result.correct,
-        "verified": result.verified,
-        "answer_mode": result.answer_mode,
-        "grounding_status": result.grounding_status,
-        "grounding_level": result.grounding_level,
-        "retrieval_status": result.retrieval_status,
-        "verification_reason": result.verification_reason,
+        "reference_valid": result.reference_valid,
+        "reference_reason": result.reference_reason,
         "rounds": result.rounds,
-        "accepted_investigations": result.accepted_investigations,
+        "investigation_count": result.investigation_count,
         "latency_sec": round(time.time() - started, 3),
         "workspace": str(workspace_root),
         "error": error,

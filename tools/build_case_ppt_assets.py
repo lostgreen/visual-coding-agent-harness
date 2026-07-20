@@ -94,13 +94,14 @@ def _summary_markdown(
         f"- Gold: {case.get('gold')}",
         f"- Correct: {run_summary.get('correct')}",
         f"- Rounds: {run_summary.get('rounds')}",
-        f"- Accepted investigations: {run_summary.get('accepted_investigations')}",
+        f"- Investigations: {run_summary.get('investigation_count')}",
+        f"- References valid: {run_summary.get('reference_valid')}",
         f"- Citations: {', '.join(run_summary.get('citations') or [])}",
         "",
         "## Reasoner Behavior",
     ]
     for idx, row in enumerate(trace, start=1):
-        if row.get("type") == "reasoner_investigate":
+        if row.get("type") == "reasoner_workspace" and (row.get("parsed") or {}).get("action") == "investigate":
             tasks = (row.get("parsed") or {}).get("tasks") or []
             lines.append(f"- Step {idx}: Reasoner requested {len(tasks)} investigation task(s).")
             for task in tasks:
