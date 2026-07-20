@@ -248,7 +248,9 @@ class VirtualVideoMultiRoundDriver:
                     "type": "answer_reference_rejected",
                     "reason": validation.reason,
                     "errors": list(validation.errors),
+                    "candidate_answer": candidate.answer,
                     "supporting_claim_ids": list(candidate.supporting_claim_ids),
+                    "residual_uncertainty": candidate.residual_uncertainty,
                 }
                 requested_observations = requested_rows
                 if force_finalize and not final_retry_available:

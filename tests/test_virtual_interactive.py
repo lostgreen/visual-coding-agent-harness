@@ -220,6 +220,27 @@ def test_reasoner_prompt_retains_first_and_last_overviews(tmp_path: Path) -> Non
     assert "seg_0039" in prompt
     assert '"residual_uncertainty":""' in prompt
     assert "support_status" not in prompt
+    assert "read_observations, update_workspace, or answer" in prompt
+
+
+def test_final_repair_prompt_closes_observation_reads(tmp_path: Path) -> None:
+    api = FakeAPI((json.dumps({"action": "update_workspace"}),))
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    reasoner.decide(
+        question="What does the person raise?",
+        options={"A": "A book", "B": "A cup"},
+        remaining_budget=0,
+        force_finalize=True,
+        final_attempt=2,
+        mechanical_status={},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    prompt = api.calls[0]["prompt"]
+    assert "update_workspace or answer" in prompt
+    assert "investigate and read_observations are closed" in prompt
 
 
 def test_reasoner_preserves_its_answer_and_workspace_operations(tmp_path: Path) -> None:

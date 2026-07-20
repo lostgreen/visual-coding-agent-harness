@@ -336,6 +336,8 @@ def test_answer_with_residual_uncertainty_requires_repair(tmp_path: Path) -> Non
     assert result.reference_valid
     assert result.answer == "B. A cup"
     assert "answer_support_uncertain" in reasoner.calls[2]["working_document_view"]
+    assert "B. A cup" in reasoner.calls[2]["working_document_view"]
+    assert "does not confirm the option's extra detail" in reasoner.calls[2]["working_document_view"]
 
 
 def test_task_schema_rejects_old_inspection_modes() -> None:

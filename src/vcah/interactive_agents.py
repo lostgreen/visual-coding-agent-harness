@@ -622,13 +622,15 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         action_rule = "Choose exactly one action: investigate, read_observations, update_workspace, or answer."
     elif final_attempt <= 1:
         action_rule = (
-            "Investigation is closed. Consolidate existing observations with workspace_ops before answering. "
-            "If direct support is still missing, use update_workspace; one reference-repair call remains."
+            "Choose exactly one action: read_observations, update_workspace, or answer; investigate is closed. "
+            "Use this call to read any needed existing observations and consolidate them with workspace_ops. "
+            "Answer only with direct support; one non-investigation final call remains."
         )
     else:
         action_rule = (
-            "This is the final reference-repair call and investigation remains closed. Repair claims from existing "
-            "observations and answer only with direct support; otherwise use update_workspace without inventing facts."
+            "Choose exactly one action: update_workspace or answer; investigate and read_observations are closed. "
+            "This is the final call. Repair the rejected candidate against the existing Working Document without switching "
+            "options merely to satisfy the gate. Answer only with direct support; otherwise use update_workspace."
         )
     return (
         "You are the sole semantic decision maker for long-video multiple-choice QA. The framework only stores observations, "
