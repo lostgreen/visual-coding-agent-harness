@@ -114,6 +114,7 @@ def test_reasoner_uses_only_workspace_protocol(tmp_path: Path) -> None:
     prompt = api.calls[0]["prompt"]
     assert "sole semantic decision maker" in prompt
     assert "Working view" in prompt
+    assert '"action":"investigate","tasks":[' in prompt
     assert "qualification" not in prompt.casefold()
     assert "option_verdict" not in prompt
     assert "answer audit" not in prompt.casefold()
