@@ -212,6 +212,17 @@ def test_global_asr_search_clusters_literal_hits_with_virtual_lineage(tmp_path: 
     assert first["virtual_time_range"] == [0.0, 4.0]
     assert first["source_lineage"][0]["source_video_id"] == "distractor"
 
+    scoped = investigator.search_asr(
+        ("dog",),
+        segment_id="seg_b",
+        time_range=(7.5, 9.0),
+        max_clusters=4,
+    )
+    assert scoped["scope"] == {"segment_id": "seg_b", "time_range": [7.5, 9.0]}
+    assert len(scoped["clusters"]) == 1
+    assert scoped["clusters"][0]["segment_id"] == "seg_b"
+    assert scoped["clusters"][0]["virtual_time_range"] == [7.5, 9.0]
+
 
 def test_investigation_task_accepts_explicit_asr_search_terms() -> None:
     task = InvestigationTask(

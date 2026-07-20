@@ -203,6 +203,43 @@ def test_working_document_applies_ops_transactionally_and_validates_answer_refer
     assert redundant_status_path.errors == ("op[1]: invalid_claim_status:superseded",)
 
 
+@pytest.mark.parametrize(
+    ("source", "status", "confidence", "expected_reason"),
+    (
+        ("hypothesis", "active", "high", "supporting_claim_hypothetical"),
+        ("observation", "contested", "high", "supporting_claim_uncertain"),
+        ("observation", "active", "low", "supporting_claim_uncertain"),
+    ),
+)
+def test_answer_validation_rejects_non_direct_support(
+    source: str,
+    status: str,
+    confidence: str,
+    expected_reason: str,
+) -> None:
+    document = WorkingDocument.with_question_premise("Which option is supported?")
+    result = document.apply_ops(
+        (
+            {
+                "op": "add_claim",
+                "claim_id": "weak_support",
+                "text": "The option might be true.",
+                "source": source,
+                "status": status,
+                "confidence": confidence,
+                "cites": ("attempt_a",),
+            },
+        ),
+        observation_ids=("attempt_a",),
+    )
+    assert result.accepted
+
+    validation = document.validate_answer(("weak_support",), observation_ids=("attempt_a",))
+
+    assert not validation.passed
+    assert validation.reason == expected_reason
+
+
 def test_working_view_exposes_mechanical_coverage_and_requested_raw_observations(tmp_path: Path) -> None:
     attempt_id = stable_attempt_id(
         frame_times=(5.0, 6.0, 7.0),

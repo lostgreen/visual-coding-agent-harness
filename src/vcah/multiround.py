@@ -21,6 +21,7 @@ from vcah.workspace import (
 
 
 _INSPECTION_MODES = {"window", "search_asr", "arbitrate_observation"}
+_SUPPORT_STATUSES = {"direct", "partial", "insufficient", "contradicted"}
 RUN_ARTIFACT_NAMES = (
     "evidence.jsonl",
     "observation_log.jsonl",
@@ -74,6 +75,8 @@ class ReasonerDecision:
     citations: tuple[str, ...] = ()
     workspace_ops: tuple[Mapping[str, Any], ...] = ()
     supporting_claim_ids: tuple[str, ...] = ()
+    support_status: str = ""
+    unsupported_option_details: tuple[str, ...] = ()
     residual_uncertainty: str = ""
     observation_requests: tuple[Mapping[str, Any], ...] = ()
 
@@ -98,6 +101,21 @@ class ReasonerDecision:
             self,
             "supporting_claim_ids",
             tuple(dict.fromkeys(str(item).strip() for item in self.supporting_claim_ids if str(item).strip())),
+        )
+        support_status = str(self.support_status or "").strip().casefold()
+        if support_status and support_status not in _SUPPORT_STATUSES:
+            raise ValueError(f"unsupported answer support status: {support_status}")
+        object.__setattr__(self, "support_status", support_status)
+        object.__setattr__(
+            self,
+            "unsupported_option_details",
+            tuple(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in self.unsupported_option_details
+                    if str(item).strip()
+                )
+            ),
         )
         object.__setattr__(self, "residual_uncertainty", str(self.residual_uncertainty or "").strip())
         object.__setattr__(
@@ -164,13 +182,16 @@ class VirtualVideoMultiRoundDriver:
         rounds_run = 0
         requested_observations: tuple[Mapping[str, Any], ...] = ()
         feedback: dict[str, Any] = {}
-        last_answer: ReasonerDecision | None = None
         final_answer: ReasonerDecision | None = None
+        forced_calls = 0
 
-        for round_id in range(1, self.max_rounds + 2):
+        for round_id in range(1, self.max_rounds + 3):
             rounds_run = round_id
             remaining = max(0, self.max_investigations - completed_investigations)
             force_finalize = round_id > self.max_rounds or remaining <= 0
+            if force_finalize:
+                forced_calls += 1
+            final_retry_available = force_finalize and forced_calls < 2
             status = _mechanical_status(workspace, document, observation_log)
             decision = _decision(
                 self.reasoner.decide(
@@ -186,6 +207,7 @@ class VirtualVideoMultiRoundDriver:
                     mechanical_status=status,
                     remaining_budget=remaining,
                     force_finalize=force_finalize,
+                    final_attempt=forced_calls if force_finalize else 0,
                 )
             )
 
@@ -213,8 +235,11 @@ class VirtualVideoMultiRoundDriver:
                     "workspace_ops_accepted": apply_result.accepted,
                     "workspace_errors": list(apply_result.errors),
                     "supporting_claim_ids": list(decision.supporting_claim_ids),
+                    "support_status": decision.support_status,
+                    "unsupported_option_details": list(decision.unsupported_option_details),
                     "remaining_budget": remaining,
                     "force_finalize": force_finalize,
+                    "final_attempt": forced_calls if force_finalize else 0,
                 }
             )
 
@@ -225,9 +250,7 @@ class VirtualVideoMultiRoundDriver:
                     "revision": document.revision,
                 }
                 requested_observations = requested_rows
-                if decision.action == "answer":
-                    last_answer = decision
-                if force_finalize:
+                if force_finalize and not final_retry_available:
                     break
                 continue
 
@@ -236,7 +259,6 @@ class VirtualVideoMultiRoundDriver:
                     decision,
                     citations=_answer_citations(decision, document, evidence_store.records),
                 )
-                last_answer = candidate
                 validation = _validate_answer(candidate, document, observation_log.attempt_ids, workspace.case.options)
                 trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
                 if validation.passed:
@@ -249,7 +271,7 @@ class VirtualVideoMultiRoundDriver:
                     "supporting_claim_ids": list(candidate.supporting_claim_ids),
                 }
                 requested_observations = requested_rows
-                if force_finalize:
+                if force_finalize and not final_retry_available:
                     break
                 continue
 
@@ -261,11 +283,20 @@ class VirtualVideoMultiRoundDriver:
                     "returned_observation_count": len(requested_rows),
                     "revision": document.revision,
                 }
-                if force_finalize:
+                if force_finalize and not final_retry_available:
                     break
                 continue
 
             if force_finalize:
+                feedback = {
+                    "type": "finalization_repair_required",
+                    "reason": "investigation_closed",
+                    "requested_task_count": len(decision.tasks),
+                    "revision": document.revision,
+                }
+                requested_observations = requested_rows
+                if final_retry_available:
+                    continue
                 break
 
             tasks = _resolve_tasks(
@@ -319,7 +350,7 @@ class VirtualVideoMultiRoundDriver:
                 }
             )
 
-        selected = final_answer or last_answer or ReasonerDecision(action="answer")
+        selected = final_answer or ReasonerDecision(action="answer")
         selected_option = _letter(selected.answer) or _option_letter_from_answer(
             selected.answer,
             workspace.case.options,
@@ -345,6 +376,8 @@ class VirtualVideoMultiRoundDriver:
                 "reference_valid": reference_valid,
                 "reference_reason": reference_reason,
                 "supporting_claim_ids": list(selected.supporting_claim_ids),
+                "support_status": selected.support_status,
+                "unsupported_option_details": list(selected.unsupported_option_details),
                 "residual_uncertainty": selected.residual_uncertainty,
                 "answer_owner": "reasoner",
                 "framework_answer_mutation": False,
@@ -378,15 +411,35 @@ def _mechanical_status(
 ) -> dict[str, Any]:
     errors = document.validate(observation_ids=observations.attempt_ids)
     coverage = _source_coverage(workspace, observations)
+    known_attempts = set(observations.attempt_ids)
+    active_claims = tuple(
+        claim
+        for claim in document.claims.values()
+        if claim.status in {"active", "contested"}
+    )
+    supported_observation_claims = tuple(
+        claim
+        for claim in active_claims
+        if claim.source == "observation"
+        and claim.status == "active"
+        and claim.confidence != "low"
+        and bool(claim.cites)
+        and set(claim.cites).issubset(known_attempts)
+    )
+    resolved_attempts = {
+        cite
+        for claim in supported_observation_claims
+        for cite in claim.cites
+    }
     return {
         "schema_version": "MechanicalCompletionStatusV1",
         "working_document_revision": document.revision,
         "workspace_valid": not errors,
         "workspace_errors": list(errors),
-        "active_claim_count": sum(
-            claim.status in {"active", "contested"}
-            for claim in document.claims.values()
-        ),
+        "active_claim_count": len(active_claims),
+        "non_premise_claim_count": sum(claim.source != "premise" for claim in active_claims),
+        "supported_observation_claim_count": len(supported_observation_claims),
+        "unresolved_observation_count": len(known_attempts - resolved_attempts),
         "active_claim_limit": document.active_claim_limit,
         "observation_attempt_count": len(observations.attempt_ids),
         "observation_interpretation_count": len(observations.rows),
@@ -539,16 +592,39 @@ def _validate_answer(
         decision.supporting_claim_ids,
         observation_ids=observation_ids,
     )
-    if _letter(decision.answer) or _option_letter_from_answer(decision.answer, options):
+    if not (_letter(decision.answer) or _option_letter_from_answer(decision.answer, options)):
+        reason = "answer_missing" if not decision.answer else "invalid_option_answer"
+        return AnswerValidation(
+            False,
+            reason,
+            validation.supporting_claim_ids,
+            validation.cited_attempt_ids,
+            ("answer_must_select_exactly_one_option",),
+        )
+    if not validation.passed:
         return validation
-    reason = "answer_missing" if not decision.answer else "invalid_option_answer"
+    if decision.support_status != "direct":
+        return _answer_rejected(validation, "answer_support_not_direct")
+    if decision.unsupported_option_details:
+        return _answer_rejected(validation, "answer_option_details_unsupported")
+    if _material_uncertainty(decision.residual_uncertainty):
+        return _answer_rejected(validation, "answer_support_uncertain")
+    return validation
+
+
+def _answer_rejected(validation: AnswerValidation, reason: str) -> AnswerValidation:
     return AnswerValidation(
         False,
         reason,
         validation.supporting_claim_ids,
         validation.cited_attempt_ids,
-        ("answer_must_select_exactly_one_option",),
+        (reason,),
     )
+
+
+def _material_uncertainty(value: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+    return normalized not in {"", "none", "no", "n a", "not applicable", "no material uncertainty"}
 
 
 def _answer_citations(
@@ -620,6 +696,8 @@ def _outcome_digest(reports: Sequence[InvestigationReport]) -> tuple[dict[str, A
             "failure_reason": report.failure_reason,
             "attempt_ids": [attempt.attempt_id for attempt in report.attempts],
             "evidence_ids": [record.evidence_id for record in report.evidence],
+            "consumes_budget": report.cost.get("consumes_budget") is not False,
+            "reused": bool(report.cost.get("reused")),
         }
         for report in tuple(reports)[-12:]
     )
@@ -652,6 +730,8 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         citations=tuple(value.get("citations", ()) or ()),
         workspace_ops=tuple(value.get("workspace_ops", value.get("ops", ())) or ()),
         supporting_claim_ids=tuple(value.get("supporting_claim_ids", ()) or ()),
+        support_status=str(value.get("support_status", "") or ""),
+        unsupported_option_details=tuple(value.get("unsupported_option_details", ()) or ()),
         residual_uncertainty=str(value.get("residual_uncertainty", "") or ""),
         observation_requests=tuple(value.get("observation_requests", ()) or ()),
     )

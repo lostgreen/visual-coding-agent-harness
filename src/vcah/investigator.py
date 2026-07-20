@@ -205,10 +205,16 @@ class VirtualVideoInvestigator:
         self,
         terms: Sequence[str],
         *,
+        segment_id: str = "",
+        time_range: Sequence[float] | None = None,
         max_clusters: int = 8,
         padding_sec: float = 10.0,
     ) -> Mapping[str, Any]:
         normalized = tuple(dict.fromkeys(str(term).strip().casefold() for term in terms if str(term).strip()))
+        requested_segment = str(segment_id or "").strip()
+        known_segments = {segment.segment_id for segment in self.workspace.manifest.segments}
+        segment_scope = requested_segment if requested_segment in known_segments else ""
+        range_scope = _normalized_range(time_range) if time_range is not None and _valid_range(time_range) else None
         grouped: dict[str, list[dict[str, Any]]] = {}
         for cue in self.workspace.read_asr_virtual_cues():
             text = str(cue.get("text", "") or "")
@@ -217,7 +223,7 @@ class VirtualVideoInvestigator:
                 continue
             start = float(cue.get("start_sec", cue.get("start", 0.0)) or 0.0)
             end = float(cue.get("end_sec", cue.get("end", start)) or start)
-            segment_id = str(cue.get("segment_id", "") or "") or next(
+            cue_segment_id = str(cue.get("segment_id", "") or "") or next(
                 (
                     segment.segment_id
                     for segment in self.workspace.manifest.segments
@@ -225,24 +231,38 @@ class VirtualVideoInvestigator:
                 ),
                 "",
             )
-            if segment_id:
-                grouped.setdefault(segment_id, []).append(
+            if segment_scope and cue_segment_id != segment_scope:
+                continue
+            if range_scope and (end < range_scope[0] or start > range_scope[1]):
+                continue
+            if cue_segment_id:
+                grouped.setdefault(cue_segment_id, []).append(
                     {"start": start, "end": end, "terms": matched, "text": text}
                 )
         candidates = []
-        for segment_id, hits in grouped.items():
-            segment = self.workspace.manifest.segment(segment_id)
+        for group_segment_id, hits in grouped.items():
+            segment = self.workspace.manifest.segment(group_segment_id)
+            scope_start = max(
+                segment.virtual_start_sec,
+                range_scope[0] if range_scope else segment.virtual_start_sec,
+            )
+            scope_end = min(
+                segment.virtual_end_sec,
+                range_scope[1] if range_scope else segment.virtual_end_sec,
+            )
+            if scope_end <= scope_start:
+                continue
             for cluster in _cluster_asr_hits(hits):
                 start, end = _padded_window(
                     float(cluster[0]["start"]),
                     float(cluster[-1]["end"]),
-                    segment_start=segment.virtual_start_sec,
-                    segment_end=segment.virtual_end_sec,
+                    segment_start=scope_start,
+                    segment_end=scope_end,
                     padding_sec=padding_sec,
                 )
                 candidates.append(
                     {
-                        "segment_id": segment_id,
+                        "segment_id": group_segment_id,
                         "virtual_time_range": [start, end],
                         "matched_terms": [
                             term for term in normalized if any(term in hit["terms"] for hit in cluster)
@@ -261,7 +281,14 @@ class VirtualVideoInvestigator:
                 float(row["virtual_time_range"][0]),
             )
         )
-        return {"terms": list(normalized), "clusters": candidates[: max(1, int(max_clusters))]}
+        return {
+            "terms": list(normalized),
+            "scope": {
+                "segment_id": segment_scope,
+                "time_range": list(range_scope) if range_scope else [],
+            },
+            "clusters": candidates[: max(1, int(max_clusters))],
+        }
 
     def _investigate_task(self, task: Any) -> InvestigationReport:
         raise NotImplementedError("Use an observation-only Investigator implementation")

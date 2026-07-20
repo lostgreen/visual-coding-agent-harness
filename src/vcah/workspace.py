@@ -358,11 +358,41 @@ class WorkingDocument:
             for claim_id in support
             if claim_id in self.claims and self.claims[claim_id].status in {"superseded", "retracted"}
         )
+        hypothetical = tuple(
+            claim_id
+            for claim_id in support
+            if claim_id in self.claims and self.claims[claim_id].source == "hypothesis"
+        )
+        uncertain = tuple(
+            claim_id
+            for claim_id in support
+            if claim_id in self.claims
+            and (
+                self.claims[claim_id].status == "contested"
+                or self.claims[claim_id].confidence == "low"
+            )
+        )
+        conflicted = tuple(
+            claim_id
+            for claim_id in support
+            if claim_id in self.claims
+            and any(
+                other in self.claims
+                and self.claims[other].status in {"active", "contested"}
+                for other in self.claims[claim_id].conflicts_with
+            )
+        )
         errors = [*document_errors]
         if missing:
             errors.append(f"supporting_claim_missing:{','.join(missing)}")
         if inactive:
             errors.append(f"supporting_claim_inactive:{','.join(inactive)}")
+        if hypothetical:
+            errors.append(f"supporting_claim_hypothetical:{','.join(hypothetical)}")
+        if uncertain:
+            errors.append(f"supporting_claim_uncertain:{','.join(uncertain)}")
+        if conflicted:
+            errors.append(f"supporting_claim_conflicted:{','.join(conflicted)}")
         cited_attempts = tuple(
             dict.fromkeys(
                 cite
@@ -371,6 +401,8 @@ class WorkingDocument:
                 for cite in self._claim_attempts(claim_id)
             )
         )
+        if not cited_attempts:
+            errors.append("supporting_claims_require_observation")
         if errors:
             return AnswerValidation(False, errors[0].split(":", 1)[0], support, cited_attempts, tuple(errors))
         return AnswerValidation(True, "reference_integrity_verified", support, cited_attempts, ())

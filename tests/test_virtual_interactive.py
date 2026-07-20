@@ -120,6 +120,80 @@ def test_reasoner_uses_only_workspace_protocol(tmp_path: Path) -> None:
     assert "answer audit" not in prompt.casefold()
 
 
+@pytest.mark.parametrize("wrapper", ("response", "responses", "items"))
+def test_reasoner_unwraps_valid_decision_wrappers(tmp_path: Path, wrapper: str) -> None:
+    payload = {
+        "action": "investigate",
+        "tasks": [
+            {
+                "query_id": "inspect_transition",
+                "goal": "Inspect the brief transition.",
+                "segment_id": "seg_0001",
+                "time_range": [5.0, 7.0],
+                "inspection_mode": "window",
+                "sampling_floor_fps": 2.0,
+            }
+        ],
+    }
+    api = FakeAPI((json.dumps({wrapper: [payload]}),))
+    trace_path = tmp_path / f"{wrapper}.jsonl"
+    reasoner = WorkspaceReasoner(api, trace_path=trace_path)
+
+    decision = reasoner.decide(
+        question="What changes?",
+        options={"A": "Nothing", "B": "The color changes"},
+        remaining_budget=4,
+        force_finalize=False,
+        mechanical_status={},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    assert decision.action == "investigate"
+    assert decision.tasks[0].time_range == (5.0, 7.0)
+    assert decision.tasks[0].sampling_floor_fps == 2.0
+    assert len(api.calls) == 1
+    trace = json.loads(trace_path.read_text(encoding="utf-8"))
+    assert trace["schema_unwrapped"] is True
+    assert trace["repair_failed"] is False
+
+
+def test_reasoner_repairs_schema_invalid_json_object(tmp_path: Path) -> None:
+    api = FakeAPI(
+        (
+            json.dumps({"response": [{"note": "missing action"}]}),
+            json.dumps(
+                {
+                    "action": "answer",
+                    "answer": "B",
+                    "supporting_claim_ids": ["claim_cup"],
+                    "support_status": "direct",
+                    "unsupported_option_details": [],
+                }
+            ),
+        )
+    )
+    trace_path = tmp_path / "trace.jsonl"
+    reasoner = WorkspaceReasoner(api, trace_path=trace_path)
+
+    decision = reasoner.decide(
+        question="What does the person raise?",
+        options={"A": "A book", "B": "A cup"},
+        remaining_budget=0,
+        force_finalize=True,
+        mechanical_status={},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    assert decision.answer == "B. A cup"
+    assert decision.support_status == "direct"
+    assert len(api.calls) == 2
+    rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["type"] for row in rows] == ["reasoner_json_repair", "reasoner_workspace"]
+    assert rows[-1]["format_repaired"] is True
+
+
 def test_reasoner_prompt_retains_first_and_last_overviews(tmp_path: Path) -> None:
     api = FakeAPI((json.dumps({"action": "answer", "answer": "B"}),))
     reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
@@ -166,6 +240,8 @@ def test_reasoner_preserves_its_answer_and_workspace_operations(tmp_path: Path) 
                         }
                     ],
                     "supporting_claim_ids": ["c1"],
+                    "support_status": "direct",
+                    "unsupported_option_details": [],
                     "residual_uncertainty": "The object is briefly occluded.",
                 }
             ),
@@ -186,6 +262,8 @@ def test_reasoner_preserves_its_answer_and_workspace_operations(tmp_path: Path) 
     assert decision.answer == "B. A cup"
     assert decision.workspace_ops[0]["claim_id"] == "c1"
     assert decision.supporting_claim_ids == ("c1",)
+    assert decision.support_status == "direct"
+    assert not decision.unsupported_option_details
     assert decision.residual_uncertainty == "The object is briefly occluded."
 
 
@@ -274,7 +352,7 @@ def test_empty_asr_search_attempt_id_is_prompt_independent(
     monkeypatch.setattr(
         investigator,
         "search_asr",
-        lambda terms, max_clusters=8: {"query_terms": list(terms), "clusters": []},
+        lambda terms, **kwargs: {"query_terms": list(terms), "clusters": []},
     )
     tasks = (
         InvestigationTask(
@@ -296,6 +374,88 @@ def test_empty_asr_search_attempt_id_is_prompt_independent(
     assert reports[0].attempts[0].attempt_id == reports[1].attempts[0].attempt_id
     assert reports[0].attempts[0].source_video_ids == ("video-a",)
     assert not reports[0].attempts[0].frame_refs
+    assert reports[0].cost["consumes_budget"] is False
+    assert reports[0].failure_reason == "asr_zero_hits_use_visual_modality"
+
+
+def test_asr_search_forwards_scope_and_zero_hits_do_not_consume_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    investigator = VisionInvestigator(
+        _workspace(tmp_path),
+        api=FakeAPI(()),
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    captured: dict[str, Any] = {}
+
+    def search(terms: Sequence[str], **kwargs: Any) -> Mapping[str, Any]:
+        captured.update({"terms": tuple(terms), **kwargs})
+        return {"terms": list(terms), "clusters": []}
+
+    monkeypatch.setattr(investigator, "search_asr", search)
+    report = investigator.run_batch(
+        (
+            InvestigationTask(
+                query_id="scoped_asr",
+                goal="Search only the requested interval.",
+                segment_id="seg_0001",
+                time_range=(7.0, 9.0),
+                inspection_mode="search_asr",
+                search_terms=("alarm",),
+            ),
+        )
+    )[0]
+
+    assert captured["segment_id"] == "seg_0001"
+    assert captured["time_range"] == (7.0, 9.0)
+    assert report.cost["consumes_budget"] is False
+    assert report.failure_reason == "asr_zero_hits_use_visual_modality"
+
+
+def test_duplicate_asr_material_is_reused_without_spending_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    investigator = VisionInvestigator(
+        _workspace(tmp_path),
+        api=FakeAPI(()),
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    packet = {
+        "terms": ["alarm"],
+        "clusters": [
+            {
+                "segment_id": "seg_0001",
+                "virtual_time_range": [7.0, 9.0],
+                "matched_terms": ["alarm"],
+                "excerpt": "an alarm sounds",
+                "source_lineage": [{"source_video_id": "video-a", "segment_id": "seg_0001"}],
+                "hit_count": 1,
+            }
+        ],
+    }
+    monkeypatch.setattr(investigator, "search_asr", lambda terms, **kwargs: packet)
+    tasks = tuple(
+        InvestigationTask(
+            query_id=f"search_{index}",
+            goal="Locate the alarm.",
+            segment_id="seg_0001",
+            time_range=(7.0, 9.0),
+            inspection_mode="search_asr",
+            search_terms=("alarm",),
+        )
+        for index in (1, 2)
+    )
+
+    first, duplicate = investigator.run_batch(tasks)
+
+    assert first.cost["consumes_budget"] is True
+    assert duplicate.cost["consumes_budget"] is False
+    assert duplicate.cost["reused"] is True
+    assert not duplicate.attempts
+    assert not duplicate.evidence
+    assert duplicate.failure_reason == "duplicate_asr_material_reused"
 
 
 def test_same_frame_arbitration_reuses_material_identity(tmp_path: Path) -> None:

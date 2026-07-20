@@ -148,6 +148,7 @@ def test_driver_keeps_semantic_authority_with_reasoner(tmp_path: Path) -> None:
             ReasonerDecision(
                 action="answer",
                 answer="B. A cup",
+                support_status="direct",
                 workspace_ops=(
                     {
                         "op": "add_claim",
@@ -191,6 +192,7 @@ def test_invalid_workspace_reference_is_returned_to_reasoner_without_answer_over
     invalid = ReasonerDecision(
         action="answer",
         answer="A. A book",
+        support_status="direct",
         workspace_ops=(
             {
                 "op": "add_claim",
@@ -205,6 +207,7 @@ def test_invalid_workspace_reference_is_returned_to_reasoner_without_answer_over
     valid = ReasonerDecision(
         action="answer",
         answer="B. A cup",
+        support_status="direct",
         workspace_ops=(
             {
                 "op": "add_claim",
@@ -229,6 +232,138 @@ def test_invalid_workspace_reference_is_returned_to_reasoner_without_answer_over
     assert "workspace_ops_rejected" in reasoner.calls[2]["working_document_view"]
     assert "attempt_missing" in reasoner.calls[2]["working_document_view"]
     assert not any(row.get("framework_answer_mutation") for row in result.trace)
+
+
+def test_forced_final_reference_repair_does_not_spend_investigation_budget(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
+    reasoner = ScriptedReasoner(
+        (
+            _investigate(),
+            ReasonerDecision(
+                action="answer",
+                answer="B. A cup",
+                support_status="direct",
+                workspace_ops=(
+                    {
+                        "op": "add_claim",
+                        "claim_id": "claim_cup",
+                        "text": "The person raises a cup.",
+                        "source": "observation",
+                        "cites": (attempt_id,),
+                        "confidence": "high",
+                    },
+                ),
+            ),
+            ReasonerDecision(
+                action="answer",
+                answer="B. A cup",
+                support_status="direct",
+                supporting_claim_ids=("claim_cup",),
+            ),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=FakeInvestigator(),
+        max_rounds=1,
+        max_investigations=1,
+    ).run(workspace)
+
+    assert result.answer == "B. A cup"
+    assert result.reference_valid
+    assert result.investigation_count == 1
+    assert len(reasoner.calls) == 3
+    assert "answer_reference_rejected" in reasoner.calls[2]["working_document_view"]
+    assert reasoner.calls[2]["mechanical_status"]["supported_observation_claim_count"] == 1
+    assert reasoner.calls[2]["mechanical_status"]["unresolved_observation_count"] == 0
+
+
+def test_reference_invalid_forced_answer_is_not_returned(tmp_path: Path) -> None:
+    invalid = ReasonerDecision(
+        action="answer",
+        answer="A. A book",
+        support_status="direct",
+        supporting_claim_ids=("claim_missing",),
+    )
+    reasoner = ScriptedReasoner((_investigate(), invalid, invalid))
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=FakeInvestigator(),
+        max_rounds=1,
+        max_investigations=1,
+    ).run(_workspace(tmp_path))
+
+    assert result.answer == "No valid answer was returned."
+    assert not result.selected_option
+    assert not result.reference_valid
+    assert not result.correct
+    assert result.reference_reason == "answer_missing"
+
+
+@pytest.mark.parametrize(
+    ("support_status", "unsupported_details", "residual_uncertainty", "expected_reason"),
+    (
+        ("partial", (), "", "answer_support_not_direct"),
+        ("direct", ("hood up",), "", "answer_option_details_unsupported"),
+        (
+            "direct",
+            (),
+            "The evidence does not confirm the option's extra detail.",
+            "answer_support_uncertain",
+        ),
+    ),
+)
+def test_answer_with_inconsistent_support_requires_repair(
+    tmp_path: Path,
+    support_status: str,
+    unsupported_details: tuple[str, ...],
+    residual_uncertainty: str,
+    expected_reason: str,
+) -> None:
+    workspace = _workspace(tmp_path)
+    attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
+    claim = {
+        "op": "add_claim",
+        "claim_id": "claim_cup",
+        "text": "The person raises a cup.",
+        "source": "observation",
+        "cites": (attempt_id,),
+        "confidence": "high",
+    }
+    reasoner = ScriptedReasoner(
+        (
+            _investigate(),
+            ReasonerDecision(
+                action="answer",
+                answer="B. A cup",
+                support_status=support_status,
+                unsupported_option_details=unsupported_details,
+                workspace_ops=(claim,),
+                supporting_claim_ids=("claim_cup",),
+                residual_uncertainty=residual_uncertainty,
+            ),
+            ReasonerDecision(
+                action="answer",
+                answer="B. A cup",
+                support_status="direct",
+                supporting_claim_ids=("claim_cup",),
+            ),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=FakeInvestigator(),
+        max_rounds=2,
+        max_investigations=4,
+    ).run(workspace)
+
+    assert result.reference_valid
+    assert result.answer == "B. A cup"
+    assert expected_reason in reasoner.calls[2]["working_document_view"]
 
 
 def test_task_schema_rejects_old_inspection_modes() -> None:

@@ -18,6 +18,10 @@ from vcah.virtual_video import VirtualVideoWorkspace
 from vcah.workspace import prompt_digest, stable_attempt_id
 
 
+_DECISION_ACTIONS = {"investigate", "read_observations", "update_workspace", "answer"}
+_DECISION_WRAPPERS = ("response", "responses", "items")
+
+
 def _completion_budget(default: int) -> int:
     return max(4096, int(default))
 
@@ -41,6 +45,20 @@ def _parse_json(text: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _decision_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    if str(value.get("action", "") or "").strip().casefold() in _DECISION_ACTIONS:
+        return dict(value)
+    for key in _DECISION_WRAPPERS:
+        nested = value.get(key)
+        candidates = (nested,) if isinstance(nested, Mapping) else nested
+        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+            continue
+        for candidate in candidates:
+            if isinstance(candidate, Mapping) and (payload := _decision_payload(candidate)):
+                return payload
+    return {}
 
 
 def _answer(value: Any, options: Mapping[str, str]) -> str:
@@ -109,8 +127,16 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
                 if normalized is not None:
                     tasks.append(normalized)
     action = str(payload.get("action", "") or "").strip().casefold()
-    if action not in {"investigate", "read_observations", "update_workspace", "answer"}:
-        action = "investigate" if tasks else "answer"
+    if action not in _DECISION_ACTIONS:
+        action = "update_workspace"
+    raw_support = payload.get("support_assessment")
+    support = dict(raw_support) if isinstance(raw_support, Mapping) else {}
+    support_status = str(payload.get("support_status") or support.get("status") or "").strip().casefold()
+    if support_status not in {"direct", "partial", "insufficient", "contradicted"}:
+        support_status = ""
+    unsupported = payload.get("unsupported_option_details", support.get("unsupported_option_details", ())) or ()
+    if isinstance(unsupported, str):
+        unsupported = (unsupported,)
     return {
         "action": action,
         "tasks": tuple(tasks),
@@ -118,6 +144,8 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
         "citations": tuple(str(item) for item in payload.get("citations", ()) or () if str(item).strip()),
         "workspace_ops": tuple(dict(item) for item in payload.get("workspace_ops", payload.get("ops", ())) or () if isinstance(item, Mapping)),
         "supporting_claim_ids": tuple(str(item) for item in payload.get("supporting_claim_ids", ()) or () if str(item).strip()),
+        "support_status": support_status,
+        "unsupported_option_details": tuple(str(item) for item in unsupported if str(item).strip()),
         "residual_uncertainty": str(payload.get("residual_uncertainty", "") or ""),
         "observation_requests": tuple(dict(item) for item in payload.get("observation_requests", ()) or () if isinstance(item, Mapping)),
     }
@@ -142,17 +170,20 @@ class WorkspaceReasoner:
         raw = self.api.chat(prompt, max_tokens=_completion_budget(2200))
         api_response = dict(self.api.last_response_metadata)
         parsed = _parse_json(raw)
-        repair_attempted = not parsed
+        payload = _decision_payload(parsed)
+        repair_attempted = not payload
         repaired = False
         if repair_attempted:
             repair_prompt = (
-                "Recover this Reasoner response as one compact JSON object. Preserve only content already present; "
-                "do not invent observations, claims, references, or an answer. Return JSON only.\n"
+                "Recover this Reasoner response as one compact Decision JSON object with exactly one valid action: "
+                "investigate, read_observations, update_workspace, or answer. Preserve only content already present; "
+                "do not invent observations, claims, references, support, or an answer. Return JSON only.\n"
                 f"Response: {raw}"
             )
             repaired_raw = self.api.chat(repair_prompt, max_tokens=_completion_budget(1400))
-            parsed = _parse_json(repaired_raw)
-            repaired = bool(parsed)
+            repaired_parsed = _parse_json(repaired_raw)
+            payload = _decision_payload(repaired_parsed)
+            repaired = bool(payload)
             _append_jsonl(
                 self.trace_path,
                 {
@@ -160,12 +191,13 @@ class WorkspaceReasoner:
                     "round": self.calls,
                     "prompt": repair_prompt,
                     "raw": repaired_raw,
-                    "parsed": parsed,
+                    "parsed": repaired_parsed,
+                    "decision_payload": payload,
                     "api_response": self.api.last_response_metadata,
                     "time": time.time(),
                 },
             )
-        value = _normalize_decision(parsed, round_id=self.calls)
+        value = _normalize_decision(payload or {"action": "update_workspace"}, round_id=self.calls)
         value["answer"] = _answer(value["answer"], dict(kwargs.get("options") or {}))
         decision = ReasonerDecision(**value)
         _append_jsonl(
@@ -177,8 +209,10 @@ class WorkspaceReasoner:
                 "prompt": prompt,
                 "raw": raw,
                 "parsed": parsed,
+                "decision_payload": payload,
+                "schema_unwrapped": bool(payload and payload != parsed),
                 "format_repaired": repaired,
-                "repair_failed": repair_attempted and not parsed,
+                "repair_failed": repair_attempted and not payload,
                 "api_response": api_response,
                 "time": time.time(),
             },
@@ -192,6 +226,11 @@ class VisionInvestigator(VirtualVideoInvestigator):
         super().__init__(workspace)
         self.api = api
         self.trace_path = trace_path
+        self._seen_asr_attempt_ids: set[str] = set()
+
+    def reset_run_state(self) -> None:
+        super().reset_run_state()
+        self._seen_asr_attempt_ids.clear()
 
     def _investigate_task(self, task: Any) -> InvestigationReport:
         try:
@@ -313,7 +352,14 @@ class VisionInvestigator(VirtualVideoInvestigator):
     def _search_asr(self, task: Any) -> InvestigationReport:
         query_id = str(getattr(task, "query_id", "") or "search_asr")
         terms = tuple(getattr(task, "search_terms", ()) or ())
-        packet = self.search_asr(terms, max_clusters=8)
+        segment_id = str(getattr(task, "segment_id", "") or "")
+        time_range = getattr(task, "time_range", None)
+        packet = self.search_asr(
+            terms,
+            segment_id=segment_id,
+            time_range=time_range,
+            max_clusters=8,
+        )
         clusters = tuple(packet["clusters"])
         ranges = tuple(tuple(float(value) for value in row["virtual_time_range"]) for row in clusters)
         lineage = tuple(dict(item) for row in clusters for item in row.get("source_lineage", ()))
@@ -329,6 +375,39 @@ class VisionInvestigator(VirtualVideoInvestigator):
             inspected_ranges=ranges,
             modality="asr",
         )
+        duplicate = bool(clusters) and (
+            attempt_id in self._seen_asr_attempt_ids
+            or bool(_observation_rows(self.workspace.root_dir / "observation_log.jsonl", attempt_id))
+        )
+        if clusters:
+            self._seen_asr_attempt_ids.add(attempt_id)
+        if duplicate:
+            _append_jsonl(
+                self.trace_path,
+                {
+                    "type": "investigator_asr_search",
+                    "query_id": query_id,
+                    "attempt_id": attempt_id,
+                    "search_terms": list(terms),
+                    "segment_id": segment_id,
+                    "time_range": list(time_range) if time_range else [],
+                    "cluster_count": len(clusters),
+                    "reused": True,
+                    "time": time.time(),
+                },
+            )
+            return InvestigationReport(
+                query_id=query_id,
+                status="completed",
+                cost={
+                    "tool_trace": ("search_asr", "reuse_attempt"),
+                    "frames": 0,
+                    "vlm_calls": 0,
+                    "reused": True,
+                    "consumes_budget": False,
+                },
+                failure_reason="duplicate_asr_material_reused",
+            )
         raw = json.dumps(packet, ensure_ascii=False, sort_keys=True)
         evidence = tuple(
             EvidenceRecord(
@@ -350,15 +429,27 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 observation_id=attempt_id,
                 confidence=1.0,
                 source_lineage=tuple(dict(item) for item in row.get("source_lineage", ())),
-                operation_metadata={"search_terms": list(terms), "literal_navigation_only": True},
+                operation_metadata={
+                    "search_terms": list(terms),
+                    "segment_id": segment_id,
+                    "time_range": list(time_range) if time_range else [],
+                    "literal_navigation_only": True,
+                },
             )
             for index, row in enumerate(clusters, start=1)
         )
         attempt = ObservationAttempt(
             attempt_id=attempt_id,
             task_id=query_id,
+            requested_range=time_range,
             inspected_ranges=ranges,
-            sampling_config={"mode": "search_asr", "modality": "asr", "terms": list(terms)},
+            sampling_config={
+                "mode": "search_asr",
+                "modality": "asr",
+                "terms": list(terms),
+                "segment_id": segment_id,
+                "time_range": list(time_range) if time_range else [],
+            },
             parse_status="deterministic",
             execution_status="completed",
             modality="asr",
@@ -375,7 +466,10 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "query_id": query_id,
                 "attempt_id": attempt_id,
                 "search_terms": list(terms),
+                "segment_id": segment_id,
+                "time_range": list(time_range) if time_range else [],
                 "cluster_count": len(clusters),
+                "reused": False,
                 "time": time.time(),
             },
         )
@@ -384,7 +478,15 @@ class VisionInvestigator(VirtualVideoInvestigator):
             status="completed",
             evidence=evidence,
             attempts=(attempt,),
-            cost={"tool_trace": ("search_asr",), "frames": 0, "vlm_calls": 0, "consumes_budget": True},
+            cost={
+                "tool_trace": ("search_asr",),
+                "frames": 0,
+                "vlm_calls": 0,
+                "reused": False,
+                "zero_hits": not clusters,
+                "consumes_budget": bool(clusters),
+            },
+            failure_reason="" if clusters else "asr_zero_hits_use_visual_modality",
             coverage_delta=ranges,
         )
 
@@ -525,11 +627,19 @@ class VisionInvestigator(VirtualVideoInvestigator):
 
 def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final = bool(kwargs.get("force_finalize"))
-    action_rule = (
-        "The budget is exhausted. Return action=answer with your single best option; do not investigate."
-        if final
-        else "Choose exactly one action: investigate, read_observations, update_workspace, or answer."
-    )
+    final_attempt = int(kwargs.get("final_attempt", 0) or 0)
+    if not final:
+        action_rule = "Choose exactly one action: investigate, read_observations, update_workspace, or answer."
+    elif final_attempt <= 1:
+        action_rule = (
+            "Investigation is closed. Consolidate existing observations with workspace_ops before answering. "
+            "If direct support is still missing, use update_workspace; one reference-repair call remains."
+        )
+    else:
+        action_rule = (
+            "This is the final reference-repair call and investigation remains closed. Repair claims from existing "
+            "observations and answer only with direct support; otherwise use update_workspace without inventing facts."
+        )
     return (
         "You are the sole semantic decision maker for long-video multiple-choice QA. The framework only stores observations, "
         "applies your Working Document operations, and validates references. It never judges claims, scores options, audits, "
@@ -553,9 +663,14 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "\"segment_id\":\"seg_0001\",\"time_range\":null,\"inspection_mode\":\"window|search_asr|arbitrate_observation\","
         "\"search_terms\":[],\"arbitration_attempt_id\":\"\",\"expected_evidence\":\"direct observation\","
         "\"sampling_floor_fps\":0.5}],\"workspace_ops\":[]}. "
-        "Use 0.5 fps for persistent states, 1 fps for ordinary motion, and 2 fps for brief transitions or changing text.\n"
+        "Use 0.5 fps for persistent states, 1 fps for ordinary motion, and 2 fps for brief transitions or changing text. "
+        "When identity, ordering, color, text, or a brief transition remains uncertain or mismatches an option, inspect a "
+        "narrow 2 fps visual window before answering; ASR cannot resolve visual attributes.\n"
         "Answer schema: {\"action\":\"answer\",\"answer\":\"A. exact option text\",\"workspace_ops\":[],"
-        "\"supporting_claim_ids\":[\"c1\"],\"residual_uncertainty\":\"...\"}.\n"
+        "\"supporting_claim_ids\":[\"c1\"],\"support_status\":\"direct|partial|insufficient|contradicted\","
+        "\"unsupported_option_details\":[],\"residual_uncertainty\":\"\"}. "
+        "Answer only when support_status=direct, every selected-option detail appears in active supporting claims, "
+        "unsupported_option_details is empty, and there is no material residual uncertainty. Never answer by closest match.\n"
         f"Question: {kwargs.get('question', '')}\n"
         f"Options: {json.dumps(kwargs.get('options') or {}, ensure_ascii=False)}\n"
         f"Remaining investigation budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
