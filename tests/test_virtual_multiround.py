@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import pytest
 
@@ -364,6 +364,65 @@ def test_answer_with_inconsistent_support_requires_repair(
     assert result.reference_valid
     assert result.answer == "B. A cup"
     assert expected_reason in reasoner.calls[2]["working_document_view"]
+
+
+def test_reasoner_support_audit_can_reject_then_accept_repaired_answer(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
+    claim = {
+        "op": "add_claim",
+        "claim_id": "claim_cup",
+        "text": "The person raises a cup.",
+        "source": "observation",
+        "cites": (attempt_id,),
+        "confidence": "high",
+    }
+
+    class AuditingReasoner(ScriptedReasoner):
+        def __init__(self) -> None:
+            super().__init__(
+                (
+                    _investigate(),
+                    ReasonerDecision(
+                        action="answer",
+                        answer="B. A cup",
+                        workspace_ops=(claim,),
+                        supporting_claim_ids=("claim_cup",),
+                    ),
+                    ReasonerDecision(
+                        action="answer",
+                        answer="B. A cup",
+                        supporting_claim_ids=("claim_cup",),
+                    ),
+                )
+            )
+            self.audits = [
+                {
+                    "support_status": "partial",
+                    "unsupported_option_details": ("object identity",),
+                    "residual_uncertainty": "The first pass did not establish identity.",
+                },
+                {"support_status": "direct"},
+            ]
+            self.audit_calls: list[dict[str, Any]] = []
+
+        def audit_answer(self, **kwargs: Any) -> Mapping[str, Any]:
+            self.audit_calls.append(dict(kwargs))
+            return self.audits.pop(0)
+
+    reasoner = AuditingReasoner()
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=FakeInvestigator(),
+        max_rounds=2,
+        max_investigations=4,
+    ).run(workspace)
+
+    assert result.reference_valid
+    assert result.answer == "B. A cup"
+    assert len(reasoner.audit_calls) == 2
+    assert "answer_support_not_direct" in reasoner.calls[2]["working_document_view"]
+    assert "claim_cup" in reasoner.audit_calls[0]["working_document_view"]
 
 
 def test_task_schema_rejects_old_inspection_modes() -> None:

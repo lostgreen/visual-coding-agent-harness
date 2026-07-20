@@ -259,8 +259,37 @@ class VirtualVideoMultiRoundDriver:
                     decision,
                     citations=_answer_citations(decision, document, evidence_store.records),
                 )
-                validation = _validate_answer(candidate, document, observation_log.attempt_ids, workspace.case.options)
-                trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
+                validation = _validate_answer(
+                    candidate,
+                    document,
+                    observation_log.attempt_ids,
+                    workspace.case.options,
+                    require_consistency=False,
+                )
+                if validation.passed:
+                    candidate = _audit_answer(
+                        self.reasoner,
+                        candidate,
+                        round_id=round_id,
+                        question=workspace.case.question,
+                        options=workspace.case.options,
+                        working_document_view=render_working_view(document, observation_log),
+                    )
+                    validation = _validate_answer(
+                        candidate,
+                        document,
+                        observation_log.attempt_ids,
+                        workspace.case.options,
+                    )
+                trace.append(
+                    {
+                        "type": "reference_integrity_check",
+                        "round": round_id,
+                        "support_status": candidate.support_status,
+                        "unsupported_option_details": list(candidate.unsupported_option_details),
+                        **validation.to_dict(),
+                    }
+                )
                 if validation.passed:
                     final_answer = candidate
                     break
@@ -587,6 +616,8 @@ def _validate_answer(
     document: WorkingDocument,
     observation_ids: Sequence[str],
     options: Mapping[str, str],
+    *,
+    require_consistency: bool = True,
 ) -> AnswerValidation:
     validation = document.validate_answer(
         decision.supporting_claim_ids,
@@ -603,6 +634,8 @@ def _validate_answer(
         )
     if not validation.passed:
         return validation
+    if not require_consistency:
+        return validation
     if decision.support_status != "direct":
         return _answer_rejected(validation, "answer_support_not_direct")
     if decision.unsupported_option_details:
@@ -610,6 +643,45 @@ def _validate_answer(
     if _material_uncertainty(decision.residual_uncertainty):
         return _answer_rejected(validation, "answer_support_uncertain")
     return validation
+
+
+def _audit_answer(
+    reasoner: Any,
+    decision: ReasonerDecision,
+    *,
+    round_id: int,
+    question: str,
+    options: Mapping[str, str],
+    working_document_view: str,
+) -> ReasonerDecision:
+    audit = getattr(reasoner, "audit_answer", None)
+    if not callable(audit):
+        return decision
+    result = audit(
+        round_id=round_id,
+        question=question,
+        options=dict(options),
+        answer=decision.answer,
+        supporting_claim_ids=decision.supporting_claim_ids,
+        residual_uncertainty=decision.residual_uncertainty,
+        working_document_view=working_document_view,
+    )
+    payload = dict(result) if isinstance(result, Mapping) else {}
+    status = str(payload.get("support_status", "") or "").strip().casefold()
+    if status not in _SUPPORT_STATUSES:
+        status = "insufficient"
+    unsupported = payload.get("unsupported_option_details", ()) or ()
+    if isinstance(unsupported, str):
+        unsupported = (unsupported,)
+    return replace(
+        decision,
+        support_status=status,
+        unsupported_option_details=tuple(
+            dict.fromkeys((*decision.unsupported_option_details, *(str(item) for item in unsupported)))
+        ),
+        residual_uncertainty=decision.residual_uncertainty
+        or str(payload.get("residual_uncertainty", "") or ""),
+    )
 
 
 def _answer_rejected(validation: AnswerValidation, reason: str) -> AnswerValidation:
