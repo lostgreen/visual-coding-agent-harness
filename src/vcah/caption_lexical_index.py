@@ -322,58 +322,17 @@ def tokenize_caption_text(value: str) -> tuple[str, ...]:
 
 
 def render_caption_hits(hits: Sequence[CaptionHitV1], *, detail_limit: int = 5, char_limit: int = 4000) -> str:
-    limit = max(1, int(char_limit))
-    detail_count = min(len(hits), max(0, int(detail_limit)))
-    legacy_lines = [f"Caption search: {len(hits)} hits"]
-    for index, hit in enumerate(hits, start=1):
-        legacy_lines.append(
-            f"{index}. [{_clock(hit.virtual_start_sec)}-{_clock(hit.virtual_end_sec)}] "
-            f"score={hit.fused_score:.4f} passage={hit.passage_id}"
-        )
-        if index <= detail_count:
-            legacy_lines.append(f'   "{hit.text[:800]}"')
-    if hits:
-        legacy_lines.append("Suggested next step: inspect the highest-ranked intervals visually.")
-    legacy_rendered = "\n".join(legacy_lines)
-    later_count = max(0, len(hits) - detail_count)
-    if later_count == 0 or len(legacy_rendered) >= limit:
-        return legacy_rendered[:limit]
-
-    snippet_limit = min(320, max(0, ((limit - len(legacy_rendered)) // later_count) - 6))
-    if snippet_limit == 0:
-        return legacy_rendered[:limit]
-
     lines = [f"Caption search: {len(hits)} hits"]
     for index, hit in enumerate(hits, start=1):
         lines.append(
             f"{index}. [{_clock(hit.virtual_start_sec)}-{_clock(hit.virtual_end_sec)}] "
             f"score={hit.fused_score:.4f} passage={hit.passage_id}"
         )
-        if index <= detail_count:
+        if index <= max(0, int(detail_limit)):
             lines.append(f'   "{hit.text[:800]}"')
-        else:
-            excerpt = _balanced_excerpt(hit.text, snippet_limit)
-            if excerpt:
-                lines.append(f'   "{excerpt}"')
     if hits:
         lines.append("Suggested next step: inspect the highest-ranked intervals visually.")
-    return "\n".join(lines)[:limit]
-
-
-def _balanced_excerpt(text: str, limit: int) -> str:
-    value = str(text).strip()
-    capped = max(0, int(limit))
-    if not value or capped == 0:
-        return ""
-    if len(value) <= capped:
-        return value
-    separator = " ... "
-    if capped <= len(separator) + 2:
-        return value[:capped]
-    content_limit = capped - len(separator)
-    head_limit = content_limit // 2
-    tail_limit = content_limit - head_limit
-    return f"{value[:head_limit]}{separator}{value[-tail_limit:]}"
+    return "\n".join(lines)[: max(1, int(char_limit))]
 
 
 def _in_time_range(passage: CaptionPassageV1, time_range: tuple[float, float] | None) -> bool:
