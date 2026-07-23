@@ -144,9 +144,13 @@ def test_render_caption_hits_keeps_later_temporal_cues_within_budget() -> None:
             wall_clock_begin=None,
             wall_clock_end=None,
             text=(
-                "The scene begins with a long establishing sequence. "
-                + ("background detail " * 40)
-                + f"The video ends with menu screens for candidate {index}."
+                f"Short top-ranked description for candidate {index}."
+                if index < 5
+                else (
+                    "The scene begins with a long establishing sequence. "
+                    + ("background detail " * 40)
+                    + f"The video ends with menu screens for candidate {index}."
+                )
             ),
             interval_precision="chunk",
             source_pointer=f"caption://passage-{index}",
@@ -159,6 +163,10 @@ def test_render_caption_hits_keeps_later_temporal_cues_within_budget() -> None:
     assert len(rendered) <= 4000
     assert "passage-7" in rendered
     assert "video ends with menu screens for candidate 7" in rendered
+
+    legacy_only = render_caption_hits(hits[:5])
+    assert hits[0].text[:800] in legacy_only
+    assert "video ends with menu screens for candidate 0" not in legacy_only
 
 
 def test_lexical_segment_scope_filters_hits_neighbors_and_fingerprint() -> None:

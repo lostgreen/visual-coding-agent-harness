@@ -323,33 +323,40 @@ def tokenize_caption_text(value: str) -> tuple[str, ...]:
 
 def render_caption_hits(hits: Sequence[CaptionHitV1], *, detail_limit: int = 5, char_limit: int = 4000) -> str:
     limit = max(1, int(char_limit))
-    header = f"Caption search: {len(hits)} hits"
-    footer = "Suggested next step: inspect the highest-ranked intervals visually."
-    hit_lines = [
-        (
+    detail_count = min(len(hits), max(0, int(detail_limit)))
+    legacy_lines = [f"Caption search: {len(hits)} hits"]
+    for index, hit in enumerate(hits, start=1):
+        legacy_lines.append(
             f"{index}. [{_clock(hit.virtual_start_sec)}-{_clock(hit.virtual_end_sec)}] "
             f"score={hit.fused_score:.4f} passage={hit.passage_id}"
         )
-        for index, hit in enumerate(hits, start=1)
-    ]
-    fixed_length = len("\n".join((header, *hit_lines, footer)))
-    detail_count = min(len(hits), max(0, int(detail_limit)))
-    weights = tuple(2 if index < detail_count else 1 for index in range(len(hits)))
-    text_budget = max(0, limit - fixed_length - (6 * len(hits)))
-    budget_unit = text_budget // max(1, sum(weights))
-    snippet_limits = tuple(
-        min(800 if index < detail_count else 320, budget_unit * weight)
-        for index, weight in enumerate(weights)
-    )
-
-    lines = [header]
-    for index, hit in enumerate(hits, start=1):
-        lines.append(hit_lines[index - 1])
-        excerpt = _balanced_excerpt(hit.text, snippet_limits[index - 1])
-        if excerpt:
-            lines.append(f'   "{excerpt}"')
+        if index <= detail_count:
+            legacy_lines.append(f'   "{hit.text[:800]}"')
     if hits:
-        lines.append(footer)
+        legacy_lines.append("Suggested next step: inspect the highest-ranked intervals visually.")
+    legacy_rendered = "\n".join(legacy_lines)
+    later_count = max(0, len(hits) - detail_count)
+    if later_count == 0 or len(legacy_rendered) >= limit:
+        return legacy_rendered[:limit]
+
+    snippet_limit = min(320, max(0, ((limit - len(legacy_rendered)) // later_count) - 6))
+    if snippet_limit == 0:
+        return legacy_rendered[:limit]
+
+    lines = [f"Caption search: {len(hits)} hits"]
+    for index, hit in enumerate(hits, start=1):
+        lines.append(
+            f"{index}. [{_clock(hit.virtual_start_sec)}-{_clock(hit.virtual_end_sec)}] "
+            f"score={hit.fused_score:.4f} passage={hit.passage_id}"
+        )
+        if index <= detail_count:
+            lines.append(f'   "{hit.text[:800]}"')
+        else:
+            excerpt = _balanced_excerpt(hit.text, snippet_limit)
+            if excerpt:
+                lines.append(f'   "{excerpt}"')
+    if hits:
+        lines.append("Suggested next step: inspect the highest-ranked intervals visually.")
     return "\n".join(lines)[:limit]
 
 
