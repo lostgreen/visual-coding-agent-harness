@@ -559,6 +559,31 @@ def test_segment_local_range_converts_with_trace(tmp_path: Path) -> None:
     )
 
 
+def test_virtual_range_clamps_subsecond_segment_boundary_rounding(tmp_path: Path) -> None:
+    workspace = _two_segment_workspace(tmp_path)
+    task = InvestigationTask(
+        query_id="rounded-boundary",
+        goal="Inspect the start of segment two.",
+        segment_id="seg_0002",
+        time_range=(99.5, 110.0),
+    )
+    errors: list[dict[str, Any]] = []
+
+    resolved = _resolve_tasks(workspace, (task,), limit=1, errors=errors)
+
+    assert errors == []
+    assert resolved[0].time_range == (100.0, 110.0)
+    assert resolved[0].conversion_trace == (
+        {
+            "operation": "virtual_boundary_clamp",
+            "segment_id": "seg_0002",
+            "input_range": [99.5, 110.0],
+            "output_range": [100.0, 110.0],
+            "tolerance_sec": 1.0,
+        },
+    )
+
+
 def test_free_form_answer_keeps_reference_gate_but_allows_uncertainty(tmp_path: Path) -> None:
     multiple_choice = _workspace(tmp_path)
     workspace = VirtualVideoWorkspace.create(

@@ -22,6 +22,7 @@ from vcah.workspace import (
 
 
 _INSPECTION_MODES = {"window", "search_asr", "search_caption", "arbitrate_observation"}
+_TIME_BOUNDARY_TOLERANCE_SEC = 1.0
 RUN_ARTIFACT_NAMES = (
     "evidence.jsonl",
     "observation_log.jsonl",
@@ -961,7 +962,32 @@ def _resolve_task_coordinates(
 
     if task.time_range is not None and segment is not None:
         start, end = task.time_range
-        if start < float(segment.virtual_start_sec) - 1e-6 or end > float(segment.virtual_end_sec) + 1e-6:
+        segment_start = float(segment.virtual_start_sec)
+        segment_end = float(segment.virtual_end_sec)
+        start_overrun = max(0.0, segment_start - start)
+        end_overrun = max(0.0, end - segment_end)
+        if start_overrun > 1e-6 or end_overrun > 1e-6:
+            clamped_range = (max(start, segment_start), min(end, segment_end))
+            can_clamp_boundary_rounding = (
+                start_overrun <= _TIME_BOUNDARY_TOLERANCE_SEC
+                and end_overrun <= _TIME_BOUNDARY_TOLERANCE_SEC
+                and clamped_range[1] > clamped_range[0]
+            )
+            if can_clamp_boundary_rounding:
+                return replace(
+                    task,
+                    time_range=clamped_range,
+                    conversion_trace=(
+                        *task.conversion_trace,
+                        {
+                            "operation": "virtual_boundary_clamp",
+                            "segment_id": segment_id,
+                            "input_range": [start, end],
+                            "output_range": list(clamped_range),
+                            "tolerance_sec": _TIME_BOUNDARY_TOLERANCE_SEC,
+                        },
+                    ),
+                )
             errors.append(
                 _task_resolution_error(
                     task,
@@ -969,9 +995,10 @@ def _resolve_task_coordinates(
                     requested_range=[start, end],
                     coordinate_space="virtual",
                     valid_virtual_range=[segment.virtual_start_sec, segment.virtual_end_sec],
+                    boundary_tolerance_sec=_TIME_BOUNDARY_TOLERANCE_SEC,
                     segment_local_hint=[
-                        max(0.0, start - float(segment.virtual_start_sec)),
-                        max(0.0, end - float(segment.virtual_start_sec)),
+                        max(0.0, start - segment_start),
+                        max(0.0, end - segment_start),
                     ],
                 )
             )
