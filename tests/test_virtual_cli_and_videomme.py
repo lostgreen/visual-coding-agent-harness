@@ -28,6 +28,9 @@ def test_virtual_video_cli_replaces_active_xle_commands() -> None:
     root_help = _run_help()
 
     assert "vv-build-videomme" in root_help
+    assert "vv-build-mmlifelong" in root_help
+    assert "vv-caption" in root_help
+    assert "vv-index-caption" in root_help
     assert "vv-index" in root_help
     assert "vv-run" in root_help
     assert "vv-run-all" in root_help

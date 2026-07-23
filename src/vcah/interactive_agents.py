@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
@@ -22,6 +23,34 @@ _DECISION_ACTIONS = {"investigate", "read_observations", "update_workspace", "an
 _DECISION_WRAPPERS = ("response", "responses", "items")
 
 
+@dataclass(frozen=True)
+class SearchFingerprint:
+    modality: str
+    normalized_terms: tuple[str, ...]
+    time_range_bucket: tuple[int, int] | None
+    index_version: str
+
+    def similarity(self, other: "SearchFingerprint") -> float:
+        if (
+            self.modality != other.modality
+            or self.time_range_bucket != other.time_range_bucket
+            or self.index_version != other.index_version
+        ):
+            return 0.0
+        left = set(self.normalized_terms)
+        right = set(other.normalized_terms)
+        union = left | right
+        return len(left & right) / len(union) if union else 1.0
+
+
+@dataclass(frozen=True)
+class SearchOutcome:
+    fingerprint: SearchFingerprint
+    hit_count: int
+    top_ids: tuple[str, ...]
+    attempt_id: str
+
+
 def _completion_budget(default: int) -> int:
     return max(4096, int(default))
 
@@ -30,6 +59,16 @@ def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def _parse_json(text: str) -> dict[str, Any]:
@@ -86,7 +125,7 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
     if not goal:
         return None
     mode = str(value.get("inspection_mode", "window") or "window").strip().casefold()
-    if mode not in {"window", "search_asr", "arbitrate_observation"}:
+    if mode not in {"window", "search_asr", "search_caption", "arbitrate_observation"}:
         return None
     raw_range = value.get("time_range")
     time_range = None
@@ -104,10 +143,17 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         expected_evidence=str(value.get("expected_evidence", "") or goal),
         inspection_mode=mode,
         search_terms=tuple(value.get("search_terms", ()) or ()),
+        caption_queries=tuple(value.get("caption_queries", value.get("queries", ())) or ()),
+        top_k=int(value.get("top_k", 12) or 12),
+        index_mode=str(value.get("index_mode", "lexical") or "lexical"),
+        expand_neighbors=int(value.get("expand_neighbors", 0) or 0),
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
+        force_reinspect=bool(value.get("force_reinspect", False)),
     )
     if mode == "search_asr" and not task.search_terms:
+        return None
+    if mode == "search_caption" and not task.caption_queries:
         return None
     if mode == "arbitrate_observation" and not task.arbitration_attempt_id:
         return None
@@ -212,21 +258,73 @@ class WorkspaceReasoner:
 class VisionInvestigator(VirtualVideoInvestigator):
     """Observation-only visual agent; it never evaluates options or claims."""
 
-    def __init__(self, workspace: VirtualVideoWorkspace, *, api: OpenAICompatibleClient, trace_path: Path) -> None:
-        super().__init__(workspace)
+    def __init__(
+        self,
+        workspace: VirtualVideoWorkspace,
+        *,
+        api: OpenAICompatibleClient,
+        trace_path: Path,
+        caption_embedding_adapter: Any | None = None,
+        caption_index_mode: str | None = None,
+        caption_config_digest: str | None = None,
+    ) -> None:
+        super().__init__(
+            workspace,
+            caption_embedding_adapter=caption_embedding_adapter,
+            caption_config_digest=caption_config_digest,
+        )
         self.api = api
         self.trace_path = trace_path
+        mode = str(caption_index_mode or "").strip().casefold()
+        if mode and mode not in {"lexical", "dense", "hybrid"}:
+            raise ValueError(f"unsupported caption_index_mode: {mode}")
+        self.caption_index_mode = mode or None
         self._seen_asr_attempt_ids: set[str] = set()
+        self._seen_caption_attempt_ids: set[str] = set()
+        self._search_outcomes: list[SearchOutcome] = []
+        self._duplicate_search_count = 0
+        self._empty_search_streak = 0
+        self._saved_visual_calls = 0
+        self._saved_visual_frames = 0
+        self._visual_attempt_cache: dict[str, InvestigationReport] = {}
 
     def reset_run_state(self) -> None:
         super().reset_run_state()
         self._seen_asr_attempt_ids.clear()
+        self._seen_caption_attempt_ids.clear()
+        self._search_outcomes.clear()
+        self._duplicate_search_count = 0
+        self._empty_search_streak = 0
+        self._saved_visual_calls = 0
+        self._saved_visual_frames = 0
+        self._visual_attempt_cache.clear()
+
+    def mechanical_status(self) -> Mapping[str, Any]:
+        zero_hits = [outcome for outcome in self._search_outcomes if outcome.hit_count == 0]
+        return {
+            "empty_search_streak": self._empty_search_streak,
+            "duplicate_search_count": self._duplicate_search_count,
+            "previous_zero_hit_queries": [
+                {
+                    "modality": outcome.fingerprint.modality,
+                    "terms": list(outcome.fingerprint.normalized_terms),
+                    "time_range_bucket": list(outcome.fingerprint.time_range_bucket)
+                    if outcome.fingerprint.time_range_bucket
+                    else None,
+                }
+                for outcome in zero_hits[-6:]
+            ],
+            "saved_visual_calls": self._saved_visual_calls,
+            "saved_visual_frames": self._saved_visual_frames,
+        }
 
     def _investigate_task(self, task: Any) -> InvestigationReport:
         try:
             mode = str(getattr(task, "inspection_mode", "window") or "window")
             if mode == "search_asr":
                 return self._search_asr(task)
+            if mode == "search_caption":
+                return self._search_caption(task)
             if mode == "arbitrate_observation":
                 return self._arbitrate(task)
             return self._observe_window(task)
@@ -271,6 +369,45 @@ class VisionInvestigator(VirtualVideoInvestigator):
             modality="visual",
         )
         prompt = _observation_prompt(self.workspace, task, window)
+        cache_key = prompt_digest(
+            json.dumps(
+                {
+                    "model": self.api.model,
+                    "prompt_digest": prompt_digest(prompt),
+                    "frame_paths": list(frame_paths),
+                },
+                sort_keys=True,
+            )
+        )
+        cached_report = self._visual_attempt_cache.get(cache_key)
+        if cached_report is not None and not bool(getattr(task, "force_reinspect", False)):
+            self._saved_visual_calls += 1
+            self._saved_visual_frames += len(frame_paths)
+            _append_jsonl(
+                self.trace_path,
+                {
+                    "type": "investigator_observation_reused",
+                    "query_id": query_id,
+                    "attempt_ids": [attempt.attempt_id for attempt in cached_report.attempts],
+                    "saved_frames": len(frame_paths),
+                    "saved_calls": 1,
+                    "time": time.time(),
+                },
+            )
+            return InvestigationReport(
+                query_id=query_id,
+                status="completed",
+                cost={
+                    "tool_trace": ("inspect_window", "reuse_visual_attempt"),
+                    "frames": 0,
+                    "vlm_calls": 0,
+                    "saved_frames": len(frame_paths),
+                    "saved_calls": 1,
+                    "reused": True,
+                    "consumes_budget": False,
+                },
+                failure_reason="duplicate_visual_attempt_reused",
+            )
         raw = self.api.chat(prompt, image_paths=frame_paths, max_tokens=_completion_budget(1800)) if frame_paths else ""
         parsed = _parse_json(raw)
         parse_status = "parsed" if parsed else "failed"
@@ -323,7 +460,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
         )
         if frame_paths:
             self._record_visit(task, evidence, status="completed")
-        return InvestigationReport(
+        report = InvestigationReport(
             query_id=query_id,
             status="completed" if frame_paths else "failed",
             evidence=(evidence,) if frame_paths else (),
@@ -338,12 +475,24 @@ class VisionInvestigator(VirtualVideoInvestigator):
             failure_reason="no frames materialized" if not frame_paths else "",
             coverage_delta=((start_sec, end_sec),) if frame_paths else (),
         )
+        if frame_paths:
+            self._visual_attempt_cache[cache_key] = report
+        return report
 
     def _search_asr(self, task: Any) -> InvestigationReport:
         query_id = str(getattr(task, "query_id", "") or "search_asr")
         terms = tuple(getattr(task, "search_terms", ()) or ())
         segment_id = str(getattr(task, "segment_id", "") or "")
         time_range = getattr(task, "time_range", None)
+        search_fingerprint = _search_fingerprint(
+            "asr",
+            terms,
+            time_range,
+            index_version=f"literal-asr-v1:{segment_id or '*'}",
+        )
+        cached = self._cached_search(search_fingerprint)
+        if cached is not None:
+            return self._reused_search_report(query_id, cached, modality="asr")
         packet = self.search_asr(
             terms,
             segment_id=segment_id,
@@ -372,6 +521,17 @@ class VisionInvestigator(VirtualVideoInvestigator):
         if clusters:
             self._seen_asr_attempt_ids.add(attempt_id)
         if duplicate:
+            self._record_search_outcome(
+                SearchOutcome(
+                    fingerprint=search_fingerprint,
+                    hit_count=len(clusters),
+                    top_ids=tuple(
+                        f"{row['segment_id']}:{float(row['virtual_time_range'][0]):.3f}"
+                        for row in clusters[:8]
+                    ),
+                    attempt_id=attempt_id,
+                )
+            )
             _append_jsonl(
                 self.trace_path,
                 {
@@ -439,10 +599,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "terms": list(terms),
                 "segment_id": segment_id,
                 "time_range": list(time_range) if time_range else [],
+                "hit_count": len(clusters),
             },
             parse_status="deterministic",
             execution_status="completed",
             modality="asr",
+            evidence_role="candidate",
             prompt_digest=prompt_digest("\n".join(terms)),
             raw_output=raw,
             source_video_ids=source_video_ids,
@@ -463,6 +625,17 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "time": time.time(),
             },
         )
+        self._record_search_outcome(
+            SearchOutcome(
+                fingerprint=search_fingerprint,
+                hit_count=len(clusters),
+                top_ids=tuple(
+                    f"{row['segment_id']}:{float(row['virtual_time_range'][0]):.3f}"
+                    for row in clusters[:8]
+                ),
+                attempt_id=attempt_id,
+            )
+        )
         return InvestigationReport(
             query_id=query_id,
             status="completed",
@@ -478,6 +651,214 @@ class VisionInvestigator(VirtualVideoInvestigator):
             },
             failure_reason="" if clusters else "asr_zero_hits_use_visual_modality",
             coverage_delta=ranges,
+        )
+
+    def _search_caption(self, task: Any) -> InvestigationReport:
+        query_id = str(getattr(task, "query_id", "") or "search_caption")
+        requested_queries = tuple(getattr(task, "caption_queries", ()) or ())
+        queries = tuple(
+            dict.fromkeys(
+                query
+                for query in (self.workspace.case.question, *requested_queries)
+                if str(query).strip()
+            )
+        )[:5]
+        time_range = getattr(task, "time_range", None)
+        top_k = int(getattr(task, "top_k", 12) or 12)
+        expand_neighbors = int(getattr(task, "expand_neighbors", 0) or 0)
+        index_mode = self.caption_index_mode or str(getattr(task, "index_mode", "lexical") or "lexical")
+        search_fingerprint = _search_fingerprint(
+            "caption",
+            requested_queries or (self.workspace.case.question,),
+            time_range,
+            index_version=index_mode,
+        )
+        cached = self._cached_search(search_fingerprint)
+        if cached is not None:
+            return self._reused_search_report(query_id, cached, modality="caption")
+        try:
+            packet = self.search_caption(
+                queries,
+                time_range=time_range,
+                top_k=top_k,
+                expand_neighbors=expand_neighbors,
+                index_mode=index_mode,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            return InvestigationReport(
+                query_id=query_id,
+                status="failed",
+                cost={"tool_trace": ("search_caption",), "consumes_budget": False},
+                failure_reason=str(exc),
+            )
+        hits = tuple(dict(hit) for hit in packet["hits"])
+        query_fingerprint = str(packet["query_fingerprint"])
+        pointer = (
+            f"caption-search://{self.workspace.workspace_id}/"
+            f"{str(packet['index_digest'])[:12]}/{query_fingerprint[:20]}"
+        )
+        source_video_ids = tuple(
+            dict.fromkeys(segment.source_video_id for segment in self.workspace.manifest.segments)
+        )
+        attempt_id = stable_attempt_id(
+            source_video_ids=source_video_ids,
+            frame_refs=(pointer,),
+            modality="caption_search",
+        )
+        duplicate = (
+            attempt_id in self._seen_caption_attempt_ids
+            or bool(_observation_rows(self.workspace.root_dir / "observation_log.jsonl", attempt_id))
+        )
+        self._seen_caption_attempt_ids.add(attempt_id)
+        if duplicate:
+            self._record_search_outcome(
+                SearchOutcome(
+                    fingerprint=search_fingerprint,
+                    hit_count=len(hits),
+                    top_ids=tuple(str(hit.get("passage_id", "")) for hit in hits[:8]),
+                    attempt_id=attempt_id,
+                )
+            )
+            return InvestigationReport(
+                query_id=query_id,
+                status="completed",
+                cost={
+                    "tool_trace": ("search_caption", "reuse_attempt"),
+                    "frames": 0,
+                    "vlm_calls": 0,
+                    "reused": True,
+                    "zero_hits": not hits,
+                    "consumes_budget": False,
+                },
+                failure_reason="duplicate_caption_query_reused",
+            )
+        raw_path = self.workspace.root_dir / "caption_search" / f"{attempt_id}.json"
+        _write_json(raw_path, packet)
+        raw_output = json.dumps(
+            {
+                "raw_output_pointer": str(raw_path),
+                "summary": packet["rendered"],
+                "search_queries": list(queries),
+                "hits": hits,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        attempt = ObservationAttempt(
+            attempt_id=attempt_id,
+            task_id=query_id,
+            requested_range=time_range,
+            inspected_ranges=(),
+            sampling_config={
+                "mode": "search_caption",
+                "modality": "caption_search",
+                "queries": list(queries),
+                "top_k": top_k,
+                "time_range": list(time_range) if time_range else None,
+                "index_mode": index_mode,
+                "index_digest": packet["index_digest"],
+                "query_fingerprint": query_fingerprint,
+                "expand_neighbors": expand_neighbors,
+                "hits": [
+                    {
+                        "passage_id": hit["passage_id"],
+                        "range": [hit["virtual_start_sec"], hit["virtual_end_sec"]],
+                        "score": hit["fused_score"],
+                    }
+                    for hit in hits
+                ],
+            },
+            parse_status="deterministic",
+            execution_status="completed",
+            frame_refs=(pointer,),
+            modality="caption_search",
+            evidence_role="candidate",
+            prompt_digest=prompt_digest(json.dumps(list(queries), ensure_ascii=False)),
+            raw_output=raw_output,
+            source_video_ids=source_video_ids,
+        )
+        _append_jsonl(
+            self.trace_path,
+            {
+                "type": "investigator_caption_search",
+                "query_id": query_id,
+                "attempt_id": attempt_id,
+                "query_fingerprint": query_fingerprint,
+                "index_digest": packet["index_digest"],
+                "hit_count": len(hits),
+                "raw_output_pointer": str(raw_path),
+                "reused": False,
+                "time": time.time(),
+            },
+        )
+        self._record_search_outcome(
+            SearchOutcome(
+                fingerprint=search_fingerprint,
+                hit_count=len(hits),
+                top_ids=tuple(str(hit.get("passage_id", "")) for hit in hits[:8]),
+                attempt_id=attempt_id,
+            )
+        )
+        return InvestigationReport(
+            query_id=query_id,
+            status="completed",
+            attempts=(attempt,),
+            cost={
+                "tool_trace": ("search_caption",),
+                "frames": 0,
+                "vlm_calls": 0,
+                "reused": False,
+                "zero_hits": not hits,
+                "consumes_budget": bool(hits),
+            },
+            failure_reason="" if hits else "caption_zero_hits_refine_query_or_use_visual",
+        )
+
+    def _cached_search(self, fingerprint: SearchFingerprint) -> SearchOutcome | None:
+        for outcome in reversed(self._search_outcomes):
+            if fingerprint.similarity(outcome.fingerprint) >= 0.85:
+                self._duplicate_search_count += 1
+                self._empty_search_streak = (
+                    self._empty_search_streak + 1 if outcome.hit_count == 0 else 0
+                )
+                return outcome
+        return None
+
+    def _record_search_outcome(self, outcome: SearchOutcome) -> None:
+        self._search_outcomes.append(outcome)
+        self._empty_search_streak = self._empty_search_streak + 1 if outcome.hit_count == 0 else 0
+
+    def _reused_search_report(
+        self,
+        query_id: str,
+        outcome: SearchOutcome,
+        *,
+        modality: str,
+    ) -> InvestigationReport:
+        _append_jsonl(
+            self.trace_path,
+            {
+                "type": f"investigator_{modality}_search",
+                "query_id": query_id,
+                "attempt_id": outcome.attempt_id,
+                "hit_count": outcome.hit_count,
+                "reused": True,
+                "near_duplicate": True,
+                "time": time.time(),
+            },
+        )
+        return InvestigationReport(
+            query_id=query_id,
+            status="completed",
+            cost={
+                "tool_trace": (f"search_{modality}", "reuse_search_outcome"),
+                "frames": 0,
+                "vlm_calls": 0,
+                "reused": True,
+                "zero_hits": outcome.hit_count == 0,
+                "consumes_budget": False,
+            },
+            failure_reason=f"near_duplicate_{modality}_query_reused",
         )
 
     def _arbitrate(self, task: Any) -> InvestigationReport:
@@ -618,59 +999,85 @@ class VisionInvestigator(VirtualVideoInvestigator):
 def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final = bool(kwargs.get("force_finalize"))
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
+    options = dict(kwargs.get("options") or {})
+    if options:
+        task_description = "long-video multiple-choice QA"
+        answer_schema = (
+            'Answer schema: {"action":"answer","answer":"A. exact option text","workspace_ops":[],'
+            '"supporting_claim_ids":["c1"],"residual_uncertainty":""}. '
+        )
+        answer_rule = (
+            "Never answer by closest match or add facts absent from the supporting observation lineage. If any selected-option "
+            "detail is mismatched or unconfirmed, record it in residual_uncertainty instead of answering.\n"
+        )
+    else:
+        task_description = "long-video free-form QA"
+        answer_schema = (
+            'Answer schema: {"action":"answer","answer":"concise factual answer","workspace_ops":[],'
+            '"supporting_claim_ids":["c1"],"residual_uncertainty":"optional concise caveat"}. '
+        )
+        answer_rule = (
+            "Return a short direct answer grounded in the supporting observation lineage. Free-form answers may retain a "
+            "concise residual_uncertainty; do not invent details absent from the cited observations.\n"
+        )
     if not final:
         action_rule = "Choose exactly one action: investigate, read_observations, update_workspace, or answer."
     elif final_attempt <= 1:
         action_rule = (
             "Choose exactly one action: read_observations, update_workspace, or answer; investigate is closed. "
             "Use this call to read any needed existing observations and consolidate them with workspace_ops. "
-            "Answer only with direct support; one non-investigation final call remains."
+            "Answer only with direct support; one non-investigation final call remains if validation fails."
         )
     else:
         action_rule = (
-            "Choose exactly one action: update_workspace or answer; investigate and read_observations are closed. "
-            "This is the final call. Repair the rejected candidate against the existing Working Document without switching "
-            "options merely to satisfy the gate. Answer only with direct support; otherwise use update_workspace."
+            "Return action=answer only. Tool use, observation reads, and workspace-only updates are closed. "
+            "Provide the best evidence-grounded answer available and list supporting_claim_ids when valid."
         )
     return (
-        "You are the sole semantic decision maker for long-video multiple-choice QA. The framework only stores observations, "
+        f"You are the sole semantic decision maker for {task_description}. The framework only stores observations, "
         "applies your Working Document operations, and validates references. It never judges claims, scores options, audits, "
         "or changes your answer.\n"
         f"{action_rule}\n"
         "Return one JSON object. Every action may include workspace_ops. Operation forms:\n"
         "{\"op\":\"add_claim\",\"claim\":{\"claim_id\":\"c1\",\"text\":\"...\","
         "\"source\":\"observation|derived|hypothesis\",\"cites\":[],\"derived_from\":[],"
-        "\"time_anchor\":[0,1],\"status\":\"active|contested\",\"confidence\":\"high|medium|low\"}}; "
+        "\"time_anchor\":[0,1],\"status\":\"active|contested\",\"confidence\":\"high|medium|low\","
+        "\"entity_ids\":[],\"metadata\":{}}}; "
         "{\"op\":\"supersede\",\"claim_id\":\"c1\",\"superseded_by\":\"c2\"}; "
         "{\"op\":\"set_status\",\"claim_id\":\"c1\",\"status\":\"active|contested|retracted\"}; "
         "{\"op\":\"link_conflict\",\"claim_id\":\"c1\",\"other_claim_id\":\"c2\"}; "
-        "{\"op\":\"note_interval\",\"time_range\":[0,1],\"label\":\"...\",\"claim_ids\":[\"c1\"]}; "
+        "{\"op\":\"note_interval\",\"time_range\":[0,1],\"label\":\"...\",\"claim_ids\":[\"c1\"],"
+        "\"role\":\"candidate|supporting|negative\",\"metadata\":{}}; "
         "{\"op\":\"update_entity\",\"entity_id\":\"person_1\",\"description\":\"...\",\"aliases\":[]}.\n"
         "An observation claim must cite an attempt_id; a derived claim must name "
         "derived_from claim_ids. Keep uncertain interpretations as contested/hypothesis claims instead of deleting them.\n"
         "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or time_range. "
         "To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and arbitration_attempt_id.\n"
+        "When available, search_caption is a locator: the framework always includes the original question, and you may add "
+        "caption_queries (1-4 complementary formulations), top_k, optional time_range, "
+        "and index_mode=lexical, dense, or hybrid when configured. Treat returned ranges as candidates and inspect decisive "
+        "claims visually. When mechanical_status lists pending_caption_candidates, inspect a top candidate time_range with "
+        "inspection_mode=window before answering; caption_search and search_asr attempts cannot directly support an answer.\n"
         "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\","
         "\"goal\":\"observable question\","
-        "\"segment_id\":\"seg_0001\",\"time_range\":null,\"inspection_mode\":\"window|search_asr|arbitrate_observation\","
-        "\"search_terms\":[],\"arbitration_attempt_id\":\"\",\"expected_evidence\":\"direct observation\","
+        "\"segment_id\":\"seg_0001\",\"time_range\":null,"
+        "\"inspection_mode\":\"window|search_asr|search_caption|arbitrate_observation\","
+        "\"search_terms\":[],\"caption_queries\":[],\"top_k\":12,\"index_mode\":\"lexical|dense|hybrid\","
+        "\"expand_neighbors\":0,\"arbitration_attempt_id\":\"\",\"force_reinspect\":false,"
+        "\"expected_evidence\":\"direct observation\","
         "\"sampling_floor_fps\":0.5}],\"workspace_ops\":[]}. "
         "Use 0.5 fps for persistent states, 1 fps for ordinary motion, and 2 fps for brief transitions or changing text. "
         "When identity, ordering, color, text, or a brief transition remains uncertain or mismatches an option, inspect a "
         "narrow 2 fps visual window before answering; ASR cannot resolve visual attributes.\n"
-        "Answer schema: {\"action\":\"answer\",\"answer\":\"A. exact option text\",\"workspace_ops\":[],"
-        "\"supporting_claim_ids\":[\"c1\"],\"residual_uncertainty\":\"\"}. "
-        "Never answer by closest match or add facts absent from the supporting observation lineage. If any selected-option "
-        "detail is mismatched or unconfirmed, record it in residual_uncertainty instead of answering.\n"
+        f"{answer_schema}"
+        f"{answer_rule}"
         f"Question: {kwargs.get('question', '')}\n"
-        f"Options: {json.dumps(kwargs.get('options') or {}, ensure_ascii=False)}\n"
+        f"Options: {json.dumps(options, ensure_ascii=False)}\n"
         f"Remaining investigation budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
         f"Mechanical status: {json.dumps(kwargs.get('mechanical_status') or {}, ensure_ascii=False)}\n"
         f"Working view:\n{kwargs.get('working_document_view', '')}\n"
         f"Workspace overview: {json.dumps(_prompt_overview(kwargs.get('workspace_overview') or {}), ensure_ascii=False)}"
     )
-
-
 def _observation_prompt(
     workspace: VirtualVideoWorkspace,
     task: Any,
@@ -797,3 +1204,39 @@ def _attachment_counts(metadata: Mapping[str, Any], frame_paths: Sequence[str]) 
     attached = int(metadata.get("images_attached", len(frame_paths)) or 0)
     dropped = int(metadata.get("images_dropped", max(0, requested - attached)) or 0)
     return {"requested": requested, "attached": min(requested, attached), "dropped": dropped}
+
+
+def _search_fingerprint(
+    modality: str,
+    queries: Sequence[str],
+    time_range: Sequence[float] | None,
+    *,
+    index_version: str,
+    bucket_sec: int = 300,
+) -> SearchFingerprint:
+    tokens = tuple(
+        sorted(
+            {
+                token
+                for query in queries
+                for token in re.findall(
+                    r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]",
+                    str(query).casefold(),
+                )
+                if token
+            }
+        )
+    )
+    normalized_range = None
+    if time_range is not None and len(time_range) == 2:
+        start, end = sorted((float(time_range[0]), float(time_range[1])))
+        normalized_range = (
+            int(start // max(1, int(bucket_sec))),
+            int(max(start, end - 1e-9) // max(1, int(bucket_sec))),
+        )
+    return SearchFingerprint(
+        modality=str(modality).casefold(),
+        normalized_terms=tokens,
+        time_range_bucket=normalized_range,
+        index_version=str(index_version),
+    )

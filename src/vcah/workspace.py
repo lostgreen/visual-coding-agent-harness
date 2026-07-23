@@ -98,6 +98,8 @@ class Claim:
     superseded_by: str | None = None
     conflicts_with: tuple[str, ...] = ()
     confidence: ClaimConfidence = "medium"
+    entity_ids: tuple[str, ...] = ()
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "claim_id", str(self.claim_id or "").strip())
@@ -120,6 +122,8 @@ class Claim:
         if confidence not in _CLAIM_CONFIDENCES:
             raise ValueError(f"invalid_claim_confidence:{confidence}")
         object.__setattr__(self, "confidence", confidence)
+        object.__setattr__(self, "entity_ids", _ids(self.entity_ids))
+        object.__setattr__(self, "metadata", dict(self.metadata or {}))
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "Claim":
@@ -134,6 +138,8 @@ class Claim:
             superseded_by=value.get("superseded_by"),
             conflicts_with=tuple(value.get("conflicts_with", ()) or ()),
             confidence=str(value.get("confidence", "medium") or "medium"),  # type: ignore[arg-type]
+            entity_ids=tuple(value.get("entity_ids", ()) or ()),
+            metadata=dict(value.get("metadata", {}) or {}),
         )
 
 
@@ -162,6 +168,8 @@ class IntervalNote:
     time_range: tuple[float, float]
     label: str
     claim_ids: tuple[str, ...] = ()
+    role: str = "supporting"
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         normalized = _time_range(self.time_range)
@@ -172,13 +180,23 @@ class IntervalNote:
         if not self.label:
             raise ValueError("interval_note_requires_label")
         object.__setattr__(self, "claim_ids", _ids(self.claim_ids))
+        role = str(self.role or "supporting").strip().casefold()
+        if role not in {"candidate", "supporting", "negative"}:
+            raise ValueError(f"invalid_interval_role:{role}")
+        object.__setattr__(self, "role", role)
+        object.__setattr__(self, "metadata", dict(self.metadata or {}))
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "IntervalNote":
+        time_range = value.get("time_range")
+        if time_range is None and value.get("start_sec") is not None and value.get("end_sec") is not None:
+            time_range = (value["start_sec"], value["end_sec"])
         return cls(
-            time_range=tuple(value.get("time_range", ())),  # type: ignore[arg-type]
+            time_range=tuple(time_range or ()),  # type: ignore[arg-type]
             label=str(value.get("label", "") or ""),
             claim_ids=tuple(value.get("claim_ids", ()) or ()),
+            role=str(value.get("role", value.get("interval_role", "supporting")) or "supporting"),
+            metadata=dict(value.get("metadata", {}) or {}),
         )
 
 
@@ -258,7 +276,7 @@ class WorkingDocument:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "WorkingDocumentV1",
+            "schema_version": "WorkingDocumentV2",
             "revision": self.revision,
             "active_claim_limit": self.active_claim_limit,
             "claims": {claim_id: asdict(claim) for claim_id, claim in sorted(self.claims.items())},
@@ -328,6 +346,9 @@ class WorkingDocument:
             missing_conflicts = tuple(other for other in claim.conflicts_with if other not in self.claims)
             if missing_conflicts:
                 errors.append(f"claim_conflict_missing:{claim_id}:{','.join(missing_conflicts)}")
+            missing_entities = tuple(entity_id for entity_id in claim.entity_ids if entity_id not in self.entities)
+            if missing_entities:
+                errors.append(f"claim_entity_missing:{claim_id}:{','.join(missing_entities)}")
             if claim.status == "superseded":
                 if not claim.superseded_by:
                     errors.append(f"superseded_claim_requires_successor:{claim_id}")
@@ -347,6 +368,7 @@ class WorkingDocument:
         supporting_claim_ids: Sequence[str],
         *,
         observation_ids: Sequence[str],
+        supporting_observation_ids: Sequence[str] | None = None,
     ) -> AnswerValidation:
         support = _ids(supporting_claim_ids)
         if not support:
@@ -403,6 +425,18 @@ class WorkingDocument:
         )
         if not cited_attempts:
             errors.append("supporting_claims_require_observation")
+        eligible_attempts = (
+            {str(item) for item in supporting_observation_ids}
+            if supporting_observation_ids is not None
+            else set(observation_ids)
+        )
+        ineligible_attempts = tuple(
+            attempt_id for attempt_id in cited_attempts if attempt_id not in eligible_attempts
+        )
+        if ineligible_attempts:
+            errors.append(
+                f"supporting_claims_cite_candidate_or_negative:{','.join(ineligible_attempts)}"
+            )
         if errors:
             return AnswerValidation(False, errors[0].split(":", 1)[0], support, cited_attempts, tuple(errors))
         return AnswerValidation(True, "reference_integrity_verified", support, cited_attempts, ())
@@ -594,6 +628,7 @@ class ObservationLog:
             "sampling_fps": sampling_fps,
             "sampling_config": dict(getattr(attempt, "sampling_config", {}) or {}),
             "modality": modality.strip().casefold(),
+            "evidence_role": str(getattr(attempt, "evidence_role", "unclassified") or "unclassified"),
             "prompt_digest": digest,
             "raw_output": raw_output,
             "parse_status": str(getattr(attempt, "parse_status", "unknown") or "unknown"),
@@ -622,6 +657,7 @@ class ObservationLog:
                     "time_ranges": first.get("inspected_ranges") or [first.get("requested_range")],
                     "sampling_fps": first.get("sampling_fps", 0.0),
                     "modality": first.get("modality", ""),
+                    "evidence_role": first.get("evidence_role", "unclassified"),
                     "frame_count": len(tuple(first.get("frame_refs", ()) or ())),
                     "interpretation_count": len(rows),
                     "interpretation_previews": [_compact_text(text, 320) for text in raw_outputs if text][:3],
@@ -655,6 +691,7 @@ class ObservationLog:
                 "time_ranges": row.get("inspected_ranges") or [row.get("requested_range")],
                 "sampling_fps": row.get("sampling_fps", 0.0),
                 "modality": row.get("modality", ""),
+                "evidence_role": row.get("evidence_role", "unclassified"),
                 "execution_status": row.get("execution_status", ""),
             }
             for row in self.catalog_source_rows()
@@ -673,6 +710,8 @@ def render_working_view(
     *,
     requested_observations: Sequence[Mapping[str, Any]] = (),
     feedback: Mapping[str, Any] | None = None,
+    requested_observation_chars: int = 2400,
+    max_observations_per_round: int = 8,
 ) -> str:
     lines = [f"WORKING DOCUMENT revision={document.revision}"]
     if feedback:
@@ -696,7 +735,8 @@ def render_working_view(
         lines.append("TIMELINE")
         for note in sorted(document.timeline, key=lambda item: item.time_range):
             lines.append(
-                f"- {note.time_range[0]:.3f}-{note.time_range[1]:.3f}s {note.label} claims={list(note.claim_ids)}"
+                f"- {note.time_range[0]:.3f}-{note.time_range[1]:.3f}s role={note.role} "
+                f"{note.label} claims={list(note.claim_ids)}"
             )
     lines.append("COVERAGE LEDGER")
     coverage = observations.coverage_ledger()
@@ -704,11 +744,17 @@ def render_working_view(
     lines.append("OBSERVATION CATALOG")
     lines.append(json.dumps(observations.catalog(), ensure_ascii=False, separators=(",", ":")))
     if requested_observations:
-        lines.append("REQUESTED RAW OBSERVATIONS")
-        for row in requested_observations:
+        lines.append("REQUESTED OBSERVATION PREVIEWS")
+        selected = tuple(requested_observations)[-max(1, int(max_observations_per_round)):]
+        for row in selected:
+            raw = _compact_text(
+                str(row.get("raw_output", "") or ""),
+                max(1, int(requested_observation_chars)),
+            )
             lines.append(
                 f"- [{row.get('attempt_id', '')}/{row.get('interpretation_id', '')}] "
-                f"{str(row.get('raw_output', '') or '')}"
+                f"modality={row.get('modality', '')} ranges={row.get('inspected_ranges', ())} "
+                f"raw_pointer={observations.path}::{row.get('interpretation_id', '')} {raw}"
             )
     return "\n".join(lines)
 
@@ -766,9 +812,11 @@ def _render_claim(claim: Claim) -> str:
     citations = f" cites={list(claim.cites)}" if claim.cites else ""
     parents = f" derived_from={list(claim.derived_from)}" if claim.derived_from else ""
     conflicts = f" conflicts={list(claim.conflicts_with)}" if claim.conflicts_with else ""
+    entities = f" entities={list(claim.entity_ids)}" if claim.entity_ids else ""
+    metadata = f" metadata={json.dumps(dict(claim.metadata), ensure_ascii=False, separators=(',', ':'))}" if claim.metadata else ""
     return (
         f"- [{claim.claim_id}] source={claim.source} status={claim.status} confidence={claim.confidence}"
-        f"{anchor}{citations}{parents}{conflicts}: {claim.text}"
+        f"{anchor}{citations}{parents}{conflicts}{entities}{metadata}: {claim.text}"
     )
 
 

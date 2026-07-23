@@ -223,7 +223,7 @@ def test_reasoner_prompt_retains_first_and_last_overviews(tmp_path: Path) -> Non
     assert "read_observations, update_workspace, or answer" in prompt
 
 
-def test_final_repair_prompt_closes_observation_reads(tmp_path: Path) -> None:
+def test_final_repair_prompt_requires_an_answer(tmp_path: Path) -> None:
     api = FakeAPI((json.dumps({"action": "update_workspace"}),))
     reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
 
@@ -239,8 +239,8 @@ def test_final_repair_prompt_closes_observation_reads(tmp_path: Path) -> None:
     )
 
     prompt = api.calls[0]["prompt"]
-    assert "update_workspace or answer" in prompt
-    assert "investigate and read_observations are closed" in prompt
+    assert "Return action=answer only" in prompt
+    assert "workspace-only updates are closed" in prompt
 
 
 def test_reasoner_preserves_its_answer_and_workspace_operations(tmp_path: Path) -> None:
@@ -281,6 +281,8 @@ def test_reasoner_preserves_its_answer_and_workspace_operations(tmp_path: Path) 
     assert decision.workspace_ops[0]["claim_id"] == "c1"
     assert decision.supporting_claim_ids == ("c1",)
     assert decision.residual_uncertainty == "The object is briefly occluded."
+    assert "investigate is closed" in api.calls[0]["prompt"]
+    assert "Investigate schema" in api.calls[0]["prompt"]
 
 
 def test_reasoner_does_not_force_or_restore_an_answer(tmp_path: Path) -> None:
@@ -471,7 +473,82 @@ def test_duplicate_asr_material_is_reused_without_spending_budget(
     assert duplicate.cost["reused"] is True
     assert not duplicate.attempts
     assert not duplicate.evidence
-    assert duplicate.failure_reason == "duplicate_asr_material_reused"
+    assert duplicate.failure_reason == "near_duplicate_asr_query_reused"
+
+
+def test_near_duplicate_zero_hit_search_is_cached(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    investigator = VisionInvestigator(
+        _workspace(tmp_path),
+        api=FakeAPI(()),
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    calls = 0
+
+    def search(terms: Sequence[str], **kwargs: Any) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return {"terms": list(terms), "clusters": []}
+
+    monkeypatch.setattr(investigator, "search_asr", search)
+    common = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen"
+    first = InvestigationTask(
+        query_id="zero-1",
+        goal="Locate an event.",
+        inspection_mode="search_asr",
+        search_terms=(f"{common} twenty",),
+    )
+    near = InvestigationTask(
+        query_id="zero-2",
+        goal="Locate the same event with one synonym.",
+        inspection_mode="search_asr",
+        search_terms=(f"{common} score",),
+    )
+
+    first_report, near_report = investigator.run_batch((first, near))
+
+    assert first_report.cost["zero_hits"] is True
+    assert near_report.cost["reused"] is True
+    assert near_report.cost["zero_hits"] is True
+    assert calls == 1
+    assert investigator.mechanical_status()["duplicate_search_count"] == 1
+    assert investigator.mechanical_status()["empty_search_streak"] == 2
+
+
+def test_identical_visual_window_reuses_vlm_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    frame = tmp_path / "frame-5.jpg"
+    frame.write_bytes(b"frame")
+    window = {
+        "virtual_time_range": [5.0, 6.0],
+        "sampling": {"fps": 1.0, "max_frames": 1, "actual_frames": 1},
+        "frames": [{"path": str(frame), "virtual_time_sec": 5.0}],
+        "asr_cues": [],
+        "source_lineage": [{"source_video_id": "video-a", "segment_id": "seg_0001"}],
+    }
+    api = FakeAPI(('{"summary":"A cup is visible."}',))
+    investigator = VisionInvestigator(workspace, api=api, trace_path=tmp_path / "trace.jsonl")
+    monkeypatch.setattr(investigator, "inspect_window", lambda *args, **kwargs: window)
+    task = InvestigationTask(
+        query_id="visual-reuse",
+        goal="Describe the visible object.",
+        segment_id="seg_0001",
+        time_range=(5.0, 6.0),
+        sampling_floor_fps=1.0,
+    )
+
+    first, repeated = investigator.run_batch((task, task))
+
+    assert first.cost["vlm_calls"] == 1
+    assert repeated.cost["vlm_calls"] == 0
+    assert repeated.cost["reused"] is True
+    assert repeated.cost["saved_frames"] == 1
+    assert len(api.calls) == 1
 
 
 def test_same_frame_arbitration_reuses_material_identity(tmp_path: Path) -> None:
@@ -584,6 +661,60 @@ def test_client_rejects_missing_images_before_request(monkeypatch: pytest.Monkey
 
     with pytest.raises(ImageAttachmentError):
         client.chat("inspect", image_paths=(str(tmp_path / "missing.jpg"),))
+
+
+def test_client_can_interleave_image_labels_and_place_prompt_last(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[Mapping[str, Any]] = []
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    class Response:
+        status_code = 200
+        headers: Mapping[str, str] = {}
+        text = ""
+
+        def json(self) -> Mapping[str, Any]:
+            return {
+                "choices": [{"finish_reason": "stop", "message": {"content": "caption"}}],
+                "usage": {},
+            }
+
+    def post(url: str, **kwargs: Any) -> Response:
+        calls.append({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr("vcah.model_client.requests.post", post)
+    client = OpenAICompatibleClient(
+        {"base": "https://example.invalid/v1", "model": "vision", "api_key": "secret", "max_retries": 0}
+    )
+
+    assert client.chat(
+        "caption prompt",
+        image_paths=(str(first), str(second)),
+        image_labels=("[00:00:00]", "[00:00:05]"),
+        prompt_position="last",
+    ) == "caption"
+    content = calls[0]["json"]["messages"][0]["content"]
+
+    assert [item["type"] for item in content] == [
+        "text",
+        "image_url",
+        "text",
+        "image_url",
+        "text",
+    ]
+    assert [item["text"] for item in content if item["type"] == "text"] == [
+        "[00:00:00]",
+        "[00:00:05]",
+        "caption prompt",
+    ]
+    assert client.last_response_metadata["image_label_count"] == 2
+    assert client.last_response_metadata["prompt_position"] == "last"
 
 
 def test_runner_helpers_keep_order_and_parse_case_groups(tmp_path: Path) -> None:

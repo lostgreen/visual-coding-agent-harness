@@ -7,7 +7,12 @@ from typing import Any, Sequence
 import pytest
 
 from vcah.investigator import InvestigationReport, ObservationAttempt
-from vcah.multiround import InvestigationTask, ReasonerDecision, VirtualVideoMultiRoundDriver
+from vcah.multiround import (
+    InvestigationTask,
+    ReasonerDecision,
+    VirtualVideoMultiRoundDriver,
+    _mechanical_status,
+)
 from vcah.types import CoverageSegment, EvidenceRecord
 from vcah.virtual_video import (
     VirtualVideoCase,
@@ -105,6 +110,45 @@ class FakeInvestigator:
     def run_batch(self, tasks: Sequence[InvestigationTask]) -> tuple[InvestigationReport, ...]:
         self.tasks.extend(tasks)
         return tuple(_report(task) for task in tasks)
+
+
+def _caption_report(task: InvestigationTask) -> InvestigationReport:
+    pointer = "caption-search://case-1/index/query"
+    attempt_id = stable_attempt_id(
+        source_video_ids=("video-a",),
+        frame_refs=(pointer,),
+        modality="caption_search",
+    )
+    attempt = ObservationAttempt(
+        attempt_id=attempt_id,
+        task_id=task.query_id,
+        sampling_config={
+            "mode": "search_caption",
+            "modality": "caption_search",
+            "hits": [{"passage_id": "p1", "range": [5.0, 10.0], "score": 0.9}],
+        },
+        execution_status="completed",
+        parse_status="deterministic",
+        frame_refs=(pointer,),
+        modality="caption_search",
+        evidence_role="candidate",
+        source_video_ids=("video-a",),
+    )
+    return InvestigationReport(
+        query_id=task.query_id,
+        status="completed",
+        attempts=(attempt,),
+        cost={"consumes_budget": True},
+    )
+
+
+class CaptionThenVisualInvestigator(FakeInvestigator):
+    def run_batch(self, tasks: Sequence[InvestigationTask]) -> tuple[InvestigationReport, ...]:
+        self.tasks.extend(tasks)
+        return tuple(
+            _caption_report(task) if task.inspection_mode == "search_caption" else _report(task)
+            for task in tasks
+        )
 
 
 class ScriptedReasoner:
@@ -231,7 +275,7 @@ def test_invalid_workspace_reference_is_returned_to_reasoner_without_answer_over
     assert not any(row.get("framework_answer_mutation") for row in result.trace)
 
 
-def test_forced_final_reference_repair_does_not_spend_investigation_budget(tmp_path: Path) -> None:
+def test_final_claim_commit_is_available_to_reference_repair(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
     reasoner = ScriptedReasoner(
@@ -270,9 +314,13 @@ def test_forced_final_reference_repair_does_not_spend_investigation_budget(tmp_p
     assert result.reference_valid
     assert result.investigation_count == 1
     assert len(reasoner.calls) == 3
+    assert reasoner.calls[1]["final_attempt"] == 1
+    assert reasoner.calls[2]["final_attempt"] == 2
+    assert "claim_cup" in reasoner.calls[2]["working_document_view"]
     assert "answer_reference_rejected" in reasoner.calls[2]["working_document_view"]
     assert reasoner.calls[2]["mechanical_status"]["supported_observation_claim_count"] == 1
     assert reasoner.calls[2]["mechanical_status"]["unresolved_observation_count"] == 0
+    assert sum(bool(row.get("answer_workspace_commit")) for row in result.trace) == 1
 
 
 def test_reference_invalid_forced_answer_is_not_returned(tmp_path: Path) -> None:
@@ -292,9 +340,77 @@ def test_reference_invalid_forced_answer_is_not_returned(tmp_path: Path) -> None
 
     assert result.answer == "No valid answer was returned."
     assert not result.selected_option
+    assert not result.answer_present
     assert not result.reference_valid
     assert not result.correct
     assert result.reference_reason == "answer_missing"
+
+
+def test_benchmark_best_effort_preserves_last_candidate_and_invalid_reference(tmp_path: Path) -> None:
+    invalid = ReasonerDecision(
+        action="answer",
+        answer="A. A book",
+        supporting_claim_ids=("claim_missing",),
+    )
+    reasoner = ScriptedReasoner((_investigate(), invalid, invalid))
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=FakeInvestigator(),
+        max_rounds=1,
+        max_investigations=1,
+        answer_policy="benchmark_best_effort",
+    ).run(_workspace(tmp_path))
+
+    assert result.answer == "A. A book"
+    assert result.answer_present
+    assert result.answer_policy == "benchmark_best_effort"
+    assert not result.reference_valid
+    assert result.reference_reason == "supporting_claim_missing"
+    assert reasoner.calls[-1]["final_attempt"] == 2
+    summary = json.loads((tmp_path / "run_summary.json").read_text(encoding="utf-8"))
+    assert summary["answer_present"] is True
+    assert summary["answer_policy"] == "benchmark_best_effort"
+
+
+def test_answer_and_claims_validate_in_one_transaction(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
+    late_answer = ReasonerDecision(
+        action="answer",
+        answer="B. A cup",
+        workspace_ops=(
+            {
+                "op": "add_claim",
+                "claim_id": "claim_cup",
+                "text": "The person raises a cup.",
+                "source": "observation",
+                "cites": (attempt_id,),
+                "confidence": "high",
+            },
+        ),
+        supporting_claim_ids=("claim_cup",),
+    )
+    reasoner = ScriptedReasoner(
+        (
+            _investigate(),
+            late_answer,
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=FakeInvestigator(),
+        max_rounds=1,
+        max_investigations=1,
+    ).run(workspace)
+    document = json.loads((tmp_path / "working_document.json").read_text(encoding="utf-8"))
+
+    assert result.reference_valid
+    assert result.answer == "B. A cup"
+    assert "claim_cup" in document["claims"]
+    assert len(reasoner.calls) == 2
+    assert sum(bool(row.get("answer_workspace_commit")) for row in result.trace) == 1
 
 
 def test_answer_with_residual_uncertainty_requires_repair(tmp_path: Path) -> None:
@@ -317,6 +433,9 @@ def test_answer_with_residual_uncertainty_requires_repair(tmp_path: Path) -> Non
                 workspace_ops=(claim,),
                 supporting_claim_ids=("claim_cup",),
                 residual_uncertainty="The evidence does not confirm the option's extra detail.",
+            ),
+            ReasonerDecision(
+                action="update_workspace",
             ),
             ReasonerDecision(
                 action="answer",
@@ -350,3 +469,229 @@ def test_task_schema_rejects_old_inspection_modes() -> None:
         )
 
     assert not hasattr(ReasonerDecision(action="answer"), "option_verdicts")
+
+
+def test_free_form_answer_keeps_reference_gate_but_allows_uncertainty(tmp_path: Path) -> None:
+    multiple_choice = _workspace(tmp_path)
+    workspace = VirtualVideoWorkspace.create(
+        tmp_path / "free-form",
+        manifest=multiple_choice.manifest,
+        case=VirtualVideoCase(
+            case_id="free-form-case",
+            question="What does the person raise?",
+            options={},
+            gold="The person raises a cup.",
+            target_segment_id="seg_0001",
+            target_virtual_interval=(0.0, 20.0),
+        ),
+    )
+    attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
+    reasoner = ScriptedReasoner(
+        (
+            _investigate(),
+            ReasonerDecision(
+                action="answer",
+                answer="A cup.",
+                workspace_ops=(
+                    {
+                        "op": "add_claim",
+                        "claim_id": "claim_cup",
+                        "text": "The person raises a cup.",
+                        "source": "observation",
+                        "cites": (attempt_id,),
+                        "time_anchor": (5.0, 6.0),
+                    },
+                ),
+                supporting_claim_ids=("claim_cup",),
+                residual_uncertainty="The cup's material is unclear.",
+            ),
+        )
+    )
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=FakeInvestigator(),
+        max_rounds=3,
+        max_investigations=4,
+    ).run(workspace)
+
+    assert result.answer == "A cup."
+    assert result.selected_option == ""
+    assert result.reference_valid
+    assert result.reference_reason == "reference_integrity_verified"
+    assert not result.correct
+
+
+def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    log_path = tmp_path / "candidate-observations.jsonl"
+    from vcah.workspace import ObservationLog, WorkingDocument
+
+    log = ObservationLog(log_path)
+    pointer = "caption-search://case-1/index/query"
+    attempt_id = stable_attempt_id(
+        source_video_ids=("video-a",),
+        frame_refs=(pointer,),
+        modality="caption_search",
+    )
+    log.append_attempt(
+        ObservationAttempt(
+            attempt_id=attempt_id,
+            sampling_config={
+                "mode": "search_caption",
+                "modality": "caption_search",
+                "hits": [
+                    {"passage_id": "p1", "range": [5.0, 10.0], "score": 0.9},
+                    {"passage_id": "p2", "range": [12.0, 15.0], "score": 0.8},
+                ],
+            },
+            frame_refs=(pointer,),
+            modality="caption_search",
+            evidence_role="candidate",
+            source_video_ids=("video-a",),
+        ),
+        round_id=1,
+    )
+
+    status = _mechanical_status(
+        workspace,
+        WorkingDocument.with_question_premise(workspace.case.question),
+        log,
+    )
+
+    assert status["pending_caption_candidate_count"] == 2
+    assert status["pending_caption_candidates"][0]["time_range"] == [5.0, 10.0]
+    assert any("locator candidates" in hint for hint in status["prompt_hints"])
+
+    visual_attempt_id = stable_attempt_id(
+        source_video_ids=("video-a",),
+        frame_times=(6.0,),
+        sampling_fps=1.0,
+        modality="visual",
+    )
+    log.append_attempt(
+        ObservationAttempt(
+            attempt_id=visual_attempt_id,
+            inspected_ranges=((5.0, 10.0),),
+            attached_frame_times=(6.0,),
+            sampling_config={"mode": "window", "modality": "visual", "fps": 1.0},
+            frame_refs=("frame-6.jpg",),
+            modality="visual",
+            source_video_ids=("video-a",),
+        ),
+        round_id=2,
+    )
+    confirmed = _mechanical_status(
+        workspace,
+        WorkingDocument.with_question_premise(workspace.case.question),
+        log,
+    )
+
+    assert confirmed["pending_caption_candidate_count"] == 1
+    assert confirmed["pending_caption_candidates"][0]["time_range"] == [12.0, 15.0]
+
+
+def test_reasoner_can_inspect_pending_caption_candidate_within_round_budget(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    visual_attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id
+    search = ReasonerDecision(
+        action="investigate",
+        tasks=(
+            InvestigationTask(
+                query_id="caption-search",
+                goal="Locate the raised object.",
+                inspection_mode="search_caption",
+                caption_queries=("person raises a cup",),
+            ),
+        ),
+    )
+    reasoner = ScriptedReasoner(
+        (
+            search,
+            ReasonerDecision(
+                action="investigate",
+                tasks=(
+                    InvestigationTask(
+                        query_id="selected-caption-window",
+                        goal="Inspect the relevant Caption candidate.",
+                        inspection_mode="window",
+                        time_range=(5.0, 10.0),
+                        sampling_floor_fps=1.0,
+                    ),
+                ),
+            ),
+            ReasonerDecision(
+                action="answer",
+                answer="B. A cup",
+                workspace_ops=(
+                    {
+                        "op": "add_claim",
+                        "claim_id": "claim_cup",
+                        "text": "The person raises a cup.",
+                        "source": "observation",
+                        "cites": (visual_attempt_id,),
+                        "confidence": "high",
+                    },
+                ),
+                supporting_claim_ids=("claim_cup",),
+            ),
+            ReasonerDecision(
+                action="answer",
+                answer="B. A cup",
+                supporting_claim_ids=("claim_cup",),
+            ),
+        )
+    )
+    investigator = CaptionThenVisualInvestigator()
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=investigator,
+        max_rounds=2,
+        max_investigations=4,
+    ).run(workspace)
+
+    assert result.reference_valid
+    assert result.investigation_count == 2
+    assert [task.inspection_mode for task in investigator.tasks] == ["search_caption", "window"]
+    assert len(reasoner.calls) == 3
+    assert reasoner.calls[1]["force_finalize"] is False
+    assert any(row.get("answer_workspace_commit") for row in result.trace)
+
+
+def test_pending_caption_candidate_is_not_automatically_selected(tmp_path: Path) -> None:
+    search = ReasonerDecision(
+        action="investigate",
+        tasks=(
+            InvestigationTask(
+                query_id="caption-search",
+                goal="Locate the raised object.",
+                inspection_mode="search_caption",
+                caption_queries=("person raises a cup",),
+            ),
+        ),
+    )
+    reasoner = ScriptedReasoner(
+        (
+            search,
+            ReasonerDecision(action="update_workspace"),
+                ReasonerDecision(
+                    action="answer",
+                    answer="A. A book",
+                    supporting_claim_ids=("claim_missing",),
+                ),
+            )
+        )
+    investigator = CaptionThenVisualInvestigator()
+
+    result = VirtualVideoMultiRoundDriver(
+        reasoner=reasoner,
+        investigator=investigator,
+        max_rounds=1,
+        max_investigations=4,
+        answer_policy="benchmark_best_effort",
+    ).run(_workspace(tmp_path))
+
+    assert result.answer_present
+    assert [task.inspection_mode for task in investigator.tasks] == ["search_caption"]
+    assert not any(row.get("decision_source") == "reasoner_caption_followup" for row in result.trace)

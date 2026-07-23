@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from math import ceil
+import os
 from pathlib import Path
 import subprocess
 import threading
@@ -12,7 +13,18 @@ from vcah.types import Frame
 
 
 IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".webp"})
-_FFMPEG_SEMAPHORE = threading.BoundedSemaphore(4)
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+_FFMPEG_SEMAPHORE = threading.BoundedSemaphore(
+    _positive_env_int("VCAH_MAX_CONCURRENT_FFMPEG", 8)
+)
 _FFMPEG_FRAME_TIMEOUT_SEC = 30.0
 _FFMPEG_FRAME_ATTEMPTS = 2
 

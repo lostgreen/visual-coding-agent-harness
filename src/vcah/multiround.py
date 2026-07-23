@@ -6,6 +6,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from vcah.investigator import InvestigationReport, ObservationAttempt, VirtualVideoInvestigator
+from vcah.mmlifelong_metrics import export_supporting_intervals
 from vcah.memory import EvidenceStore
 from vcah.types import EvidenceRecord, to_jsonable
 from vcah.virtual_index import build_workspace_overview
@@ -20,7 +21,7 @@ from vcah.workspace import (
 )
 
 
-_INSPECTION_MODES = {"window", "search_asr", "arbitrate_observation"}
+_INSPECTION_MODES = {"window", "search_asr", "search_caption", "arbitrate_observation"}
 RUN_ARTIFACT_NAMES = (
     "evidence.jsonl",
     "observation_log.jsonl",
@@ -40,8 +41,13 @@ class InvestigationTask:
     expected_evidence: str = ""
     inspection_mode: str = "window"
     search_terms: tuple[str, ...] = ()
+    caption_queries: tuple[str, ...] = ()
+    top_k: int = 12
+    index_mode: str = "lexical"
+    expand_neighbors: int = 0
     sampling_floor_fps: float | None = None
     arbitration_attempt_id: str = ""
+    force_reinspect: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "query_id", str(self.query_id or "").strip())
@@ -60,10 +66,22 @@ class InvestigationTask:
         )
         object.__setattr__(
             self,
+            "caption_queries",
+            tuple(dict.fromkeys(str(item).strip() for item in self.caption_queries if str(item).strip()))[:5],
+        )
+        object.__setattr__(self, "top_k", min(50, max(1, int(self.top_k))))
+        index_mode = str(self.index_mode or "lexical").strip().casefold()
+        if index_mode not in {"lexical", "dense", "hybrid"}:
+            raise ValueError(f"unsupported caption index_mode: {index_mode}")
+        object.__setattr__(self, "index_mode", index_mode)
+        object.__setattr__(self, "expand_neighbors", min(3, max(0, int(self.expand_neighbors))))
+        object.__setattr__(
+            self,
             "sampling_floor_fps",
             min(2.0, max(0.5, float(self.sampling_floor_fps or 0.5))),
         )
         object.__setattr__(self, "arbitration_attempt_id", str(self.arbitration_attempt_id or "").strip())
+        object.__setattr__(self, "force_reinspect", bool(self.force_reinspect))
 
 
 @dataclass(frozen=True)
@@ -121,6 +139,11 @@ class MultiRoundResult:
     evidence: tuple[EvidenceRecord, ...]
     reports: tuple[InvestigationReport, ...]
     trace: tuple[Mapping[str, Any], ...] = ()
+    answer_policy: str = "strict"
+    answer_present: bool = False
+    supporting_claim_ids: tuple[str, ...] = ()
+    supporting_intervals: tuple[tuple[float, float], ...] = ()
+    residual_uncertainty: str = ""
 
 
 class VirtualVideoMultiRoundDriver:
@@ -132,6 +155,7 @@ class VirtualVideoMultiRoundDriver:
         max_rounds: int = 4,
         max_investigations: int = 20,
         max_tasks_per_round: int = 4,
+        answer_policy: str = "strict",
     ) -> None:
         if reasoner is None:
             raise ValueError("VirtualVideoMultiRoundDriver requires a Reasoner")
@@ -142,6 +166,10 @@ class VirtualVideoMultiRoundDriver:
         self.max_rounds = max(1, int(max_rounds))
         self.max_investigations = max(1, int(max_investigations))
         self.max_tasks_per_round = max(1, int(max_tasks_per_round))
+        policy = str(answer_policy or "strict").strip().casefold()
+        if policy not in {"strict", "benchmark_best_effort"}:
+            raise ValueError(f"unsupported answer_policy: {policy}")
+        self.answer_policy = policy
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         existing = tuple(name for name in RUN_ARTIFACT_NAMES if (workspace.root_dir / name).exists())
@@ -165,32 +193,52 @@ class VirtualVideoMultiRoundDriver:
         requested_observations: tuple[Mapping[str, Any], ...] = ()
         feedback: dict[str, Any] = {}
         final_answer: ReasonerDecision | None = None
-        forced_calls = 0
+        latest_answer_candidate: ReasonerDecision | None = None
+        forced_decision_calls = 0
 
         for round_id in range(1, self.max_rounds + 3):
             rounds_run = round_id
             remaining = max(0, self.max_investigations - completed_investigations)
+            runtime_status = (
+                dict(investigator.mechanical_status())
+                if callable(getattr(investigator, "mechanical_status", None))
+                else {}
+            )
+            status = _mechanical_status(
+                workspace,
+                document,
+                observation_log,
+                runtime_status=runtime_status,
+            )
             force_finalize = round_id > self.max_rounds or remaining <= 0
             if force_finalize:
-                forced_calls += 1
-            final_retry_available = force_finalize and forced_calls < 2
-            status = _mechanical_status(workspace, document, observation_log)
-            decision = _decision(
-                self.reasoner.decide(
-                    question=workspace.case.question,
-                    options=dict(workspace.case.options),
-                    workspace_overview=overview,
-                    working_document_view=render_working_view(
-                        document,
-                        observation_log,
-                        requested_observations=requested_observations,
-                        feedback=feedback,
-                    ),
-                    mechanical_status=status,
-                    remaining_budget=remaining,
-                    force_finalize=force_finalize,
-                    final_attempt=forced_calls if force_finalize else 0,
-                )
+                forced_decision_calls += 1
+            final_retry_available = force_finalize and forced_decision_calls < 2
+            raw_decision = _decision(self.reasoner.decide(
+                question=workspace.case.question,
+                options=dict(workspace.case.options),
+                workspace_overview=overview,
+                working_document_view=render_working_view(
+                    document,
+                    observation_log,
+                    requested_observations=requested_observations,
+                    feedback=feedback,
+                ),
+                mechanical_status=status,
+                remaining_budget=remaining,
+                force_finalize=force_finalize,
+                final_attempt=forced_decision_calls if force_finalize else 0,
+                answer_policy=self.answer_policy,
+            ))
+
+            decision = raw_decision
+            if decision.action == "answer" and decision.answer:
+                latest_answer_candidate = decision
+            answer_workspace_commit = bool(
+                force_finalize
+                and decision.action == "answer"
+                and decision.answer
+                and decision.workspace_ops
             )
 
             apply_result = document.apply_ops(
@@ -219,7 +267,8 @@ class VirtualVideoMultiRoundDriver:
                     "supporting_claim_ids": list(decision.supporting_claim_ids),
                     "remaining_budget": remaining,
                     "force_finalize": force_finalize,
-                    "final_attempt": forced_calls if force_finalize else 0,
+                    "final_attempt": forced_decision_calls if force_finalize else 0,
+                    "answer_workspace_commit": answer_workspace_commit,
                 }
             )
 
@@ -239,7 +288,13 @@ class VirtualVideoMultiRoundDriver:
                     decision,
                     citations=_answer_citations(decision, document, evidence_store.records),
                 )
-                validation = _validate_answer(candidate, document, observation_log.attempt_ids, workspace.case.options)
+                validation = _validate_answer(
+                    candidate,
+                    document,
+                    observation_log.attempt_ids,
+                    workspace.case.options,
+                    supporting_observation_ids=_supporting_observation_ids(observation_log),
+                )
                 trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
                 if validation.passed:
                     final_answer = candidate
@@ -281,9 +336,10 @@ class VirtualVideoMultiRoundDriver:
                     continue
                 break
 
+            requested_tasks = tuple(task for task in decision.tasks if _task_is_executable(task))
             tasks = _resolve_tasks(
                 workspace,
-                tuple(task for task in decision.tasks if _task_is_executable(task)),
+                requested_tasks,
                 limit=min(self.max_tasks_per_round, remaining),
             )
             if decision.action != "investigate" or not tasks:
@@ -329,25 +385,46 @@ class VirtualVideoMultiRoundDriver:
                     "requested_tasks": len(tasks),
                     "completed_tasks": completed,
                     "attempt_ids": [str(row["attempt_id"]) for row in new_rows],
+                    "outcomes": list(_outcome_digest(batch)),
                 }
             )
 
-        selected = final_answer or ReasonerDecision(action="answer")
+        selected = final_answer or (
+            latest_answer_candidate
+            if self.answer_policy == "benchmark_best_effort" and latest_answer_candidate is not None
+            else ReasonerDecision(action="answer")
+        )
         selected_option = _letter(selected.answer) or _option_letter_from_answer(
             selected.answer,
             workspace.case.options,
         )
-        if selected_option:
+        schema_answer_present = bool(selected.answer) if not workspace.case.options else bool(selected_option)
+        candidate_present = bool(selected.answer)
+        preserve_candidate = self.answer_policy == "benchmark_best_effort" and candidate_present
+        validation = _validate_answer(
+            selected,
+            document,
+            observation_log.attempt_ids,
+            workspace.case.options,
+            supporting_observation_ids=_supporting_observation_ids(observation_log),
+        )
+        if schema_answer_present or preserve_candidate:
             answer = selected.answer
-            validation = _validate_answer(selected, document, observation_log.attempt_ids, workspace.case.options)
+            returned_answer_present = True
             citations = _answer_citations(selected, document, evidence_store.records)
             reference_valid = validation.passed
             reference_reason = validation.reason
         else:
             answer = "No valid answer was returned."
+            returned_answer_present = False
             citations = ()
             reference_valid = False
             reference_reason = "answer_missing" if not selected.answer else "invalid_option_answer"
+        supporting_intervals = export_supporting_intervals(
+            document,
+            selected.supporting_claim_ids,
+            observation_log.rows,
+        )
 
         trace.append(
             {
@@ -361,6 +438,9 @@ class VirtualVideoMultiRoundDriver:
                 "residual_uncertainty": selected.residual_uncertainty,
                 "answer_owner": "reasoner",
                 "framework_answer_mutation": False,
+                "answer_policy": self.answer_policy,
+                "answer_present": returned_answer_present,
+                "supporting_intervals": [list(item) for item in supporting_intervals],
                 "working_document_path": str(document_path),
                 "observation_log_path": str(observation_log.path),
                 "workspace_history_path": str(history_path),
@@ -379,6 +459,11 @@ class VirtualVideoMultiRoundDriver:
             evidence=tuple(evidence_store.records),
             reports=tuple(reports),
             trace=tuple(trace),
+            answer_policy=self.answer_policy,
+            answer_present=returned_answer_present,
+            supporting_claim_ids=selected.supporting_claim_ids,
+            supporting_intervals=supporting_intervals,
+            residual_uncertainty=selected.residual_uncertainty,
         )
         _write_run_summary(workspace, result)
         return result
@@ -388,10 +473,13 @@ def _mechanical_status(
     workspace: VirtualVideoWorkspace,
     document: WorkingDocument,
     observations: ObservationLog,
+    *,
+    runtime_status: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     errors = document.validate(observation_ids=observations.attempt_ids)
     coverage = _source_coverage(workspace, observations)
     known_attempts = set(observations.attempt_ids)
+    supporting_attempts = set(_supporting_observation_ids(observations))
     active_claims = tuple(
         claim
         for claim in document.claims.values()
@@ -404,13 +492,121 @@ def _mechanical_status(
         and claim.status == "active"
         and claim.confidence != "low"
         and bool(claim.cites)
-        and set(claim.cites).issubset(known_attempts)
+        and set(claim.cites).issubset(supporting_attempts)
     )
     resolved_attempts = {
         cite
         for claim in supported_observation_claims
         for cite in claim.cites
     }
+    source_rows = observations.catalog_source_rows()
+    modality_by_attempt = {
+        str(row.get("attempt_id", "")): str(row.get("modality", "") or "").casefold()
+        for row in source_rows
+    }
+    asr_search_count = sum(row.get("sampling_config", {}).get("mode") == "search_asr" for row in source_rows)
+    caption_search_count = sum(
+        row.get("sampling_config", {}).get("mode") == "search_caption" for row in source_rows
+    )
+    visual_window_attempt_count = sum(
+        str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
+        for row in source_rows
+    )
+    visual_ranges = tuple(
+        interval
+        for row in source_rows
+        if str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
+        for raw in tuple(row.get("inspected_ranges", ()) or ())
+        if (interval := _time_range(raw)) is not None
+    )
+    candidates_by_key: dict[tuple[str, float, float], dict[str, Any]] = {}
+    for row in source_rows:
+        config = row.get("sampling_config")
+        if not isinstance(config, Mapping) or config.get("mode") != "search_caption":
+            continue
+        for hit in tuple(config.get("hits", ()) or ()):
+            if not isinstance(hit, Mapping):
+                continue
+            interval = _time_range(hit.get("range"))
+            if interval is None:
+                continue
+            candidate = {
+                "attempt_id": str(row.get("attempt_id", "")),
+                "passage_id": str(hit.get("passage_id", "")),
+                "time_range": list(interval),
+                "score": float(hit.get("score", 0.0) or 0.0),
+            }
+            key = (candidate["passage_id"], interval[0], interval[1])
+            existing = candidates_by_key.get(key)
+            if existing is None or candidate["score"] > existing["score"]:
+                candidates_by_key[key] = candidate
+    caption_candidates = tuple(
+        sorted(
+            candidates_by_key.values(),
+            key=lambda candidate: (-float(candidate["score"]), float(candidate["time_range"][0])),
+        )
+    )
+    pending_caption_candidates = tuple(
+        candidate
+        for candidate in caption_candidates
+        if not any(
+            _ranges_overlap(tuple(candidate["time_range"]), interval)
+            for interval in visual_ranges
+        )
+    )
+    caption_cited_claim_count = sum(
+        any(modality_by_attempt.get(cite) == "caption_search" for cite in claim.cites)
+        for claim in active_claims
+    )
+    visual_confirmed_claim_count = sum(
+        any(modality_by_attempt.get(cite) in {"visual", "ocr"} for cite in claim.cites)
+        for claim in active_claims
+    )
+    runtime = dict(runtime_status or {})
+    hints: list[str] = []
+    empty_streak = int(runtime.get("empty_search_streak", 0) or 0)
+    zero_queries = tuple(runtime.get("previous_zero_hit_queries", ()) or ())
+    if empty_streak >= 2 and zero_queries:
+        last_modality = str(zero_queries[-1].get("modality", "") or "")
+        if last_modality == "asr":
+            hints.append("ASR has returned no hits twice; consider caption search or visual inspection.")
+        elif last_modality == "caption":
+            hints.append(
+                "Caption retrieval may have missed a brief event; consider broader synonyms, a wider time filter, "
+                "or hierarchical visual inspection."
+            )
+    raw_question_tags = workspace.case.metadata.get("question_type_tags", ()) or ()
+    if isinstance(raw_question_tags, str):
+        raw_question_tags = (raw_question_tags,)
+    question_tags = {
+        str(value).strip().casefold()
+        for value in (
+            workspace.case.question_type,
+            *tuple(raw_question_tags),
+        )
+        if str(value or "").strip()
+    }
+    requires_visual = bool(
+        question_tags
+        & {
+            "visual",
+            "color",
+            "clothing",
+            "appearance",
+            "object_appearance",
+            "identity",
+            "event_order",
+            "event tracking",
+            "event_tracking",
+        }
+    ) or bool(workspace.case.metadata.get("requires_visual_confirmation", False))
+    if requires_visual and visual_window_attempt_count == 0:
+        hints.append("Modality debt: this annotated question has no visual confirmation yet.")
+    if pending_caption_candidates:
+        hints.append(
+            "Caption hits are locator candidates only. Inspect a top pending caption time_range with inspection_mode=window "
+            "before using it as answer support."
+        )
     return {
         "schema_version": "MechanicalCompletionStatusV1",
         "working_document_revision": document.revision,
@@ -423,6 +619,28 @@ def _mechanical_status(
         "active_claim_limit": document.active_claim_limit,
         "observation_attempt_count": len(observations.attempt_ids),
         "observation_interpretation_count": len(observations.rows),
+        "asr_search_count": asr_search_count,
+        "caption_search_count": caption_search_count,
+        "visual_window_attempt_count": visual_window_attempt_count,
+        "caption_cited_claim_count": caption_cited_claim_count,
+        "visual_confirmed_claim_count": visual_confirmed_claim_count,
+        "pending_caption_candidate_count": len(pending_caption_candidates),
+        "pending_caption_candidates": list(pending_caption_candidates[:8]),
+        "entity_count": len(document.entities),
+        "candidate_interval_count": sum(note.role == "candidate" for note in document.timeline),
+        "supporting_interval_count": sum(note.role == "supporting" for note in document.timeline),
+        "negative_interval_count": sum(note.role == "negative" for note in document.timeline),
+        "confirmed_occurrence_count": sum(
+            note.role == "supporting" and str(note.metadata.get("status", "confirmed")) == "confirmed"
+            for note in document.timeline
+            if note.metadata.get("event_key") or note.label == "counted_event"
+        ),
+        "candidate_occurrence_count": sum(
+            note.role == "candidate"
+            for note in document.timeline
+            if note.metadata.get("event_key") or note.label == "counted_event"
+        ),
+        "prompt_hints": hints,
         "source_coverage": coverage,
         "missing_segment_ids": [
             segment_id
@@ -430,6 +648,7 @@ def _mechanical_status(
             for segment_id in source["missing_segment_ids"]
         ],
         "answer_owner": "reasoner",
+        **runtime,
     }
 
 
@@ -500,7 +719,7 @@ def _resolve_tasks(
     global_aliases = {"all", "full", "full_video", "global", "workspace"}
     groups: list[tuple[InvestigationTask, ...]] = []
     for task in tasks:
-        if task.inspection_mode in {"search_asr", "arbitrate_observation"}:
+        if task.inspection_mode in {"search_asr", "search_caption", "arbitrate_observation"}:
             groups.append((task,))
             continue
         if task.time_range is not None:
@@ -552,11 +771,17 @@ def _resolve_tasks(
     return tuple(resolved)
 
 
+def _ranges_overlap(left: tuple[float, float], right: tuple[float, float]) -> bool:
+    return min(left[1], right[1]) > max(left[0], right[0])
+
+
 def _task_is_executable(task: InvestigationTask) -> bool:
     if not task.query_id or not task.goal:
         return False
     if task.inspection_mode == "search_asr":
         return bool(task.search_terms)
+    if task.inspection_mode == "search_caption":
+        return bool(task.caption_queries)
     if task.inspection_mode == "arbitrate_observation":
         return bool(task.arbitration_attempt_id)
     return bool(task.segment_id or task.time_range)
@@ -567,12 +792,23 @@ def _validate_answer(
     document: WorkingDocument,
     observation_ids: Sequence[str],
     options: Mapping[str, str],
+    *,
+    supporting_observation_ids: Sequence[str] | None = None,
 ) -> AnswerValidation:
     validation = document.validate_answer(
         decision.supporting_claim_ids,
         observation_ids=observation_ids,
+        supporting_observation_ids=supporting_observation_ids,
     )
-    if not (_letter(decision.answer) or _option_letter_from_answer(decision.answer, options)):
+    if not decision.answer:
+        return AnswerValidation(
+            False,
+            "answer_missing",
+            validation.supporting_claim_ids,
+            validation.cited_attempt_ids,
+            ("answer_is_required",),
+        )
+    if options and not (_letter(decision.answer) or _option_letter_from_answer(decision.answer, options)):
         reason = "answer_missing" if not decision.answer else "invalid_option_answer"
         return AnswerValidation(
             False,
@@ -583,9 +819,19 @@ def _validate_answer(
         )
     if not validation.passed:
         return validation
-    if _material_uncertainty(decision.residual_uncertainty):
+    if options and _material_uncertainty(decision.residual_uncertainty):
         return _answer_rejected(validation, "answer_support_uncertain")
     return validation
+
+
+def _supporting_observation_ids(observations: ObservationLog) -> tuple[str, ...]:
+    return tuple(
+        str(row.get("attempt_id", ""))
+        for row in observations.catalog_source_rows()
+        if str(row.get("evidence_role", "unclassified") or "unclassified").casefold()
+        not in {"candidate", "negative"}
+        and str(row.get("modality", "") or "").casefold() != "caption_search"
+    )
 
 
 def _answer_rejected(validation: AnswerValidation, reason: str) -> AnswerValidation:
@@ -691,8 +937,13 @@ def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
         "segment_id": task.segment_id,
         "time_range": list(task.time_range) if task.time_range else [],
         "inspection_mode": task.inspection_mode,
+        "caption_queries": list(task.caption_queries),
+        "top_k": task.top_k,
+        "index_mode": task.index_mode,
+        "expand_neighbors": task.expand_neighbors,
         "sampling_floor_fps": task.sampling_floor_fps,
         "arbitration_attempt_id": task.arbitration_attempt_id,
+        "force_reinspect": task.force_reinspect,
     }
 
 
@@ -722,8 +973,13 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         expected_evidence=str(value.get("expected_evidence", "") or ""),
         inspection_mode=str(value.get("inspection_mode", "window") or "window"),
         search_terms=tuple(value.get("search_terms", ()) or ()),
+        caption_queries=tuple(value.get("caption_queries", value.get("queries", ())) or ()),
+        top_k=int(value.get("top_k", 12) or 12),
+        index_mode=str(value.get("index_mode", "lexical") or "lexical"),
+        expand_neighbors=int(value.get("expand_neighbors", 0) or 0),
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
+        force_reinspect=bool(value.get("force_reinspect", False)),
     )
 
 
@@ -806,11 +1062,16 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
     payload = {
         "case_id": result.case_id,
         "answer": result.answer,
+        "answer_present": result.answer_present,
+        "answer_policy": result.answer_policy,
         "selected_option": result.selected_option,
         "citations": list(result.citations),
         "correct": result.correct,
         "reference_valid": result.reference_valid,
         "reference_reason": result.reference_reason,
+        "supporting_claim_ids": list(result.supporting_claim_ids),
+        "supporting_intervals": [list(item) for item in result.supporting_intervals],
+        "residual_uncertainty": result.residual_uncertainty,
         "rounds": result.rounds,
         "investigation_count": result.investigation_count,
         "evidence": [

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import html
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any, Callable, Mapping, Sequence, TypeVar
@@ -29,6 +30,19 @@ class VirtualVideoSegment:
     virtual_start_sec: float
     virtual_end_sec: float
     role: str = "content"
+    wall_clock_begin: str | None = None
+    wall_clock_end: str | None = None
+    day_index: int | None = None
+    time_of_day_begin: str | None = None
+    time_of_day_end: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source_start_sec", float(self.source_start_sec))
+        object.__setattr__(self, "source_end_sec", float(self.source_end_sec))
+        object.__setattr__(self, "virtual_start_sec", float(self.virtual_start_sec))
+        object.__setattr__(self, "virtual_end_sec", float(self.virtual_end_sec))
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
     @property
     def duration_sec(self) -> float:
@@ -60,17 +74,36 @@ class VirtualVideoManifest:
 class VirtualVideoCase:
     case_id: str
     question: str
-    options: Mapping[str, str]
-    gold: str
-    target_segment_id: str
-    target_virtual_interval: tuple[float, float]
+    options: Mapping[str, str] = field(default_factory=dict)
+    gold: str = ""
+    target_segment_id: str = ""
+    target_virtual_interval: tuple[float, float] = (0.0, 0.0)
+    gold_clue_intervals: tuple[tuple[float, float], ...] = ()
+    subset: str | None = None
+    split: str | None = None
+    question_type: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "options", {str(k): str(v) for k, v in dict(self.options).items()})
+        object.__setattr__(self, "gold", str(self.gold))
         start, end = self.target_virtual_interval
-        object.__setattr__(self, "target_virtual_interval", (float(start), float(end)))
+        target_interval = (float(start), float(end))
+        clue_intervals = tuple(
+            (float(clue_start), float(clue_end))
+            for clue_start, clue_end in self.gold_clue_intervals
+        )
+        if not clue_intervals and target_interval[1] > target_interval[0]:
+            clue_intervals = (target_interval,)
+        elif clue_intervals and target_interval[1] <= target_interval[0]:
+            target_interval = clue_intervals[0]
+        object.__setattr__(self, "target_virtual_interval", target_interval)
+        object.__setattr__(self, "gold_clue_intervals", clue_intervals)
         object.__setattr__(self, "metadata", dict(self.metadata))
+
+    @property
+    def gold_answer(self) -> str:
+        return self.gold
 
 
 @dataclass(frozen=True)
@@ -107,6 +140,15 @@ class VirtualVideoWorkspace:
     frame_manifest: Path
     asr_virtual_cues: Path
     cold_index_dir: Path
+    asset_root: Path | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "root_dir", Path(self.root_dir))
+        object.__setattr__(
+            self,
+            "asset_root",
+            Path(self.asset_root) if self.asset_root is not None else Path(self.root_dir),
+        )
 
     @classmethod
     def create(
@@ -115,17 +157,21 @@ class VirtualVideoWorkspace:
         *,
         manifest: VirtualVideoManifest,
         case: VirtualVideoCase,
+        asset_root: Path | None = None,
     ) -> "VirtualVideoWorkspace":
         root = Path(root_dir)
+        assets = Path(asset_root) if asset_root is not None else root
         root.mkdir(parents=True, exist_ok=True)
+        assets.mkdir(parents=True, exist_ok=True)
         workspace = cls(
             workspace_id=manifest.workspace_id,
             root_dir=root,
+            asset_root=assets,
             manifest=manifest,
             case=case,
-            frame_manifest=root / "frame_manifest.jsonl",
-            asr_virtual_cues=root / "asr_virtual_cues.json",
-            cold_index_dir=root / "cold_index",
+            frame_manifest=assets / "frame_manifest.jsonl",
+            asr_virtual_cues=assets / "asr_virtual_cues.json",
+            cold_index_dir=assets / "cold_index",
         )
         workspace.save()
         if not workspace.frame_manifest.exists():
@@ -137,8 +183,15 @@ class VirtualVideoWorkspace:
     @classmethod
     def load(cls, root_dir: Path) -> "VirtualVideoWorkspace":
         root = Path(root_dir)
-        manifest_payload = json.loads((root / "virtual_timeline.json").read_text(encoding="utf-8"))
         case_payload = json.loads((root / "case.json").read_text(encoding="utf-8"))
+        asset_ref = str(case_payload.get("asset_ref", "")).strip()
+        if asset_ref:
+            candidate = Path(asset_ref)
+            asset_root = candidate if candidate.is_absolute() else root / candidate
+            asset_root = asset_root.resolve()
+        else:
+            asset_root = root
+        manifest_payload = json.loads((asset_root / "virtual_timeline.json").read_text(encoding="utf-8"))
         manifest = VirtualVideoManifest(
             workspace_id=str(manifest_payload["workspace_id"]),
             duration_sec=float(manifest_payload.get("duration_sec", 0.0)),
@@ -148,29 +201,42 @@ class VirtualVideoWorkspace:
             case_id=str(case_payload["case_id"]),
             question=str(case_payload["question"]),
             options=dict(case_payload.get("options", {})),
-            gold=str(case_payload.get("gold", "")),
+            gold=str(case_payload.get("gold", case_payload.get("gold_answer", ""))),
             target_segment_id=str(case_payload.get("target_segment_id", "")),
             target_virtual_interval=tuple(case_payload.get("target_virtual_interval", (0.0, 0.0))),  # type: ignore[arg-type]
+            gold_clue_intervals=tuple(
+                tuple(interval) for interval in case_payload.get("gold_clue_intervals", ())
+            ),  # type: ignore[arg-type]
+            subset=str(case_payload["subset"]) if case_payload.get("subset") is not None else None,
+            split=str(case_payload["split"]) if case_payload.get("split") is not None else None,
+            question_type=(
+                str(case_payload["question_type"]) if case_payload.get("question_type") is not None else None
+            ),
             metadata=dict(case_payload.get("metadata", {})),
         )
         return cls(
             workspace_id=manifest.workspace_id,
             root_dir=root,
+            asset_root=asset_root,
             manifest=manifest,
             case=case,
-            frame_manifest=root / "frame_manifest.jsonl",
-            asr_virtual_cues=root / "asr_virtual_cues.json",
-            cold_index_dir=root / "cold_index",
+            frame_manifest=asset_root / "frame_manifest.jsonl",
+            asr_virtual_cues=asset_root / "asr_virtual_cues.json",
+            cold_index_dir=asset_root / "cold_index",
         )
 
     def save(self) -> None:
         self.root_dir.mkdir(parents=True, exist_ok=True)
-        (self.root_dir / "virtual_timeline.json").write_text(
+        self.asset_root.mkdir(parents=True, exist_ok=True)
+        (self.asset_root / "virtual_timeline.json").write_text(
             json.dumps(_manifest_payload(self.manifest), ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
+        case_payload = _case_payload(self.case)
+        if self.asset_root.resolve() != self.root_dir.resolve():
+            case_payload["asset_ref"] = Path(os.path.relpath(self.asset_root, start=self.root_dir)).as_posix()
         (self.root_dir / "case.json").write_text(
-            json.dumps(_case_payload(self.case), ensure_ascii=False, indent=2, sort_keys=True),
+            json.dumps(case_payload, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
 
@@ -286,7 +352,7 @@ def materialize_lowfps_frame_cache(
     step = 1.0 / max(0.001, float(fps))
     rows: list[VirtualFrameRef] = []
     failures: list[dict[str, Any]] = []
-    failures_path = workspace.root_dir / "frame_sampling_failures.jsonl"
+    failures_path = workspace.asset_root / "frame_sampling_failures.jsonl"
     failures_path.unlink(missing_ok=True)
     frame_index = 1
     for segment in workspace.manifest.segments:
@@ -298,7 +364,7 @@ def materialize_lowfps_frame_cache(
             if virtual_time >= float(segment.virtual_end_sec):
                 virtual_time = round(float(segment.virtual_end_sec) - 0.001, 3)
             source_time = round(float(segment.source_start_sec) + (virtual_time - float(segment.virtual_start_sec)), 3)
-            frame_dir = workspace.root_dir / "frames" / "low" / segment.segment_id / f"lo_{frame_index:06d}"
+            frame_dir = workspace.asset_root / "frames" / "low" / segment.segment_id / f"lo_{frame_index:06d}"
             try:
                 frame = tuple(sampler(segment.source_path, source_time, source_time, 1, frame_dir))[0]
             except RuntimeError as exc:
@@ -620,8 +686,13 @@ def _case_payload(case: VirtualVideoCase) -> dict[str, Any]:
         "question": case.question,
         "options": dict(case.options),
         "gold": case.gold,
+        "gold_answer": case.gold_answer,
         "target_segment_id": case.target_segment_id,
         "target_virtual_interval": list(case.target_virtual_interval),
+        "gold_clue_intervals": [list(interval) for interval in case.gold_clue_intervals],
+        "subset": case.subset,
+        "split": case.split,
+        "question_type": case.question_type,
         "metadata": dict(case.metadata),
     }
 

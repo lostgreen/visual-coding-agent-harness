@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 import json
 from typing import Any, Mapping, Sequence
 
+from vcah.caption_hybrid_search import CaptionHybridSearch
+from vcah.caption_lexical_index import CaptionLexicalIndex, render_caption_hits
+from vcah.caption_semantic_index import CaptionSemanticIndex
+from vcah.embedding_adapter import TextEmbeddingAdapter
 from vcah.types import EvidenceRecord
 from vcah.virtual_index import load_virtual_beats
 from vcah.virtual_video import (
@@ -33,6 +37,7 @@ class ObservationAttempt:
     execution_status: str = "completed"
     frame_refs: tuple[str, ...] = ()
     modality: str = "visual"
+    evidence_role: str = "unclassified"
     prompt_digest: str = ""
     raw_output: str = ""
     round_id: str = ""
@@ -71,6 +76,10 @@ class ObservationAttempt:
         )
         object.__setattr__(self, "frame_refs", tuple(str(item) for item in self.frame_refs if str(item).strip()))
         object.__setattr__(self, "modality", str(self.modality or "visual").strip().casefold())
+        evidence_role = str(self.evidence_role or "unclassified").strip().casefold()
+        if evidence_role not in {"unclassified", "candidate", "supporting", "negative"}:
+            raise ValueError(f"invalid evidence_role: {evidence_role}")
+        object.__setattr__(self, "evidence_role", evidence_role)
         object.__setattr__(self, "prompt_digest", str(self.prompt_digest or "").strip())
         object.__setattr__(self, "raw_output", str(self.raw_output or ""))
         object.__setattr__(self, "round_id", str(self.round_id or "").strip())
@@ -118,16 +127,24 @@ class InvestigationReport:
 class VirtualVideoInvestigator:
     """Mechanical virtual-video tools shared by observation-only Investigators."""
 
-    tool_names = ("open_segment", "inspect_window", "search_asr")
+    tool_names = ("open_segment", "inspect_window", "search_asr", "search_caption")
 
     def __init__(
         self,
         workspace: VirtualVideoWorkspace,
         *,
         sampler: FrameSampler | None = None,
+        caption_index: CaptionLexicalIndex | None = None,
+        caption_embedding_adapter: TextEmbeddingAdapter | None = None,
+        caption_config_digest: str | None = None,
     ) -> None:
         self.workspace = workspace
         self.sampler = sampler
+        self._caption_indexes: dict[str, Any] = {}
+        if caption_index is not None:
+            self._caption_indexes["lexical"] = caption_index
+        self._caption_embedding_adapter = caption_embedding_adapter
+        self._caption_config_digest = str(caption_config_digest or "").strip() or None
         self.ledger_path = self.workspace.root_dir / "exploration_ledger.jsonl"
         self._visit_count = 0
 
@@ -290,6 +307,75 @@ class VirtualVideoInvestigator:
             "clusters": candidates[: max(1, int(max_clusters))],
         }
 
+    def search_caption(
+        self,
+        queries: Sequence[str],
+        *,
+        time_range: tuple[float, float] | None = None,
+        top_k: int = 12,
+        expand_neighbors: int = 0,
+        index_mode: str = "lexical",
+    ) -> Mapping[str, Any]:
+        mode = str(index_mode or "lexical").strip().casefold()
+        if mode not in {"lexical", "dense", "hybrid"}:
+            raise ValueError(f"unsupported caption index mode: {mode}")
+        index = self._caption_indexes.get(mode)
+        if index is None:
+            index = self._load_caption_index(mode)
+            self._caption_indexes[mode] = index
+        index.save_manifest(self.workspace.asset_root)
+        hits = index.search(
+            queries,
+            top_k=top_k,
+            time_range=time_range,
+            expand_neighbors=expand_neighbors,
+        )
+        fingerprint = index.query_fingerprint(
+            queries,
+            top_k=top_k,
+            time_range=time_range,
+            expand_neighbors=expand_neighbors,
+        )
+        return {
+            "queries": [str(query) for query in queries],
+            "time_range": list(time_range) if time_range else None,
+            "top_k": int(top_k),
+            "expand_neighbors": int(expand_neighbors),
+            "index_mode": mode,
+            "index_digest": index.index_digest,
+            "config_digest": index.config_digest,
+            "query_fingerprint": fingerprint,
+            "hits": [asdict(hit) for hit in hits],
+            "rendered": render_caption_hits(hits),
+        }
+
+    def _load_caption_index(self, mode: str) -> Any:
+        lexical = self._caption_indexes.get("lexical")
+        if lexical is None:
+            lexical = CaptionLexicalIndex.from_asset_root(
+                self.workspace.asset_root,
+                config_digest=self._caption_config_digest,
+            )
+            self._caption_indexes["lexical"] = lexical
+        if mode == "lexical":
+            return lexical
+        adapter = self._caption_embedding_adapter
+        if adapter is None:
+            raise RuntimeError(
+                "caption dense/hybrid search requires a real TextEmbeddingAdapter"
+            )
+        dense = self._caption_indexes.get("dense")
+        if dense is None:
+            dense = CaptionSemanticIndex.from_asset_root(
+                self.workspace.asset_root,
+                adapter=adapter,
+                config_digest=lexical.config_digest,
+            )
+            self._caption_indexes["dense"] = dense
+        if mode == "dense":
+            return dense
+        return CaptionHybridSearch(lexical, dense)
+
     def _investigate_task(self, task: Any) -> InvestigationReport:
         raise NotImplementedError("Use an observation-only Investigator implementation")
 
@@ -319,7 +405,7 @@ def _beats_for_segment(
     workspace: VirtualVideoWorkspace,
     segment_id: str,
 ) -> tuple[Mapping[str, Any], ...]:
-    path = workspace.root_dir / "beat_index.json"
+    path = workspace.asset_root / "beat_index.json"
     if not path.exists():
         return ()
     return tuple(

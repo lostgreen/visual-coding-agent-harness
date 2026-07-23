@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>__PAGE_TITLE__</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f3f5f6;
+      --surface: #ffffff;
+      --surface-2: #e9edef;
+      --ink: #171a1d;
+      --muted: #5d6770;
+      --line: #d3d9dd;
+      --caption: #197c68;
+      --visual: #d9573d;
+      --evidence: #a66f00;
+      --reasoner: #52606c;
+      --gold: #b52d3a;
+      --media-bg: #101214;
+      --focus: #246bce;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121516;
+        --surface: #1b1f21;
+        --surface-2: #252b2e;
+        --ink: #f3f5f5;
+        --muted: #a9b2b8;
+        --line: #394146;
+        --caption: #63c8ae;
+        --visual: #f0836c;
+        --evidence: #e5b858;
+        --reasoner: #aab4bb;
+        --gold: #ed7580;
+        --focus: #7aaff7;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    button, input { font: inherit; }
+    button:focus-visible, input:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 50%, transparent); outline-offset: 2px; }
+    .topbar {
+      min-height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 28px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-mark { width: 28px; height: 28px; color: var(--visual); flex: 0 0 auto; }
+    .brand-name { font-weight: 500; white-space: nowrap; }
+    .case-id { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .model-id { color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .question-band {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+      gap: 28px;
+      padding: 22px 28px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow { color: var(--muted); font-size: 12px; text-transform: uppercase; margin-bottom: 7px; }
+    h1 { font-size: 20px; line-height: 1.35; font-weight: 500; margin: 0; }
+    .answer-block { border-left: 3px solid var(--caption); padding-left: 16px; min-width: 0; }
+    .answer-text { line-height: 1.45; overflow-wrap: anywhere; }
+    .answer-meta { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 9px; color: var(--muted); font-size: 13px; }
+    .status { font-weight: 500; color: var(--ink); }
+    .status.is-correct { color: var(--caption); }
+    .status.is-wrong { color: var(--visual); }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      padding: 0 28px;
+    }
+    .metric { padding: 14px 18px 14px 0; min-width: 0; }
+    .metric + .metric { padding-left: 18px; border-left: 1px solid var(--line); }
+    .metric-value { font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .metric-label { color: var(--muted); font-size: 12px; margin-top: 3px; }
+    .architecture {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(110px, 1fr));
+      gap: 20px;
+      padding: 18px 28px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .arch-node { position: relative; border: 1px solid var(--line); border-radius: 5px; padding: 10px 12px; min-width: 0; }
+    .arch-node:not(:last-child)::after { content: ""; position: absolute; top: 50%; left: calc(100% + 1px); width: 20px; border-top: 1px solid var(--line); }
+    .arch-node.is-active { border-color: var(--focus); background: color-mix(in srgb, var(--focus) 9%, var(--surface)); }
+    .arch-name { font-weight: 500; }
+    .arch-count { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    main { padding: 22px 28px 36px; }
+    .decision-flow-section { margin-bottom: 26px; }
+    .round-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+    .round-tab {
+      min-height: 64px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 9px 11px;
+      background: var(--surface);
+      color: var(--ink);
+      text-align: left;
+      cursor: pointer;
+      min-width: 0;
+    }
+    .round-tab.is-selected { border-color: var(--focus); background: color-mix(in srgb, var(--focus) 8%, var(--surface)); }
+    .round-tab-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 500; }
+    .round-tab-action { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .round-tab-summary { color: var(--muted); font-size: 12px; margin-top: 5px; overflow-wrap: anywhere; }
+    .flow-grid { display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1fr) 28px minmax(0, 1fr); align-items: stretch; }
+    .flow-node {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-top-width: 3px;
+      border-radius: 6px;
+      padding: 13px 14px;
+      background: var(--surface);
+      color: var(--ink);
+      text-align: left;
+      cursor: pointer;
+      overflow-wrap: anywhere;
+    }
+    .flow-node.reasoner { border-top-color: var(--reasoner); }
+    .flow-node.investigator.caption { border-top-color: var(--caption); }
+    .flow-node.investigator.visual { border-top-color: var(--visual); }
+    .flow-node.workspace { border-top-color: var(--caption); }
+    .flow-node.result { border-top-color: var(--evidence); }
+    .flow-node.is-active { border-color: var(--focus); background: color-mix(in srgb, var(--focus) 7%, var(--surface)); }
+    .flow-kicker { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .flow-title { font-size: 16px; font-weight: 500; margin-top: 5px; }
+    .flow-copy { margin: 8px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .flow-command { margin-top: 9px; padding: 8px; border-radius: 4px; background: var(--surface-2); font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    .flow-params { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+    .flow-param { padding: 3px 6px; border-radius: 3px; background: var(--surface-2); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .flow-query-list, .flow-result-list { list-style: none; margin: 9px 0 0; padding: 0; }
+    .flow-query-list li, .flow-result-list li { padding: 5px 0; font-size: 12px; line-height: 1.4; }
+    .flow-query-list li + li, .flow-result-list li + li { border-top: 1px solid var(--line); }
+    .flow-hit { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; align-items: baseline; }
+    .flow-hit.is-selected-next { margin-left: -8px; padding-left: 6px; border-left: 2px solid var(--focus); }
+    .flow-hit-rank { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .flow-hit-time { font-variant-numeric: tabular-nums; }
+    .flow-hit-score { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .flow-hit-text { grid-column: 2 / -1; color: var(--muted); line-height: 1.4; }
+    .flow-hit-note { grid-column: 2 / -1; color: var(--focus); font-size: 11px; }
+    .flow-status { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 10px; color: var(--muted); font-size: 12px; }
+    .flow-status strong { color: var(--ink); font-weight: 500; }
+    .flow-arrow { display: grid; place-items: center; color: var(--muted); font-size: 18px; pointer-events: none; }
+    .claim-section { grid-column: 1 / -1; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .claim-heading { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 3px; font-weight: 500; }
+    .claim-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); align-items: start; }
+    .claim-row.is-supporting { border-left: 2px solid var(--evidence); padding-left: 8px; }
+    .claim-id { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+    .claim-text { font-size: 13px; line-height: 1.45; }
+    .claim-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .uncertainty-line { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .timeline-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-bottom: 12px; }
+    .transport { display: flex; align-items: center; gap: 8px; }
+    .icon-button {
+      width: 34px;
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--ink);
+      background: var(--surface);
+      cursor: pointer;
+    }
+    .icon-button svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; }
+    .timecode { min-width: 92px; font-variant-numeric: tabular-nums; font-weight: 500; }
+    .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+    .segmented button { border: 0; border-right: 1px solid var(--line); padding: 7px 12px; color: var(--muted); background: var(--surface); cursor: pointer; }
+    .segmented button:last-child { border-right: 0; }
+    .segmented button[aria-pressed="true"] { color: var(--ink); background: var(--surface-2); }
+    .layer-toggles { display: flex; flex-wrap: wrap; gap: 12px; margin-left: auto; }
+    .toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; cursor: pointer; }
+    .toggle input { accent-color: var(--focus); }
+    .swatch { width: 9px; height: 9px; border-radius: 2px; background: var(--reasoner); }
+    .swatch.caption { background: var(--caption); }
+    .swatch.visual { background: var(--visual); }
+    .swatch.evidence { background: var(--evidence); }
+    .swatch.gold { background: var(--gold); }
+    .timeline-surface { background: var(--surface); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .timeline-svg { display: block; width: 100%; height: auto; min-height: 224px; }
+    .timeline-svg.is-hidden { display: none; }
+    .timeline-svg text { font-family: inherit; fill: var(--muted); font-size: 11px; }
+    .lane-line { stroke: var(--line); stroke-width: 1; }
+    .segment-mark { fill: var(--surface-2); stroke: var(--line); stroke-width: 1; }
+    .event-mark { cursor: pointer; }
+    .event-mark.caption { fill: var(--caption); }
+    .event-mark.visual { fill: var(--visual); }
+    .event-mark.evidence, .event-mark.support { fill: var(--evidence); }
+    .gold-band { fill: var(--gold); opacity: .18; }
+    .event-mark.gold { fill: var(--gold); }
+    .event-mark.is-selected { stroke: var(--ink); stroke-width: 2.5; }
+    .playhead { stroke: var(--ink); stroke-width: 1.5; pointer-events: none; }
+    .content-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .7fr); gap: 24px; margin-top: 24px; }
+    .media-column { min-width: 0; }
+    .media-stage { position: relative; aspect-ratio: 16 / 9; background: var(--media-bg); overflow: hidden; border-radius: 6px; }
+    .media-stage img { width: 100%; height: 100%; object-fit: contain; display: none; }
+    .media-stage img.is-visible { display: block; }
+    .media-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #aeb6bd; text-align: center; padding: 24px; }
+    .media-empty.is-hidden { display: none; }
+    .frame-time { position: absolute; left: 12px; bottom: 10px; background: rgba(0,0,0,.72); color: #fff; padding: 4px 7px; border-radius: 3px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .filmstrip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(104px, 1fr); gap: 7px; overflow-x: auto; padding: 9px 0 2px; }
+    .frame-button { border: 2px solid transparent; background: transparent; padding: 0; border-radius: 4px; cursor: pointer; min-width: 0; }
+    .frame-button.is-selected { border-color: var(--focus); }
+    .frame-button img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; border-radius: 2px; }
+    .frame-button span { display: block; color: var(--muted); font-size: 11px; padding-top: 3px; font-variant-numeric: tabular-nums; }
+    .trace-column { min-width: 0; border-left: 1px solid var(--line); padding-left: 20px; }
+    .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 10px; }
+    h2 { font-size: 15px; font-weight: 500; margin: 0; }
+    .section-note { color: var(--muted); font-size: 12px; }
+    .step-list { display: grid; gap: 0; }
+    .step-button { position: relative; width: 100%; border: 0; border-left: 3px solid var(--line); background: transparent; color: var(--ink); text-align: left; padding: 9px 10px 9px 14px; cursor: pointer; }
+    .step-button + .step-button { border-top: 1px solid var(--line); }
+    .step-button.is-selected { border-left-color: var(--focus); background: color-mix(in srgb, var(--focus) 8%, transparent); }
+    .step-title { display: flex; justify-content: space-between; gap: 12px; font-weight: 500; }
+    .step-round { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .step-detail { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+    .event-detail { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+    .detail-head { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 14px; }
+    .detail-kind { padding: 3px 7px; border-radius: 3px; font-size: 12px; background: var(--surface-2); }
+    .detail-time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+    .detail-text { margin: 10px 0 0; line-height: 1.55; overflow-wrap: anywhere; }
+    .detail-query, .detail-source { margin-top: 8px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .detail-findings, .detail-uncertainties { margin: 10px 0 0; padding: 0; list-style: none; }
+    .detail-findings li, .detail-uncertainties li { padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.45; }
+    .detail-findings time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+    .detail-uncertainties li { color: var(--muted); }
+    @media (max-width: 900px) {
+      .question-band { grid-template-columns: 1fr; gap: 18px; }
+      .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .metric:nth-child(4) { border-left: 0; padding-left: 0; }
+      .architecture { grid-template-columns: 1fr; gap: 8px; }
+      .arch-node:not(:last-child)::after { display: none; }
+      .content-grid { grid-template-columns: 1fr; }
+      .trace-column { border-left: 0; border-top: 1px solid var(--line); padding: 20px 0 0; }
+      .layer-toggles { margin-left: 0; width: 100%; }
+      .flow-grid { grid-template-columns: 1fr; }
+      .flow-arrow { min-height: 24px; transform: rotate(90deg); }
+    }
+    @media (max-width: 560px) {
+      .topbar, .question-band, main { padding-left: 16px; padding-right: 16px; }
+      .topbar { align-items: flex-start; padding-top: 13px; padding-bottom: 13px; }
+      .model-id { display: none; }
+      .metrics { padding: 0 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric:nth-child(3), .metric:nth-child(5) { border-left: 0; padding-left: 0; }
+      .architecture { padding-left: 16px; padding-right: 16px; }
+      .round-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .flow-node { padding: 12px; }
+      .claim-row { grid-template-columns: 36px minmax(0, 1fr); }
+      .claim-meta { grid-column: 2; white-space: normal; }
+      .timeline-toolbar { align-items: flex-start; }
+      .filmstrip { grid-auto-columns: 90px; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h16" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="17" cy="12" r="2.5" fill="currentColor"/></svg>
+      <div class="brand-name" id="brandName"></div>
+      <div class="case-id" id="caseId"></div>
+    </div>
+    <div class="model-id" id="modelId"></div>
+  </header>
+
+  <section class="question-band">
+    <div><div class="eyebrow">Question</div><h1 id="question"></h1></div>
+    <div class="answer-block">
+      <div class="eyebrow">Agent answer</div>
+      <div class="answer-text" id="answer"></div>
+      <div class="answer-meta"><span class="status" id="answerStatus"></span><span id="referenceStatus"></span></div>
+    </div>
+  </section>
+
+  <section class="metrics" aria-label="运行摘要">
+    <div class="metric"><div class="metric-value" id="durationMetric"></div><div class="metric-label">超长视频</div></div>
+    <div class="metric"><div class="metric-value" id="roundMetric"></div><div class="metric-label">Reasoner 轮次</div></div>
+    <div class="metric"><div class="metric-value" id="captionMetric"></div><div class="metric-label">Caption 检索</div></div>
+    <div class="metric"><div class="metric-value" id="visualMetric"></div><div class="metric-label">视觉复核</div></div>
+    <div class="metric"><div class="metric-value" id="evidenceMetric"></div><div class="metric-label">证据记录</div></div>
+  </section>
+
+  <section class="architecture" id="architecture" aria-label="Agent architecture">
+    <div class="arch-node" data-arch="reasoner"><div class="arch-name">Reasoner</div><div class="arch-count">规划与更新 workspace</div></div>
+    <div class="arch-node" data-arch="caption"><div class="arch-name">Caption Search</div><div class="arch-count" id="captionNodeCount"></div></div>
+    <div class="arch-node" data-arch="visual"><div class="arch-name">Visual Investigator</div><div class="arch-count" id="visualNodeCount"></div></div>
+    <div class="arch-node" data-arch="evidence"><div class="arch-name">Evidence Workspace</div><div class="arch-count" id="evidenceNodeCount"></div></div>
+    <div class="arch-node" data-arch="answer"><div class="arch-name">Answer Gate</div><div class="arch-count" id="answerNodeCount"></div></div>
+  </section>
+
+  <main>
+    <section class="decision-flow-section" aria-labelledby="flowHeading">
+      <div class="section-heading"><h2 id="flowHeading">任务级探索链路</h2><span class="section-note" id="roundContext"></span></div>
+      <div class="round-tabs" id="roundTabs" aria-label="Reasoner 轮次"></div>
+      <div class="flow-grid" id="roundFlow"></div>
+    </section>
+
+    <div class="timeline-toolbar">
+      <div class="transport">
+        <button class="icon-button" id="playButton" type="button" aria-label="播放探索轨迹">
+          <svg id="playIcon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 3 14 9-14 9z"/></svg>
+        </button>
+        <div class="timecode" id="timecode">00:00:00</div>
+      </div>
+      <div class="segmented" aria-label="时间轴范围">
+        <button id="globalMode" type="button" aria-pressed="true">全局 24h</button>
+        <button id="focusMode" type="button" aria-pressed="false">局部窗口</button>
+      </div>
+      <div class="layer-toggles">
+        <label class="toggle"><input id="captionToggle" type="checkbox" checked><span class="swatch caption"></span>Caption</label>
+        <label class="toggle"><input id="visualToggle" type="checkbox" checked><span class="swatch visual"></span>视觉</label>
+        <label class="toggle"><input id="evidenceToggle" type="checkbox" checked><span class="swatch evidence"></span>证据</label>
+        <label class="toggle"><input id="goldToggle" type="checkbox" checked><span class="swatch gold"></span>答案区间</label>
+      </div>
+    </div>
+
+    <div class="timeline-surface">
+      <svg class="timeline-svg" id="globalTimeline" viewBox="0 0 1200 228" role="img" aria-label="全局超长视频探索时间轴"></svg>
+      <svg class="timeline-svg is-hidden" id="focusTimeline" viewBox="0 0 1200 228" role="img" aria-label="局部探索时间轴"></svg>
+    </div>
+
+    <div class="content-grid">
+      <section class="media-column" aria-labelledby="frameHeading">
+        <div class="section-heading"><h2 id="frameHeading">观察帧</h2><span class="section-note" id="frameContext"></span></div>
+        <div class="media-stage">
+          <img id="stageImage" alt="Agent 检查的视频帧">
+          <div class="media-empty" id="mediaEmpty">当前步骤没有向视觉模型发送图像</div>
+          <div class="frame-time" id="frameTime"></div>
+        </div>
+        <div class="filmstrip" id="filmstrip" aria-label="观察帧列表"></div>
+        <div class="event-detail">
+          <div class="detail-head"><h2 id="detailTitle">选择一个探索事件</h2><span class="detail-kind" id="detailKind"></span><span class="detail-time" id="detailTime"></span></div>
+          <p class="detail-text" id="detailText"></p>
+          <ul class="detail-findings" id="detailFindings"></ul>
+          <ul class="detail-uncertainties" id="detailUncertainties"></ul>
+          <div class="detail-query" id="detailQuery"></div>
+          <div class="detail-source" id="detailSource"></div>
+        </div>
+      </section>
+
+      <aside class="trace-column" aria-labelledby="traceHeading">
+        <div class="section-heading"><h2 id="traceHeading">探索过程</h2><span class="section-note" id="stepCounter"></span></div>
+        <div class="step-list" id="stepList"></div>
+      </aside>
+    </div>
+  </main>
+
+  <script id="trace-data" type="application/json">__TRACE_DATA__</script>
+  <script>
+    (() => {
+      const DATA = JSON.parse(document.getElementById('trace-data').textContent);
+      const NS = 'http://www.w3.org/2000/svg';
+      const state = { selectedEventId: DATA.initialEventId || '', selectedStepIndex: 0, selectedRound: DATA.rounds?.[0]?.round || 0, selectedFlowPhase: 'reasoner', selectedFrameId: '', playing: false, timer: null, cursor: 0, layers: { caption: true, visual: true, evidence: true, gold: true } };
+      const byId = id => document.getElementById(id);
+      const eventById = id => DATA.events.find(event => event.id === id);
+      const frameById = id => DATA.frames.find(frame => frame.id === id);
+      const roundByNumber = value => DATA.rounds.find(round => round.round === value);
+      const fmtTime = seconds => {
+        const value = Math.max(0, Number(seconds) || 0);
+        const hours = Math.floor(value / 3600);
+        const minutes = Math.floor((value % 3600) / 60);
+        const secs = Math.floor(value % 60);
+        return [hours, minutes, secs].map(part => String(part).padStart(2, '0')).join(':');
+      };
+      const fmtRange = event => `${fmtTime(event.start)}–${fmtTime(event.end)}`;
+      const fmtDuration = seconds => `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+      const kindLabel = kind => ({ caption: 'Caption 检索', visual: '视觉复核', evidence: '证据写入', support: '答案引用' }[kind] || kind);
+      const modeLabel = mode => ({ search_caption: 'Caption 检索', window: '视觉窗口复核', visual: '视觉窗口复核', ocr: 'OCR 复核' }[mode] || mode || '调查任务');
+      const behaviorName = mode => ({ search_caption: 'search_caption()', window: 'inspect_window()', visual: 'inspect_window()', ocr: 'inspect_ocr()' }[mode] || `${mode || 'investigate'}()`);
+      const currentStep = () => DATA.steps[state.selectedStepIndex] || null;
+
+      function textNode(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        node.textContent = text;
+        return node;
+      }
+
+      function createFlowNode(className, kicker, title, onClick) {
+        const node = document.createElement('button');
+        node.type = 'button';
+        node.className = `flow-node ${className}`;
+        node.append(textNode('div', 'flow-kicker', kicker), textNode('div', 'flow-title', title));
+        node.addEventListener('click', onClick);
+        return node;
+      }
+
+      function appendParams(node, values) {
+        const present = values.filter(([, value]) => value !== '' && value !== null && value !== undefined && value !== false);
+        if (!present.length) return;
+        const list = textNode('div', 'flow-params', '');
+        present.forEach(([label, value]) => list.append(textNode('span', 'flow-param', `${label} ${value}`)));
+        node.append(list);
+      }
+
+      function taskTabSummary(round) {
+        if (!round.tasks.length) return `${round.claims.length} claims · Answer Gate`;
+        return round.tasks.map(task => {
+          if (task.mode === 'search_caption') return `${task.result.hitCount} 个 Caption 候选`;
+          return `${task.result.frameCount} 帧 · ${task.evidenceIds.length} 条证据`;
+        }).join(' · ');
+      }
+
+      function selectRound(roundNumber) {
+        state.selectedRound = roundNumber;
+        const index = DATA.steps.findIndex(step => step.round === roundNumber && step.kind === 'reasoner');
+        if (index >= 0) selectStep(index, '', 'reasoner');
+        else renderAll();
+      }
+
+      function activateTask(round, task, phase) {
+        const kind = phase === 'reasoner' ? 'reasoner' : 'investigator';
+        const index = DATA.steps.findIndex(step => step.round === round.round && step.kind === kind && (!step.taskIds?.length || step.taskIds.includes(task.id)));
+        const eventId = phase === 'result' ? task.preferredEventId : task.eventIds[0];
+        if (index >= 0) selectStep(index, eventId || '', phase);
+        else if (eventId) selectEvent(eventId);
+      }
+
+      function activateFinal(round, phase) {
+        const kind = phase === 'result' ? 'gate' : 'reasoner';
+        const index = DATA.steps.findIndex(step => step.round === round.round && step.kind === kind);
+        const eventId = phase === 'result' ? round.eventIds.map(eventById).find(event => event?.kind === 'support')?.id || '' : '';
+        if (index >= 0) selectStep(index, eventId, phase);
+      }
+
+      function renderRoundTabs() {
+        const tabs = byId('roundTabs');
+        tabs.replaceChildren();
+        DATA.rounds.forEach(round => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = `round-tab${round.round === state.selectedRound ? ' is-selected' : ''}`;
+          button.setAttribute('aria-pressed', round.round === state.selectedRound ? 'true' : 'false');
+          const top = textNode('div', 'round-tab-top', '');
+          top.append(textNode('span', '', `R${round.round}`), textNode('span', 'round-tab-action', round.decision.action));
+          button.append(top, textNode('div', 'round-tab-summary', taskTabSummary(round)));
+          button.addEventListener('click', () => selectRound(round.round));
+          tabs.append(button);
+        });
+      }
+
+      function renderTaskFlow(round, task, flow) {
+        const step = currentStep();
+        const sameTask = step?.round === round.round && (!step.taskIds?.length || step.taskIds.includes(task.id));
+        const reasoner = createFlowNode(
+          `reasoner${sameTask && state.selectedFlowPhase === 'reasoner' ? ' is-active' : ''}`,
+          `Reasoner 发出 · ${task.id}`,
+          modeLabel(task.mode),
+          () => activateTask(round, task, 'reasoner'),
+        );
+        if (task.goal) reasoner.append(textNode('p', 'flow-copy', task.goal));
+        if (task.captionQueries.length) {
+          const queries = textNode('ul', 'flow-query-list', '');
+          task.captionQueries.forEach(query => queries.append(textNode('li', '', query)));
+          reasoner.append(queries);
+        }
+        const reasonerParams = task.mode === 'search_caption'
+          ? [['index', task.indexMode], ['top_k', task.topK || ''], ['neighbors', task.expandNeighbors]]
+          : [
+              ['time', task.timeRange.length ? `${fmtTime(task.timeRange[0])}–${fmtTime(task.timeRange[1])}` : ''],
+              ['segment', task.segmentId],
+              ['fps floor', task.samplingFps ?? ''],
+              ['force', task.forceReinspect ? 'reinspect' : ''],
+            ];
+        appendParams(reasoner, reasonerParams);
+
+        const behaviorClass = task.mode === 'search_caption' ? 'caption' : 'visual';
+        const investigator = createFlowNode(
+          `investigator ${behaviorClass}${sameTask && state.selectedFlowPhase === 'investigator' ? ' is-active' : ''}`,
+          'Investigator 执行',
+          behaviorName(task.mode),
+          () => activateTask(round, task, 'investigator'),
+        );
+        const call = task.mode === 'search_caption'
+          ? `search_caption(index="${task.indexMode}", top_k=${task.topK})`
+          : `inspect_window(segment="${task.segmentId}", range="${task.timeRange.length ? `${fmtTime(task.timeRange[0])}-${fmtTime(task.timeRange[1])}` : 'auto'}", fps=${task.samplingFps}, max_frames=${task.maxFrames})`;
+        investigator.append(textNode('div', 'flow-command', call));
+        const status = textNode('div', 'flow-status', '');
+        status.append(textNode('strong', '', task.status), textNode('span', '', task.reused ? '复用 observation' : '新建 attempt'));
+        if (task.consumesBudget) status.append(textNode('span', '', '消耗 1 次预算'));
+        investigator.append(status);
+        if (task.attemptIds.length) investigator.append(textNode('p', 'flow-copy', `attempt · ${task.attemptIds.join(', ')}`));
+
+        const resultTitle = task.mode === 'search_caption'
+          ? `${task.result.hitCount} 个 Caption 候选`
+          : `${task.result.frameCount} 帧 → ${task.evidenceIds.length} 条 evidence`;
+        const result = createFlowNode(
+          `result${sameTask && state.selectedFlowPhase === 'result' ? ' is-active' : ''}`,
+          `返回 · ${task.status}`,
+          resultTitle,
+          () => activateTask(round, task, 'result'),
+        );
+        if (task.mode === 'search_caption') {
+          const hits = textNode('ul', 'flow-result-list', '');
+          task.result.topHits.forEach((hit, index) => {
+            const item = textNode('li', `flow-hit${hit.selectedNext ? ' is-selected-next' : ''}`, '');
+            item.append(
+              textNode('span', 'flow-hit-rank', `#${index + 1}`),
+              textNode('span', 'flow-hit-time', hit.range.length ? `${fmtTime(hit.range[0])}–${fmtTime(hit.range[1])}` : '无时间'),
+              textNode('span', 'flow-hit-score', hit.score === null ? '' : hit.score.toFixed(4)),
+            );
+            if (hit.text) item.append(textNode('span', 'flow-hit-text', hit.text));
+            if (hit.selectedNext) item.append(textNode('span', 'flow-hit-note', `R${round.round + 1} 选择此区间做视觉复核`));
+            hits.append(item);
+          });
+          result.append(hits);
+        } else {
+          if (task.result.summary) result.append(textNode('p', 'flow-copy', task.result.summary));
+          appendParams(result, [
+            ['observations', task.result.observations.length],
+            ['uncertainties', task.result.uncertainties.length],
+            ['bundled', task.result.bundledFrameCount || ''],
+          ]);
+          if (task.evidenceIds.length) result.append(textNode('p', 'flow-copy', `evidence · ${task.evidenceIds.join(', ')}`));
+          if (task.result.uncertainties.length) result.append(textNode('div', 'uncertainty-line', `仍有疑点 · ${task.result.uncertainties[0]}`));
+        }
+        flow.append(reasoner, textNode('div', 'flow-arrow', '→'), investigator, textNode('div', 'flow-arrow', '→'), result);
+      }
+
+      function renderClaims(round, flow) {
+        if (!round.claims.length) return;
+        const section = textNode('div', 'claim-section', '');
+        const heading = textNode('div', 'claim-heading', '');
+        heading.append(textNode('span', '', 'Workspace claims'), textNode('span', 'section-note', `${round.workspace.applied_count || round.claims.length} 条写入 · revision ${round.workspace.revision ?? round.decision.workspaceRevision}`));
+        section.append(heading);
+        round.claims.forEach(claim => {
+          const supporting = round.decision.supportingClaimIds.includes(claim.id);
+          const row = textNode('div', `claim-row${supporting ? ' is-supporting' : ''}`, '');
+          row.append(
+            textNode('div', 'claim-id', claim.id),
+            textNode('div', 'claim-text', claim.text),
+            textNode('div', 'claim-meta', supporting ? '答案采用' : `${claim.source} · ${claim.confidence}`),
+          );
+          section.append(row);
+        });
+        flow.append(section);
+      }
+
+      function renderFinalFlow(round, flow) {
+        const phase = state.selectedFlowPhase;
+        const reasoner = createFlowNode(
+          `reasoner${phase === 'reasoner' ? ' is-active' : ''}`,
+          'Reasoner 决策',
+          'answer',
+          () => activateFinal(round, 'reasoner'),
+        );
+        reasoner.append(textNode('p', 'flow-copy', `停止继续检索，并使用 ${round.decision.supportingClaimIds.join(', ') || '当前证据'} 生成答案。`));
+        appendParams(reasoner, [['budget left', round.decision.remainingBudget], ['workspace rev', round.decision.workspaceRevision]]);
+
+        const workspace = createFlowNode(
+          `workspace${phase === 'workspace' ? ' is-active' : ''}`,
+          'Reasoner 行为',
+          'apply_workspace_ops()',
+          () => activateFinal(round, 'workspace'),
+        );
+        workspace.append(textNode('p', 'flow-copy', `${round.claims.length} 个 claim 写入 Working Document。`));
+        appendParams(workspace, [['accepted', round.workspace.accepted === false ? 'false' : 'true'], ['revision', round.workspace.revision ?? round.decision.workspaceRevision]]);
+
+        const gate = createFlowNode(
+          `result${phase === 'result' ? ' is-active' : ''}`,
+          'Reference Gate',
+          round.reference.passed ? 'PASS · 引用有效' : 'REJECT · 引用无效',
+          () => activateFinal(round, 'result'),
+        );
+        gate.append(textNode('p', 'flow-copy', round.answer));
+        if (round.reference.reason) gate.append(textNode('div', 'flow-status', round.reference.reason));
+        flow.append(reasoner, textNode('div', 'flow-arrow', '→'), workspace, textNode('div', 'flow-arrow', '→'), gate);
+        renderClaims(round, flow);
+      }
+
+      function renderDecisionFlow() {
+        renderRoundTabs();
+        const round = roundByNumber(state.selectedRound) || DATA.rounds[0];
+        const flow = byId('roundFlow');
+        flow.replaceChildren();
+        if (!round) {
+          byId('roundContext').textContent = '没有任务级轨迹';
+          return;
+        }
+        byId('roundContext').textContent = `R${round.round} · budget ${round.decision.remainingBudget} · workspace rev ${round.decision.workspaceRevision}`;
+        if (round.tasks.length) round.tasks.forEach(task => renderTaskFlow(round, task, flow));
+        else renderFinalFlow(round, flow);
+      }
+
+      function initHeader() {
+        byId('brandName').textContent = DATA.title;
+        byId('caseId').textContent = DATA.case.caseId;
+        byId('modelId').textContent = DATA.models.reasoner || DATA.models.investigator || '';
+        byId('question').textContent = DATA.case.question;
+        byId('answer').textContent = DATA.case.answer || 'No answer';
+        const score = DATA.case.score;
+        const status = byId('answerStatus');
+        status.textContent = score === 1 ? '回答正确' : score === .5 ? '部分正确' : score === 0 ? '回答错误' : '未判分';
+        status.classList.toggle('is-correct', score === 1);
+        status.classList.toggle('is-wrong', score === 0);
+        byId('referenceStatus').textContent = DATA.case.referenceValid ? '引用有效' : `引用：${DATA.case.referenceReason || '无'}`;
+        byId('durationMetric').textContent = fmtDuration(DATA.durationSec);
+        byId('roundMetric').textContent = DATA.metrics.rounds;
+        byId('captionMetric').textContent = DATA.metrics.captionSearches;
+        byId('visualMetric').textContent = DATA.metrics.visualWindows;
+        byId('evidenceMetric').textContent = DATA.metrics.evidenceRecords;
+        byId('captionNodeCount').textContent = `${DATA.metrics.captionSearches} 次检索 · ${DATA.metrics.caption} 个候选`;
+        const inspectedFrames = DATA.rounds.flatMap(round => round.tasks).reduce((total, task) => total + (task.result.frameCount || 0), 0);
+        byId('visualNodeCount').textContent = `${DATA.metrics.visualWindows} 个窗口 · ${inspectedFrames} 检查帧 · ${DATA.frames.length} 展示帧`;
+        byId('evidenceNodeCount').textContent = `${DATA.metrics.evidenceRecords} 条证据`;
+        byId('answerNodeCount').textContent = DATA.case.referenceValid ? '引用校验通过' : '引用校验未通过';
+      }
+
+      function svgNode(tag, attrs, parent) {
+        const node = document.createElementNS(NS, tag);
+        Object.entries(attrs || {}).forEach(([key, value]) => node.setAttribute(key, String(value)));
+        if (parent) parent.appendChild(node);
+        return node;
+      }
+
+      function domainFor(view) {
+        if (view === 'global') return [0, Math.max(1, DATA.durationSec)];
+        const selected = eventById(state.selectedEventId);
+        const center = selected ? (selected.start + selected.end) / 2 : state.cursor;
+        const span = selected ? Math.max(10, selected.end - selected.start) : 60;
+        const width = Math.max(300, span * 6);
+        return [Math.max(0, center - width / 2), Math.min(DATA.durationSec, center + width / 2)];
+      }
+
+      function visibleEvents() {
+        return DATA.events.filter(event => {
+          if (event.kind === 'caption') return state.layers.caption;
+          if (event.kind === 'visual') return state.layers.visual;
+          if (event.kind === 'evidence' || event.kind === 'support') return state.layers.evidence;
+          return true;
+        });
+      }
+
+      function renderTimeline(svg, view) {
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        const width = 1200;
+        const plotLeft = 118;
+        const plotRight = 1175;
+        const plotWidth = plotRight - plotLeft;
+        const [domainStart, domainEnd] = domainFor(view);
+        const domainWidth = Math.max(.001, domainEnd - domainStart);
+        const x = value => plotLeft + ((Number(value) - domainStart) / domainWidth) * plotWidth;
+        const lanes = { segments: 44, caption: 84, visual: 122, evidence: 160, gold: 196 };
+        [['视频片段', lanes.segments], ['Caption', lanes.caption], ['视觉复核', lanes.visual], ['证据', lanes.evidence], ['答案区间', lanes.gold]].forEach(([label, y]) => {
+          const text = svgNode('text', { x: 14, y: y + 4 }, svg);
+          text.textContent = label;
+          svgNode('line', { x1: plotLeft, y1: y, x2: plotRight, y2: y, class: 'lane-line' }, svg);
+        });
+        const tickCount = view === 'global' ? 5 : 6;
+        for (let index = 0; index <= tickCount; index += 1) {
+          const value = domainStart + domainWidth * (index / tickCount);
+          const tickX = x(value);
+          svgNode('line', { x1: tickX, y1: 16, x2: tickX, y2: 205, class: 'lane-line' }, svg);
+          const label = svgNode('text', { x: tickX, y: 14, 'text-anchor': index === 0 ? 'start' : index === tickCount ? 'end' : 'middle' }, svg);
+          label.textContent = fmtTime(value);
+        }
+        DATA.segments.forEach(segment => {
+          if (segment.end < domainStart || segment.start > domainEnd) return;
+          const left = x(Math.max(segment.start, domainStart));
+          const right = x(Math.min(segment.end, domainEnd));
+          const rect = svgNode('rect', { x: left, y: lanes.segments - 7, width: Math.max(1, right - left), height: 14, rx: 2, class: 'segment-mark' }, svg);
+          const title = svgNode('title', {}, rect);
+          title.textContent = `${segment.id} · ${fmtTime(segment.start)}–${fmtTime(segment.end)}`;
+        });
+        if (state.layers.gold) {
+          DATA.case.goldIntervals.forEach(interval => {
+            if (interval[1] < domainStart || interval[0] > domainEnd) return;
+            const left = x(Math.max(interval[0], domainStart));
+            const right = x(Math.min(interval[1], domainEnd));
+            svgNode('rect', { x: left, y: 28, width: Math.max(4, right - left), height: 172, class: 'gold-band' }, svg);
+            svgNode('rect', { x: left, y: lanes.gold - 6, width: Math.max(4, right - left), height: 12, rx: 2, class: 'event-mark gold' }, svg);
+          });
+        }
+        visibleEvents().forEach(event => {
+          if (event.end < domainStart || event.start > domainEnd) return;
+          const lane = event.kind === 'caption' ? lanes.caption : event.kind === 'visual' ? lanes.visual : lanes.evidence;
+          const left = x(Math.max(event.start, domainStart));
+          const right = x(Math.min(event.end, domainEnd));
+          const selected = event.id === state.selectedEventId ? ' is-selected' : '';
+          let mark;
+          if (event.kind === 'evidence' || event.kind === 'support') {
+            const center = (left + right) / 2;
+            mark = svgNode('polygon', { points: `${center},${lane - 8} ${center + 8},${lane} ${center},${lane + 8} ${center - 8},${lane}`, class: `event-mark ${event.kind}${selected}` }, svg);
+          } else {
+            mark = svgNode('rect', { x: left, y: lane - 7, width: Math.max(view === 'global' ? 4 : 7, right - left), height: 14, rx: 2, class: `event-mark ${event.kind}${selected}` }, svg);
+          }
+          mark.addEventListener('click', clickEvent => { clickEvent.stopPropagation(); selectEvent(event.id); });
+          const title = svgNode('title', {}, mark);
+          title.textContent = `${event.title} · ${fmtRange(event)}`;
+        });
+        const cursorX = x(Math.min(domainEnd, Math.max(domainStart, state.cursor)));
+        svgNode('line', { x1: cursorX, y1: 20, x2: cursorX, y2: 205, class: 'playhead' }, svg);
+        svg.onclick = clickEvent => {
+          if (clickEvent.target !== svg) return;
+          const bounds = svg.getBoundingClientRect();
+          const viewX = ((clickEvent.clientX - bounds.left) / bounds.width) * width;
+          const ratio = Math.max(0, Math.min(1, (viewX - plotLeft) / plotWidth));
+          state.cursor = domainStart + ratio * domainWidth;
+          const nearest = visibleEvents().slice().sort((a, b) => Math.abs((a.start + a.end) / 2 - state.cursor) - Math.abs((b.start + b.end) / 2 - state.cursor))[0];
+          if (nearest) state.selectedEventId = nearest.id;
+          renderAll();
+        };
+      }
+
+      function associatedFrames(event) {
+        if (!event) return [];
+        const direct = (event.frameIds || []).map(frameById).filter(Boolean);
+        if (direct.length) return direct;
+        if (!['visual', 'evidence', 'support'].includes(event.kind)) return [];
+        return DATA.frames.filter(frame => frame.time >= event.start - 2 && frame.time <= event.end + 2);
+      }
+
+      function renderFrames(event) {
+        const frames = associatedFrames(event);
+        const selected = frameById(state.selectedFrameId);
+        const active = selected && frames.some(frame => frame.id === selected.id) ? selected : frames[Math.floor(frames.length / 2)];
+        state.selectedFrameId = active ? active.id : '';
+        const image = byId('stageImage');
+        const empty = byId('mediaEmpty');
+        if (active) {
+          image.src = active.src;
+          image.classList.add('is-visible');
+          empty.classList.add('is-hidden');
+          byId('frameTime').textContent = `${fmtTime(active.time)} · ${active.source}@${active.sourceTime.toFixed(1)}s`;
+          byId('frameContext').textContent = `${frames.length} 展示帧`;
+        } else {
+          image.removeAttribute('src');
+          image.classList.remove('is-visible');
+          empty.classList.remove('is-hidden');
+          byId('frameTime').textContent = '';
+          byId('frameContext').textContent = 'text-only operation';
+        }
+        const strip = byId('filmstrip');
+        strip.replaceChildren();
+        frames.forEach(frame => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = `frame-button${frame.id === state.selectedFrameId ? ' is-selected' : ''}`;
+          button.setAttribute('aria-label', `查看 ${fmtTime(frame.time)} 帧`);
+          const thumb = document.createElement('img');
+          thumb.src = frame.src;
+          thumb.alt = '';
+          const label = document.createElement('span');
+          label.textContent = fmtTime(frame.time);
+          button.append(thumb, label);
+          button.addEventListener('click', () => { state.selectedFrameId = frame.id; state.cursor = frame.time; renderAll(); });
+          strip.appendChild(button);
+        });
+      }
+
+      function renderDetail(event) {
+        if (!event) return;
+        byId('detailTitle').textContent = event.title;
+        byId('detailKind').textContent = kindLabel(event.kind);
+        byId('detailTime').textContent = fmtRange(event);
+        byId('detailText').textContent = event.text || 'No textual observation';
+        const findings = byId('detailFindings');
+        findings.replaceChildren();
+        (event.observations || []).forEach(observation => {
+          const item = document.createElement('li');
+          if (observation.time !== null && observation.time !== undefined) item.append(textNode('time', '', fmtTime(observation.time)));
+          item.append(document.createTextNode(observation.description));
+          findings.append(item);
+        });
+        const uncertainties = byId('detailUncertainties');
+        uncertainties.replaceChildren();
+        (event.uncertainties || []).forEach(value => uncertainties.append(textNode('li', '', `Uncertainty · ${value}`)));
+        byId('detailQuery').textContent = event.query ? `Query · ${event.query}` : '';
+        byId('detailSource').textContent = event.source ? `Source · ${event.source}` : '';
+      }
+
+      function renderSteps() {
+        const list = byId('stepList');
+        list.replaceChildren();
+        DATA.steps.forEach((step, index) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = `step-button${index === state.selectedStepIndex ? ' is-selected' : ''}`;
+          const title = document.createElement('div');
+          title.className = 'step-title';
+          const name = document.createElement('span');
+          name.textContent = step.title;
+          const round = document.createElement('span');
+          round.className = 'step-round';
+          round.textContent = step.round ? `R${step.round}` : '';
+          title.append(name, round);
+          const detail = document.createElement('div');
+          detail.className = 'step-detail';
+          detail.textContent = step.detail;
+          button.append(title, detail);
+          button.addEventListener('click', () => selectStep(index));
+          list.appendChild(button);
+        });
+        byId('stepCounter').textContent = DATA.steps.length ? `${state.selectedStepIndex + 1} / ${DATA.steps.length}` : '0 / 0';
+      }
+
+      function renderArchitecture(event) {
+        let active = 'reasoner';
+        const step = currentStep();
+        const round = roundByNumber(state.selectedRound);
+        const task = round?.tasks.find(candidate => candidate.id === event?.taskId || step?.taskIds?.includes(candidate.id));
+        if (state.selectedFlowPhase === 'workspace') active = 'evidence';
+        else if (state.selectedFlowPhase === 'result' && event) active = event.kind === 'support' ? 'answer' : event.kind;
+        else if (step?.kind === 'investigator' && task) active = task.mode === 'search_caption' ? 'caption' : 'visual';
+        else if (step && ['gate', 'answer'].includes(step.kind)) active = 'answer';
+        document.querySelectorAll('.arch-node').forEach(node => node.classList.toggle('is-active', node.dataset.arch === active));
+      }
+
+      function selectEvent(id) {
+        const event = eventById(id);
+        if (!event) return;
+        state.selectedEventId = id;
+        state.selectedFrameId = '';
+        state.cursor = (event.start + event.end) / 2;
+        if (event.round) state.selectedRound = event.round;
+        state.selectedFlowPhase = 'result';
+        let relatedStep = DATA.steps.findIndex(step => step.kind === 'investigator' && (step.eventIds || []).includes(id));
+        if (relatedStep < 0) relatedStep = DATA.steps.findIndex(step => (step.eventIds || []).includes(id));
+        if (relatedStep >= 0) state.selectedStepIndex = relatedStep;
+        renderAll();
+      }
+
+      function selectStep(index, preferredEventId = '', flowPhase = '') {
+        if (!DATA.steps.length) return;
+        state.selectedStepIndex = Math.max(0, Math.min(DATA.steps.length - 1, index));
+        const step = DATA.steps[state.selectedStepIndex];
+        if (step.round) state.selectedRound = step.round;
+        state.selectedFlowPhase = flowPhase || (step.kind === 'reasoner' ? 'reasoner' : ['gate', 'answer'].includes(step.kind) ? 'result' : 'investigator');
+        const event = eventById(preferredEventId || step.preferredEventId) || (step.eventIds || []).map(eventById).find(Boolean);
+        if (event) {
+          state.selectedEventId = event.id;
+          state.selectedFrameId = '';
+          state.cursor = (event.start + event.end) / 2;
+        }
+        renderAll();
+      }
+
+      function setPlaying(value) {
+        state.playing = value;
+        if (state.timer) clearInterval(state.timer);
+        state.timer = null;
+        byId('playButton').setAttribute('aria-label', value ? '暂停探索轨迹' : '播放探索轨迹');
+        byId('playIcon').innerHTML = value ? '<rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect>' : '<path d="m6 3 14 9-14 9z"></path>';
+        if (value) {
+          state.timer = setInterval(() => {
+            if (state.selectedStepIndex >= DATA.steps.length - 1) { setPlaying(false); return; }
+            selectStep(state.selectedStepIndex + 1);
+          }, 1600);
+        }
+      }
+
+      function renderAll() {
+        const event = eventById(state.selectedEventId);
+        byId('timecode').textContent = fmtTime(state.cursor);
+        renderTimeline(byId('globalTimeline'), 'global');
+        renderTimeline(byId('focusTimeline'), 'focus');
+        renderDecisionFlow();
+        renderFrames(event);
+        renderDetail(event);
+        renderSteps();
+        renderArchitecture(event);
+      }
+
+      byId('playButton').addEventListener('click', () => setPlaying(!state.playing));
+      byId('globalMode').addEventListener('click', () => {
+        byId('globalMode').setAttribute('aria-pressed', 'true');
+        byId('focusMode').setAttribute('aria-pressed', 'false');
+        byId('globalTimeline').classList.remove('is-hidden');
+        byId('focusTimeline').classList.add('is-hidden');
+      });
+      byId('focusMode').addEventListener('click', () => {
+        byId('globalMode').setAttribute('aria-pressed', 'false');
+        byId('focusMode').setAttribute('aria-pressed', 'true');
+        byId('globalTimeline').classList.add('is-hidden');
+        byId('focusTimeline').classList.remove('is-hidden');
+        renderTimeline(byId('focusTimeline'), 'focus');
+      });
+      [['captionToggle', 'caption'], ['visualToggle', 'visual'], ['evidenceToggle', 'evidence'], ['goldToggle', 'gold']].forEach(([id, layer]) => {
+        byId(id).addEventListener('change', changeEvent => { state.layers[layer] = changeEvent.target.checked; renderAll(); });
+      });
+
+      initHeader();
+      const firstStep = DATA.steps[0];
+      if (firstStep) {
+        state.selectedStepIndex = 0;
+        state.selectedRound = firstStep.round || state.selectedRound;
+        state.selectedFlowPhase = firstStep.kind === 'reasoner' ? 'reasoner' : 'investigator';
+        state.selectedEventId = firstStep.preferredEventId || firstStep.eventIds?.[0] || state.selectedEventId;
+      }
+      const initial = eventById(state.selectedEventId);
+      state.cursor = initial ? (initial.start + initial.end) / 2 : 0;
+      renderAll();
+    })();
+  </script>
+</body>
+</html>

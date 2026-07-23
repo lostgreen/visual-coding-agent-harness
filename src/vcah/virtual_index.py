@@ -61,7 +61,7 @@ def build_virtual_beat_index(
                 beat_frames = (nearest,)
             thumbs = build_beat_thumbnail_grids(
                 beat_frames,
-                workspace.root_dir / "beat_thumbnails" / f"bt{number:05d}",
+                workspace.asset_root / "beat_thumbnails" / f"bt{number:05d}",
             )
             beat_cues = tuple(cue for cue in asr_cues if _cue_overlaps(cue, start, end))
             virtual_beats.append(
@@ -98,7 +98,7 @@ def build_virtual_beat_index(
         diagnostics=diagnostics,
     )
     cold.save(workspace.cold_index_dir)
-    beat_index_path = workspace.root_dir / "beat_index.json"
+    beat_index_path = workspace.asset_root / "beat_index.json"
     beat_index_path.write_text(
         json.dumps(
             {
@@ -112,7 +112,10 @@ def build_virtual_beat_index(
         ),
         encoding="utf-8",
     )
-    timeline_grid_path = render_timeline_grid([beat.thumbnail_grid_path for beat in virtual_beats], workspace.root_dir / "timeline_grid.jpg")
+    timeline_grid_path = render_timeline_grid(
+        [beat.thumbnail_grid_path for beat in virtual_beats],
+        workspace.asset_root / "timeline_grid.jpg",
+    )
     return VirtualBeatIndexResult(cold, tuple(virtual_beats), beat_index_path, timeline_grid_path)
 
 
@@ -189,7 +192,7 @@ def build_workspace_overview(
         group_frames = tuple(frame for frame in frames if start <= frame.virtual_time_sec < end)
         thumb = build_segment_overview_grid(
             group_frames,
-            workspace.root_dir / "segment_overviews" / f"{overview_id}_overview.jpg",
+            workspace.asset_root / "segment_overviews" / f"{overview_id}_overview.jpg",
         )
         row: dict[str, Any] = {
             "kind": kind,
@@ -205,6 +208,7 @@ def build_workspace_overview(
             row["segment_id"] = group[0].segment_id
         overviews.append(row)
 
+    caption_navigation = _caption_navigation_available(workspace)
     return {
         "workspace_id": workspace.workspace_id,
         "workspace_duration_sec": workspace.manifest.duration_sec,
@@ -215,13 +219,18 @@ def build_workspace_overview(
             "open_segment",
             "inspect_window",
         ],
-        "available_navigation": ["search_asr"],
+        "available_navigation": ["search_asr", *(["search_caption"] if caption_navigation else [])],
     }
 
 
 def load_virtual_beats(path: Path) -> tuple[dict[str, Any], ...]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     return tuple(dict(item) for item in payload.get("beats", ()))
+
+
+def _caption_navigation_available(workspace: VirtualVideoWorkspace) -> bool:
+    captions_root = workspace.asset_root / "captions"
+    return any(path.stat().st_size > 0 for path in captions_root.glob("passages.*.jsonl"))
 
 
 def _to_runtime_beat(beat: VirtualBeat) -> Beat:

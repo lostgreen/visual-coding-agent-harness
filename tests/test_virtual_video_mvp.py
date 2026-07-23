@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image
 import pytest
 
+import vcah.investigator as investigator_module
 import vcah.video as video
 from vcah import virtual_video
 from vcah.types import Frame
@@ -57,6 +58,17 @@ def test_phase_shifted_uniform_times_changes_the_sampling_grid() -> None:
     assert base != shifted
     assert shifted[0] == 10.25
     assert all(10.0 <= value <= 14.0 for value in shifted)
+
+
+def test_ffmpeg_concurrency_env_requires_a_positive_integer(monkeypatch) -> None:
+    monkeypatch.setenv("VCAH_MAX_CONCURRENT_FFMPEG", "24")
+    assert video._positive_env_int("VCAH_MAX_CONCURRENT_FFMPEG", 8) == 24
+
+    monkeypatch.setenv("VCAH_MAX_CONCURRENT_FFMPEG", "invalid")
+    assert video._positive_env_int("VCAH_MAX_CONCURRENT_FFMPEG", 8) == 8
+
+    monkeypatch.setenv("VCAH_MAX_CONCURRENT_FFMPEG", "0")
+    assert video._positive_env_int("VCAH_MAX_CONCURRENT_FFMPEG", 8) == 1
 
 
 def test_ffmpeg_frame_extraction_uses_concurrency_guard_and_timeout(monkeypatch, tmp_path: Path) -> None:
@@ -234,6 +246,38 @@ def test_investigation_task_accepts_explicit_asr_search_terms() -> None:
 
     assert task.inspection_mode == "search_asr"
     assert task.search_terms == ("dog", "father", "rent")
+
+
+def test_caption_search_loads_explicit_config_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    captured: dict[str, object] = {}
+    expected_index = object()
+
+    def load(asset_root: Path, *, config_digest: str | None = None) -> object:
+        captured["asset_root"] = asset_root
+        captured["config_digest"] = config_digest
+        return expected_index
+
+    monkeypatch.setattr(
+        investigator_module.CaptionLexicalIndex,
+        "from_asset_root",
+        staticmethod(load),
+    )
+    investigator = VirtualVideoInvestigator(
+        workspace,
+        caption_config_digest="caption-digest",
+    )
+
+    loaded = investigator._load_caption_index("lexical")
+
+    assert loaded is expected_index
+    assert captured == {
+        "asset_root": workspace.asset_root,
+        "config_digest": "caption-digest",
+    }
 
 
 def test_lowfps_cache_and_window_sampling_manifests_keep_separate_lineage(tmp_path: Path) -> None:

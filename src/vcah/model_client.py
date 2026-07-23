@@ -113,10 +113,18 @@ class OpenAICompatibleClient:
         prompt: str,
         *,
         image_paths: Sequence[str] = (),
+        image_labels: Sequence[str] = (),
+        prompt_position: str = "first",
         max_tokens: int = 900,
         _retry_truncation: bool = True,
     ) -> str:
         requested_paths = tuple(str(path) for path in image_paths)
+        requested_labels = tuple(str(label) for label in image_labels)
+        if requested_labels and len(requested_labels) != len(requested_paths):
+            raise ValueError("image_labels must match image_paths length")
+        position = str(prompt_position or "first").strip().casefold()
+        if position not in {"first", "last"}:
+            raise ValueError("prompt_position must be 'first' or 'last'")
         attached_paths = tuple(path for path in requested_paths if Path(path).is_file())
         dropped_paths = tuple(path for path in requested_paths if not Path(path).is_file())
         attachment_metadata = {
@@ -124,6 +132,8 @@ class OpenAICompatibleClient:
             "images_attached": len(attached_paths),
             "images_dropped": len(dropped_paths),
             "image_attachment_warning": bool(dropped_paths),
+            "image_label_count": len(requested_labels),
+            "prompt_position": position,
         }
         if len(dropped_paths) > self.max_dropped_images:
             self.last_response_metadata = {
@@ -137,11 +147,16 @@ class OpenAICompatibleClient:
                 self.last_response_metadata,
             )
 
-        content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-        content.extend(
-            {"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}}
-            for path in attached_paths
-        )
+        label_by_path = dict(zip(requested_paths, requested_labels)) if requested_labels else {}
+        content: list[dict[str, Any]] = []
+        if position == "first":
+            content.append({"type": "text", "text": prompt})
+        for path in attached_paths:
+            if requested_labels:
+                content.append({"type": "text", "text": label_by_path[path]})
+            content.append({"type": "image_url", "image_url": {"url": _image_data_url(Path(path))}})
+        if position == "last":
+            content.append({"type": "text", "text": prompt})
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": content}],
@@ -216,6 +231,8 @@ class OpenAICompatibleClient:
             retried = self.chat(
                 prompt,
                 image_paths=requested_paths,
+                image_labels=requested_labels,
+                prompt_position=position,
                 max_tokens=max(4096, int(max_tokens) * 2),
                 _retry_truncation=False,
             )

@@ -266,12 +266,12 @@ def test_working_view_exposes_mechanical_coverage_and_requested_raw_observations
 
     assert "COVERAGE LEDGER" in view
     assert "OBSERVATION CATALOG" in view
-    assert "REQUESTED RAW OBSERVATIONS" in view
+    assert "REQUESTED OBSERVATION PREVIEWS" in view
     assert attempt_id in view
     assert "subject raises a cup" in view
 
 
-def test_working_view_does_not_truncate_requested_raw_observation(tmp_path: Path) -> None:
+def test_working_view_bounds_requested_observation_and_keeps_pointer(tmp_path: Path) -> None:
     attempt_id = stable_attempt_id(frame_times=(5.0,), sampling_fps=1.0)
     raw_output = ("direct observation " * 1800) + "RAW_END_SENTINEL"
     log = ObservationLog(tmp_path / "observation_log.jsonl")
@@ -293,5 +293,80 @@ def test_working_view_does_not_truncate_requested_raw_observation(tmp_path: Path
         requested_observations=log.read(attempt_ids=(attempt_id,)),
     )
 
-    assert "RAW_END_SENTINEL" in view
-    assert "[view truncated]" not in view
+    assert "RAW_END_SENTINEL" not in view
+    assert "REQUESTED OBSERVATION PREVIEWS" in view
+    assert f"raw_pointer={log.path}" in view
+
+
+def test_claim_entities_and_interval_roles_round_trip(tmp_path: Path) -> None:
+    attempt_id = stable_attempt_id(frame_times=(5.0,), sampling_fps=1.0)
+    document = WorkingDocument.with_question_premise("Who appears and where?")
+    result = document.apply_ops(
+        (
+            {
+                "op": "update_entity",
+                "entity_id": "person_1",
+                "description": "The player character",
+                "aliases": ["player"],
+            },
+            {
+                "op": "add_claim",
+                "claim_id": "located_player",
+                "text": "The player stands by the shrine.",
+                "source": "observation",
+                "cites": [attempt_id],
+                "entity_ids": ["person_1"],
+                "metadata": {"located_by": {"passage_id": "caption:p1"}},
+            },
+            {
+                "op": "note_interval",
+                "start_sec": 5.0,
+                "end_sec": 7.0,
+                "label": "counted_event",
+                "claim_ids": ["located_player"],
+                "role": "candidate",
+                "metadata": {"event_key": "shrine_visit", "status": "candidate"},
+            },
+        ),
+        observation_ids=(attempt_id,),
+    )
+    path = tmp_path / "working_document.json"
+    document.save(path)
+    restored = WorkingDocument.from_mapping(json.loads(path.read_text(encoding="utf-8")))
+
+    assert result.accepted
+    assert restored.claims["located_player"].entity_ids == ("person_1",)
+    assert restored.claims["located_player"].metadata["located_by"]["passage_id"] == "caption:p1"
+    assert restored.timeline[0].role == "candidate"
+    assert restored.timeline[0].metadata["event_key"] == "shrine_visit"
+
+
+def test_candidate_search_attempt_cannot_directly_support_answer() -> None:
+    attempt_id = stable_attempt_id(
+        source_video_ids=("video-a",),
+        frame_refs=("caption-search://candidate",),
+        modality="caption_search",
+    )
+    document = WorkingDocument.with_question_premise("What item appears?")
+    applied = document.apply_ops(
+        (
+            {
+                "op": "add_claim",
+                "claim_id": "caption_guess",
+                "text": "The caption suggests an item.",
+                "source": "observation",
+                "cites": [attempt_id],
+            },
+        ),
+        observation_ids=(attempt_id,),
+    )
+
+    validation = document.validate_answer(
+        ("caption_guess",),
+        observation_ids=(attempt_id,),
+        supporting_observation_ids=(),
+    )
+
+    assert applied.accepted
+    assert not validation.passed
+    assert validation.reason == "supporting_claims_cite_candidate_or_negative"

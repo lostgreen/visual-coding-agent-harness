@@ -32,7 +32,7 @@ supersession, remaining uncertainty, investigation sufficiency, and the final an
 VirtualVideoWorkspace
   -> segment and beat overview
   -> Reasoner reads Rendered View
-       -> investigate window / literal ASR search / same-frame arbitration
+       -> caption/ASR locator search / visual window / same-frame arbitration
        -> edit Working Document
        -> read raw observations
        -> answer
@@ -73,10 +73,9 @@ the claim text.
 ### Rendered View
 
 Each Reasoner turn contains the question and options, the compact Working Document,
-the observation catalog, the coverage ledger, and raw observations explicitly
-requested on the prior turn. Full raw output remains addressable through
-`read_observations(attempt_ids | time_range)` rather than being copied into every
-prompt.
+the observation catalog, the coverage ledger, and bounded previews requested on
+the prior turn. Full raw output remains addressable through the immutable
+observation-log pointer rather than being copied into every prompt.
 
 ### Same-Frame Arbitration
 
@@ -134,6 +133,73 @@ python main.py vv-index \
   --workspace runs/videomme-smoke/477-2 \
   --low-fps 0.1 \
   --beat-sec 60
+```
+
+Build the MM-Lifelong Day subset as one shared virtual timeline plus lightweight
+free-form cases. The builder probes the source clips in filename order, records
+any clue-interval normalization in `validation.json`, and never creates a merged
+video:
+
+```bash
+python main.py vv-build-mmlifelong \
+  --dataset-root /path/to/MM-Lifelong \
+  --subset game \
+  --split test \
+  --asset-root data/mmlifelong/assets/game \
+  --case-root data/mmlifelong/cases/game/test \
+  --verify-durations \
+  --verify-clues
+```
+
+Generate resumable shared captions, then build a real sentence-transformer
+cosine index and deterministic lexical+dense RRF index. The model revision,
+dimension, and normalization setting are bound into the index manifest. The
+bundled MM-Lifelong prompt reproduces the official ReMA global-caption prompt
+and image contract while keeping timestamp shifting deterministic.
+
+```bash
+python main.py vv-caption \
+  --asset-root data/mmlifelong/assets/game \
+  --config /path/to/multimodal-api.yaml \
+  --config-section investigator_api \
+  --prompt-file prompts/mmlifelong_rema_caption_official.txt \
+  --chunk-sec 300 \
+  --sample-fps 1 \
+  --max-frames 300 \
+  --frame-extraction-mode fps_batch \
+  --image-width 640 \
+  --image-height 360 \
+  --jpeg-quality 75 \
+  --no-append-timestamp-map \
+  --timestamp-shift-mode deterministic_rema_v3 \
+  --workers 8 \
+  --no-keep-frames \
+  --resume
+
+python main.py vv-index-caption \
+  --asset-root data/mmlifelong/assets/game \
+  --embedding-model sentence-transformers/all-MiniLM-L6-v2 \
+  --index-mode hybrid
+```
+
+Run one Day case in an isolated workspace. `benchmark_best_effort` preserves the
+last parseable answer for benchmark scoring while reporting reference failures;
+`strict` retains the fail-closed behavior.
+
+```bash
+PYTHONPATH=src python tools/run_mmlifelong_interactive.py \
+  --case-workspace data/mmlifelong/cases/game/test/mmlifelong-game-test-0038 \
+  --out-dir runs/mmlifelong/game-test-0038 \
+  --config /path/to/multimodal-api.yaml \
+  --answer-policy benchmark_best_effort \
+  --caption-index-mode hybrid \
+  --caption-config-digest CAPTION_CONFIG_DIGEST \
+  --embedding-model sentence-transformers/all-MiniLM-L6-v2
+
+PYTHONPATH=src python tools/summarize_mmlifelong_runs.py \
+  --run-root runs/mmlifelong \
+  --out-json reports/mmlifelong.json \
+  --out-md reports/mmlifelong.md
 ```
 
 Use explicit sections in a shared YAML file. A separate role-specific file may put
@@ -200,6 +266,19 @@ python tools/build_virtual_trace_viewer.py \
   --light
 ```
 
+Build a presentation-oriented viewer for one completed ultra-long-video case. The
+output is an offline HTML page with a per-round `Reasoner task -> Investigator
+call -> observation/evidence` flow, full/focus timelines, architecture playback,
+workspace claims, uncertainty records, and bundled observed frames:
+
+```bash
+PYTHONPATH=src:. python tools/build_exploration_trace_viewer.py \
+  --workspace runs/mmlifelong/game-test-0117 \
+  --out-dir artifacts/game-test-0117-exploration \
+  --zip-path artifacts/game-test-0117-exploration.zip \
+  --title "Day · LongVideo Explorer"
+```
+
 ## Code Map
 
 ```text
@@ -210,9 +289,17 @@ src/vcah/interactive_agents.py   model Reasoner and observation-only Investigato
 src/vcah/model_client.py         OpenAI-compatible client and usage metadata
 src/vcah/virtual_video.py        timeline mapping, ASR, and frame materialization
 src/vcah/virtual_index.py        overview and beat navigation index
+src/vcah/captioning.py           resumable shared caption generation
+src/vcah/caption_lexical_index.py  Unicode/BM25 caption retrieval
+src/vcah/caption_semantic_index.py exact cosine retrieval with matrix cache
+src/vcah/caption_hybrid_search.py  lexical+dense reciprocal-rank fusion
+src/vcah/mmlifelong_metrics.py   free-form judge, Ref, retrieval, and run metrics
 src/vcah/replay.py               immutable runs and content-free reproducibility records
 tools/run_virtual_videomme_interactive.py  Video-MME evaluation orchestration
+tools/run_mmlifelong_interactive.py        MM-Lifelong Day case orchestration
+tools/summarize_mmlifelong_runs.py         aggregate comparison tables
 tools/build_virtual_trace_viewer.py        HTML/zip trace viewer
+tools/build_exploration_trace_viewer.py    presentation-oriented exploration viewer
 ```
 
 The earlier generic single-agent harness remains available in `src/vcah/agent.py`.
