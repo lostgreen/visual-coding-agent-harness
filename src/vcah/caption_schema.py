@@ -247,6 +247,22 @@ def passage_from_dict(payload: Mapping[str, Any]) -> CaptionPassageV1:
     return CaptionPassageV1(**values)
 
 
+def passage_in_segments(
+    passage: CaptionPassageV1,
+    segment_ids: Sequence[str] = (),
+) -> bool:
+    requested = {str(item).strip() for item in segment_ids if str(item).strip()}
+    if not requested:
+        return True
+    raw_segments = passage.metadata.get("source_segments", ())
+    if isinstance(raw_segments, str):
+        raw_segments = (raw_segments,)
+    if not isinstance(raw_segments, Sequence):
+        return False
+    available = {str(item).strip() for item in raw_segments if str(item).strip()}
+    return bool(requested & available)
+
+
 def stable_digest(payload: Any) -> str:
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()

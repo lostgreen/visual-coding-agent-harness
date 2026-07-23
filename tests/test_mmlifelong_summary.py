@@ -88,3 +88,26 @@ def test_implementation_digest_is_content_bound_and_stable() -> None:
 
     assert first == second
     assert len(first) == 64
+
+
+def test_correctness_outcome_defers_free_form_to_answer_judge() -> None:
+    assert RUNNER._correctness_outcome(
+        has_options=True,
+        mcq_correct=True,
+        judge=None,
+    ) == (True, "mcq_exact")
+    assert RUNNER._correctness_outcome(
+        has_options=False,
+        mcq_correct=False,
+        judge={"raw_score": 5},
+    ) == (True, "answer_judge")
+    assert RUNNER._correctness_outcome(
+        has_options=False,
+        mcq_correct=True,
+        judge={"raw_score": 3},
+    ) == (False, "answer_judge")
+    assert RUNNER._correctness_outcome(
+        has_options=False,
+        mcq_correct=False,
+        judge=None,
+    ) == (None, "unjudged")

@@ -76,10 +76,16 @@ def main() -> None:
         "split": workspace.case.split,
         "answer": result.answer,
         "answer_present": result.answer_present,
+        "candidate_answer": result.candidate_answer,
+        "verified_answer": result.verified_answer,
+        "verification_status": result.verification_status,
+        "blocking_reasons": list(result.blocking_reasons),
         "reference_valid": result.reference_valid,
         "reference_reason": result.reference_reason,
         "mcq_correct": result.correct if workspace.case.options else None,
         "accuracy_score": float(result.correct) if workspace.case.options else None,
+        "correct": result.correct if workspace.case.options else None,
+        "correctness_source": "mcq_exact" if workspace.case.options else "unjudged",
         "gold_answer": workspace.case.gold,
         "gold_clue_intervals": [list(item) for item in workspace.case.gold_clue_intervals],
         "supporting_intervals": [list(item) for item in result.supporting_intervals],
@@ -108,6 +114,11 @@ def main() -> None:
         )
         evaluation["judge"] = judged.to_dict()
         evaluation["accuracy_score"] = judged.smoothed_score
+        evaluation["correct"], evaluation["correctness_source"] = _correctness_outcome(
+            has_options=False,
+            mcq_correct=None,
+            judge=evaluation["judge"],
+        )
         judge_model = judge_api.model
 
     config = {
@@ -143,6 +154,9 @@ def main() -> None:
     _write_json(workspace.root_dir / "mmlifelong_metrics.json", evaluation)
     summary_path = workspace.root_dir / "run_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["correct"] = evaluation["correct"]
+    summary["correctness_source"] = evaluation["correctness_source"]
+    summary["accuracy_score"] = evaluation["accuracy_score"]
     summary["evaluation"] = evaluation
     summary["config_digest"] = config["config_digest"]
     _write_json(summary_path, summary)
@@ -176,6 +190,19 @@ def _read_jsonl(path: Path) -> tuple[Mapping[str, Any], ...]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip() and isinstance((value := json.loads(line)), Mapping)
     )
+
+
+def _correctness_outcome(
+    *,
+    has_options: bool,
+    mcq_correct: bool | None,
+    judge: Mapping[str, Any] | None,
+) -> tuple[bool | None, str]:
+    if has_options:
+        return bool(mcq_correct), "mcq_exact"
+    if not isinstance(judge, Mapping) or judge.get("raw_score") is None:
+        return None, "unjudged"
+    return int(judge["raw_score"]) in {4, 5}, "answer_judge"
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:

@@ -85,6 +85,7 @@ class CaptionHybridSearch:
         *,
         top_k: int = 12,
         time_range: tuple[float, float] | None = None,
+        segment_ids: Sequence[str] = (),
         expand_neighbors: int = 0,
         per_caption_limit: int = 3,
         temporal_iou_threshold: float = 0.9,
@@ -95,6 +96,7 @@ class CaptionHybridSearch:
             queries,
             top_k=candidate_limit,
             time_range=time_range,
+            segment_ids=segment_ids,
             expand_neighbors=0,
             per_caption_limit=max(per_caption_limit, candidate_limit),
             temporal_iou_threshold=1.01,
@@ -103,6 +105,7 @@ class CaptionHybridSearch:
             queries,
             top_k=candidate_limit,
             time_range=time_range,
+            segment_ids=segment_ids,
             expand_neighbors=0,
             per_caption_limit=max(per_caption_limit, candidate_limit),
             temporal_iou_threshold=1.01,
@@ -159,6 +162,7 @@ class CaptionHybridSearch:
                 hits,
                 distance=int(expand_neighbors),
                 time_range=time_range,
+                segment_ids=segment_ids,
                 index_digest=self.index_digest,
                 config_digest=self.config_digest,
             )
@@ -174,6 +178,7 @@ class CaptionHybridSearch:
         top_k: int,
         time_range: tuple[float, float] | None,
         expand_neighbors: int,
+        segment_ids: Sequence[str] = (),
     ) -> str:
         return stable_digest(
             {
@@ -183,6 +188,9 @@ class CaptionHybridSearch:
                 "top_k": int(top_k),
                 "time_range": list(time_range) if time_range else None,
                 "expand_neighbors": int(expand_neighbors),
+                "segment_ids": sorted(
+                    {str(item).strip() for item in segment_ids if str(item).strip()}
+                ),
             }
         )
 

@@ -38,6 +38,9 @@ class InvestigationTask:
     goal: str
     segment_id: str = ""
     time_range: tuple[float, float] | None = None
+    coordinate_space: str = "virtual"
+    source_video_ids: tuple[str, ...] = ()
+    conversion_trace: tuple[Mapping[str, Any], ...] = ()
     expected_evidence: str = ""
     inspection_mode: str = "window"
     search_terms: tuple[str, ...] = ()
@@ -54,6 +57,26 @@ class InvestigationTask:
         object.__setattr__(self, "goal", str(self.goal or "").strip())
         object.__setattr__(self, "segment_id", str(self.segment_id or "").strip())
         object.__setattr__(self, "time_range", _time_range(self.time_range))
+        coordinate_space = str(self.coordinate_space or "virtual").strip().casefold()
+        if coordinate_space not in {"virtual", "segment_local"}:
+            raise ValueError(f"unsupported coordinate_space: {coordinate_space}")
+        object.__setattr__(self, "coordinate_space", coordinate_space)
+        object.__setattr__(
+            self,
+            "source_video_ids",
+            tuple(
+                dict.fromkeys(
+                    str(item).strip()
+                    for item in self.source_video_ids
+                    if str(item).strip()
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "conversion_trace",
+            tuple(dict(item) for item in self.conversion_trace if isinstance(item, Mapping)),
+        )
         object.__setattr__(self, "expected_evidence", str(self.expected_evidence or "").strip())
         mode = str(self.inspection_mode or "window").strip().casefold()
         if mode not in _INSPECTION_MODES:
@@ -131,7 +154,7 @@ class MultiRoundResult:
     answer: str
     selected_option: str
     citations: tuple[str, ...]
-    correct: bool
+    correct: bool | None
     reference_valid: bool
     reference_reason: str
     rounds: int
@@ -141,6 +164,10 @@ class MultiRoundResult:
     trace: tuple[Mapping[str, Any], ...] = ()
     answer_policy: str = "strict"
     answer_present: bool = False
+    candidate_answer: str = ""
+    verified_answer: str = ""
+    verification_status: str = "missing"
+    blocking_reasons: tuple[str, ...] = ()
     supporting_claim_ids: tuple[str, ...] = ()
     supporting_intervals: tuple[tuple[float, float], ...] = ()
     residual_uncertainty: str = ""
@@ -337,16 +364,28 @@ class VirtualVideoMultiRoundDriver:
                 break
 
             requested_tasks = tuple(task for task in decision.tasks if _task_is_executable(task))
+            resolution_errors: list[dict[str, Any]] = []
             tasks = _resolve_tasks(
                 workspace,
                 requested_tasks,
                 limit=min(self.max_tasks_per_round, remaining),
+                errors=resolution_errors,
             )
+            if resolution_errors:
+                trace.append(
+                    {
+                        "type": "task_resolution",
+                        "round": round_id,
+                        "resolved_task_count": len(tasks),
+                        "errors": resolution_errors,
+                    }
+                )
             if decision.action != "investigate" or not tasks:
                 feedback = {
                     "type": "task_validation",
                     "reason": "reasoner_tasks_not_executable",
                     "requested_task_count": len(decision.tasks),
+                    "errors": resolution_errors,
                 }
                 requested_observations = requested_rows
                 continue
@@ -389,10 +428,12 @@ class VirtualVideoMultiRoundDriver:
                 }
             )
 
+        empty_answer = ReasonerDecision(action="answer")
+        candidate_decision = final_answer or latest_answer_candidate or empty_answer
         selected = final_answer or (
             latest_answer_candidate
             if self.answer_policy == "benchmark_best_effort" and latest_answer_candidate is not None
-            else ReasonerDecision(action="answer")
+            else empty_answer
         )
         selected_option = _letter(selected.answer) or _option_letter_from_answer(
             selected.answer,
@@ -407,6 +448,17 @@ class VirtualVideoMultiRoundDriver:
             observation_log.attempt_ids,
             workspace.case.options,
             supporting_observation_ids=_supporting_observation_ids(observation_log),
+        )
+        candidate_validation = (
+            validation
+            if candidate_decision is selected
+            else _validate_answer(
+                candidate_decision,
+                document,
+                observation_log.attempt_ids,
+                workspace.case.options,
+                supporting_observation_ids=_supporting_observation_ids(observation_log),
+            )
         )
         if schema_answer_present or preserve_candidate:
             answer = selected.answer
@@ -425,11 +477,30 @@ class VirtualVideoMultiRoundDriver:
             selected.supporting_claim_ids,
             observation_log.rows,
         )
+        candidate_answer = candidate_decision.answer
+        verified_answer = final_answer.answer if final_answer is not None else ""
+        verification_status = (
+            "verified"
+            if verified_answer
+            else "candidate_only"
+            if candidate_answer
+            else "missing"
+        )
+        blocking_reasons = (
+            ()
+            if verification_status == "verified"
+            else tuple(candidate_validation.errors)
+            or (candidate_validation.reason,)
+        )
 
         trace.append(
             {
                 "type": "answer_outcome",
                 "answer": answer,
+                "candidate_answer": candidate_answer,
+                "verified_answer": verified_answer,
+                "verification_status": verification_status,
+                "blocking_reasons": list(blocking_reasons),
                 "raw_reasoner_answer": selected.answer,
                 "selected_option": selected_option,
                 "reference_valid": reference_valid,
@@ -451,7 +522,11 @@ class VirtualVideoMultiRoundDriver:
             answer=answer,
             selected_option=selected_option,
             citations=citations,
-            correct=_score_answer(answer, workspace.case.gold, workspace.case.options),
+            correct=(
+                _score_answer(answer, workspace.case.gold, workspace.case.options)
+                if workspace.case.options
+                else None
+            ),
             reference_valid=reference_valid,
             reference_reason=reference_reason,
             rounds=rounds_run,
@@ -461,6 +536,10 @@ class VirtualVideoMultiRoundDriver:
             trace=tuple(trace),
             answer_policy=self.answer_policy,
             answer_present=returned_answer_present,
+            candidate_answer=candidate_answer,
+            verified_answer=verified_answer,
+            verification_status=verification_status,
+            blocking_reasons=blocking_reasons,
             supporting_claim_ids=selected.supporting_claim_ids,
             supporting_intervals=supporting_intervals,
             residual_uncertainty=selected.residual_uncertainty,
@@ -516,8 +595,23 @@ def _mechanical_status(
         interval
         for row in source_rows
         if str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
+        and str(row.get("evidence_role", "unclassified") or "unclassified").casefold()
+        not in {"candidate", "negative"}
         for raw in tuple(row.get("inspected_ranges", ()) or ())
         if (interval := _time_range(raw)) is not None
+    )
+    unrefined_visual_attempts = tuple(
+        {
+            "attempt_id": str(row.get("attempt_id", "")),
+            "requested_range": list(row.get("requested_range", ()) or ()),
+            "max_gap": float(manifest.get("max_gap", 0.0) or 0.0),
+            "coverage_ratio": float(manifest.get("coverage_ratio", 0.0) or 0.0),
+        }
+        for row in source_rows
+        if str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
+        and isinstance((config := row.get("sampling_config")), Mapping)
+        and isinstance((manifest := config.get("sampling_manifest")), Mapping)
+        and bool(manifest.get("requires_refinement"))
     )
     candidates_by_key: dict[tuple[str, float, float], dict[str, Any]] = {}
     for row in source_rows:
@@ -607,6 +701,11 @@ def _mechanical_status(
             "Caption hits are locator candidates only. Inspect a top pending caption time_range with inspection_mode=window "
             "before using it as answer support."
         )
+    if unrefined_visual_attempts:
+        hints.append(
+            "Wide visual scans are locator candidates only; refine a relevant neighborhood to <=120 seconds before "
+            "using it as answer support."
+        )
     return {
         "schema_version": "MechanicalCompletionStatusV1",
         "working_document_revision": document.revision,
@@ -622,6 +721,8 @@ def _mechanical_status(
         "asr_search_count": asr_search_count,
         "caption_search_count": caption_search_count,
         "visual_window_attempt_count": visual_window_attempt_count,
+        "unrefined_visual_attempt_count": len(unrefined_visual_attempts),
+        "unrefined_visual_attempts": list(unrefined_visual_attempts[-6:]),
         "caption_cited_claim_count": caption_cited_claim_count,
         "visual_confirmed_claim_count": visual_confirmed_claim_count,
         "pending_caption_candidate_count": len(pending_caption_candidates),
@@ -710,6 +811,7 @@ def _resolve_tasks(
     tasks: Sequence[InvestigationTask],
     *,
     limit: int,
+    errors: list[dict[str, Any]] | None = None,
 ) -> tuple[InvestigationTask, ...]:
     limit = max(0, int(limit))
     if not limit:
@@ -717,23 +819,35 @@ def _resolve_tasks(
     segments = tuple(workspace.manifest.segments)
     by_id = {segment.segment_id: segment for segment in segments}
     global_aliases = {"all", "full", "full_video", "global", "workspace"}
+    resolution_errors = errors if errors is not None else []
     groups: list[tuple[InvestigationTask, ...]] = []
-    for task in tasks:
-        if task.inspection_mode in {"search_asr", "search_caption", "arbitrate_observation"}:
+    for requested_task in tasks:
+        task = _resolve_task_coordinates(
+            requested_task,
+            by_id,
+            global_aliases=global_aliases,
+            errors=resolution_errors,
+        )
+        if task is None:
+            continue
+        if task.inspection_mode == "arbitrate_observation":
+            groups.append((task,))
+            continue
+        if task.inspection_mode in {"search_asr", "search_caption"}:
+            if task.segment_id.casefold() in global_aliases:
+                task = replace(task, segment_id="")
             groups.append((task,))
             continue
         if task.time_range is not None:
             start, end = task.time_range
+            if task.segment_id in by_id:
+                groups.append((task,))
+                continue
             overlaps = tuple(
                 (segment, max(start, segment.virtual_start_sec), min(end, segment.virtual_end_sec))
                 for segment in segments
                 if min(end, segment.virtual_end_sec) > max(start, segment.virtual_start_sec)
             )
-            if task.segment_id in by_id:
-                segment = by_id[task.segment_id]
-                if start >= segment.virtual_start_sec and end <= segment.virtual_end_sec:
-                    groups.append((task,))
-                    continue
             if overlaps:
                 groups.append(
                     tuple(
@@ -747,6 +861,15 @@ def _resolve_tasks(
                     )
                 )
                 continue
+            resolution_errors.append(
+                _task_resolution_error(
+                    task,
+                    "range_outside_workspace",
+                    requested_range=[start, end],
+                    workspace_range=[0.0, workspace.manifest.duration_sec],
+                )
+            )
+            continue
         if task.segment_id in by_id:
             groups.append((task,))
             continue
@@ -769,6 +892,105 @@ def _resolve_tasks(
                 resolved.append(group[depth])
         depth += 1
     return tuple(resolved)
+
+
+def _resolve_task_coordinates(
+    task: InvestigationTask,
+    segments_by_id: Mapping[str, Any],
+    *,
+    global_aliases: set[str],
+    errors: list[dict[str, Any]],
+) -> InvestigationTask | None:
+    segment_id = task.segment_id
+    segment = segments_by_id.get(segment_id)
+    is_global = segment_id.casefold() in global_aliases
+    if segment_id and segment is None and not is_global:
+        errors.append(
+            _task_resolution_error(
+                task,
+                "unknown_segment",
+                known_segment_ids=sorted(segments_by_id),
+            )
+        )
+        return None
+
+    if task.coordinate_space == "segment_local":
+        if segment is None:
+            errors.append(
+                _task_resolution_error(
+                    task,
+                    "segment_local_requires_known_segment",
+                    known_segment_ids=sorted(segments_by_id),
+                )
+            )
+            return None
+        if task.time_range is None:
+            errors.append(_task_resolution_error(task, "segment_local_requires_time_range"))
+            return None
+        local_start, local_end = task.time_range
+        duration = max(0.0, float(segment.virtual_end_sec) - float(segment.virtual_start_sec))
+        if local_start < 0.0 or local_end > duration + 1e-6:
+            errors.append(
+                _task_resolution_error(
+                    task,
+                    "range_outside_segment",
+                    requested_range=[local_start, local_end],
+                    valid_segment_local_range=[0.0, duration],
+                    valid_virtual_range=[segment.virtual_start_sec, segment.virtual_end_sec],
+                )
+            )
+            return None
+        virtual_range = (
+            float(segment.virtual_start_sec) + local_start,
+            float(segment.virtual_start_sec) + local_end,
+        )
+        return replace(
+            task,
+            time_range=virtual_range,
+            coordinate_space="virtual",
+            conversion_trace=(
+                *task.conversion_trace,
+                {
+                    "operation": "segment_local_to_virtual",
+                    "segment_id": segment_id,
+                    "input_range": [local_start, local_end],
+                    "output_range": list(virtual_range),
+                },
+            ),
+        )
+
+    if task.time_range is not None and segment is not None:
+        start, end = task.time_range
+        if start < float(segment.virtual_start_sec) - 1e-6 or end > float(segment.virtual_end_sec) + 1e-6:
+            errors.append(
+                _task_resolution_error(
+                    task,
+                    "range_outside_segment",
+                    requested_range=[start, end],
+                    coordinate_space="virtual",
+                    valid_virtual_range=[segment.virtual_start_sec, segment.virtual_end_sec],
+                    segment_local_hint=[
+                        max(0.0, start - float(segment.virtual_start_sec)),
+                        max(0.0, end - float(segment.virtual_start_sec)),
+                    ],
+                )
+            )
+            return None
+    return task
+
+
+def _task_resolution_error(
+    task: InvestigationTask,
+    code: str,
+    **details: Any,
+) -> dict[str, Any]:
+    return {
+        "query_id": task.query_id,
+        "code": str(code),
+        "segment_id": task.segment_id,
+        "coordinate_space": task.coordinate_space,
+        **details,
+    }
 
 
 def _ranges_overlap(left: tuple[float, float], right: tuple[float, float]) -> bool:
@@ -936,6 +1158,9 @@ def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
         "query_id": task.query_id,
         "segment_id": task.segment_id,
         "time_range": list(task.time_range) if task.time_range else [],
+        "coordinate_space": task.coordinate_space,
+        "source_video_ids": list(task.source_video_ids),
+        "conversion_trace": [dict(item) for item in task.conversion_trace],
         "inspection_mode": task.inspection_mode,
         "caption_queries": list(task.caption_queries),
         "top_k": task.top_k,
@@ -970,6 +1195,9 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         goal=str(value.get("goal", value.get("task", "")) or ""),
         segment_id=str(value.get("segment_id", "") or ""),
         time_range=value.get("time_range"),
+        coordinate_space=str(value.get("coordinate_space", "virtual") or "virtual"),
+        source_video_ids=tuple(value.get("source_video_ids", ()) or ()),
+        conversion_trace=tuple(value.get("conversion_trace", ()) or ()),
         expected_evidence=str(value.get("expected_evidence", "") or ""),
         inspection_mode=str(value.get("inspection_mode", "window") or "window"),
         search_terms=tuple(value.get("search_terms", ()) or ()),
@@ -1064,9 +1292,14 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
         "answer": result.answer,
         "answer_present": result.answer_present,
         "answer_policy": result.answer_policy,
+        "candidate_answer": result.candidate_answer,
+        "verified_answer": result.verified_answer,
+        "verification_status": result.verification_status,
+        "blocking_reasons": list(result.blocking_reasons),
         "selected_option": result.selected_option,
         "citations": list(result.citations),
         "correct": result.correct,
+        "correctness_source": "mcq" if result.correct is not None else "pending_judge",
         "reference_valid": result.reference_valid,
         "reference_reason": result.reference_reason,
         "supporting_claim_ids": list(result.supporting_claim_ids),

@@ -12,6 +12,7 @@ from vcah.multiround import (
     ReasonerDecision,
     VirtualVideoMultiRoundDriver,
     _mechanical_status,
+    _resolve_tasks,
 )
 from vcah.types import CoverageSegment, EvidenceRecord
 from vcah.virtual_video import (
@@ -45,6 +46,34 @@ def _workspace(tmp_path: Path) -> VirtualVideoWorkspace:
             target_segment_id=segment.segment_id,
             target_virtual_interval=(0.0, 20.0),
         ),
+    )
+
+
+def _two_segment_workspace(tmp_path: Path) -> VirtualVideoWorkspace:
+    segments = (
+        VirtualVideoSegment(
+            "seg_0001",
+            "video-a",
+            "video-a.mp4",
+            0.0,
+            100.0,
+            0.0,
+            100.0,
+        ),
+        VirtualVideoSegment(
+            "seg_0002",
+            "video-b",
+            "video-b.mp4",
+            0.0,
+            100.0,
+            100.0,
+            200.0,
+        ),
+    )
+    return VirtualVideoWorkspace.create(
+        tmp_path,
+        manifest=VirtualVideoManifest("two-segments", segments),
+        case=VirtualVideoCase(case_id="two-segments", question="What happens?"),
     )
 
 
@@ -218,6 +247,10 @@ def test_driver_keeps_semantic_authority_with_reasoner(tmp_path: Path) -> None:
     assert result.selected_option == "B"
     assert result.reference_valid
     assert result.correct
+    assert result.candidate_answer == "B. A cup"
+    assert result.verified_answer == "B. A cup"
+    assert result.verification_status == "verified"
+    assert result.blocking_reasons == ()
     assert result.investigation_count == 1
     assert attempt_id in reasoner.calls[1]["working_document_view"]
     assert "The person raises a cup" in reasoner.calls[1]["working_document_view"]
@@ -344,6 +377,10 @@ def test_reference_invalid_forced_answer_is_not_returned(tmp_path: Path) -> None
     assert not result.reference_valid
     assert not result.correct
     assert result.reference_reason == "answer_missing"
+    assert result.candidate_answer == "A. A book"
+    assert result.verified_answer == ""
+    assert result.verification_status == "candidate_only"
+    assert any(reason.startswith("supporting_claim_missing") for reason in result.blocking_reasons)
 
 
 def test_benchmark_best_effort_preserves_last_candidate_and_invalid_reference(tmp_path: Path) -> None:
@@ -367,10 +404,16 @@ def test_benchmark_best_effort_preserves_last_candidate_and_invalid_reference(tm
     assert result.answer_policy == "benchmark_best_effort"
     assert not result.reference_valid
     assert result.reference_reason == "supporting_claim_missing"
+    assert result.candidate_answer == "A. A book"
+    assert result.verified_answer == ""
+    assert result.verification_status == "candidate_only"
     assert reasoner.calls[-1]["final_attempt"] == 2
     summary = json.loads((tmp_path / "run_summary.json").read_text(encoding="utf-8"))
     assert summary["answer_present"] is True
     assert summary["answer_policy"] == "benchmark_best_effort"
+    assert summary["candidate_answer"] == "A. A book"
+    assert summary["verified_answer"] == ""
+    assert summary["verification_status"] == "candidate_only"
 
 
 def test_answer_and_claims_validate_in_one_transaction(tmp_path: Path) -> None:
@@ -471,6 +514,51 @@ def test_task_schema_rejects_old_inspection_modes() -> None:
     assert not hasattr(ReasonerDecision(action="answer"), "option_verdicts")
 
 
+def test_resolve_tasks_rejects_virtual_range_outside_named_segment(tmp_path: Path) -> None:
+    workspace = _two_segment_workspace(tmp_path)
+    task = InvestigationTask(
+        query_id="wrong-coordinate",
+        goal="Inspect the end of segment two.",
+        segment_id="seg_0002",
+        time_range=(10.0, 20.0),
+    )
+    errors: list[dict[str, Any]] = []
+
+    resolved = _resolve_tasks(workspace, (task,), limit=1, errors=errors)
+
+    assert resolved == ()
+    assert errors[0]["code"] == "range_outside_segment"
+    assert errors[0]["segment_id"] == "seg_0002"
+    assert errors[0]["valid_virtual_range"] == [100.0, 200.0]
+
+
+def test_segment_local_range_converts_with_trace(tmp_path: Path) -> None:
+    workspace = _two_segment_workspace(tmp_path)
+    task = InvestigationTask(
+        query_id="local-coordinate",
+        goal="Inspect the end of segment two.",
+        segment_id="seg_0002",
+        time_range=(10.0, 20.0),
+        coordinate_space="segment_local",
+    )
+    errors: list[dict[str, Any]] = []
+
+    resolved = _resolve_tasks(workspace, (task,), limit=1, errors=errors)
+
+    assert errors == []
+    assert resolved[0].segment_id == "seg_0002"
+    assert resolved[0].time_range == (110.0, 120.0)
+    assert resolved[0].coordinate_space == "virtual"
+    assert resolved[0].conversion_trace == (
+        {
+            "operation": "segment_local_to_virtual",
+            "segment_id": "seg_0002",
+            "input_range": [10.0, 20.0],
+            "output_range": [110.0, 120.0],
+        },
+    )
+
+
 def test_free_form_answer_keeps_reference_gate_but_allows_uncertainty(tmp_path: Path) -> None:
     multiple_choice = _workspace(tmp_path)
     workspace = VirtualVideoWorkspace.create(
@@ -519,7 +607,10 @@ def test_free_form_answer_keeps_reference_gate_but_allows_uncertainty(tmp_path: 
     assert result.selected_option == ""
     assert result.reference_valid
     assert result.reference_reason == "reference_integrity_verified"
-    assert not result.correct
+    assert result.correct is None
+    summary = json.loads((workspace.root_dir / "run_summary.json").read_text(encoding="utf-8"))
+    assert summary["correct"] is None
+    assert summary["correctness_source"] == "pending_judge"
 
 
 def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path) -> None:

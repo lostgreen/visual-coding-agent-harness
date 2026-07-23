@@ -230,7 +230,9 @@ class VirtualVideoInvestigator:
         normalized = tuple(dict.fromkeys(str(term).strip().casefold() for term in terms if str(term).strip()))
         requested_segment = str(segment_id or "").strip()
         known_segments = {segment.segment_id for segment in self.workspace.manifest.segments}
-        segment_scope = requested_segment if requested_segment in known_segments else ""
+        if requested_segment and requested_segment not in known_segments:
+            raise ValueError(f"unknown ASR segment_id: {requested_segment}")
+        segment_scope = requested_segment
         range_scope = _normalized_range(time_range) if time_range is not None and _valid_range(time_range) else None
         grouped: dict[str, list[dict[str, Any]]] = {}
         for cue in self.workspace.read_asr_virtual_cues():
@@ -312,6 +314,8 @@ class VirtualVideoInvestigator:
         queries: Sequence[str],
         *,
         time_range: tuple[float, float] | None = None,
+        segment_ids: Sequence[str] = (),
+        source_video_ids: Sequence[str] = (),
         top_k: int = 12,
         expand_neighbors: int = 0,
         index_mode: str = "lexical",
@@ -319,6 +323,42 @@ class VirtualVideoInvestigator:
         mode = str(index_mode or "lexical").strip().casefold()
         if mode not in {"lexical", "dense", "hybrid"}:
             raise ValueError(f"unsupported caption index mode: {mode}")
+        segments = tuple(self.workspace.manifest.segments)
+        by_segment_id = {segment.segment_id: segment for segment in segments}
+        known_source_ids = {segment.source_video_id for segment in segments}
+        requested_segment_ids = tuple(
+            dict.fromkeys(str(item).strip() for item in segment_ids if str(item).strip())
+        )
+        requested_source_ids = tuple(
+            dict.fromkeys(str(item).strip() for item in source_video_ids if str(item).strip())
+        )
+        unknown_segments = tuple(item for item in requested_segment_ids if item not in by_segment_id)
+        if unknown_segments:
+            raise ValueError(f"unknown Caption segment_ids: {', '.join(unknown_segments)}")
+        unknown_sources = tuple(item for item in requested_source_ids if item not in known_source_ids)
+        if unknown_sources:
+            raise ValueError(f"unknown Caption source_video_ids: {', '.join(unknown_sources)}")
+        source_scoped_segments = {
+            segment.segment_id
+            for segment in segments
+            if segment.source_video_id in set(requested_source_ids)
+        }
+        if requested_segment_ids and requested_source_ids:
+            scoped_segment_ids = tuple(
+                item for item in requested_segment_ids if item in source_scoped_segments
+            )
+        elif requested_segment_ids:
+            scoped_segment_ids = requested_segment_ids
+        elif requested_source_ids:
+            scoped_segment_ids = tuple(
+                segment.segment_id
+                for segment in segments
+                if segment.segment_id in source_scoped_segments
+            )
+        else:
+            scoped_segment_ids = ()
+        scope_empty = bool(requested_segment_ids and requested_source_ids and not scoped_segment_ids)
+        index_segment_ids = ("__no_matching_scope__",) if scope_empty else scoped_segment_ids
         index = self._caption_indexes.get(mode)
         if index is None:
             index = self._load_caption_index(mode)
@@ -328,17 +368,22 @@ class VirtualVideoInvestigator:
             queries,
             top_k=top_k,
             time_range=time_range,
+            segment_ids=index_segment_ids,
             expand_neighbors=expand_neighbors,
         )
         fingerprint = index.query_fingerprint(
             queries,
             top_k=top_k,
             time_range=time_range,
+            segment_ids=index_segment_ids,
             expand_neighbors=expand_neighbors,
         )
         return {
             "queries": [str(query) for query in queries],
             "time_range": list(time_range) if time_range else None,
+            "segment_ids": list(scoped_segment_ids),
+            "source_video_ids": list(requested_source_ids),
+            "scope_empty": scope_empty,
             "top_k": int(top_k),
             "expand_neighbors": int(expand_neighbors),
             "index_mode": mode,

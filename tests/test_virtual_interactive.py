@@ -358,6 +358,70 @@ def test_investigator_preserves_raw_observation_without_semantic_gates(
     assert "Do not select an answer option" in api.calls[0]["prompt"]
 
 
+def test_wide_sparse_scan_is_a_locator_not_full_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    segment = VirtualVideoSegment(
+        "seg_long",
+        "video-long",
+        "video-long.mp4",
+        0.0,
+        300.0,
+        0.0,
+        300.0,
+        "target",
+    )
+    workspace = VirtualVideoWorkspace.create(
+        tmp_path / "long",
+        manifest=VirtualVideoManifest("long", (segment,)),
+        case=VirtualVideoCase("long", "What changes?", {}, "", segment.segment_id, (0.0, 300.0)),
+    )
+    frame_times = (0.0, 120.0, 240.0)
+    frame_paths = tuple(tmp_path / f"frame-{int(value)}.jpg" for value in frame_times)
+    for path in frame_paths:
+        path.write_bytes(b"frame")
+    window = {
+        "virtual_time_range": [0.0, 240.0],
+        "sampling": {"fps": 1.0, "max_frames": 96, "actual_frames": 3},
+        "frames": [
+            {"path": str(path), "virtual_time_sec": time_sec}
+            for path, time_sec in zip(frame_paths, frame_times)
+        ],
+        "asr_cues": [],
+        "source_lineage": [{"source_video_id": "video-long", "segment_id": "seg_long"}],
+    }
+    raw = json.dumps({"summary": "Sparse locator scan.", "observations": []})
+    investigator = VisionInvestigator(
+        workspace,
+        api=FakeAPI((raw,)),
+        trace_path=tmp_path / "wide-trace.jsonl",
+    )
+    monkeypatch.setattr(investigator, "inspect_window", lambda *args, **kwargs: window)
+    task = InvestigationTask(
+        query_id="wide-locator",
+        goal="Locate the change.",
+        segment_id="seg_long",
+        time_range=(0.0, 240.0),
+        sampling_floor_fps=1.0,
+    )
+
+    report = investigator.run_batch((task,))[0]
+    attempt = report.attempts[0]
+    manifest = attempt.sampling_config["sampling_manifest"]
+
+    assert attempt.requested_range == (0.0, 240.0)
+    assert attempt.inspected_ranges != (attempt.requested_range,)
+    assert report.coverage_delta == attempt.inspected_ranges
+    assert attempt.evidence_role == "candidate"
+    assert manifest["requires_refinement"] is True
+    assert manifest["coverage_ratio"] < 0.01
+    assert manifest["max_gap"] == 120.0
+    assert report.cost["requires_refinement"] is True
+    assert report.evidence[0].sampling_coverage == "sparse"
+    assert len(report.evidence[0].coverage_manifest) == 3
+
+
 def test_empty_asr_search_attempt_id_is_prompt_independent(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

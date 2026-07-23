@@ -55,3 +55,38 @@ def test_hybrid_query_fingerprint_includes_rank_configuration() -> None:
 
     assert default.index_digest != changed.index_digest
     assert default_fingerprint != changed_fingerprint
+
+
+def test_hybrid_segment_scope_filters_components_and_changes_fingerprint() -> None:
+    fixture_passages = passages()
+    lexical = CaptionLexicalIndex(fixture_passages, config_digest="fixture")
+    dense = CaptionSemanticIndex.build(
+        fixture_passages,
+        adapter=FakeSemanticAdapter(),
+        config_digest="fixture",
+    )
+    hybrid = CaptionHybridSearch(lexical, dense)
+
+    scoped = hybrid.search(
+        ("stationary car",),
+        top_k=3,
+        segment_ids=("seg_0001",),
+        expand_neighbors=1,
+    )
+    first_fingerprint = hybrid.query_fingerprint(
+        ("stationary car",),
+        top_k=3,
+        time_range=None,
+        segment_ids=("seg_0001",),
+        expand_neighbors=1,
+    )
+    second_fingerprint = hybrid.query_fingerprint(
+        ("stationary car",),
+        top_k=3,
+        time_range=None,
+        segment_ids=("seg_0002",),
+        expand_neighbors=1,
+    )
+
+    assert [hit.passage_id for hit in scoped] == ["cap:p0"]
+    assert first_fingerprint != second_fingerprint

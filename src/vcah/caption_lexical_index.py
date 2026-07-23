@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 from vcah.caption_schema import (
     CaptionHitV1,
     CaptionPassageV1,
+    passage_in_segments,
     passage_from_dict,
     stable_digest,
 )
@@ -91,6 +92,7 @@ class CaptionLexicalIndex:
         *,
         top_k: int = 12,
         time_range: tuple[float, float] | None = None,
+        segment_ids: Sequence[str] = (),
         expand_neighbors: int = 0,
         per_caption_limit: int = 3,
         temporal_iou_threshold: float = 0.9,
@@ -104,6 +106,7 @@ class CaptionLexicalIndex:
             index
             for index, passage in enumerate(self.passages)
             if _in_time_range(passage, time_range)
+            and passage_in_segments(passage, segment_ids)
         )
         scores: dict[int, float] = {}
         matched_queries: dict[int, list[str]] = {}
@@ -154,7 +157,12 @@ class CaptionLexicalIndex:
             for rank, index in enumerate(selected, start=1)
         ]
         if expand_neighbors > 0:
-            hits = self._with_neighbors(hits, distance=int(expand_neighbors))
+            hits = self._with_neighbors(
+                hits,
+                distance=int(expand_neighbors),
+                time_range=time_range,
+                segment_ids=segment_ids,
+            )
         return tuple(
             CaptionHitV1(**{**asdict(hit), "rank": rank})
             for rank, hit in enumerate(hits, start=1)
@@ -167,6 +175,7 @@ class CaptionLexicalIndex:
         top_k: int,
         time_range: tuple[float, float] | None,
         expand_neighbors: int,
+        segment_ids: Sequence[str] = (),
     ) -> str:
         return stable_digest(
             {
@@ -175,6 +184,9 @@ class CaptionLexicalIndex:
                 "top_k": int(top_k),
                 "time_range": list(time_range) if time_range else None,
                 "expand_neighbors": int(expand_neighbors),
+                "segment_ids": sorted(
+                    {str(item).strip() for item in segment_ids if str(item).strip()}
+                ),
             }
         )
 
@@ -248,7 +260,14 @@ class CaptionLexicalIndex:
             metadata={"index_digest": self.index_digest, **dict(metadata)},
         )
 
-    def _with_neighbors(self, hits: Sequence[CaptionHitV1], *, distance: int) -> list[CaptionHitV1]:
+    def _with_neighbors(
+        self,
+        hits: Sequence[CaptionHitV1],
+        *,
+        distance: int,
+        time_range: tuple[float, float] | None,
+        segment_ids: Sequence[str],
+    ) -> list[CaptionHitV1]:
         passage_index = {passage.passage_id: index for index, passage in enumerate(self.passages)}
         by_caption_ordinal = {
             (passage.caption_id, passage.ordinal): index
@@ -269,6 +288,11 @@ class CaptionLexicalIndex:
                     continue
                 neighbor = self.passages[neighbor_index]
                 if neighbor.passage_id in seen:
+                    continue
+                if not _in_time_range(neighbor, time_range) or not passage_in_segments(
+                    neighbor,
+                    segment_ids,
+                ):
                     continue
                 expanded.append(
                     self._hit(

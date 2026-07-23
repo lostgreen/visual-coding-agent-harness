@@ -31,7 +31,7 @@ def _passages() -> tuple[CaptionPassageV1, ...]:
             20.0,
             10.0,
             0,
-            {"interval_precision": "anchor"},
+            {"interval_precision": "anchor", "source_segments": ["seg_0001"]},
         ),
         CaptionPassageV1(
             "p1",
@@ -41,7 +41,7 @@ def _passages() -> tuple[CaptionPassageV1, ...]:
             30.0,
             20.0,
             1,
-            {"interval_precision": "anchor"},
+            {"interval_precision": "anchor", "source_segments": ["seg_0002"]},
         ),
         CaptionPassageV1(
             "p2",
@@ -51,7 +51,7 @@ def _passages() -> tuple[CaptionPassageV1, ...]:
             120.0,
             100.0,
             0,
-            {"interval_precision": "anchor"},
+            {"interval_precision": "anchor", "source_segments": ["seg_0002"]},
         ),
         CaptionPassageV1(
             "p3",
@@ -61,7 +61,7 @@ def _passages() -> tuple[CaptionPassageV1, ...]:
             210.0,
             200.0,
             0,
-            {"interval_precision": "anchor"},
+            {"interval_precision": "anchor", "source_segments": ["seg_0002"]},
         ),
     )
 
@@ -69,7 +69,10 @@ def _passages() -> tuple[CaptionPassageV1, ...]:
 def _workspace(tmp_path: Path, *, with_captions: bool = True) -> VirtualVideoWorkspace:
     manifest = VirtualVideoManifest(
         workspace_id="mmlifelong-game",
-        segments=(VirtualVideoSegment("seg", "video", "video.mp4", 0.0, 300.0, 0.0, 300.0),),
+        segments=(
+            VirtualVideoSegment("seg_0001", "video-a", "video-a.mp4", 0.0, 20.0, 0.0, 20.0),
+            VirtualVideoSegment("seg_0002", "video-b", "video-b.mp4", 0.0, 280.0, 20.0, 300.0),
+        ),
     )
     case = VirtualVideoCase(case_id="case", question="Where is the red door?")
     workspace = VirtualVideoWorkspace.create(tmp_path / "case", manifest=manifest, case=case)
@@ -125,6 +128,42 @@ def test_lexical_neighbor_expansion_and_query_fingerprint_are_deterministic() ->
     assert first == repeated
     assert changed != first
     assert len(render_caption_hits(hits, char_limit=120)) <= 120
+
+
+def test_lexical_segment_scope_filters_hits_neighbors_and_fingerprint() -> None:
+    index = CaptionLexicalIndex(_passages(), config_digest="cfg")
+    queries = ("red temple door", "红色寺庙大门")
+
+    first_segment = index.search(
+        queries,
+        top_k=3,
+        segment_ids=("seg_0001",),
+        expand_neighbors=1,
+    )
+    second_segment = index.search(
+        queries,
+        top_k=3,
+        segment_ids=("seg_0002",),
+        expand_neighbors=1,
+    )
+    first_fingerprint = index.query_fingerprint(
+        queries,
+        top_k=3,
+        time_range=None,
+        segment_ids=("seg_0001",),
+        expand_neighbors=1,
+    )
+    second_fingerprint = index.query_fingerprint(
+        queries,
+        top_k=3,
+        time_range=None,
+        segment_ids=("seg_0002",),
+        expand_neighbors=1,
+    )
+
+    assert [hit.passage_id for hit in first_segment] == ["p0"]
+    assert [hit.passage_id for hit in second_segment] == ["p3"]
+    assert first_fingerprint != second_fingerprint
 
 
 def test_search_caption_creates_one_locator_attempt_and_caches_zero_hits(tmp_path: Path) -> None:
@@ -186,6 +225,42 @@ def test_search_caption_creates_one_locator_attempt_and_caches_zero_hits(tmp_pat
     assert zero.cost["zero_hits"] is True
     assert zero.cost["consumes_budget"] is False
     assert zero_repeated.cost["reused"] is True
+
+
+def test_search_caption_scope_is_forwarded_and_not_reused_across_segments(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    investigator = VisionInvestigator(
+        workspace,
+        api=DummyApi(),
+        trace_path=tmp_path / "trace-scoped.jsonl",
+    )
+    common = {
+        "goal": "Locate the red door.",
+        "inspection_mode": "search_caption",
+        "caption_queries": ("red temple door", "红色寺庙大门"),
+        "top_k": 3,
+        "index_mode": "lexical",
+    }
+
+    first = investigator._investigate_task(
+        InvestigationTask(query_id="caption-seg-1", segment_id="seg_0001", **common)
+    )
+    second = investigator._investigate_task(
+        InvestigationTask(query_id="caption-seg-2", segment_id="seg_0002", **common)
+    )
+
+    first_attempt = first.attempts[0]
+    second_attempt = second.attempts[0]
+    assert first.cost["reused"] is False
+    assert second.cost["reused"] is False
+    assert first_attempt.sampling_config["segment_ids"] == ["seg_0001"]
+    assert second_attempt.sampling_config["segment_ids"] == ["seg_0002"]
+    assert first_attempt.sampling_config["source_video_ids"] == ["video-a"]
+    assert second_attempt.sampling_config["source_video_ids"] == ["video-b"]
+    assert [hit["passage_id"] for hit in first_attempt.sampling_config["hits"]] == ["p0"]
+    second_ids = [hit["passage_id"] for hit in second_attempt.sampling_config["hits"]]
+    assert second_ids[0] == "p3"
+    assert "p0" not in second_ids
 
 
 def test_no_caption_workspace_does_not_advertise_caption_navigation(tmp_path: Path) -> None:

@@ -11,7 +11,13 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from vcah.caption_lexical_index import normalize_caption_query
-from vcah.caption_schema import CaptionHitV1, CaptionPassageV1, passage_from_dict, stable_digest
+from vcah.caption_schema import (
+    CaptionHitV1,
+    CaptionPassageV1,
+    passage_from_dict,
+    passage_in_segments,
+    stable_digest,
+)
 from vcah.caption_store import resolve_caption_passages_path
 from vcah.embedding_adapter import TextEmbeddingAdapter, normalize_rows
 
@@ -129,6 +135,7 @@ class CaptionSemanticIndex:
         *,
         top_k: int = 12,
         time_range: tuple[float, float] | None = None,
+        segment_ids: Sequence[str] = (),
         expand_neighbors: int = 0,
         per_caption_limit: int = 3,
         temporal_iou_threshold: float = 0.9,
@@ -147,6 +154,7 @@ class CaptionSemanticIndex:
             index
             for index, passage in enumerate(self.passages)
             if interval_in_time_range(passage, time_range)
+            and passage_in_segments(passage, segment_ids)
         )
         ordered = sorted(
             allowed,
@@ -181,6 +189,7 @@ class CaptionSemanticIndex:
                 hits,
                 distance=int(expand_neighbors),
                 time_range=time_range,
+                segment_ids=segment_ids,
                 index_digest=self.index_digest,
                 config_digest=self.config_digest,
             )
@@ -196,6 +205,7 @@ class CaptionSemanticIndex:
         top_k: int,
         time_range: tuple[float, float] | None,
         expand_neighbors: int,
+        segment_ids: Sequence[str] = (),
     ) -> str:
         return stable_digest(
             {
@@ -205,6 +215,9 @@ class CaptionSemanticIndex:
                 "top_k": int(top_k),
                 "time_range": list(time_range) if time_range else None,
                 "expand_neighbors": int(expand_neighbors),
+                "segment_ids": sorted(
+                    {str(item).strip() for item in segment_ids if str(item).strip()}
+                ),
             }
         )
 
@@ -299,6 +312,7 @@ def expand_passage_neighbors(
     *,
     distance: int,
     time_range: tuple[float, float] | None,
+    segment_ids: Sequence[str] = (),
     index_digest: str,
     config_digest: str,
 ) -> list[CaptionHitV1]:
@@ -323,6 +337,8 @@ def expand_passage_neighbors(
             if neighbor is None or neighbor.passage_id in seen:
                 continue
             if not interval_in_time_range(neighbor, time_range):
+                continue
+            if not passage_in_segments(neighbor, segment_ids):
                 continue
             expanded.append(
                 CaptionHitV1(

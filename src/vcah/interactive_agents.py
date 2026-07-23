@@ -29,12 +29,21 @@ class SearchFingerprint:
     normalized_terms: tuple[str, ...]
     time_range_bucket: tuple[int, int] | None
     index_version: str
+    normalized_queries: tuple[str, ...] = ()
+    segment_ids: tuple[str, ...] = ()
+    source_video_ids: tuple[str, ...] = ()
+    top_k: int = 0
+    expand_neighbors: int = 0
 
     def similarity(self, other: "SearchFingerprint") -> float:
         if (
             self.modality != other.modality
             or self.time_range_bucket != other.time_range_bucket
             or self.index_version != other.index_version
+            or self.segment_ids != other.segment_ids
+            or self.source_video_ids != other.source_video_ids
+            or self.top_k != other.top_k
+            or self.expand_neighbors != other.expand_neighbors
         ):
             return 0.0
         left = set(self.normalized_terms)
@@ -140,6 +149,8 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         goal=goal,
         segment_id=str(value.get("segment_id", "") or ""),
         time_range=time_range,
+        coordinate_space=str(value.get("coordinate_space", "virtual") or "virtual"),
+        source_video_ids=tuple(value.get("source_video_ids", ()) or ()),
         expected_evidence=str(value.get("expected_evidence", "") or goal),
         inspection_mode=mode,
         search_terms=tuple(value.get("search_terms", ()) or ()),
@@ -311,6 +322,10 @@ class VisionInvestigator(VirtualVideoInvestigator):
                     "time_range_bucket": list(outcome.fingerprint.time_range_bucket)
                     if outcome.fingerprint.time_range_bucket
                     else None,
+                    "segment_ids": list(outcome.fingerprint.segment_ids),
+                    "source_video_ids": list(outcome.fingerprint.source_video_ids),
+                    "top_k": outcome.fingerprint.top_k,
+                    "expand_neighbors": outcome.fingerprint.expand_neighbors,
                 }
                 for outcome in zero_hits[-6:]
             ],
@@ -357,6 +372,15 @@ class VisionInvestigator(VirtualVideoInvestigator):
         frames = tuple(window["frames"])
         frame_paths = tuple(str(row["path"]) for row in frames)
         frame_times = tuple(float(row["virtual_time_sec"]) for row in frames)
+        sampling_manifest = _sampling_manifest(
+            (start_sec, end_sec),
+            frame_times,
+            requested_fps=fps,
+        )
+        observed_subranges = tuple(
+            tuple(float(value) for value in interval)
+            for interval in sampling_manifest["observed_subranges"]
+        )
         source_lineage = tuple(dict(item) for item in window["source_lineage"])
         source_video_ids = tuple(
             dict.fromkeys(str(item.get("source_video_id", "") or "") for item in source_lineage)
@@ -364,7 +388,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
         attempt_id = stable_attempt_id(
             source_video_ids=source_video_ids,
             frame_times=frame_times,
-            inspected_ranges=((start_sec, end_sec),) if frame_paths else (),
+            inspected_ranges=observed_subranges if frame_paths else (),
             sampling_fps=fps,
             modality="visual",
         )
@@ -424,14 +448,21 @@ class VisionInvestigator(VirtualVideoInvestigator):
             parsed=parsed,
             source_lineage=source_lineage,
             model=self.api.model,
+            sampling_manifest=sampling_manifest,
         )
         attempt = ObservationAttempt(
             attempt_id=attempt_id,
             task_id=query_id,
             requested_range=(start_sec, end_sec),
-            inspected_ranges=((start_sec, end_sec),) if counts["attached"] else (),
+            inspected_ranges=observed_subranges if counts["attached"] else (),
             attached_frame_times=frame_times if counts["attached"] else (),
-            sampling_config={"fps": fps, "max_frames": frame_limit, "mode": "window", "modality": "visual"},
+            sampling_config={
+                "fps": fps,
+                "max_frames": frame_limit,
+                "mode": "window",
+                "modality": "visual",
+                "sampling_manifest": sampling_manifest,
+            },
             images_requested=counts["requested"],
             images_attached=counts["attached"],
             images_dropped=counts["dropped"],
@@ -439,6 +470,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
             execution_status="completed" if frame_paths else "failed",
             frame_refs=frame_paths,
             modality="visual",
+            evidence_role="candidate" if sampling_manifest["requires_refinement"] else "unclassified",
             prompt_digest=prompt_digest(prompt),
             raw_output=raw,
             source_video_ids=source_video_ids,
@@ -459,7 +491,11 @@ class VisionInvestigator(VirtualVideoInvestigator):
             },
         )
         if frame_paths:
-            self._record_visit(task, evidence, status="completed")
+            self._record_visit(
+                task,
+                evidence,
+                status="candidate_locator" if sampling_manifest["requires_refinement"] else "completed",
+            )
         report = InvestigationReport(
             query_id=query_id,
             status="completed" if frame_paths else "failed",
@@ -471,9 +507,10 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "vlm_calls": int(bool(frame_paths)),
                 "reused": False,
                 "consumes_budget": bool(frame_paths),
+                "requires_refinement": sampling_manifest["requires_refinement"],
             },
             failure_reason="no frames materialized" if not frame_paths else "",
-            coverage_delta=((start_sec, end_sec),) if frame_paths else (),
+            coverage_delta=observed_subranges if frame_paths else (),
         )
         if frame_paths:
             self._visual_attempt_cache[cache_key] = report
@@ -489,6 +526,8 @@ class VisionInvestigator(VirtualVideoInvestigator):
             terms,
             time_range,
             index_version=f"literal-asr-v1:{segment_id or '*'}",
+            segment_ids=(segment_id,) if segment_id else (),
+            top_k=8,
         )
         cached = self._cached_search(search_fingerprint)
         if cached is not None:
@@ -664,14 +703,20 @@ class VisionInvestigator(VirtualVideoInvestigator):
             )
         )[:5]
         time_range = getattr(task, "time_range", None)
+        segment_id = str(getattr(task, "segment_id", "") or "")
+        requested_source_video_ids = tuple(getattr(task, "source_video_ids", ()) or ())
         top_k = int(getattr(task, "top_k", 12) or 12)
         expand_neighbors = int(getattr(task, "expand_neighbors", 0) or 0)
         index_mode = self.caption_index_mode or str(getattr(task, "index_mode", "lexical") or "lexical")
         search_fingerprint = _search_fingerprint(
             "caption",
-            requested_queries or (self.workspace.case.question,),
+            queries,
             time_range,
             index_version=index_mode,
+            segment_ids=(segment_id,) if segment_id else (),
+            source_video_ids=requested_source_video_ids,
+            top_k=top_k,
+            expand_neighbors=expand_neighbors,
         )
         cached = self._cached_search(search_fingerprint)
         if cached is not None:
@@ -680,6 +725,8 @@ class VisionInvestigator(VirtualVideoInvestigator):
             packet = self.search_caption(
                 queries,
                 time_range=time_range,
+                segment_ids=(segment_id,) if segment_id else (),
+                source_video_ids=requested_source_video_ids,
                 top_k=top_k,
                 expand_neighbors=expand_neighbors,
                 index_mode=index_mode,
@@ -697,8 +744,13 @@ class VisionInvestigator(VirtualVideoInvestigator):
             f"caption-search://{self.workspace.workspace_id}/"
             f"{str(packet['index_digest'])[:12]}/{query_fingerprint[:20]}"
         )
-        source_video_ids = tuple(
-            dict.fromkeys(segment.source_video_id for segment in self.workspace.manifest.segments)
+        scoped_segment_ids = set(packet.get("segment_ids", ()) or ())
+        source_video_ids = tuple(packet.get("source_video_ids", ()) or ()) or tuple(
+            dict.fromkeys(
+                segment.source_video_id
+                for segment in self.workspace.manifest.segments
+                if not scoped_segment_ids or segment.segment_id in scoped_segment_ids
+            )
         )
         attempt_id = stable_attempt_id(
             source_video_ids=source_video_ids,
@@ -755,6 +807,8 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "queries": list(queries),
                 "top_k": top_k,
                 "time_range": list(time_range) if time_range else None,
+                "segment_ids": list(packet.get("segment_ids", ()) or ()),
+                "source_video_ids": list(source_video_ids),
                 "index_mode": index_mode,
                 "index_digest": packet["index_digest"],
                 "query_fingerprint": query_fingerprint,
@@ -786,6 +840,8 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "query_fingerprint": query_fingerprint,
                 "index_digest": packet["index_digest"],
                 "hit_count": len(hits),
+                "segment_ids": list(packet.get("segment_ids", ()) or ()),
+                "source_video_ids": list(source_video_ids),
                 "raw_output_pointer": str(raw_path),
                 "reused": False,
                 "time": time.time(),
@@ -884,7 +940,14 @@ class VisionInvestigator(VirtualVideoInvestigator):
         metadata = self.api.last_response_metadata
         counts = _attachment_counts(metadata, frame_paths)
         time_ranges = tuple(tuple(float(value) for value in item) for item in first.get("inspected_ranges", ()))
-        start_sec, end_sec = time_ranges[0] if time_ranges else tuple(first.get("requested_range", (0.0, 0.0)))
+        raw_requested_range = tuple(first.get("requested_range", ()) or ())
+        start_sec, end_sec = (
+            tuple(float(value) for value in raw_requested_range)
+            if len(raw_requested_range) == 2
+            else time_ranges[0]
+            if time_ranges
+            else (0.0, 0.0)
+        )
         frame_times = tuple(float(value) for value in first.get("frame_times", ()))
         source_video_ids = tuple(str(value) for value in first.get("source_video_ids", ()))
         sampling_fps = float(first.get("sampling_fps", 0.0) or 0.0)
@@ -902,6 +965,21 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 status="failed",
                 failure_reason="stored frame material does not match arbitration attempt_id",
             )
+        stored_sampling_config = first.get("sampling_config")
+        stored_sampling_manifest = (
+            stored_sampling_config.get("sampling_manifest")
+            if isinstance(stored_sampling_config, Mapping)
+            else None
+        )
+        sampling_manifest = (
+            dict(stored_sampling_manifest)
+            if isinstance(stored_sampling_manifest, Mapping)
+            else _sampling_manifest(
+                (float(start_sec), float(end_sec)),
+                frame_times,
+                requested_fps=sampling_fps,
+            )
+        )
         evidence = _visual_evidence(
             workspace=self.workspace,
             query_id=query_id,
@@ -913,6 +991,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
             parsed=parsed,
             source_lineage=tuple(dict(item) for item in first.get("source_lineage", ())),
             model=self.api.model,
+            sampling_manifest=sampling_manifest,
         )
         attempt = ObservationAttempt(
             attempt_id=attempt_id,
@@ -920,7 +999,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
             requested_range=(float(start_sec), float(end_sec)),
             inspected_ranges=time_ranges,
             attached_frame_times=frame_times,
-            sampling_config={"fps": sampling_fps, "mode": "arbitrate_observation", "modality": "visual"},
+            sampling_config={
+                "fps": sampling_fps,
+                "mode": "arbitrate_observation",
+                "modality": "visual",
+                "sampling_manifest": sampling_manifest,
+            },
             images_requested=counts["requested"],
             images_attached=counts["attached"],
             images_dropped=counts["dropped"],
@@ -928,6 +1012,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
             execution_status="completed",
             frame_refs=frame_paths,
             modality="visual",
+            evidence_role="candidate" if sampling_manifest.get("requires_refinement") else "unclassified",
             prompt_digest=prompt_digest(prompt),
             raw_output=raw,
             source_video_ids=source_video_ids,
@@ -1054,18 +1139,21 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or time_range. "
         "To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and arbitration_attempt_id.\n"
         "When available, search_caption is a locator: the framework always includes the original question, and you may add "
-        "caption_queries (1-4 complementary formulations), top_k, optional time_range, "
+        "caption_queries (1-4 complementary formulations), top_k, optional time_range, segment_id/source_video_ids, "
         "and index_mode=lexical, dense, or hybrid when configured. Treat returned ranges as candidates and inspect decisive "
         "claims visually. When mechanical_status lists pending_caption_candidates, inspect a top candidate time_range with "
         "inspection_mode=window before answering; caption_search and search_asr attempts cannot directly support an answer.\n"
         "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\","
         "\"goal\":\"observable question\","
-        "\"segment_id\":\"seg_0001\",\"time_range\":null,"
+        "\"segment_id\":\"seg_0001\",\"time_range\":null,\"coordinate_space\":\"virtual|segment_local\","
+        "\"source_video_ids\":[],"
         "\"inspection_mode\":\"window|search_asr|search_caption|arbitrate_observation\","
         "\"search_terms\":[],\"caption_queries\":[],\"top_k\":12,\"index_mode\":\"lexical|dense|hybrid\","
         "\"expand_neighbors\":0,\"arbitration_attempt_id\":\"\",\"force_reinspect\":false,"
         "\"expected_evidence\":\"direct observation\","
         "\"sampling_floor_fps\":0.5}],\"workspace_ops\":[]}. "
+        "time_range defaults to virtual workspace seconds. segment_local requires a known segment_id and is converted with "
+        "an explicit trace; a virtual range outside its named segment is rejected rather than remapped. "
         "Use 0.5 fps for persistent states, 1 fps for ordinary motion, and 2 fps for brief transitions or changing text. "
         "When identity, ordering, color, text, or a brief transition remains uncertain or mismatches an option, inspect a "
         "narrow 2 fps visual window before answering; ASR cannot resolve visual attributes.\n"
@@ -1146,6 +1234,67 @@ def _arbitration_prompt(task: Any, rows: Sequence[Mapping[str, Any]]) -> str:
     )
 
 
+def _sampling_manifest(
+    requested_range: tuple[float, float],
+    frame_times: Sequence[float],
+    *,
+    requested_fps: float,
+) -> dict[str, Any]:
+    start_sec, end_sec = sorted((float(requested_range[0]), float(requested_range[1])))
+    duration_sec = max(0.0, end_sec - start_sec)
+    times = tuple(
+        sorted(
+            {
+                min(end_sec, max(start_sec, float(value)))
+                for value in frame_times
+            }
+        )
+    )
+    fps = max(1e-6, float(requested_fps or 0.0))
+    half_width = 0.5 / fps
+    observed = _merge_sampling_ranges(
+        tuple(
+            (
+                max(start_sec, frame_time - half_width),
+                min(end_sec, frame_time + half_width),
+            )
+            for frame_time in times
+        )
+    )
+    covered_sec = sum(max(0.0, end - start) for start, end in observed)
+    boundary_points = (start_sec, *times, end_sec)
+    max_gap = max(
+        (right - left for left, right in zip(boundary_points, boundary_points[1:])),
+        default=duration_sec,
+    )
+    return {
+        "requested_range": [round(start_sec, 6), round(end_sec, 6)],
+        "frame_times": [round(value, 6) for value in times],
+        "observed_subranges": [
+            [round(range_start, 6), round(range_end, 6)]
+            for range_start, range_end in observed
+        ],
+        "effective_fps": round(len(times) / duration_sec, 6) if duration_sec else 0.0,
+        "max_gap": round(max_gap, 6),
+        "coverage_ratio": round(covered_sec / duration_sec, 6) if duration_sec else 0.0,
+        "requires_refinement": duration_sec > 120.0,
+    }
+
+
+def _merge_sampling_ranges(
+    ranges: Sequence[tuple[float, float]],
+) -> tuple[tuple[float, float], ...]:
+    merged: list[list[float]] = []
+    for start_sec, end_sec in sorted(ranges):
+        if end_sec <= start_sec:
+            continue
+        if not merged or start_sec > merged[-1][1] + 1e-9:
+            merged.append([start_sec, end_sec])
+        else:
+            merged[-1][1] = max(merged[-1][1], end_sec)
+    return tuple((start_sec, end_sec) for start_sec, end_sec in merged)
+
+
 def _visual_evidence(
     *,
     workspace: VirtualVideoWorkspace,
@@ -1158,6 +1307,7 @@ def _visual_evidence(
     parsed: Mapping[str, Any],
     source_lineage: Sequence[Mapping[str, Any]],
     model: str,
+    sampling_manifest: Mapping[str, Any],
 ) -> EvidenceRecord:
     start_sec, end_sec = time_range
     return EvidenceRecord(
@@ -1173,15 +1323,35 @@ def _visual_evidence(
         temporal_scope="window",
         evidence_kind="visual_observation",
         observation_polarity="unknown",
-        sampling_coverage="sparse",
+        sampling_coverage=(
+            "dense"
+            if float(sampling_manifest.get("coverage_ratio", 0.0) or 0.0) >= 0.98
+            and not bool(sampling_manifest.get("requires_refinement"))
+            else "sparse"
+        ),
         request_ids=(query_id,),
-        coverage_manifest=(CoverageSegment(query_id, float(start_sec), float(end_sec), "visual", 1.0),),
+        coverage_manifest=tuple(
+            CoverageSegment(
+                f"{query_id}:{index:03d}",
+                float(interval[0]),
+                float(interval[1]),
+                "visual",
+                1.0,
+            )
+            for index, interval in enumerate(
+                tuple(sampling_manifest.get("observed_subranges", ()) or ()),
+                start=1,
+            )
+        ),
         task_id=query_id,
         observation_id=attempt_id,
         sampling_fps=float(fps),
         confidence=0.0,
         source_lineage=tuple(dict(item) for item in source_lineage),
-        operation_metadata={"observation_payload": dict(parsed)},
+        operation_metadata={
+            "observation_payload": dict(parsed),
+            "sampling_manifest": dict(sampling_manifest),
+        },
     )
 
 
@@ -1212,8 +1382,15 @@ def _search_fingerprint(
     time_range: Sequence[float] | None,
     *,
     index_version: str,
+    segment_ids: Sequence[str] = (),
+    source_video_ids: Sequence[str] = (),
+    top_k: int = 0,
+    expand_neighbors: int = 0,
     bucket_sec: int = 300,
 ) -> SearchFingerprint:
+    normalized_queries = tuple(
+        dict.fromkeys(" ".join(str(query).casefold().split()) for query in queries if str(query).strip())
+    )
     tokens = tuple(
         sorted(
             {
@@ -1239,4 +1416,11 @@ def _search_fingerprint(
         normalized_terms=tokens,
         time_range_bucket=normalized_range,
         index_version=str(index_version),
+        normalized_queries=normalized_queries,
+        segment_ids=tuple(sorted({str(item).strip() for item in segment_ids if str(item).strip()})),
+        source_video_ids=tuple(
+            sorted({str(item).strip() for item in source_video_ids if str(item).strip()})
+        ),
+        top_k=max(0, int(top_k)),
+        expand_neighbors=max(0, int(expand_neighbors)),
     )

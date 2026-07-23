@@ -62,6 +62,7 @@ def passages() -> tuple[CaptionPassageV1, ...]:
             virtual_end_sec=10.0,
             anchor_virtual_sec=0.0,
             ordinal=0,
+            metadata={"source_segments": ["seg_0001"]},
         ),
         CaptionPassageV1(
             passage_id="cap:p1",
@@ -71,6 +72,7 @@ def passages() -> tuple[CaptionPassageV1, ...]:
             virtual_end_sec=20.0,
             anchor_virtual_sec=10.0,
             ordinal=1,
+            metadata={"source_segments": ["seg_0002"]},
         ),
         CaptionPassageV1(
             passage_id="cap:p2",
@@ -80,6 +82,7 @@ def passages() -> tuple[CaptionPassageV1, ...]:
             virtual_end_sec=30.0,
             anchor_virtual_sec=20.0,
             ordinal=2,
+            metadata={"source_segments": ["seg_0002"]},
         ),
     )
 
@@ -137,6 +140,38 @@ def test_dense_time_filter_and_neighbor_expansion() -> None:
     assert filtered[0].passage_id != "cap:p0"
     assert [hit.passage_id for hit in expanded] == ["cap:p0", "cap:p1"]
     assert expanded[1].metadata["candidate_only"] is True
+
+
+def test_dense_segment_scope_filters_neighbors_and_fingerprint() -> None:
+    index = CaptionSemanticIndex.build(
+        passages(),
+        adapter=FakeSemanticAdapter(),
+        config_digest="fixture",
+    )
+
+    scoped = index.search(
+        ("stationary car",),
+        top_k=1,
+        segment_ids=("seg_0001",),
+        expand_neighbors=1,
+    )
+    first_fingerprint = index.query_fingerprint(
+        ("stationary car",),
+        top_k=1,
+        time_range=None,
+        segment_ids=("seg_0001",),
+        expand_neighbors=1,
+    )
+    second_fingerprint = index.query_fingerprint(
+        ("stationary car",),
+        top_k=1,
+        time_range=None,
+        segment_ids=("seg_0002",),
+        expand_neighbors=1,
+    )
+
+    assert [hit.passage_id for hit in scoped] == ["cap:p0"]
+    assert first_fingerprint != second_fingerprint
 
 
 class FakeSentenceModel:
