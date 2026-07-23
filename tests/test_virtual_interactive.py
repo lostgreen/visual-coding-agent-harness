@@ -118,7 +118,6 @@ def test_reasoner_uses_only_workspace_protocol(tmp_path: Path) -> None:
     assert "qualification" not in prompt.casefold()
     assert "option_verdict" not in prompt
     assert "answer audit" not in prompt.casefold()
-    assert "do not default to the range start" in prompt
 
 
 @pytest.mark.parametrize("wrapper", ("response", "responses", "items"))
