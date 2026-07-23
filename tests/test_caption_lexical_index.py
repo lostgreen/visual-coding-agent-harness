@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from vcah.caption_lexical_index import CaptionLexicalIndex, render_caption_hits
-from vcah.caption_schema import CaptionPassageV1, passage_to_dict
+from vcah.caption_schema import CaptionHitV1, CaptionPassageV1, passage_to_dict
 from vcah.interactive_agents import VisionInvestigator
 from vcah.multiround import InvestigationTask
 from vcah.virtual_index import build_workspace_overview
@@ -128,6 +128,37 @@ def test_lexical_neighbor_expansion_and_query_fingerprint_are_deterministic() ->
     assert first == repeated
     assert changed != first
     assert len(render_caption_hits(hits, char_limit=120)) <= 120
+
+
+def test_render_caption_hits_keeps_later_temporal_cues_within_budget() -> None:
+    hits = tuple(
+        CaptionHitV1(
+            passage_id=f"passage-{index}",
+            caption_id=f"caption-{index}",
+            rank=index + 1,
+            lexical_score=1.0,
+            dense_score=1.0,
+            fused_score=1.0 / (index + 1),
+            virtual_start_sec=index * 100.0,
+            virtual_end_sec=(index + 1) * 100.0,
+            wall_clock_begin=None,
+            wall_clock_end=None,
+            text=(
+                "The scene begins with a long establishing sequence. "
+                + ("background detail " * 40)
+                + f"The video ends with menu screens for candidate {index}."
+            ),
+            interval_precision="chunk",
+            source_pointer=f"caption://passage-{index}",
+        )
+        for index in range(8)
+    )
+
+    rendered = render_caption_hits(hits)
+
+    assert len(rendered) <= 4000
+    assert "passage-7" in rendered
+    assert "video ends with menu screens for candidate 7" in rendered
 
 
 def test_lexical_segment_scope_filters_hits_neighbors_and_fingerprint() -> None:
