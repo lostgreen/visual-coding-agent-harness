@@ -291,7 +291,7 @@ def test_reasoner_retries_structurally_empty_investigation(tmp_path: Path) -> No
         force_finalize=False,
         mechanical_status={},
         working_document_view="",
-        workspace_overview={},
+        workspace_overview={"segment_overviews": [{"segment_ids": ["seg_0001"]}]},
     )
 
     assert decision.action == "investigate"
@@ -300,6 +300,7 @@ def test_reasoner_retries_structurally_empty_investigation(tmp_path: Path) -> No
     assert decision.tasks[0].caption_queries == ("rickety bridge over a chasm",)
     assert "window requires a known segment_id" in api.calls[2]["prompt"]
     assert "Do not invent or copy placeholder segment IDs" in api.calls[2]["prompt"]
+    assert 'Known workspace segment_ids: ["seg_0001"]' in api.calls[2]["prompt"]
     rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
     assert [row["repair_succeeded"] for row in rows[:2]] == [False, True]
 

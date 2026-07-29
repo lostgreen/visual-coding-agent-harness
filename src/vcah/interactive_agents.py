@@ -208,6 +208,18 @@ def _executable_decision_payload(value: Mapping[str, Any], *, round_id: int) -> 
     return payload
 
 
+def _workspace_segment_ids(value: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            str(segment_id)
+            for row in tuple(value.get("segment_overviews", ()) or ())
+            if isinstance(row, Mapping)
+            for segment_id in tuple(row.get("segment_ids", ()) or ())
+            if str(segment_id).strip()
+        )
+    )
+
+
 class WorkspaceReasoner:
     """The only component that makes semantic decisions."""
 
@@ -232,6 +244,7 @@ class WorkspaceReasoner:
         repaired = False
         repair_attempt_count = 0
         repair_source = raw
+        known_segment_ids = _workspace_segment_ids(kwargs.get("workspace_overview") or {})
         while not payload and repair_attempt_count < 2:
             repair_attempt_count += 1
             if repair_attempt_count == 1:
@@ -254,6 +267,8 @@ class WorkspaceReasoner:
                     "non-empty search_terms array. If a visual window has no known location, use search_caption with "
                     "queries already supported by the stated intent. Do not invent or copy placeholder segment IDs such "
                     "as search_result_0 or s1; only reuse an explicit seg_... ID already present in the invalid repair. "
+                    f"Known workspace segment_ids: {json.dumps(known_segment_ids)}. If none of these exact IDs already "
+                    "appears in the invalid repair, use search_caption instead of window. "
                     "Preserve any concrete ranges, valid segments, or queries. "
                     "Convert only intent already present in the invalid repair. Do not invent observations, references, "
                     "support, or an answer. Return JSON only.\n"
