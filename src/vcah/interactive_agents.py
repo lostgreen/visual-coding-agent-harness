@@ -198,28 +198,6 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
     }
 
 
-def _executable_decision_payload(value: Mapping[str, Any], *, round_id: int) -> dict[str, Any]:
-    payload = _decision_payload(value)
-    if not payload:
-        return {}
-    normalized = _normalize_decision(payload, round_id=round_id)
-    if normalized["action"] == "investigate" and not normalized["tasks"]:
-        return {}
-    return payload
-
-
-def _workspace_segment_ids(value: Mapping[str, Any]) -> tuple[str, ...]:
-    return tuple(
-        dict.fromkeys(
-            str(segment_id)
-            for row in tuple(value.get("segment_overviews", ()) or ())
-            if isinstance(row, Mapping)
-            for segment_id in tuple(row.get("segment_ids", ()) or ())
-            if str(segment_id).strip()
-        )
-    )
-
-
 class WorkspaceReasoner:
     """The only component that makes semantic decisions."""
 
@@ -242,49 +220,22 @@ class WorkspaceReasoner:
         payload = _decision_payload(parsed)
         repair_attempted = not payload
         repaired = False
-        repair_attempt_count = 0
-        repair_source = raw
-        known_segment_ids = _workspace_segment_ids(kwargs.get("workspace_overview") or {})
-        while not payload and repair_attempt_count < 2:
-            repair_attempt_count += 1
-            if repair_attempt_count == 1:
-                repair_prompt = (
-                    "Recover this Reasoner response as one compact Decision JSON object with exactly one valid action: "
-                    "investigate, read_observations, update_workspace, or answer. Preserve only content already present; "
-                    "do not invent observations, claims, references, support, or an answer. Return JSON only.\n"
-                    f"Response: {repair_source}"
-                )
-            else:
-                repair_prompt = (
-                    "The previous repair is still invalid because it has no recognized top-level string action. "
-                    "Rewrite it as exactly one compact Decision JSON object. The top-level action must be one of "
-                    "investigate, read_observations, update_workspace, or answer; do not use a nested action object, "
-                    "action_type, questions, claims, decision, or thought. For an investigation use "
-                    '{"action":"investigate","tasks":[{"query_id":"r1_t1","goal":"observable question",'
-                    '"inspection_mode":"window|search_asr|search_caption"}],"workspace_ops":[]}. '
-                    "Every investigation task must be executable: window requires a known segment_id or a two-value "
-                    "time_range; search_caption requires a non-empty caption_queries array; search_asr requires a "
-                    "non-empty search_terms array. If a visual window has no known location, use search_caption with "
-                    "queries already supported by the stated intent. Do not invent or copy placeholder segment IDs such "
-                    "as search_result_0 or s1; only reuse an explicit seg_... ID already present in the invalid repair. "
-                    f"Known workspace segment_ids: {json.dumps(known_segment_ids)}. If none of these exact IDs already "
-                    "appears in the invalid repair, use search_caption instead of window. "
-                    "Preserve any concrete ranges, valid segments, or queries. "
-                    "Convert only intent already present in the invalid repair. Do not invent observations, references, "
-                    "support, or an answer. Return JSON only.\n"
-                    f"Invalid repair: {repair_source}"
-                )
+        if repair_attempted:
+            repair_prompt = (
+                "Recover this Reasoner response as one compact Decision JSON object with exactly one valid action: "
+                "investigate, read_observations, update_workspace, or answer. Preserve only content already present; "
+                "do not invent observations, claims, references, support, or an answer. Return JSON only.\n"
+                f"Response: {raw}"
+            )
             repaired_raw = self.api.chat(repair_prompt, max_tokens=_completion_budget(1400))
             repaired_parsed = _parse_json(repaired_raw)
-            payload = _executable_decision_payload(repaired_parsed, round_id=self.calls)
+            payload = _decision_payload(repaired_parsed)
             repaired = bool(payload)
             _append_jsonl(
                 self.trace_path,
                 {
                     "type": "reasoner_json_repair",
                     "round": self.calls,
-                    "repair_attempt": repair_attempt_count,
-                    "repair_succeeded": repaired,
                     "prompt": repair_prompt,
                     "raw": repaired_raw,
                     "parsed": repaired_parsed,
@@ -293,7 +244,6 @@ class WorkspaceReasoner:
                     "time": time.time(),
                 },
             )
-            repair_source = repaired_raw
         value = _normalize_decision(payload or {"action": "update_workspace"}, round_id=self.calls)
         value["answer"] = _answer(value["answer"], dict(kwargs.get("options") or {}))
         decision = ReasonerDecision(**value)
@@ -310,7 +260,6 @@ class WorkspaceReasoner:
                 "schema_unwrapped": bool(payload and payload != parsed),
                 "format_repaired": repaired,
                 "repair_failed": repair_attempted and not payload,
-                "repair_attempt_count": repair_attempt_count,
                 "api_response": api_response,
                 "time": time.time(),
             },
