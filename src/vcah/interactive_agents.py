@@ -220,13 +220,29 @@ class WorkspaceReasoner:
         payload = _decision_payload(parsed)
         repair_attempted = not payload
         repaired = False
-        if repair_attempted:
-            repair_prompt = (
-                "Recover this Reasoner response as one compact Decision JSON object with exactly one valid action: "
-                "investigate, read_observations, update_workspace, or answer. Preserve only content already present; "
-                "do not invent observations, claims, references, support, or an answer. Return JSON only.\n"
-                f"Response: {raw}"
-            )
+        repair_attempt_count = 0
+        repair_source = raw
+        while not payload and repair_attempt_count < 2:
+            repair_attempt_count += 1
+            if repair_attempt_count == 1:
+                repair_prompt = (
+                    "Recover this Reasoner response as one compact Decision JSON object with exactly one valid action: "
+                    "investigate, read_observations, update_workspace, or answer. Preserve only content already present; "
+                    "do not invent observations, claims, references, support, or an answer. Return JSON only.\n"
+                    f"Response: {repair_source}"
+                )
+            else:
+                repair_prompt = (
+                    "The previous repair is still invalid because it has no recognized top-level string action. "
+                    "Rewrite it as exactly one compact Decision JSON object. The top-level action must be one of "
+                    "investigate, read_observations, update_workspace, or answer; do not use a nested action object, "
+                    "action_type, questions, claims, decision, or thought. For an investigation use "
+                    '{"action":"investigate","tasks":[{"query_id":"r1_t1","goal":"observable question",'
+                    '"inspection_mode":"window|search_asr|search_caption","time_range":null}],"workspace_ops":[]}. '
+                    "Convert only intent already present in the invalid repair. Do not invent observations, references, "
+                    "support, or an answer. Return JSON only.\n"
+                    f"Invalid repair: {repair_source}"
+                )
             repaired_raw = self.api.chat(repair_prompt, max_tokens=_completion_budget(1400))
             repaired_parsed = _parse_json(repaired_raw)
             payload = _decision_payload(repaired_parsed)
@@ -236,6 +252,8 @@ class WorkspaceReasoner:
                 {
                     "type": "reasoner_json_repair",
                     "round": self.calls,
+                    "repair_attempt": repair_attempt_count,
+                    "repair_succeeded": repaired,
                     "prompt": repair_prompt,
                     "raw": repaired_raw,
                     "parsed": repaired_parsed,
@@ -244,6 +262,7 @@ class WorkspaceReasoner:
                     "time": time.time(),
                 },
             )
+            repair_source = repaired_raw
         value = _normalize_decision(payload or {"action": "update_workspace"}, round_id=self.calls)
         value["answer"] = _answer(value["answer"], dict(kwargs.get("options") or {}))
         decision = ReasonerDecision(**value)
@@ -260,6 +279,7 @@ class WorkspaceReasoner:
                 "schema_unwrapped": bool(payload and payload != parsed),
                 "format_repaired": repaired,
                 "repair_failed": repair_attempted and not payload,
+                "repair_attempt_count": repair_attempt_count,
                 "api_response": api_response,
                 "time": time.time(),
             },
