@@ -223,6 +223,27 @@ def test_reasoner_prompt_retains_first_and_last_overviews(tmp_path: Path) -> Non
     assert "read_observations, update_workspace, or answer" in prompt
 
 
+def test_reasoner_prompt_uses_anchor_first_temporal_localization(tmp_path: Path) -> None:
+    api = FakeAPI((json.dumps({"action": "investigate", "tasks": []}),))
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    reasoner.decide(
+        question="After entering the valley, what is the first item collected?",
+        options={},
+        remaining_budget=4,
+        force_finalize=False,
+        mechanical_status={},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    prompt = api.calls[0]["prompt"]
+    assert "separate the event that anchors where to look from the answer payload" in prompt
+    assert "include at least one caption query for that anchor" in prompt
+    assert "restrict a follow-up caption search or visual scan" in prompt
+    assert "do not add hypothesis claims merely to restate the decomposition" in prompt
+
+
 def test_final_repair_prompt_requires_an_answer(tmp_path: Path) -> None:
     api = FakeAPI((json.dumps({"action": "update_workspace"}),))
     reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
