@@ -198,6 +198,16 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
     }
 
 
+def _executable_decision_payload(value: Mapping[str, Any], *, round_id: int) -> dict[str, Any]:
+    payload = _decision_payload(value)
+    if not payload:
+        return {}
+    normalized = _normalize_decision(payload, round_id=round_id)
+    if normalized["action"] == "investigate" and not normalized["tasks"]:
+        return {}
+    return payload
+
+
 class WorkspaceReasoner:
     """The only component that makes semantic decisions."""
 
@@ -238,14 +248,18 @@ class WorkspaceReasoner:
                     "investigate, read_observations, update_workspace, or answer; do not use a nested action object, "
                     "action_type, questions, claims, decision, or thought. For an investigation use "
                     '{"action":"investigate","tasks":[{"query_id":"r1_t1","goal":"observable question",'
-                    '"inspection_mode":"window|search_asr|search_caption","time_range":null}],"workspace_ops":[]}. '
+                    '"inspection_mode":"window|search_asr|search_caption"}],"workspace_ops":[]}. '
+                    "Every investigation task must be executable: window requires a known segment_id or a two-value "
+                    "time_range; search_caption requires a non-empty caption_queries array; search_asr requires a "
+                    "non-empty search_terms array. If a visual window has no known location, use search_caption with "
+                    "queries already supported by the stated intent. Preserve any concrete ranges, segments, or queries. "
                     "Convert only intent already present in the invalid repair. Do not invent observations, references, "
                     "support, or an answer. Return JSON only.\n"
                     f"Invalid repair: {repair_source}"
                 )
             repaired_raw = self.api.chat(repair_prompt, max_tokens=_completion_budget(1400))
             repaired_parsed = _parse_json(repaired_raw)
-            payload = _decision_payload(repaired_parsed)
+            payload = _executable_decision_payload(repaired_parsed, round_id=self.calls)
             repaired = bool(payload)
             _append_jsonl(
                 self.trace_path,

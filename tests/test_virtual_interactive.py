@@ -250,6 +250,59 @@ def test_reasoner_retries_when_first_json_repair_uses_nested_legacy_schema(tmp_p
     assert rows[-1]["repair_attempt_count"] == 2
 
 
+def test_reasoner_retries_structurally_empty_investigation(tmp_path: Path) -> None:
+    api = FakeAPI(
+        (
+            json.dumps({"note": "missing action"}),
+            json.dumps(
+                {
+                    "action": "investigate",
+                    "tasks": [
+                        {
+                            "query_id": "r1_t1",
+                            "goal": "Locate the bridge.",
+                            "inspection_mode": "window",
+                        }
+                    ],
+                }
+            ),
+            json.dumps(
+                {
+                    "action": "investigate",
+                    "tasks": [
+                        {
+                            "query_id": "r1_t1",
+                            "goal": "Locate the bridge.",
+                            "inspection_mode": "search_caption",
+                            "caption_queries": ["rickety bridge over a chasm"],
+                        }
+                    ],
+                }
+            ),
+        )
+    )
+    trace_path = tmp_path / "trace.jsonl"
+    reasoner = WorkspaceReasoner(api, trace_path=trace_path)
+
+    decision = reasoner.decide(
+        question="Where is the bridge?",
+        options={},
+        remaining_budget=4,
+        force_finalize=False,
+        mechanical_status={},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    assert decision.action == "investigate"
+    assert len(decision.tasks) == 1
+    assert decision.tasks[0].inspection_mode == "search_caption"
+    assert decision.tasks[0].caption_queries == ("rickety bridge over a chasm",)
+    assert "window requires a known segment_id" in api.calls[2]["prompt"]
+    rows = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+    assert [row["repair_succeeded"] for row in rows[:2]] == [False, True]
+
+
 def test_reasoner_prompt_retains_first_and_last_overviews(tmp_path: Path) -> None:
     api = FakeAPI((json.dumps({"action": "answer", "answer": "B"}),))
     reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
