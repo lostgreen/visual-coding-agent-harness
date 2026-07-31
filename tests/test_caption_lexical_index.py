@@ -278,10 +278,12 @@ def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
         caption_query_strategy="rema",
     )
     calls: list[tuple[str, ...]] = []
+    top_ks: list[int] = []
 
-    def search(queries: Sequence[str], **_kwargs: Any) -> Mapping[str, Any]:
+    def search(queries: Sequence[str], **kwargs: Any) -> Mapping[str, Any]:
         normalized = tuple(str(query) for query in queries)
         calls.append(normalized)
+        top_ks.append(int(kwargs["top_k"]))
         fingerprint = "-".join(normalized)
         return {
             "hits": [],
@@ -301,6 +303,7 @@ def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
             goal="Locate the target.",
             inspection_mode="search_caption",
             caption_queries=("red temple door", "红色寺庙大门"),
+            top_k=5,
         )
     )
     refined = investigator._investigate_task(
@@ -309,6 +312,7 @@ def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
             goal="Refine the target.",
             inspection_mode="search_caption",
             caption_queries=("red temple doorway", "红色寺庙大门"),
+            top_k=5,
         )
     )
 
@@ -316,10 +320,13 @@ def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
         ("red temple door", "红色寺庙大门", "the target"),
         ("red temple doorway", "红色寺庙大门", "the target"),
     ]
+    assert top_ks == [8, 8]
     assert workspace.case.question not in calls[0]
     assert first.cost["reused"] is False
     assert refined.cost["reused"] is False
     assert first.attempts[0].sampling_config["query_strategy"] == "rema"
+    assert first.attempts[0].sampling_config["top_k"] == 8
+    assert first.attempts[0].sampling_config["requested_top_k"] == 5
 
 
 def test_rema_caption_queries_split_temporal_goal_before_entity_terms(

@@ -733,7 +733,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
         time_range = getattr(task, "time_range", None)
         segment_id = str(getattr(task, "segment_id", "") or "")
         requested_source_video_ids = tuple(getattr(task, "source_video_ids", ()) or ())
-        top_k = int(getattr(task, "top_k", 12) or 12)
+        requested_top_k = int(getattr(task, "top_k", 12) or 12)
+        top_k = requested_top_k
+        if self.caption_query_strategy == "rema":
+            # Round-robin fusion needs enough shared slots to reach beyond each
+            # query's first two hits. Only the automatic expansion is capped.
+            top_k = max(requested_top_k, min(20, len(queries) * 2 + 2))
         expand_neighbors = int(getattr(task, "expand_neighbors", 0) or 0)
         index_mode = self.caption_index_mode or str(getattr(task, "index_mode", "lexical") or "lexical")
         search_fingerprint = _search_fingerprint(
@@ -834,6 +839,11 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "modality": "caption_search",
                 "queries": list(queries),
                 "top_k": top_k,
+                **(
+                    {"requested_top_k": requested_top_k}
+                    if requested_top_k != top_k
+                    else {}
+                ),
                 "time_range": list(time_range) if time_range else None,
                 "segment_ids": list(packet.get("segment_ids", ()) or ()),
                 "source_video_ids": list(source_video_ids),
