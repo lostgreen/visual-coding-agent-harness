@@ -270,7 +270,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)
     parser.add_argument("--caption-index-mode", choices=("lexical", "dense", "hybrid"), default="hybrid")
-    parser.add_argument("--caption-query-strategy", choices=("joint", "rema"), default="joint")
+    parser.add_argument(
+        "--caption-query-strategy",
+        choices=("joint", "rema", "adaptive"),
+        default="joint",
+    )
     parser.add_argument("--caption-config-digest")
     parser.add_argument("--embedding-model")
     parser.add_argument("--embedding-revision")

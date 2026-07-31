@@ -396,6 +396,34 @@ def test_rema_caption_queries_extract_temporal_contract_from_question() -> None:
     )
 
 
+def test_adaptive_caption_strategy_is_rema_only_for_supported_temporal_contract(
+    tmp_path: Path,
+) -> None:
+    ordinary = VisionInvestigator(
+        _workspace(tmp_path / "ordinary"),
+        api=DummyApi(),
+        trace_path=tmp_path / "ordinary.jsonl",
+        caption_query_strategy="adaptive",
+    )
+    temporal = VisionInvestigator(
+        _workspace(
+            tmp_path / "temporal",
+            question=(
+                "After the player enters the Flaming Mountains chapter, what are the values "
+                "before the first challenge against Yin Tiger?"
+            ),
+        ),
+        api=DummyApi(),
+        trace_path=tmp_path / "temporal.jsonl",
+        caption_query_strategy="adaptive",
+    )
+
+    assert ordinary.mechanical_status()["caption_query_policy"] == "adaptive"
+    assert ordinary.mechanical_status()["caption_query_strategy"] == "joint"
+    assert temporal.mechanical_status()["caption_query_policy"] == "adaptive"
+    assert temporal.mechanical_status()["caption_query_strategy"] == "rema"
+
+
 def test_rema_temporal_locator_selects_first_target_after_shared_chapter_boundary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

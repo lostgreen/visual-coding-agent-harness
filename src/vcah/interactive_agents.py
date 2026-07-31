@@ -302,11 +302,22 @@ class VisionInvestigator(VirtualVideoInvestigator):
         caption_config_digest: str | None = None,
         caption_query_strategy: str = "joint",
     ) -> None:
+        requested_query_strategy = str(caption_query_strategy or "joint").strip().casefold()
+        if requested_query_strategy not in {"joint", "rema", "adaptive"}:
+            raise ValueError(f"unsupported caption_query_strategy: {requested_query_strategy}")
+        effective_query_strategy = requested_query_strategy
+        if requested_query_strategy == "adaptive":
+            contract = _temporal_caption_contract(workspace.case.question)
+            effective_query_strategy = (
+                "rema"
+                if contract is not None and contract.get("scope_kind") == "chapter"
+                else "joint"
+            )
         super().__init__(
             workspace,
             caption_embedding_adapter=caption_embedding_adapter,
             caption_config_digest=caption_config_digest,
-            caption_query_strategy=caption_query_strategy,
+            caption_query_strategy=effective_query_strategy,
         )
         self.api = api
         self.trace_path = trace_path
@@ -314,6 +325,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
         if mode and mode not in {"lexical", "dense", "hybrid"}:
             raise ValueError(f"unsupported caption_index_mode: {mode}")
         self.caption_index_mode = mode or None
+        self.caption_query_policy = requested_query_strategy
         self.caption_query_strategy = self._caption_query_strategy
         self._seen_asr_attempt_ids: set[str] = set()
         self._seen_caption_attempt_ids: set[str] = set()
@@ -338,6 +350,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
     def mechanical_status(self) -> Mapping[str, Any]:
         zero_hits = [outcome for outcome in self._search_outcomes if outcome.hit_count == 0]
         return {
+            "caption_query_policy": self.caption_query_policy,
             "caption_query_strategy": self.caption_query_strategy,
             "empty_search_streak": self._empty_search_streak,
             "duplicate_search_count": self._duplicate_search_count,
