@@ -615,10 +615,14 @@ def _mechanical_status(
         and bool(manifest.get("requires_refinement"))
     )
     candidates_by_key: dict[tuple[str, float, float], dict[str, Any]] = {}
+    temporal_locators: list[dict[str, Any]] = []
     for row in source_rows:
         config = row.get("sampling_config")
         if not isinstance(config, Mapping) or config.get("mode") != "search_caption":
             continue
+        temporal_locator = config.get("temporal_locator")
+        if isinstance(temporal_locator, Mapping):
+            temporal_locators.append(dict(temporal_locator))
         for hit in tuple(config.get("hits", ()) or ()):
             if not isinstance(hit, Mapping):
                 continue
@@ -651,6 +655,20 @@ def _mechanical_status(
             for interval in visual_ranges
         )
     )
+    temporal_status: dict[str, Any] = {}
+    if temporal_locators:
+        latest_locator = temporal_locators[-1]
+        candidate_groups = tuple(latest_locator.get("candidate_groups", ()) or ())[:4]
+        recommended = latest_locator.get("recommended")
+        if isinstance(recommended, Mapping):
+            inspection_range = _time_range(recommended.get("inspection_range"))
+            if inspection_range is not None and not any(
+                _ranges_overlap(inspection_range, interval) for interval in visual_ranges
+            ):
+                temporal_status["recommended_temporal_candidate"] = dict(recommended)
+        temporal_status["temporal_candidate_groups"] = [
+            dict(item) for item in candidate_groups if isinstance(item, Mapping)
+        ]
     caption_cited_claim_count = sum(
         any(modality_by_attempt.get(cite) == "caption_search" for cite in claim.cites)
         for claim in active_claims
@@ -704,6 +722,11 @@ def _mechanical_status(
             "Caption hits are locator candidates only. Inspect a top pending caption time_range with inspection_mode=window "
             "before using it as answer support."
         )
+    if temporal_status.get("recommended_temporal_candidate"):
+        hints.append(
+            "An explicit after/before/first contract produced a scoped temporal locator. "
+            "Inspect recommended_temporal_candidate.inspection_range before unrelated Caption hits."
+        )
     if unrefined_visual_attempts:
         hints.append(
             "Wide visual scans are locator candidates only; refine a relevant neighborhood to <=120 seconds before "
@@ -736,6 +759,7 @@ def _mechanical_status(
                 else 8
             ]
         ),
+        **temporal_status,
         "entity_count": len(document.entities),
         "candidate_interval_count": sum(note.role == "candidate" for note in document.timeline),
         "supporting_interval_count": sum(note.role == "supporting" for note in document.timeline),

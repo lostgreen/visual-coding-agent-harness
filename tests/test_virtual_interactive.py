@@ -143,6 +143,8 @@ def test_reasoner_prompts_short_independent_queries_for_rema_strategy(tmp_path: 
     assert "usually a scope constraint" in prompt
     assert "query_matches and caption_excerpt" in prompt
     assert "rank is retrieval priority, not proof" in prompt
+    assert "recommended_temporal_candidate" in prompt
+    assert "locator-only join" in prompt
     assert "framework always includes the original question" not in prompt
 
 

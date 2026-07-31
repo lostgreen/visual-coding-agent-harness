@@ -650,12 +650,22 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
         frame_refs=(pointer,),
         modality="caption_search",
     )
+    temporal_candidate = {
+        "scope_anchor": {"time_range": [1.0, 2.0]},
+        "target_event": {"passage_id": "p1", "time_range": [5.0, 10.0]},
+        "inspection_range": [4.0, 11.0],
+        "target_candidate_count": 2,
+    }
     log.append_attempt(
         ObservationAttempt(
             attempt_id=attempt_id,
             sampling_config={
                 "mode": "search_caption",
                 "modality": "caption_search",
+                "temporal_locator": {
+                    "candidate_groups": [temporal_candidate],
+                    "recommended": temporal_candidate,
+                },
                 "hits": [
                     {
                         "passage_id": "p1",
@@ -689,7 +699,10 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
     assert status["pending_caption_candidates"][0]["caption_excerpt"] == (
         "The person raises a cup."
     )
+    assert status["recommended_temporal_candidate"]["inspection_range"] == [4.0, 11.0]
+    assert status["temporal_candidate_groups"] == [temporal_candidate]
     assert any("locator candidates" in hint for hint in status["prompt_hints"])
+    assert any("scoped temporal locator" in hint for hint in status["prompt_hints"])
 
     visual_attempt_id = stable_attempt_id(
         source_video_ids=("video-a",),
@@ -717,6 +730,7 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
 
     assert confirmed["pending_caption_candidate_count"] == 1
     assert confirmed["pending_caption_candidates"][0]["time_range"] == [12.0, 15.0]
+    assert "recommended_temporal_candidate" not in confirmed
 
 
 def test_reasoner_can_inspect_pending_caption_candidate_within_round_budget(tmp_path: Path) -> None:

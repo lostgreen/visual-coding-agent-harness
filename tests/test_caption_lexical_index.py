@@ -69,7 +69,12 @@ def _passages() -> tuple[CaptionPassageV1, ...]:
     )
 
 
-def _workspace(tmp_path: Path, *, with_captions: bool = True) -> VirtualVideoWorkspace:
+def _workspace(
+    tmp_path: Path,
+    *,
+    with_captions: bool = True,
+    question: str = "Where is the red door?",
+) -> VirtualVideoWorkspace:
     manifest = VirtualVideoManifest(
         workspace_id="mmlifelong-game",
         segments=(
@@ -77,7 +82,7 @@ def _workspace(tmp_path: Path, *, with_captions: bool = True) -> VirtualVideoWor
             VirtualVideoSegment("seg_0002", "video-b", "video-b.mp4", 0.0, 280.0, 20.0, 300.0),
         ),
     )
-    case = VirtualVideoCase(case_id="case", question="Where is the red door?")
+    case = VirtualVideoCase(case_id="case", question=question)
     workspace = VirtualVideoWorkspace.create(tmp_path / "case", manifest=manifest, case=case)
     if with_captions:
         captions = workspace.asset_root / "captions"
@@ -389,6 +394,99 @@ def test_rema_caption_queries_extract_temporal_contract_from_question() -> None:
         "the player enters the Flaming Mountains chapter",
         "the first challenge against Yin Tiger",
     )
+
+
+def test_rema_temporal_locator_selects_first_target_after_shared_chapter_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    question = (
+        "After the player enters the Flaming Mountains chapter, what are the values "
+        "before the first challenge against Yin Tiger?"
+    )
+    workspace = _workspace(tmp_path, question=question)
+    investigator = VisionInvestigator(
+        workspace,
+        api=DummyApi(),
+        trace_path=tmp_path / "trace-rema-locator.jsonl",
+        caption_query_strategy="rema",
+    )
+    calls: list[dict[str, Any]] = []
+
+    def hit(
+        passage_id: str,
+        start: float,
+        end: float,
+        text: str,
+        query: str,
+        rank: int,
+    ) -> dict[str, Any]:
+        return {
+            "passage_id": passage_id,
+            "caption_id": "caption",
+            "rank": rank,
+            "lexical_score": 1.0,
+            "dense_score": 1.0,
+            "fused_score": 1.0 / (60 + rank),
+            "virtual_start_sec": start,
+            "virtual_end_sec": end,
+            "wall_clock_begin": None,
+            "wall_clock_end": None,
+            "text": text,
+            "interval_precision": "anchor",
+            "source_pointer": f"caption://fixture/{passage_id}",
+            "metadata": {"query_matches": [{"query": query.casefold(), "rank": rank}]},
+        }
+
+    target_query = "the player first challenges Yin Tiger"
+    targets = [
+        hit("late", 68920.0, 68967.0, "The later tiger fight continues.", target_query, 1),
+        hit("early", 17844.0, 17868.0, "An earlier tiger fight continues.", target_query, 2),
+        hit("correct", 66215.0, 66300.0, "The sparring match begins.", target_query, 3),
+    ]
+    chapter = hit(
+        "chapter-5",
+        63135.0,
+        63144.0,
+        "White calligraphy appears, reading Chapter 5: Sunset in the Mortal World.",
+        "a chapter title appears",
+        2,
+    )
+
+    def search(queries: Sequence[str], **kwargs: Any) -> Mapping[str, Any]:
+        calls.append({"queries": tuple(queries), **kwargs})
+        scoped_end = (kwargs.get("time_range") or (None, None))[1]
+        hits = targets if scoped_end is None else ([chapter] if scoped_end in {66215.0, 68920.0} else [])
+        return {
+            "hits": hits,
+            "query_fingerprint": f"search-{len(calls)}",
+            "index_digest": "rema-index",
+            "config_digest": "fixture",
+            "rendered": "",
+            "segment_ids": [],
+            "source_video_ids": [],
+            "query_strategy": "rema",
+        }
+
+    monkeypatch.setattr(investigator, "search_caption", search)
+    report = investigator._investigate_task(
+        InvestigationTask(
+            query_id="rema-temporal-locator",
+            goal="Find the Flaming Mountains chapter.",
+            inspection_mode="search_caption",
+            caption_queries=("Flaming Mountains",),
+            top_k=5,
+        )
+    )
+
+    locator = report.attempts[0].sampling_config["temporal_locator"]
+    recommended = locator["recommended"]
+    assert calls[0]["top_k"] == 12
+    assert [call["top_k"] for call in calls[1:]] == [6, 6, 6]
+    assert recommended["scope_anchor"]["time_range"] == [63135.0, 63144.0]
+    assert recommended["target_event"]["time_range"] == [66215.0, 66300.0]
+    assert recommended["inspection_range"] == [66105.0, 66225.0]
+    assert recommended["target_candidate_count"] == 2
 
 
 def test_no_caption_workspace_does_not_advertise_caption_navigation(tmp_path: Path) -> None:

@@ -27,13 +27,16 @@ _LOCATOR_PREFIX_RE = re.compile(
 )
 _QUERY_PART_RE = re.compile(r"\s+(?:and|then|after|before)\s+|[,;；]", re.IGNORECASE)
 _TEMPORAL_CLAUSE_RE = re.compile(
-    r"\b(?:after|before|when|while|until|once)\s+(.+?)(?=,|\?|$)",
+    r"\b(?P<relation>after|before|when|while|until|once)\s+"
+    r"(?P<clause>.+?)(?=,|\?|$)",
     re.IGNORECASE,
 )
 _FIRST_EVENT_RE = re.compile(
     r"^(?:the\s+)?first\s+(challenge|fight|encounter)\s+(?:against|with)\s+(.+)$",
     re.IGNORECASE,
 )
+_CHAPTER_BOUNDARY_RE = re.compile(r"\bchapter\b|章节|第.{0,4}[回章]", re.IGNORECASE)
+_TEMPORAL_LOOKBACK_SEC = 7200.0
 
 
 @dataclass(frozen=True)
@@ -764,6 +767,15 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 expand_neighbors=expand_neighbors,
                 index_mode=index_mode,
             )
+            temporal_locator = self._chapter_temporal_locator(
+                packet,
+                time_range=time_range,
+                segment_id=segment_id,
+                source_video_ids=requested_source_video_ids,
+                index_mode=index_mode,
+            )
+            if temporal_locator:
+                packet = {**packet, "temporal_locator": temporal_locator}
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             return InvestigationReport(
                 query_id=query_id,
@@ -865,6 +877,11 @@ class VisionInvestigator(VirtualVideoInvestigator):
                     }
                     for hit in hits
                 ],
+                **(
+                    {"temporal_locator": dict(packet["temporal_locator"])}
+                    if isinstance(packet.get("temporal_locator"), Mapping)
+                    else {}
+                ),
             },
             parse_status="deterministic",
             execution_status="completed",
@@ -914,6 +931,131 @@ class VisionInvestigator(VirtualVideoInvestigator):
             },
             failure_reason="" if hits else "caption_zero_hits_refine_query_or_use_visual",
         )
+
+    def _chapter_temporal_locator(
+        self,
+        packet: Mapping[str, Any],
+        *,
+        time_range: Sequence[float] | None,
+        segment_id: str,
+        source_video_ids: Sequence[str],
+        index_mode: str,
+    ) -> dict[str, Any]:
+        if self.caption_query_strategy != "rema" or time_range is not None or segment_id:
+            return {}
+        contract = _temporal_caption_contract(self.workspace.case.question)
+        if contract is None or contract["scope_kind"] != "chapter":
+            return {}
+        target_queries = {
+            " ".join(str(query).casefold().split())
+            for query in tuple(contract["target_queries"])
+        }
+        target_hits = []
+        for raw_hit in tuple(packet.get("hits", ()) or ()):
+            if not isinstance(raw_hit, Mapping):
+                continue
+            metadata = raw_hit.get("metadata")
+            matches = tuple(metadata.get("query_matches", ()) or ()) if isinstance(metadata, Mapping) else ()
+            if any(
+                " ".join(str(match.get("query", "")).casefold().split()) in target_queries
+                for match in matches
+                if isinstance(match, Mapping)
+            ):
+                target_hits.append(dict(raw_hit))
+        if not target_hits:
+            return {}
+
+        anchor_queries = (str(contract["scope_query"]), "a chapter title appears")
+        pairs: list[dict[str, Any]] = []
+        auxiliary_search_count = 0
+        for target_hit in target_hits[:8]:
+            target_start = float(target_hit.get("virtual_start_sec", 0.0) or 0.0)
+            target_end = float(target_hit.get("virtual_end_sec", target_start) or target_start)
+            if target_start <= 0.0:
+                continue
+            try:
+                anchor_packet = self.search_caption(
+                    anchor_queries,
+                    time_range=(max(0.0, target_start - _TEMPORAL_LOOKBACK_SEC), target_start),
+                    source_video_ids=source_video_ids,
+                    top_k=6,
+                    expand_neighbors=0,
+                    index_mode=index_mode,
+                )
+            except (FileNotFoundError, RuntimeError, ValueError):
+                continue
+            auxiliary_search_count += 1
+            anchors = [
+                dict(raw_anchor)
+                for raw_anchor in tuple(anchor_packet.get("hits", ()) or ())
+                if isinstance(raw_anchor, Mapping)
+                and float(raw_anchor.get("virtual_end_sec", 0.0) or 0.0) <= target_start
+                and _CHAPTER_BOUNDARY_RE.search(str(raw_anchor.get("text", "") or ""))
+            ]
+            if not anchors:
+                continue
+            anchor = max(
+                anchors,
+                key=lambda item: float(item.get("virtual_end_sec", 0.0) or 0.0),
+            )
+            target_inspection_end = min(target_end, target_start + 10.0)
+            target_inspection_end = max(target_start + 1.0, target_inspection_end)
+            pairs.append(
+                {
+                    "scope_anchor": _caption_locator_hit(anchor),
+                    "target_event": _caption_locator_hit(target_hit),
+                    "inspection_range": [
+                        max(
+                            float(anchor.get("virtual_end_sec", 0.0) or 0.0),
+                            target_start - 110.0,
+                        ),
+                        target_inspection_end,
+                    ],
+                }
+            )
+        if not pairs:
+            return {}
+
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for pair in pairs:
+            anchor = pair["scope_anchor"]
+            anchor_key = str(anchor.get("passage_id", "")) or json.dumps(
+                anchor.get("time_range", ()), separators=(",", ":")
+            )
+            grouped.setdefault(anchor_key, []).append(pair)
+        candidate_groups = []
+        for group_pairs in grouped.values():
+            selected = min(
+                group_pairs,
+                key=lambda item: float(item["target_event"]["time_range"][0]),
+            )
+            candidate_groups.append(
+                {
+                    **selected,
+                    "target_candidate_count": len(group_pairs),
+                    "selection_reason": "earliest target candidate after the shared chapter boundary",
+                }
+            )
+        candidate_groups.sort(
+            key=lambda item: (
+                -int(item["target_candidate_count"]),
+                float(item["target_event"]["time_range"][0]),
+            )
+        )
+        recommended = None
+        if len(candidate_groups) == 1 or (
+            int(candidate_groups[0]["target_candidate_count"])
+            > int(candidate_groups[1]["target_candidate_count"])
+        ):
+            recommended = candidate_groups[0]
+        return {
+            "schema_version": "TemporalCaptionLocatorV1",
+            "contract": dict(contract),
+            "anchor_queries": list(anchor_queries),
+            "candidate_groups": candidate_groups[:4],
+            "recommended": dict(recommended) if recommended is not None else None,
+            "auxiliary_search_count": auxiliary_search_count,
+        }
 
     def _cached_search(self, fingerprint: SearchFingerprint) -> SearchOutcome | None:
         for outcome in reversed(self._search_outcomes):
@@ -1211,6 +1353,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "When mechanical_status lists pending_caption_candidates, select the candidate whose query_matches and "
         "caption_excerpt best cover the unresolved condition, then inspect its time_range with inspection_mode=window; "
         "rank is retrieval priority, not proof. Caption_search and search_asr attempts cannot directly support an answer.\n"
+        "When recommended_temporal_candidate is present, it is a locator-only join for an explicit after/before/first "
+        "condition. Inspect its inspection_range before unrelated Caption candidates, then visually verify the target "
+        "identity, ordering, and requested state; the recommendation itself is not answer evidence.\n"
         "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\","
         "\"goal\":\"observable question\","
         "\"segment_id\":\"seg_0001\",\"time_range\":null,\"coordinate_space\":\"virtual|segment_local\","
@@ -1456,25 +1601,10 @@ def _rema_caption_queries(
         if (cleaned := _LOCATOR_PREFIX_RE.sub("", raw).strip(" .,:;"))
     )
     question_parts = tuple(
-        match.group(1).strip(" .,:;")
+        match.group("clause").strip(" .,:;")
         for match in _TEMPORAL_CLAUSE_RE.finditer(str(fallback or ""))
-        if match.group(1).strip(" .,:;")
+        if match.group("clause").strip(" .,:;")
     )
-
-    def variants(parts: Sequence[str]) -> tuple[str, ...]:
-        rewritten: list[str] = []
-        for part in parts:
-            match = _FIRST_EVENT_RE.match(part)
-            if match is None:
-                continue
-            event, entity = match.groups()
-            verb = {
-                "challenge": "challenges",
-                "fight": "fights",
-                "encounter": "encounters",
-            }[event.casefold()]
-            rewritten.append(f"the player first {verb} {entity.strip(' .,:;')}")
-        return tuple(rewritten)
 
     def relational(parts: Sequence[str]) -> tuple[str, ...]:
         return tuple(
@@ -1490,9 +1620,9 @@ def _rema_caption_queries(
         )
 
     candidates = (
-        *variants(question_parts),
+        *_first_event_variants(question_parts),
         *relational(question_parts),
-        *variants(goal_parts),
+        *_first_event_variants(goal_parts),
         *relational(goal_parts),
         *(str(query).strip() for query in requested_queries),
         *goal_parts,
@@ -1500,6 +1630,63 @@ def _rema_caption_queries(
     )
     normalized = tuple(dict.fromkeys(query for query in candidates if query))[:5]
     return normalized or (str(fallback or "").strip(),)
+
+
+def _temporal_caption_contract(question: str) -> dict[str, Any] | None:
+    clauses = tuple(
+        (
+            match.group("relation").casefold(),
+            match.group("clause").strip(" .,:;"),
+        )
+        for match in _TEMPORAL_CLAUSE_RE.finditer(str(question or ""))
+        if match.group("clause").strip(" .,:;")
+    )
+    scope_query = next((clause for relation, clause in clauses if relation == "after"), "")
+    target_query = next((clause for relation, clause in clauses if relation == "before"), "")
+    if not scope_query or not target_query or "first" not in target_query.casefold():
+        return None
+    scope_kind = "chapter" if "chapter" in scope_query.casefold() else "event"
+    target_queries = tuple(dict.fromkeys((*_first_event_variants((target_query,)), target_query)))
+    return {
+        "scope_relation": "after",
+        "scope_query": scope_query,
+        "scope_kind": scope_kind,
+        "target_relation": "before",
+        "target_query": target_query,
+        "target_queries": list(target_queries),
+        "selection": "first_target_after_scope",
+    }
+
+
+def _first_event_variants(parts: Sequence[str]) -> tuple[str, ...]:
+    rewritten: list[str] = []
+    for part in parts:
+        match = _FIRST_EVENT_RE.match(part)
+        if match is None:
+            continue
+        event, entity = match.groups()
+        verb = {
+            "challenge": "challenges",
+            "fight": "fights",
+            "encounter": "encounters",
+        }[event.casefold()]
+        rewritten.append(f"the player first {verb} {entity.strip(' .,:;')}")
+    return tuple(rewritten)
+
+
+def _caption_locator_hit(hit: Mapping[str, Any]) -> dict[str, Any]:
+    metadata = hit.get("metadata")
+    return {
+        "passage_id": str(hit.get("passage_id", "")),
+        "time_range": [
+            float(hit.get("virtual_start_sec", 0.0) or 0.0),
+            float(hit.get("virtual_end_sec", 0.0) or 0.0),
+        ],
+        "caption_excerpt": str(hit.get("text", "") or "")[:200],
+        "query_matches": list(metadata.get("query_matches", ()) or ())
+        if isinstance(metadata, Mapping)
+        else [],
+    }
 
 
 def _search_fingerprint(
