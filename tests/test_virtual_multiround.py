@@ -657,7 +657,13 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
                 "mode": "search_caption",
                 "modality": "caption_search",
                 "hits": [
-                    {"passage_id": "p1", "range": [5.0, 10.0], "score": 0.9},
+                    {
+                        "passage_id": "p1",
+                        "range": [5.0, 10.0],
+                        "score": 0.9,
+                        "query_matches": [{"query": "person raises cup", "rank": 1}],
+                        "caption_excerpt": "The person raises a cup.",
+                    },
                     {"passage_id": "p2", "range": [12.0, 15.0], "score": 0.8},
                 ],
             },
@@ -677,6 +683,12 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
 
     assert status["pending_caption_candidate_count"] == 2
     assert status["pending_caption_candidates"][0]["time_range"] == [5.0, 10.0]
+    assert status["pending_caption_candidates"][0]["query_matches"] == [
+        {"query": "person raises cup", "rank": 1}
+    ]
+    assert status["pending_caption_candidates"][0]["caption_excerpt"] == (
+        "The person raises a cup."
+    )
     assert any("locator candidates" in hint for hint in status["prompt_hints"])
 
     visual_attempt_id = stable_attempt_id(

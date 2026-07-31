@@ -139,6 +139,8 @@ def test_reasoner_prompts_short_independent_queries_for_rema_strategy(tmp_path: 
     assert "do not repeat the full question" in prompt
     assert "do not invent translations" in prompt
     assert "each anchor in a separate subject-verb-object phrase" in prompt
+    assert "query_matches and caption_excerpt" in prompt
+    assert "rank is retrieval priority, not proof" in prompt
     assert "framework always includes the original question" not in prompt
 
 

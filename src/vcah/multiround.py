@@ -630,6 +630,8 @@ def _mechanical_status(
                 "passage_id": str(hit.get("passage_id", "")),
                 "time_range": list(interval),
                 "score": float(hit.get("score", 0.0) or 0.0),
+                "query_matches": list(hit.get("query_matches", ()) or ()),
+                "caption_excerpt": str(hit.get("caption_excerpt", "") or "")[:240],
             }
             key = (candidate["passage_id"], interval[0], interval[1])
             existing = candidates_by_key.get(key)

@@ -840,6 +840,11 @@ class VisionInvestigator(VirtualVideoInvestigator):
                         "passage_id": hit["passage_id"],
                         "range": [hit["virtual_start_sec"], hit["virtual_end_sec"]],
                         "score": hit["fused_score"],
+                        "query_matches": list(
+                            dict(hit.get("metadata") or {}).get("query_matches", ())
+                            or dict(hit.get("metadata") or {}).get("matched_queries", ())
+                        ),
+                        "caption_excerpt": str(hit.get("text", ""))[:240],
                     }
                     for hit in hits
                 ],
@@ -1183,8 +1188,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or time_range. "
         "To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and arbitration_attempt_id.\n"
         f"{caption_search_rule}"
-        "When mechanical_status lists pending_caption_candidates, inspect a top candidate time_range with "
-        "inspection_mode=window before answering; caption_search and search_asr attempts cannot directly support an answer.\n"
+        "When mechanical_status lists pending_caption_candidates, select the candidate whose query_matches and "
+        "caption_excerpt best cover the unresolved condition, then inspect its time_range with inspection_mode=window; "
+        "rank is retrieval priority, not proof. Caption_search and search_asr attempts cannot directly support an answer.\n"
         "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\","
         "\"goal\":\"observable question\","
         "\"segment_id\":\"seg_0001\",\"time_range\":null,\"coordinate_space\":\"virtual|segment_local\","
