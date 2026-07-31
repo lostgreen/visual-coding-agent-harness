@@ -46,6 +46,8 @@ class SearchFingerprint:
             or self.expand_neighbors != other.expand_neighbors
         ):
             return 0.0
+        if self.modality == "caption" and self.normalized_queries != other.normalized_queries:
+            return 0.0
         left = set(self.normalized_terms)
         right = set(other.normalized_terms)
         union = left | right
@@ -278,11 +280,13 @@ class VisionInvestigator(VirtualVideoInvestigator):
         caption_embedding_adapter: Any | None = None,
         caption_index_mode: str | None = None,
         caption_config_digest: str | None = None,
+        caption_query_strategy: str = "joint",
     ) -> None:
         super().__init__(
             workspace,
             caption_embedding_adapter=caption_embedding_adapter,
             caption_config_digest=caption_config_digest,
+            caption_query_strategy=caption_query_strategy,
         )
         self.api = api
         self.trace_path = trace_path
@@ -290,6 +294,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
         if mode and mode not in {"lexical", "dense", "hybrid"}:
             raise ValueError(f"unsupported caption_index_mode: {mode}")
         self.caption_index_mode = mode or None
+        self.caption_query_strategy = self._caption_query_strategy
         self._seen_asr_attempt_ids: set[str] = set()
         self._seen_caption_attempt_ids: set[str] = set()
         self._search_outcomes: list[SearchOutcome] = []
@@ -313,6 +318,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
     def mechanical_status(self) -> Mapping[str, Any]:
         zero_hits = [outcome for outcome in self._search_outcomes if outcome.hit_count == 0]
         return {
+            "caption_query_strategy": self.caption_query_strategy,
             "empty_search_streak": self._empty_search_streak,
             "duplicate_search_count": self._duplicate_search_count,
             "previous_zero_hit_queries": [
@@ -695,10 +701,14 @@ class VisionInvestigator(VirtualVideoInvestigator):
     def _search_caption(self, task: Any) -> InvestigationReport:
         query_id = str(getattr(task, "query_id", "") or "search_caption")
         requested_queries = tuple(getattr(task, "caption_queries", ()) or ())
+        if self.caption_query_strategy == "rema":
+            query_candidates = requested_queries or (self.workspace.case.question,)
+        else:
+            query_candidates = (self.workspace.case.question, *requested_queries)
         queries = tuple(
             dict.fromkeys(
-                query
-                for query in (self.workspace.case.question, *requested_queries)
+                str(query).strip()
+                for query in query_candidates
                 if str(query).strip()
             )
         )[:5]
@@ -712,7 +722,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
             "caption",
             queries,
             time_range,
-            index_version=index_mode,
+            index_version=f"{index_mode}:{self.caption_query_strategy}",
             segment_ids=(segment_id,) if segment_id else (),
             source_video_ids=requested_source_video_ids,
             top_k=top_k,
@@ -810,6 +820,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "segment_ids": list(packet.get("segment_ids", ()) or ()),
                 "source_video_ids": list(source_video_ids),
                 "index_mode": index_mode,
+                "query_strategy": str(packet.get("query_strategy", self.caption_query_strategy)),
                 "index_digest": packet["index_digest"],
                 "query_fingerprint": query_fingerprint,
                 "expand_neighbors": expand_neighbors,
@@ -839,6 +850,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "attempt_id": attempt_id,
                 "query_fingerprint": query_fingerprint,
                 "index_digest": packet["index_digest"],
+                "query_strategy": str(packet.get("query_strategy", self.caption_query_strategy)),
                 "hit_count": len(hits),
                 "segment_ids": list(packet.get("segment_ids", ()) or ()),
                 "source_video_ids": list(source_video_ids),
@@ -1085,6 +1097,25 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final = bool(kwargs.get("force_finalize"))
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})
+    mechanical_status = dict(kwargs.get("mechanical_status") or {})
+    caption_query_strategy = str(
+        mechanical_status.get("caption_query_strategy", "joint") or "joint"
+    ).casefold()
+    if caption_query_strategy == "rema":
+        caption_search_rule = (
+            "When available, search_caption is a locator using ReMA-style independent multi-query retrieval. Provide "
+            "caption_queries as 1-5 short complementary entity, event, alias, or relation phrases; do not repeat the full "
+            "question. Each query receives balanced retrieval coverage within the shared top_k result budget. You may also "
+            "set optional time_range, segment_id/source_video_ids, and index_mode=hybrid. Treat returned ranges as candidates "
+            "and inspect decisive claims visually. "
+        )
+    else:
+        caption_search_rule = (
+            "When available, search_caption is a locator: the framework always includes the original question, and you may "
+            "add caption_queries (1-4 complementary formulations), top_k, optional time_range, segment_id/source_video_ids, "
+            "and index_mode=lexical, dense, or hybrid when configured. Treat returned ranges as candidates and inspect "
+            "decisive claims visually. "
+        )
     if options:
         task_description = "long-video multiple-choice QA"
         answer_schema = (
@@ -1138,10 +1169,8 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "derived_from claim_ids. Keep uncertain interpretations as contested/hypothesis claims instead of deleting them.\n"
         "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or time_range. "
         "To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and arbitration_attempt_id.\n"
-        "When available, search_caption is a locator: the framework always includes the original question, and you may add "
-        "caption_queries (1-4 complementary formulations), top_k, optional time_range, segment_id/source_video_ids, "
-        "and index_mode=lexical, dense, or hybrid when configured. Treat returned ranges as candidates and inspect decisive "
-        "claims visually. When mechanical_status lists pending_caption_candidates, inspect a top candidate time_range with "
+        f"{caption_search_rule}"
+        "When mechanical_status lists pending_caption_candidates, inspect a top candidate time_range with "
         "inspection_mode=window before answering; caption_search and search_asr attempts cannot directly support an answer.\n"
         "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\","
         "\"goal\":\"observable question\","
@@ -1162,7 +1191,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         f"Question: {kwargs.get('question', '')}\n"
         f"Options: {json.dumps(options, ensure_ascii=False)}\n"
         f"Remaining investigation budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
-        f"Mechanical status: {json.dumps(kwargs.get('mechanical_status') or {}, ensure_ascii=False)}\n"
+        f"Mechanical status: {json.dumps(mechanical_status, ensure_ascii=False)}\n"
         f"Working view:\n{kwargs.get('working_document_view', '')}\n"
         f"Workspace overview: {json.dumps(_prompt_overview(kwargs.get('workspace_overview') or {}), ensure_ascii=False)}"
     )

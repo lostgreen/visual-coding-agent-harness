@@ -120,6 +120,26 @@ def test_reasoner_uses_only_workspace_protocol(tmp_path: Path) -> None:
     assert "answer audit" not in prompt.casefold()
 
 
+def test_reasoner_prompts_short_independent_queries_for_rema_strategy(tmp_path: Path) -> None:
+    api = FakeAPI((json.dumps({"action": "answer", "answer": "B. A cup"}),))
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    reasoner.decide(
+        question="What does the person raise?",
+        options={"A": "A book", "B": "A cup"},
+        remaining_budget=4,
+        force_finalize=False,
+        mechanical_status={"caption_query_strategy": "rema"},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    prompt = api.calls[0]["prompt"]
+    assert "ReMA-style independent multi-query retrieval" in prompt
+    assert "do not repeat the full question" in prompt
+    assert "framework always includes the original question" not in prompt
+
+
 @pytest.mark.parametrize("wrapper", ("response", "responses", "items"))
 def test_reasoner_unwraps_valid_decision_wrappers(tmp_path: Path, wrapper: str) -> None:
     payload = {

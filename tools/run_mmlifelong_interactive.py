@@ -59,6 +59,7 @@ def main() -> None:
             caption_embedding_adapter=embedding_adapter,
             caption_index_mode=args.caption_index_mode,
             caption_config_digest=args.caption_config_digest,
+            caption_query_strategy=args.caption_query_strategy,
         ),
         max_rounds=args.max_rounds,
         max_investigations=args.max_investigations,
@@ -129,6 +130,7 @@ def main() -> None:
         "max_investigations": args.max_investigations,
         "max_tasks_per_round": args.max_tasks_per_round,
         "caption_index_mode": args.caption_index_mode,
+        "caption_query_strategy": args.caption_query_strategy,
         "caption_config_digest": args.caption_config_digest,
         "embedding": dict(embedding_adapter.manifest) if embedding_adapter else None,
         "caption_index_digests": sorted(
@@ -268,6 +270,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)
     parser.add_argument("--caption-index-mode", choices=("lexical", "dense", "hybrid"), default="hybrid")
+    parser.add_argument("--caption-query-strategy", choices=("joint", "rema"), default="joint")
     parser.add_argument("--caption-config-digest")
     parser.add_argument("--embedding-model")
     parser.add_argument("--embedding-revision")

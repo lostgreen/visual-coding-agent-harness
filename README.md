@@ -193,6 +193,7 @@ PYTHONPATH=src python tools/run_mmlifelong_interactive.py \
   --config /path/to/multimodal-api.yaml \
   --answer-policy benchmark_best_effort \
   --caption-index-mode hybrid \
+  --caption-query-strategy rema \
   --caption-config-digest CAPTION_CONFIG_DIGEST \
   --embedding-model sentence-transformers/all-MiniLM-L6-v2
 
@@ -201,6 +202,11 @@ PYTHONPATH=src python tools/summarize_mmlifelong_runs.py \
   --out-json reports/mmlifelong.json \
   --out-md reports/mmlifelong.md
 ```
+
+`--caption-query-strategy rema` keeps explicit short queries separate, retrieves
+each query independently through the hybrid index, and balances their candidates
+within the existing `top_k` budget. The default `joint` strategy preserves the
+original whole-question-plus-rewrites behavior.
 
 Use explicit sections in a shared YAML file. A separate role-specific file may put
 the same fields at its root.

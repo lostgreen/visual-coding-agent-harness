@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from vcah.caption_hybrid_search import CaptionHybridSearch
-from vcah.caption_lexical_index import CaptionLexicalIndex
+from vcah.caption_lexical_index import CaptionLexicalIndex, render_caption_hits
 from vcah.caption_semantic_index import CaptionSemanticIndex
 
 from test_caption_semantic_index import FakeSemanticAdapter, passages
@@ -90,3 +92,46 @@ def test_hybrid_segment_scope_filters_components_and_changes_fingerprint() -> No
 
     assert [hit.passage_id for hit in scoped] == ["cap:p0"]
     assert first_fingerprint != second_fingerprint
+
+
+def test_rema_query_strategy_balances_independent_query_results() -> None:
+    fixture_passages = passages()
+    lexical = CaptionLexicalIndex(fixture_passages, config_digest="fixture")
+    dense = CaptionSemanticIndex.build(
+        fixture_passages,
+        adapter=FakeSemanticAdapter(),
+        config_digest="fixture",
+    )
+    joint = CaptionHybridSearch(lexical, dense)
+    rema = CaptionHybridSearch(lexical, dense, query_strategy="rema")
+
+    hits = rema.search(("stationary car", "stage performance"), top_k=2)
+
+    assert [hit.passage_id for hit in hits] == ["cap:p2", "cap:p1"]
+    assert hits[0].metadata["query_strategy"] == "rema"
+    assert hits[0].metadata["query_matches"][0] == {
+        "query": "stationary car",
+        "rank": 1,
+    }
+    assert hits[1].metadata["query_matches"][0] == {
+        "query": "stage performance",
+        "rank": 1,
+    }
+    assert len(hits) == 2
+    assert rema.index_digest != joint.index_digest
+    rendered = render_caption_hits(hits)
+    assert "matched queries: stationary car" in rendered
+    assert "matched queries: stage performance" in rendered
+
+
+def test_hybrid_rejects_unknown_query_strategy() -> None:
+    fixture_passages = passages()
+    lexical = CaptionLexicalIndex(fixture_passages, config_digest="fixture")
+    dense = CaptionSemanticIndex.build(
+        fixture_passages,
+        adapter=FakeSemanticAdapter(),
+        config_digest="fixture",
+    )
+
+    with pytest.raises(ValueError, match="unsupported hybrid query strategy"):
+        CaptionHybridSearch(lexical, dense, query_strategy="unknown")

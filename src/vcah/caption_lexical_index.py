@@ -330,6 +330,18 @@ def render_caption_hits(hits: Sequence[CaptionHitV1], *, detail_limit: int = 5, 
         )
         if index <= max(0, int(detail_limit)):
             lines.append(f'   "{hit.text[:800]}"')
+            raw_matches = hit.metadata.get("query_matches") or hit.metadata.get(
+                "matched_queries", ()
+            )
+            matched_queries = tuple(
+                dict.fromkeys(
+                    str(item.get("query", "") if isinstance(item, Mapping) else item).strip()
+                    for item in tuple(raw_matches or ())
+                    if str(item.get("query", "") if isinstance(item, Mapping) else item).strip()
+                )
+            )
+            if matched_queries:
+                lines.append(f"   matched queries: {'; '.join(matched_queries)}")
     if hits:
         lines.append("Suggested next step: inspect the highest-ranked intervals visually.")
     return "\n".join(lines)[: max(1, int(char_limit))]

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import pytest
 
 from vcah.caption_lexical_index import CaptionLexicalIndex, render_caption_hits
 from vcah.caption_schema import CaptionPassageV1, passage_to_dict
@@ -261,6 +264,62 @@ def test_search_caption_scope_is_forwarded_and_not_reused_across_segments(tmp_pa
     second_ids = [hit["passage_id"] for hit in second_attempt.sampling_config["hits"]]
     assert second_ids[0] == "p3"
     assert "p0" not in second_ids
+
+
+def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    investigator = VisionInvestigator(
+        workspace,
+        api=DummyApi(),
+        trace_path=tmp_path / "trace-rema.jsonl",
+        caption_query_strategy="rema",
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def search(queries: Sequence[str], **_kwargs: Any) -> Mapping[str, Any]:
+        normalized = tuple(str(query) for query in queries)
+        calls.append(normalized)
+        fingerprint = "-".join(normalized)
+        return {
+            "hits": [],
+            "query_fingerprint": fingerprint,
+            "index_digest": "rema-index",
+            "config_digest": "fixture",
+            "rendered": "",
+            "segment_ids": [],
+            "source_video_ids": [],
+            "query_strategy": "rema",
+        }
+
+    monkeypatch.setattr(investigator, "search_caption", search)
+    first = investigator._investigate_task(
+        InvestigationTask(
+            query_id="rema-1",
+            goal="Locate the target.",
+            inspection_mode="search_caption",
+            caption_queries=("red temple door", "红色寺庙大门"),
+        )
+    )
+    refined = investigator._investigate_task(
+        InvestigationTask(
+            query_id="rema-2",
+            goal="Refine the target.",
+            inspection_mode="search_caption",
+            caption_queries=("red temple doorway", "红色寺庙大门"),
+        )
+    )
+
+    assert calls == [
+        ("red temple door", "红色寺庙大门"),
+        ("red temple doorway", "红色寺庙大门"),
+    ]
+    assert workspace.case.question not in calls[0]
+    assert first.cost["reused"] is False
+    assert refined.cost["reused"] is False
+    assert first.attempts[0].sampling_config["query_strategy"] == "rema"
 
 
 def test_no_caption_workspace_does_not_advertise_caption_navigation(tmp_path: Path) -> None:

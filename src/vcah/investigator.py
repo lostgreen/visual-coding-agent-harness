@@ -137,6 +137,7 @@ class VirtualVideoInvestigator:
         caption_index: CaptionLexicalIndex | None = None,
         caption_embedding_adapter: TextEmbeddingAdapter | None = None,
         caption_config_digest: str | None = None,
+        caption_query_strategy: str = "joint",
     ) -> None:
         self.workspace = workspace
         self.sampler = sampler
@@ -145,6 +146,11 @@ class VirtualVideoInvestigator:
             self._caption_indexes["lexical"] = caption_index
         self._caption_embedding_adapter = caption_embedding_adapter
         self._caption_config_digest = str(caption_config_digest or "").strip() or None
+        self._caption_query_strategy = str(caption_query_strategy or "joint").strip().casefold()
+        if self._caption_query_strategy not in {"joint", "rema"}:
+            raise ValueError(
+                f"unsupported caption_query_strategy: {self._caption_query_strategy}"
+            )
         self.ledger_path = self.workspace.root_dir / "exploration_ledger.jsonl"
         self._visit_count = 0
 
@@ -387,6 +393,9 @@ class VirtualVideoInvestigator:
             "top_k": int(top_k),
             "expand_neighbors": int(expand_neighbors),
             "index_mode": mode,
+            "query_strategy": str(
+                getattr(index, "query_strategy", self._caption_query_strategy)
+            ),
             "index_digest": index.index_digest,
             "config_digest": index.config_digest,
             "query_fingerprint": fingerprint,
@@ -419,7 +428,11 @@ class VirtualVideoInvestigator:
             self._caption_indexes["dense"] = dense
         if mode == "dense":
             return dense
-        return CaptionHybridSearch(lexical, dense)
+        return CaptionHybridSearch(
+            lexical,
+            dense,
+            query_strategy=self._caption_query_strategy,
+        )
 
     def _investigate_task(self, task: Any) -> InvestigationReport:
         raise NotImplementedError("Use an observation-only Investigator implementation")

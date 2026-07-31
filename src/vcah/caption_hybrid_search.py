@@ -25,6 +25,7 @@ class CaptionHybridSearch:
         lexical_weight: float = 1.0,
         dense_weight: float = 1.0,
         rrf_k0: int = 60,
+        query_strategy: str = "joint",
     ) -> None:
         if lexical.config_digest != dense.config_digest:
             raise ValueError("lexical and dense caption indexes use different caption configs")
@@ -39,18 +40,22 @@ class CaptionHybridSearch:
         self.lexical_weight = max(0.0, float(lexical_weight))
         self.dense_weight = max(0.0, float(dense_weight))
         self.rrf_k0 = max(1, int(rrf_k0))
+        self.query_strategy = str(query_strategy or "joint").strip().casefold()
+        if self.query_strategy not in {"joint", "rema"}:
+            raise ValueError(f"unsupported hybrid query strategy: {self.query_strategy}")
         if self.lexical_weight == 0.0 and self.dense_weight == 0.0:
             raise ValueError("hybrid search requires at least one positive rank weight")
-        self.index_digest = stable_digest(
-            {
-                "index_mode": "hybrid_rrf",
-                "lexical_index_digest": lexical.index_digest,
-                "dense_index_digest": dense.index_digest,
-                "lexical_weight": self.lexical_weight,
-                "dense_weight": self.dense_weight,
-                "rrf_k0": self.rrf_k0,
-            }
-        )
+        digest_payload = {
+            "index_mode": "hybrid_rrf",
+            "lexical_index_digest": lexical.index_digest,
+            "dense_index_digest": dense.index_digest,
+            "lexical_weight": self.lexical_weight,
+            "dense_weight": self.dense_weight,
+            "rrf_k0": self.rrf_k0,
+        }
+        if self.query_strategy != "joint":
+            digest_payload["query_strategy"] = self.query_strategy
+        self.index_digest = stable_digest(digest_payload)
 
     @classmethod
     def from_asset_root(
@@ -63,6 +68,7 @@ class CaptionHybridSearch:
         lexical_weight: float = 1.0,
         dense_weight: float = 1.0,
         rrf_k0: int = 60,
+        query_strategy: str = "joint",
     ) -> "CaptionHybridSearch":
         lexical = CaptionLexicalIndex.from_asset_root(asset_root, config_digest=config_digest)
         dense = CaptionSemanticIndex.from_asset_root(
@@ -77,6 +83,7 @@ class CaptionHybridSearch:
             lexical_weight=lexical_weight,
             dense_weight=dense_weight,
             rrf_k0=rrf_k0,
+            query_strategy=query_strategy,
         )
 
     def search(
@@ -89,6 +96,37 @@ class CaptionHybridSearch:
         expand_neighbors: int = 0,
         per_caption_limit: int = 3,
         temporal_iou_threshold: float = 0.9,
+    ) -> tuple[CaptionHitV1, ...]:
+        if self.query_strategy == "rema":
+            return self._search_independent(
+                queries,
+                top_k=top_k,
+                time_range=time_range,
+                segment_ids=segment_ids,
+                expand_neighbors=expand_neighbors,
+                per_caption_limit=per_caption_limit,
+                temporal_iou_threshold=temporal_iou_threshold,
+            )
+        return self._search_joint(
+            queries,
+            top_k=top_k,
+            time_range=time_range,
+            segment_ids=segment_ids,
+            expand_neighbors=expand_neighbors,
+            per_caption_limit=per_caption_limit,
+            temporal_iou_threshold=temporal_iou_threshold,
+        )
+
+    def _search_joint(
+        self,
+        queries: Sequence[str],
+        *,
+        top_k: int,
+        time_range: tuple[float, float] | None,
+        segment_ids: Sequence[str],
+        expand_neighbors: int,
+        per_caption_limit: int,
+        temporal_iou_threshold: float,
     ) -> tuple[CaptionHitV1, ...]:
         result_limit = max(1, int(top_k))
         candidate_limit = max(20, result_limit * 4)
@@ -171,6 +209,106 @@ class CaptionHybridSearch:
             for rank, hit in enumerate(hits, start=1)
         )
 
+    def _search_independent(
+        self,
+        queries: Sequence[str],
+        *,
+        top_k: int,
+        time_range: tuple[float, float] | None,
+        segment_ids: Sequence[str],
+        expand_neighbors: int,
+        per_caption_limit: int,
+        temporal_iou_threshold: float,
+    ) -> tuple[CaptionHitV1, ...]:
+        normalized_queries = tuple(
+            dict.fromkeys(
+                normalize_caption_query(query)
+                for query in queries
+                if normalize_caption_query(query)
+            )
+        )[:5]
+        if not normalized_queries:
+            return ()
+        result_limit = max(1, int(top_k))
+        per_query_hits = tuple(
+            self._search_joint(
+                (query,),
+                top_k=result_limit,
+                time_range=time_range,
+                segment_ids=segment_ids,
+                expand_neighbors=0,
+                per_caption_limit=per_caption_limit,
+                temporal_iou_threshold=temporal_iou_threshold,
+            )
+            for query in normalized_queries
+        )
+        matches: dict[str, list[dict[str, Any]]] = {}
+        for query, hits in zip(normalized_queries, per_query_hits):
+            for hit in hits:
+                matches.setdefault(hit.passage_id, []).append(
+                    {"query": query, "rank": hit.rank}
+                )
+
+        passage_by_id = {passage.passage_id: passage for passage in self.passages}
+        selected: list[CaptionHitV1] = []
+        seen: set[str] = set()
+        caption_counts: Counter[str] = Counter()
+        max_depth = max((len(hits) for hits in per_query_hits), default=0)
+        for depth in range(max_depth):
+            for hits in per_query_hits:
+                if depth >= len(hits):
+                    continue
+                hit = hits[depth]
+                if hit.passage_id in seen:
+                    continue
+                passage = passage_by_id[hit.passage_id]
+                if caption_counts[passage.caption_id] >= max(1, int(per_caption_limit)):
+                    continue
+                if any(
+                    passage_interval_iou(passage, passage_by_id[existing.passage_id])
+                    >= float(temporal_iou_threshold)
+                    for existing in selected
+                ):
+                    continue
+                global_rank = len(selected) + 1
+                selected.append(
+                    CaptionHitV1(
+                        **{
+                            **asdict(hit),
+                            "rank": global_rank,
+                            "fused_score": 1.0 / (self.rrf_k0 + global_rank),
+                            "metadata": {
+                                **dict(hit.metadata),
+                                "query_strategy": "rema",
+                                "balanced_rank": global_rank,
+                                "component_fused_score": hit.fused_score,
+                                "query_matches": matches.get(hit.passage_id, ()),
+                            },
+                        }
+                    )
+                )
+                seen.add(hit.passage_id)
+                caption_counts[passage.caption_id] += 1
+                if len(selected) >= result_limit:
+                    break
+            if len(selected) >= result_limit:
+                break
+        hits = selected
+        if expand_neighbors > 0:
+            hits = expand_passage_neighbors(
+                self.passages,
+                hits,
+                distance=int(expand_neighbors),
+                time_range=time_range,
+                segment_ids=segment_ids,
+                index_digest=self.index_digest,
+                config_digest=self.config_digest,
+            )
+        return tuple(
+            CaptionHitV1(**{**asdict(hit), "rank": rank})
+            for rank, hit in enumerate(hits, start=1)
+        )
+
     def query_fingerprint(
         self,
         queries: Sequence[str],
@@ -180,19 +318,20 @@ class CaptionHybridSearch:
         expand_neighbors: int,
         segment_ids: Sequence[str] = (),
     ) -> str:
-        return stable_digest(
-            {
-                "index_mode": "hybrid",
-                "index_digest": self.index_digest,
-                "queries": [normalize_caption_query(query) for query in queries],
-                "top_k": int(top_k),
-                "time_range": list(time_range) if time_range else None,
-                "expand_neighbors": int(expand_neighbors),
-                "segment_ids": sorted(
-                    {str(item).strip() for item in segment_ids if str(item).strip()}
-                ),
-            }
-        )
+        payload = {
+            "index_mode": "hybrid",
+            "index_digest": self.index_digest,
+            "queries": [normalize_caption_query(query) for query in queries],
+            "top_k": int(top_k),
+            "time_range": list(time_range) if time_range else None,
+            "expand_neighbors": int(expand_neighbors),
+            "segment_ids": sorted(
+                {str(item).strip() for item in segment_ids if str(item).strip()}
+            ),
+        }
+        if self.query_strategy != "joint":
+            payload["query_strategy"] = self.query_strategy
+        return stable_digest(payload)
 
     def save_manifest(self, asset_root: Path) -> Path:
         path = (
@@ -216,6 +355,7 @@ class CaptionHybridSearch:
                         "lexical_weight": self.lexical_weight,
                         "dense_weight": self.dense_weight,
                         "rrf_k0": self.rrf_k0,
+                        "query_strategy": self.query_strategy,
                     },
                     indent=2,
                     sort_keys=True,
@@ -254,6 +394,7 @@ class CaptionHybridSearch:
             metadata={
                 "index_digest": self.index_digest,
                 "index_mode": "hybrid",
+                "query_strategy": self.query_strategy,
                 "lexical_rank": lexical_hit.rank if lexical_hit else None,
                 "dense_rank": dense_hit.rank if dense_hit else None,
             },

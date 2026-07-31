@@ -110,6 +110,7 @@ def main() -> None:
         "selected_count": len(selected),
         "caption_config_digest": args.caption_config_digest,
         "caption_index_mode": args.caption_index_mode,
+        "caption_query_strategy": args.caption_query_strategy,
         "answer_policy": args.answer_policy,
         "workers": max(1, min(int(args.workers), len(selected))),
         "question_type_counts": dict(Counter(case["question_type"] for case in selected)),
@@ -271,6 +272,8 @@ def _case_command(
         str(args.max_tasks_per_round),
         "--caption-index-mode",
         str(args.caption_index_mode),
+        "--caption-query-strategy",
+        str(args.caption_query_strategy),
         "--caption-config-digest",
         str(args.caption_config_digest),
         "--embedding-model",
@@ -337,6 +340,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)
     parser.add_argument("--caption-index-mode", choices=("lexical", "dense", "hybrid"), default="hybrid")
+    parser.add_argument("--caption-query-strategy", choices=("joint", "rema"), default="joint")
     parser.add_argument("--embedding-revision")
     parser.add_argument("--embedding-device", default="cpu")
     parser.add_argument("--embedding-batch-size", type=int, default=64)
