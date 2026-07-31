@@ -26,6 +26,10 @@ _LOCATOR_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _QUERY_PART_RE = re.compile(r"\s+(?:and|then|after|before)\s+|[,;；]", re.IGNORECASE)
+_TEMPORAL_CLAUSE_RE = re.compile(
+    r"\b(?:after|before|when|while|until|once)\s+(.+?)(?=,|\?|$)",
+    re.IGNORECASE,
+)
 _FIRST_EVENT_RE = re.compile(
     r"^(?:the\s+)?first\s+(challenge|fight|encounter)\s+(?:against|with)\s+(.+)$",
     re.IGNORECASE,
@@ -1436,34 +1440,52 @@ def _rema_caption_queries(
     *,
     fallback: str,
 ) -> tuple[str, ...]:
-    parts = tuple(
+    goal_parts = tuple(
         cleaned
         for raw in _QUERY_PART_RE.split(str(goal or ""))
         if (cleaned := _LOCATOR_PREFIX_RE.sub("", raw).strip(" .,:;"))
     )
-    variants: list[str] = []
-    for part in parts:
-        match = _FIRST_EVENT_RE.match(part)
-        if match is None:
-            continue
-        event, entity = match.groups()
-        verb = {
-            "challenge": "challenges",
-            "fight": "fights",
-            "encounter": "encounters",
-        }[event.casefold()]
-        variants.append(f"the player first {verb} {entity.strip(' .,:;')}")
-    relational = tuple(
-        part
-        for part in parts
-        if len(re.findall(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", part.casefold()))
-        >= 4
+    question_parts = tuple(
+        match.group(1).strip(" .,:;")
+        for match in _TEMPORAL_CLAUSE_RE.finditer(str(fallback or ""))
+        if match.group(1).strip(" .,:;")
     )
+
+    def variants(parts: Sequence[str]) -> tuple[str, ...]:
+        rewritten: list[str] = []
+        for part in parts:
+            match = _FIRST_EVENT_RE.match(part)
+            if match is None:
+                continue
+            event, entity = match.groups()
+            verb = {
+                "challenge": "challenges",
+                "fight": "fights",
+                "encounter": "encounters",
+            }[event.casefold()]
+            rewritten.append(f"the player first {verb} {entity.strip(' .,:;')}")
+        return tuple(rewritten)
+
+    def relational(parts: Sequence[str]) -> tuple[str, ...]:
+        return tuple(
+            part
+            for part in parts
+            if len(
+                re.findall(
+                    r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]",
+                    part.casefold(),
+                )
+            )
+            >= 4
+        )
+
     candidates = (
-        *variants,
-        *relational,
+        *variants(question_parts),
+        *relational(question_parts),
+        *variants(goal_parts),
+        *relational(goal_parts),
         *(str(query).strip() for query in requested_queries),
-        *parts,
+        *goal_parts,
         _LOCATOR_PREFIX_RE.sub("", str(goal or "")).strip(" .,:;"),
     )
     normalized = tuple(dict.fromkeys(query for query in candidates if query))[:5]

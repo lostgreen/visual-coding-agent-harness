@@ -8,7 +8,7 @@ import pytest
 
 from vcah.caption_lexical_index import CaptionLexicalIndex, render_caption_hits
 from vcah.caption_schema import CaptionPassageV1, passage_to_dict
-from vcah.interactive_agents import VisionInvestigator
+from vcah.interactive_agents import VisionInvestigator, _rema_caption_queries
 from vcah.multiround import InvestigationTask
 from vcah.virtual_index import build_workspace_overview
 from vcah.virtual_video import (
@@ -365,6 +365,23 @@ def test_rema_caption_queries_split_temporal_goal_before_entity_terms(
         "Flaming Mountains",
         "the chapter start",
     ]
+
+
+def test_rema_caption_queries_extract_temporal_contract_from_question() -> None:
+    queries = _rema_caption_queries(
+        "Find the Flaming Mountains chapter.",
+        ("Flaming Mountains",),
+        fallback=(
+            "After the player enters the Flaming Mountains chapter, what are the values "
+            "before the first challenge against Yin Tiger?"
+        ),
+    )
+
+    assert queries[:3] == (
+        "the player first challenges Yin Tiger",
+        "the player enters the Flaming Mountains chapter",
+        "the first challenge against Yin Tiger",
+    )
 
 
 def test_no_caption_workspace_does_not_advertise_caption_navigation(tmp_path: Path) -> None:
