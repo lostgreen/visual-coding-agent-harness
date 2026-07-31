@@ -970,7 +970,6 @@ class VisionInvestigator(VirtualVideoInvestigator):
         auxiliary_search_count = 0
         for target_hit in target_hits[:8]:
             target_start = float(target_hit.get("virtual_start_sec", 0.0) or 0.0)
-            target_end = float(target_hit.get("virtual_end_sec", target_start) or target_start)
             if target_start <= 0.0:
                 continue
             try:
@@ -998,19 +997,21 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 anchors,
                 key=lambda item: float(item.get("virtual_end_sec", 0.0) or 0.0),
             )
-            target_inspection_end = min(target_end, target_start + 10.0)
-            target_inspection_end = max(target_start + 1.0, target_inspection_end)
+            target_inspection_start = max(
+                float(anchor.get("virtual_end_sec", 0.0) or 0.0),
+                target_start - 90.0,
+            )
+            target_inspection_end = min(
+                target_start,
+                max(target_inspection_start + 1.0, target_start - 25.0),
+            )
+            if target_inspection_end <= target_inspection_start:
+                continue
             pairs.append(
                 {
                     "scope_anchor": _caption_locator_hit(anchor),
                     "target_event": _caption_locator_hit(target_hit),
-                    "inspection_range": [
-                        max(
-                            float(anchor.get("virtual_end_sec", 0.0) or 0.0),
-                            target_start - 110.0,
-                        ),
-                        target_inspection_end,
-                    ],
+                    "inspection_range": [target_inspection_start, target_inspection_end],
                 }
             )
         if not pairs:
@@ -1354,8 +1355,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "caption_excerpt best cover the unresolved condition, then inspect its time_range with inspection_mode=window; "
         "rank is retrieval priority, not proof. Caption_search and search_asr attempts cannot directly support an answer.\n"
         "When recommended_temporal_candidate is present, it is a locator-only join for an explicit after/before/first "
-        "condition. Inspect its inspection_range before unrelated Caption candidates, then visually verify the target "
-        "identity, ordering, and requested state; the recommendation itself is not answer evidence.\n"
+        "condition. Inspect its full inspection_range before unrelated Caption candidates; do not replace it with only "
+        "the last seconds adjacent to the target event. Then visually verify the target identity, ordering, and requested "
+        "state; the recommendation itself is not answer evidence.\n"
         "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\","
         "\"goal\":\"observable question\","
         "\"segment_id\":\"seg_0001\",\"time_range\":null,\"coordinate_space\":\"virtual|segment_local\","

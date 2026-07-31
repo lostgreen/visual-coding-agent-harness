@@ -485,7 +485,7 @@ def test_rema_temporal_locator_selects_first_target_after_shared_chapter_boundar
     assert [call["top_k"] for call in calls[1:]] == [6, 6, 6]
     assert recommended["scope_anchor"]["time_range"] == [63135.0, 63144.0]
     assert recommended["target_event"]["time_range"] == [66215.0, 66300.0]
-    assert recommended["inspection_range"] == [66105.0, 66225.0]
+    assert recommended["inspection_range"] == [66125.0, 66190.0]
     assert recommended["target_candidate_count"] == 2
 
 
