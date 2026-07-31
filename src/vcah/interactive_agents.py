@@ -36,6 +36,10 @@ _FIRST_EVENT_RE = re.compile(
     re.IGNORECASE,
 )
 _CHAPTER_BOUNDARY_RE = re.compile(r"\bchapter\b|章节|第.{0,4}[回章]", re.IGNORECASE)
+_TARGET_EVENT_CUE_RE = re.compile(
+    r"\b(?:challeng\w*|sparr\w*|fight\w*|battle\w*|duel\w*|faces?\s+off)\b",
+    re.IGNORECASE,
+)
 _TEMPORAL_LOOKBACK_SEC = 7200.0
 
 
@@ -960,6 +964,9 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 " ".join(str(match.get("query", "")).casefold().split()) in target_queries
                 for match in matches
                 if isinstance(match, Mapping)
+            ) and _caption_describes_target_event(
+                str(raw_hit.get("text", "") or ""),
+                str(contract["target_event_kind"]),
             ):
                 target_hits.append(dict(raw_hit))
         if not target_hits:
@@ -1645,7 +1652,8 @@ def _temporal_caption_contract(question: str) -> dict[str, Any] | None:
     )
     scope_query = next((clause for relation, clause in clauses if relation == "after"), "")
     target_query = next((clause for relation, clause in clauses if relation == "before"), "")
-    if not scope_query or not target_query or "first" not in target_query.casefold():
+    event_match = _FIRST_EVENT_RE.match(target_query)
+    if not scope_query or event_match is None:
         return None
     scope_kind = "chapter" if "chapter" in scope_query.casefold() else "event"
     target_queries = tuple(dict.fromkeys((*_first_event_variants((target_query,)), target_query)))
@@ -1656,6 +1664,7 @@ def _temporal_caption_contract(question: str) -> dict[str, Any] | None:
         "target_relation": "before",
         "target_query": target_query,
         "target_queries": list(target_queries),
+        "target_event_kind": event_match.group(1).casefold(),
         "selection": "first_target_after_scope",
     }
 
@@ -1689,6 +1698,12 @@ def _caption_locator_hit(hit: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(metadata, Mapping)
         else [],
     }
+
+
+def _caption_describes_target_event(text: str, event_kind: str) -> bool:
+    if str(event_kind).casefold() in {"challenge", "fight"}:
+        return bool(_TARGET_EVENT_CUE_RE.search(str(text or "")))
+    return True
 
 
 def _search_fingerprint(

@@ -443,6 +443,14 @@ def test_rema_temporal_locator_selects_first_target_after_shared_chapter_boundar
         hit("late", 68920.0, 68967.0, "The later tiger fight continues.", target_query, 1),
         hit("early", 17844.0, 17868.0, "An earlier tiger fight continues.", target_query, 2),
         hit("correct", 66215.0, 66300.0, "The sparring match begins.", target_query, 3),
+        hit(
+            "approach",
+            66118.0,
+            66133.0,
+            "The player approaches Yin Tiger, who is sharpening a sword.",
+            target_query,
+            4,
+        ),
     ]
     chapter = hit(
         "chapter-5",
