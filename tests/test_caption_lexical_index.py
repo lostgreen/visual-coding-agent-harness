@@ -322,6 +322,51 @@ def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
     assert first.attempts[0].sampling_config["query_strategy"] == "rema"
 
 
+def test_rema_caption_queries_split_temporal_goal_before_entity_terms(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    investigator = VisionInvestigator(
+        workspace,
+        api=DummyApi(),
+        trace_path=tmp_path / "trace-rema-temporal.jsonl",
+        caption_query_strategy="rema",
+    )
+    captured: list[str] = []
+
+    def search(queries: Sequence[str], **_kwargs: Any) -> Mapping[str, Any]:
+        captured.extend(queries)
+        return {
+            "hits": [],
+            "query_fingerprint": "temporal",
+            "index_digest": "rema-index",
+            "config_digest": "fixture",
+            "rendered": "",
+            "segment_ids": [],
+            "source_video_ids": [],
+            "query_strategy": "rema",
+        }
+
+    monkeypatch.setattr(investigator, "search_caption", search)
+    investigator._investigate_task(
+        InvestigationTask(
+            query_id="rema-temporal",
+            goal="Locate the chapter start and the first fight against Yin Tiger.",
+            inspection_mode="search_caption",
+            caption_queries=("Yin Tiger", "Flaming Mountains"),
+        )
+    )
+
+    assert captured == [
+        "Locate the chapter start",
+        "the first fight against Yin Tiger",
+        "Locate the chapter start and the first fight against Yin Tiger.",
+        "Yin Tiger",
+        "Flaming Mountains",
+    ]
+
+
 def test_no_caption_workspace_does_not_advertise_caption_navigation(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path, with_captions=False)
 
