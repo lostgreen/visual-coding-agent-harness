@@ -729,7 +729,13 @@ def _mechanical_status(
         "caption_cited_claim_count": caption_cited_claim_count,
         "visual_confirmed_claim_count": visual_confirmed_claim_count,
         "pending_caption_candidate_count": len(pending_caption_candidates),
-        "pending_caption_candidates": list(pending_caption_candidates[:8]),
+        "pending_caption_candidates": list(
+            pending_caption_candidates[
+                : 12
+                if str(runtime.get("caption_query_strategy", "") or "") == "rema"
+                else 8
+            ]
+        ),
         "entity_count": len(document.entities),
         "candidate_interval_count": sum(note.role == "candidate" for note in document.timeline),
         "supporting_interval_count": sum(note.role == "supporting" for note in document.timeline),

@@ -21,6 +21,15 @@ from vcah.workspace import prompt_digest, stable_attempt_id
 
 _DECISION_ACTIONS = {"investigate", "read_observations", "update_workspace", "answer"}
 _DECISION_WRAPPERS = ("response", "responses", "items")
+_LOCATOR_PREFIX_RE = re.compile(
+    r"^(?:find|locate|identify|determine|confirm|observe|verify|refine)\s+",
+    re.IGNORECASE,
+)
+_QUERY_PART_RE = re.compile(r"\s+(?:and|then|after|before)\s+|[,;；]", re.IGNORECASE)
+_FIRST_EVENT_RE = re.compile(
+    r"^(?:the\s+)?first\s+(challenge|fight|encounter)\s+(?:against|with)\s+(.+)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -703,26 +712,20 @@ class VisionInvestigator(VirtualVideoInvestigator):
         goal_query = str(getattr(task, "goal", "") or "").strip()
         requested_queries = tuple(getattr(task, "caption_queries", ()) or ())
         if self.caption_query_strategy == "rema":
-            goal_parts = tuple(
-                part.strip(" .,:;")
-                for part in re.split(r"\s+(?:and|then)\s+|[;；]", goal_query, flags=re.I)
-                if part.strip(" .,:;")
+            queries = _rema_caption_queries(
+                goal_query,
+                requested_queries,
+                fallback=self.workspace.case.question,
             )
-            query_candidates = (
-                *((*goal_parts, goal_query) if len(goal_parts) > 1 else (goal_query,)),
-                *requested_queries,
-            )
-            if not any(str(query).strip() for query in query_candidates):
-                query_candidates = (self.workspace.case.question,)
         else:
             query_candidates = (self.workspace.case.question, *requested_queries)
-        queries = tuple(
-            dict.fromkeys(
-                str(query).strip()
-                for query in query_candidates
-                if str(query).strip()
-            )
-        )[:5]
+            queries = tuple(
+                dict.fromkeys(
+                    str(query).strip()
+                    for query in query_candidates
+                    if str(query).strip()
+                )
+            )[:5]
         time_range = getattr(task, "time_range", None)
         segment_id = str(getattr(task, "segment_id", "") or "")
         requested_source_video_ids = tuple(getattr(task, "source_video_ids", ()) or ())
@@ -1422,6 +1425,46 @@ def _attachment_counts(metadata: Mapping[str, Any], frame_paths: Sequence[str]) 
     attached = int(metadata.get("images_attached", len(frame_paths)) or 0)
     dropped = int(metadata.get("images_dropped", max(0, requested - attached)) or 0)
     return {"requested": requested, "attached": min(requested, attached), "dropped": dropped}
+
+
+def _rema_caption_queries(
+    goal: str,
+    requested_queries: Sequence[str],
+    *,
+    fallback: str,
+) -> tuple[str, ...]:
+    parts = tuple(
+        cleaned
+        for raw in _QUERY_PART_RE.split(str(goal or ""))
+        if (cleaned := _LOCATOR_PREFIX_RE.sub("", raw).strip(" .,:;"))
+    )
+    variants: list[str] = []
+    for part in parts:
+        match = _FIRST_EVENT_RE.match(part)
+        if match is None:
+            continue
+        event, entity = match.groups()
+        verb = {
+            "challenge": "challenges",
+            "fight": "fights",
+            "encounter": "encounters",
+        }[event.casefold()]
+        variants.append(f"the player first {verb} {entity.strip(' .,:;')}")
+    relational = tuple(
+        part
+        for part in parts
+        if len(re.findall(r"[a-z0-9]+|[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", part.casefold()))
+        >= 4
+    )
+    candidates = (
+        *variants,
+        *relational,
+        *(str(query).strip() for query in requested_queries),
+        *parts,
+        _LOCATOR_PREFIX_RE.sub("", str(goal or "")).strip(" .,:;"),
+    )
+    normalized = tuple(dict.fromkeys(query for query in candidates if query))[:5]
+    return normalized or (str(fallback or "").strip(),)
 
 
 def _search_fingerprint(

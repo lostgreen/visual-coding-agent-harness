@@ -313,8 +313,8 @@ def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
     )
 
     assert calls == [
-        ("Locate the target.", "red temple door", "红色寺庙大门"),
-        ("Refine the target.", "red temple doorway", "红色寺庙大门"),
+        ("red temple door", "红色寺庙大门", "the target"),
+        ("red temple doorway", "红色寺庙大门", "the target"),
     ]
     assert workspace.case.question not in calls[0]
     assert first.cost["reused"] is False
@@ -359,11 +359,11 @@ def test_rema_caption_queries_split_temporal_goal_before_entity_terms(
     )
 
     assert captured == [
-        "Locate the chapter start",
+        "the player first fights Yin Tiger",
         "the first fight against Yin Tiger",
-        "Locate the chapter start and the first fight against Yin Tiger.",
         "Yin Tiger",
         "Flaming Mountains",
+        "the chapter start",
     ]
 
 
