@@ -700,9 +700,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
 
     def _search_caption(self, task: Any) -> InvestigationReport:
         query_id = str(getattr(task, "query_id", "") or "search_caption")
+        goal_query = str(getattr(task, "goal", "") or "").strip()
         requested_queries = tuple(getattr(task, "caption_queries", ()) or ())
         if self.caption_query_strategy == "rema":
-            query_candidates = requested_queries or (self.workspace.case.question,)
+            query_candidates = (goal_query, *requested_queries)
+            if not any(str(query).strip() for query in query_candidates):
+                query_candidates = (self.workspace.case.question,)
         else:
             query_candidates = (self.workspace.case.question, *requested_queries)
         queries = tuple(
@@ -1104,8 +1107,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     if caption_query_strategy == "rema":
         caption_search_rule = (
             "When available, search_caption is a locator using ReMA-style independent multi-query retrieval. Provide "
-            "caption_queries as 1-5 short complementary entity, event, alias, or relation phrases; do not repeat the full "
-            "question. Each query receives balanced retrieval coverage within the shared top_k result budget. You may also "
+            "a self-contained observable event or relation as the task goal, then caption_queries as short complementary "
+            "entity names or aliases; do not repeat the full question. Preserve entity spellings from the question and do "
+            "not invent translations. Each query receives balanced retrieval coverage within the shared top_k result budget. You may also "
             "set optional time_range, segment_id/source_video_ids, and index_mode=hybrid. Treat returned ranges as candidates "
             "and inspect decisive claims visually. "
         )

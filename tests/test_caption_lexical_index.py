@@ -313,8 +313,8 @@ def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
     )
 
     assert calls == [
-        ("red temple door", "红色寺庙大门"),
-        ("red temple doorway", "红色寺庙大门"),
+        ("Locate the target.", "red temple door", "红色寺庙大门"),
+        ("Refine the target.", "red temple doorway", "红色寺庙大门"),
     ]
     assert workspace.case.question not in calls[0]
     assert first.cost["reused"] is False
