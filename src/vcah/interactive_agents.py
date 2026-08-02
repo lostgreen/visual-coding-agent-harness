@@ -159,6 +159,12 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
     if mode not in {"window", "search_asr", "search_caption", "arbitrate_observation"}:
         return None
     raw_range = value.get("time_range")
+    raw_requirement_ids = value.get("requirement_ids", ()) or ()
+    requirement_ids = (
+        (raw_requirement_ids,)
+        if isinstance(raw_requirement_ids, str)
+        else tuple(raw_requirement_ids)
+    )
     time_range = None
     if isinstance(raw_range, Sequence) and not isinstance(raw_range, (str, bytes)) and len(raw_range) == 2:
         try:
@@ -183,7 +189,7 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
-        requirement_ids=tuple(value.get("requirement_ids", ()) or ()),
+        requirement_ids=requirement_ids,
     )
     if mode == "search_asr" and not task.search_terms:
         return None
@@ -1300,7 +1306,6 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
-    contract_policy = str(mechanical_status.get("evidence_contract_policy", "off") or "off").casefold()
     contract_required = bool(mechanical_status.get("evidence_contract_required"))
     contract_declared = bool(mechanical_status.get("evidence_contract_declared"))
     if contract_required and not contract_declared:
@@ -1309,19 +1314,28 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "answer-critical observable conditions before committing an answer. Each item uses "
             "{requirement_id,condition,kind,target,relation,occurrence,identity_cues,exclusion_cues}; kind is one of "
             "attribute, causal, count, entity, event, order, state, or text. Keep conditions independent of any guessed answer "
-            "or option. Include only cues needed to identify the requested event instance or distinguish a confounder. If the "
-            "same action investigates, bind every task to one or more declared requirement_ids.\n"
+            "or option and never invent aliases or translations. Use one requirement per independent event or occurrence, not "
+            "per field: combine attributes that are visible in the same window, and encode a navigation or scope anchor in the "
+            "target/relation/identity cues unless it must be observed separately to disambiguate repeated occurrences. For a "
+            "multi-statement truth question, one requirement per statement is valid. If the same action investigates, bind every "
+            "task to one or more declared requirement_ids.\n"
         )
     elif contract_declared:
         contract_rule = (
             "The Evidence Contract is immutable. Drive work from unresolved_evidence_requirements and include requirement_ids "
             "on every investigation task. Tag each resulting observation or derived claim with "
             "metadata.requirement_ids. Before answering, ensure the selected supporting claims collectively cover every "
-            "declared requirement; investigate missing conditions or preserve uncertainty.\n"
+            "declared requirement. Reuse one candidate window for requirements that are co-visible, and do not revisit a "
+            "requirement whose claim_ready is true. For identity, text, or state verification, start with a focused 20-60 second "
+            "window around the candidate cue and expand only when the cue is absent; preserve uncertainty instead of guessing.\n"
         )
     else:
         contract_rule = ""
-    requirement_schema = ',"requirement_ids":["req_1"]' if contract_policy != "off" else ""
+    requirement_schema = (
+        ',"requirement_ids":["req_1"]'
+        if contract_required or contract_declared
+        else ""
+    )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
     ).casefold()

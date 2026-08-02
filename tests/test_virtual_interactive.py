@@ -118,6 +118,8 @@ def test_reasoner_uses_only_workspace_protocol(tmp_path: Path) -> None:
     assert "qualification" not in prompt.casefold()
     assert "option_verdict" not in prompt
     assert "answer audit" not in prompt.casefold()
+    assert "Evidence Contract" not in prompt
+    assert '"requirement_ids"' not in prompt
 
 
 def test_reasoner_prompts_short_independent_queries_for_rema_strategy(tmp_path: Path) -> None:

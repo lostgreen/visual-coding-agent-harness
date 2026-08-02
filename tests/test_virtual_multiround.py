@@ -13,6 +13,7 @@ from vcah.multiround import (
     InvestigationTask,
     ReasonerDecision,
     VirtualVideoMultiRoundDriver,
+    _evidence_contract_required,
     _mechanical_status,
     _resolve_tasks,
 )
@@ -197,6 +198,37 @@ def test_driver_requires_both_semantic_roles() -> None:
         VirtualVideoMultiRoundDriver(reasoner=None, investigator=FakeInvestigator())
     with pytest.raises(ValueError, match="Investigator"):
         VirtualVideoMultiRoundDriver(reasoner=ScriptedReasoner(()), investigator=None)
+
+
+def test_adaptive_contract_selector_ignores_generic_all_wording(tmp_path: Path) -> None:
+    source = _workspace(tmp_path / "source")
+    workspace = VirtualVideoWorkspace.create(
+        tmp_path / "language-recall",
+        manifest=source.manifest,
+        case=VirtualVideoCase(
+            case_id="language-recall",
+            question="What are all the words shown on the sign?",
+            question_type="Language Content Recall",
+        ),
+    )
+
+    assert not _evidence_contract_required(workspace, "adaptive")
+
+
+def test_inactive_adaptive_contract_is_absent_from_mechanical_status(tmp_path: Path) -> None:
+    from vcah.workspace import ObservationLog, WorkingDocument
+
+    workspace = _workspace(tmp_path)
+    status = _mechanical_status(
+        workspace,
+        WorkingDocument.with_question_premise(workspace.case.question),
+        ObservationLog(tmp_path / "observations.jsonl"),
+        evidence_contract_policy="adaptive",
+        evidence_contract_required=False,
+    )
+
+    assert "evidence_contract_policy" not in status
+    assert "evidence_requirements" not in status
 
 
 def _investigate() -> ReasonerDecision:

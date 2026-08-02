@@ -44,7 +44,7 @@ _ADAPTIVE_CONTRACT_QUESTION_TYPES = {
     "temporal reasoning",
 }
 _ADAPTIVE_CONTRACT_QUESTION_RE = re.compile(
-    r"\b(?:after|before|first|last|prior|following|respectively|how many|both|each|all)\b",
+    r"\b(?:after|before|first|last|respectively|how many)\b",
     re.IGNORECASE,
 )
 _TIME_BOUNDARY_TOLERANCE_SEC = 1.0
@@ -939,6 +939,18 @@ def _mechanical_status(
         hints.append(
             "Continue from unresolved_evidence_requirements; bind each investigation task to requirement_ids and avoid unrelated search."
         )
+    contract_status = (
+        {
+            "evidence_contract_policy": evidence_contract_policy,
+            "evidence_contract_required": bool(evidence_contract_required),
+            "evidence_contract_declared": bool(evidence_requirements),
+            "evidence_requirements": [item.to_dict() for item in evidence_requirements],
+            "evidence_requirement_coverage": list(requirement_coverage),
+            "unresolved_evidence_requirements": list(unresolved_requirements),
+        }
+        if evidence_contract_required or evidence_requirements
+        else {}
+    )
     return {
         "schema_version": "MechanicalCompletionStatusV1",
         "working_document_revision": document.revision,
@@ -958,12 +970,7 @@ def _mechanical_status(
         "unrefined_visual_attempts": list(unrefined_visual_attempts[-6:]),
         "caption_cited_claim_count": caption_cited_claim_count,
         "visual_confirmed_claim_count": visual_confirmed_claim_count,
-        "evidence_contract_policy": evidence_contract_policy,
-        "evidence_contract_required": bool(evidence_contract_required),
-        "evidence_contract_declared": bool(evidence_requirements),
-        "evidence_requirements": [item.to_dict() for item in evidence_requirements],
-        "evidence_requirement_coverage": list(requirement_coverage),
-        "unresolved_evidence_requirements": list(unresolved_requirements),
+        **contract_status,
         "pending_caption_candidate_count": len(pending_caption_candidates),
         "pending_caption_candidates": list(
             pending_caption_candidates[
@@ -1482,10 +1489,8 @@ def _evidence_requirement(value: EvidenceRequirement | Mapping[str, Any]) -> Evi
         target=str(value.get("target", value.get("anchor", "")) or ""),
         relation=str(value.get("relation", "") or ""),
         occurrence=str(value.get("occurrence", "") or ""),
-        identity_cues=tuple(value.get("identity_cues", ()) or ()),
-        exclusion_cues=tuple(
-            value.get("exclusion_cues", value.get("must_not_confuse_with", ())) or ()
-        ),
+        identity_cues=value.get("identity_cues", ()) or (),
+        exclusion_cues=value.get("exclusion_cues", value.get("must_not_confuse_with", ())) or (),
     )
 
 
@@ -1672,9 +1677,11 @@ def _claim_requirement_ids(
                 seen=visited,
             )
         )
+    raw_declared = claim.metadata.get("requirement_ids", ()) or ()
+    declared_values = (raw_declared,) if isinstance(raw_declared, str) else tuple(raw_declared)
     declared = {
         str(item)
-        for item in tuple(claim.metadata.get("requirement_ids", ()) or ())
+        for item in declared_values
         if str(item) in valid_requirement_ids
     }
     if declared:
@@ -1763,6 +1770,12 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
 def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
     if isinstance(value, InvestigationTask):
         return value
+    raw_requirement_ids = value.get("requirement_ids", ()) or ()
+    requirement_ids = (
+        (raw_requirement_ids,)
+        if isinstance(raw_requirement_ids, str)
+        else tuple(raw_requirement_ids)
+    )
     return InvestigationTask(
         query_id=str(value.get("query_id", value.get("id", "")) or ""),
         goal=str(value.get("goal", value.get("task", "")) or ""),
@@ -1781,7 +1794,7 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
-        requirement_ids=tuple(value.get("requirement_ids", ()) or ()),
+        requirement_ids=requirement_ids,
         requirement_context=tuple(value.get("requirement_context", ()) or ()),
     )
 
