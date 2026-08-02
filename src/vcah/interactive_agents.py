@@ -1378,6 +1378,8 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "condition. Inspect its full inspection_range before unrelated Caption candidates; do not replace it with only "
         "the last seconds adjacent to the target event. Then visually verify the target identity, ordering, and requested "
         "state; the recommendation itself is not answer evidence.\n"
+        "Final supporting_claim_ids must contain only active observation or derived claims that directly support the "
+        "answer. Never include hypothesis claims or locator-only claims as final support.\n"
         "Investigate schema: {\"action\":\"investigate\",\"tasks\":[{\"query_id\":\"r1_t1\","
         "\"goal\":\"observable question\","
         "\"segment_id\":\"seg_0001\",\"time_range\":null,\"coordinate_space\":\"virtual|segment_local\","

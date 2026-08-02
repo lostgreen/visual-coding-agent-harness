@@ -50,17 +50,18 @@ def main() -> None:
 
     trace_path = workspace.root_dir / "interactions.jsonl"
     trace_path.touch(exist_ok=False)
+    investigator = VisionInvestigator(
+        workspace,
+        api=investigator_api,
+        trace_path=trace_path,
+        caption_embedding_adapter=embedding_adapter,
+        caption_index_mode=args.caption_index_mode,
+        caption_config_digest=args.caption_config_digest,
+        caption_query_strategy=args.caption_query_strategy,
+    )
     driver = VirtualVideoMultiRoundDriver(
         reasoner=WorkspaceReasoner(reasoner_api, trace_path=trace_path),
-        investigator=VisionInvestigator(
-            workspace,
-            api=investigator_api,
-            trace_path=trace_path,
-            caption_embedding_adapter=embedding_adapter,
-            caption_index_mode=args.caption_index_mode,
-            caption_config_digest=args.caption_config_digest,
-            caption_query_strategy=args.caption_query_strategy,
-        ),
+        investigator=investigator,
         max_rounds=args.max_rounds,
         max_investigations=args.max_investigations,
         max_tasks_per_round=args.max_tasks_per_round,
@@ -131,6 +132,8 @@ def main() -> None:
         "max_tasks_per_round": args.max_tasks_per_round,
         "caption_index_mode": args.caption_index_mode,
         "caption_query_strategy": args.caption_query_strategy,
+        "caption_query_policy": investigator.caption_query_policy,
+        "effective_caption_query_strategy": investigator.caption_query_strategy,
         "caption_config_digest": args.caption_config_digest,
         "embedding": dict(embedding_adapter.manifest) if embedding_adapter else None,
         "caption_index_digests": sorted(

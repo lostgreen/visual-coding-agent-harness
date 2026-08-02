@@ -146,6 +146,7 @@ def test_reasoner_prompts_short_independent_queries_for_rema_strategy(tmp_path: 
     assert "recommended_temporal_candidate" in prompt
     assert "locator-only join" in prompt
     assert "full inspection_range" in prompt
+    assert "Never include hypothesis claims or locator-only claims as final support" in prompt
     assert "framework always includes the original question" not in prompt
 
 
