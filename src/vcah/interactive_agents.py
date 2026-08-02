@@ -159,12 +159,6 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
     if mode not in {"window", "search_asr", "search_caption", "arbitrate_observation"}:
         return None
     raw_range = value.get("time_range")
-    raw_requirement_ids = value.get("requirement_ids", ()) or ()
-    requirement_ids = (
-        (raw_requirement_ids,)
-        if isinstance(raw_requirement_ids, str)
-        else tuple(raw_requirement_ids)
-    )
     time_range = None
     if isinstance(raw_range, Sequence) and not isinstance(raw_range, (str, bytes)) and len(raw_range) == 2:
         try:
@@ -189,7 +183,6 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
-        requirement_ids=requirement_ids,
     )
     if mode == "search_asr" and not task.search_terms:
         return None
@@ -224,11 +217,6 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
         "supporting_claim_ids": tuple(str(item) for item in payload.get("supporting_claim_ids", ()) or () if str(item).strip()),
         "residual_uncertainty": str(payload.get("residual_uncertainty", "") or ""),
         "observation_requests": tuple(dict(item) for item in payload.get("observation_requests", ()) or () if isinstance(item, Mapping)),
-        "evidence_requirements": tuple(
-            dict(item)
-            for item in payload.get("evidence_requirements", ()) or ()
-            if isinstance(item, Mapping)
-        ),
     }
 
 
@@ -1306,47 +1294,6 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
-    question = str(kwargs.get("question", "") or "")
-    anchored_text_rule = (
-        "This is event-anchored language recall. Treat the named trigger event and the requested spoken, sung, or displayed "
-        "text as two distinct observation targets. Use Caption retrieval to localize the trigger and its immediate continuation, "
-        "then inspect the trigger identity/order in one focused visual task and transcribe the requested post-trigger text in a "
-        "separate focused visual task. Do not combine both targets into one long observation call. Keep the combined span narrow, "
-        "use 2 fps for changing subtitles, preserve literal wording and visible uncertainty, and cite direct observations for both "
-        "the anchor and the text.\n"
-        if _is_event_anchored_language_recall(question)
-        else ""
-    )
-    contract_required = bool(mechanical_status.get("evidence_contract_required"))
-    contract_declared = bool(mechanical_status.get("evidence_contract_declared"))
-    if contract_required and not contract_declared:
-        contract_rule = (
-            "This question requires an Evidence Contract. In the same Decision JSON, declare evidence_requirements as 1-4 "
-            "answer-critical observable conditions before committing an answer. Each item uses "
-            "{requirement_id,condition,kind,target,relation,occurrence,identity_cues,exclusion_cues}; kind is one of "
-            "attribute, causal, count, entity, event, order, state, or text. Keep conditions independent of any guessed answer "
-            "or option and never invent aliases or translations. Use one requirement per independent event or occurrence, not "
-            "per field: combine attributes that are visible in the same window, and encode a navigation or scope anchor in the "
-            "target/relation/identity cues unless it must be observed separately to disambiguate repeated occurrences. For a "
-            "multi-statement truth question, one requirement per statement is valid. If the same action investigates, bind every "
-            "task to one or more declared requirement_ids.\n"
-        )
-    elif contract_declared:
-        contract_rule = (
-            "The Evidence Contract is immutable. Drive work from unresolved_evidence_requirements and include requirement_ids "
-            "on every investigation task. Tag each resulting observation or derived claim with "
-            "metadata.requirement_ids. Before answering, ensure the selected supporting claims collectively cover every "
-            "declared requirement. Reuse one candidate window for requirements that are co-visible, and do not revisit a "
-            "requirement whose claim_ready is true. For identity, text, or state verification, start with a focused 20-60 second "
-            "window around the candidate cue and expand only when the cue is absent; preserve uncertainty instead of guessing.\n"
-        )
-    else:
-        contract_rule = ""
-    requirement_schema = (
-        ',"requirement_ids":["req_1"]'
-        if contract_required or contract_declared
-        else ""
-    )
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
     ).casefold()
@@ -1408,8 +1355,6 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "applies your Working Document operations, and validates references. It never judges claims, scores options, audits, "
         "or changes your answer.\n"
         f"{action_rule}\n"
-        f"{contract_rule}"
-        f"{anchored_text_rule}"
         "Return one JSON object. Every action may include workspace_ops. Operation forms:\n"
         "{\"op\":\"add_claim\",\"claim\":{\"claim_id\":\"c1\",\"text\":\"...\","
         "\"source\":\"observation|derived|hypothesis\",\"cites\":[],\"derived_from\":[],"
@@ -1443,7 +1388,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "\"search_terms\":[],\"caption_queries\":[],\"top_k\":12,\"index_mode\":\"lexical|dense|hybrid\","
         "\"expand_neighbors\":0,\"arbitration_attempt_id\":\"\",\"force_reinspect\":false,"
         "\"expected_evidence\":\"direct observation\","
-        f"\"sampling_floor_fps\":0.5{requirement_schema}}}],\"workspace_ops\":[]}}. "
+        "\"sampling_floor_fps\":0.5}],\"workspace_ops\":[]}. "
         "time_range defaults to virtual workspace seconds. segment_local requires a known segment_id and is converted with "
         "an explicit trace; a virtual range outside its named segment is rejected rather than remapped. "
         "Use 0.5 fps for persistent states, 1 fps for ordinary motion, and 2 fps for brief transitions or changing text. "
@@ -1451,30 +1396,13 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "narrow 2 fps visual window before answering; ASR cannot resolve visual attributes.\n"
         f"{answer_schema}"
         f"{answer_rule}"
-        f"Question: {question}\n"
+        f"Question: {kwargs.get('question', '')}\n"
         f"Options: {json.dumps(options, ensure_ascii=False)}\n"
         f"Remaining investigation budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
         f"Mechanical status: {json.dumps(mechanical_status, ensure_ascii=False)}\n"
         f"Working view:\n{kwargs.get('working_document_view', '')}\n"
         f"Workspace overview: {json.dumps(_prompt_overview(kwargs.get('workspace_overview') or {}), ensure_ascii=False)}"
     )
-
-
-def _is_event_anchored_language_recall(question: str) -> bool:
-    normalized = str(question or "").casefold()
-    has_temporal_anchor = bool(
-        re.search(r"\b(?:after|before|following|once|when|first|last)\b", normalized)
-    )
-    requests_language = bool(
-        re.search(
-            r"\b(?:say|says|said|speak|speaks|spoke|sing|sings|sang|line|lyrics?|words?|"
-            r"text|subtitles?|caption|written|displayed)\b",
-            normalized,
-        )
-    )
-    return has_temporal_anchor and requests_language
-
-
 def _observation_prompt(
     workspace: VirtualVideoWorkspace,
     task: Any,
@@ -1488,15 +1416,6 @@ def _observation_prompt(
         "asr_cues": window.get("asr_cues"),
         "source_lineage": window.get("source_lineage"),
     }
-    requirement_context = tuple(getattr(task, "requirement_context", ()) or ())
-    requirement_rule = (
-        "Evidence requirement context (navigation only): "
-        f"{json.dumps(requirement_context, ensure_ascii=False)}\n"
-        "Report visible identity cues and exclusion cues explicitly, including mismatches or ambiguity; do not decide whether "
-        "the requirement is satisfied.\n"
-        if requirement_context
-        else ""
-    )
     return (
         "You are a visual Investigator. Report only what is directly visible or literally stated in the supplied local ASR. "
         "Do not select an answer option, evaluate a candidate claim, qualify an event, infer hidden intent, or decide whether "
@@ -1510,7 +1429,6 @@ def _observation_prompt(
         f"Question context (navigation only): {workspace.case.question}\n"
         f"Observation goal: {getattr(task, 'goal', '')}\n"
         f"Expected visible material: {getattr(task, 'expected_evidence', '')}\n"
-        f"{requirement_rule}"
         f"Window metadata: {json.dumps(metadata, ensure_ascii=False)}"
     )
 

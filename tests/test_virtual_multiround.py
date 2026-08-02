@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any, Sequence
@@ -9,11 +8,9 @@ import pytest
 
 from vcah.investigator import InvestigationReport, ObservationAttempt
 from vcah.multiround import (
-    EvidenceRequirement,
     InvestigationTask,
     ReasonerDecision,
     VirtualVideoMultiRoundDriver,
-    _evidence_contract_required,
     _mechanical_status,
     _resolve_tasks,
 )
@@ -198,37 +195,6 @@ def test_driver_requires_both_semantic_roles() -> None:
         VirtualVideoMultiRoundDriver(reasoner=None, investigator=FakeInvestigator())
     with pytest.raises(ValueError, match="Investigator"):
         VirtualVideoMultiRoundDriver(reasoner=ScriptedReasoner(()), investigator=None)
-
-
-def test_adaptive_contract_selector_ignores_generic_all_wording(tmp_path: Path) -> None:
-    source = _workspace(tmp_path / "source")
-    workspace = VirtualVideoWorkspace.create(
-        tmp_path / "language-recall",
-        manifest=source.manifest,
-        case=VirtualVideoCase(
-            case_id="language-recall",
-            question="What are all the words shown on the sign?",
-            question_type="Language Content Recall",
-        ),
-    )
-
-    assert not _evidence_contract_required(workspace, "adaptive")
-
-
-def test_inactive_adaptive_contract_is_absent_from_mechanical_status(tmp_path: Path) -> None:
-    from vcah.workspace import ObservationLog, WorkingDocument
-
-    workspace = _workspace(tmp_path)
-    status = _mechanical_status(
-        workspace,
-        WorkingDocument.with_question_premise(workspace.case.question),
-        ObservationLog(tmp_path / "observations.jsonl"),
-        evidence_contract_policy="adaptive",
-        evidence_contract_required=False,
-    )
-
-    assert "evidence_contract_policy" not in status
-    assert "evidence_requirements" not in status
 
 
 def _investigate() -> ReasonerDecision:
@@ -871,139 +837,3 @@ def test_pending_caption_candidate_is_not_automatically_selected(tmp_path: Path)
     assert result.answer_present
     assert [task.inspection_mode for task in investigator.tasks] == ["search_caption"]
     assert not any(row.get("decision_source") == "reasoner_caption_followup" for row in result.trace)
-
-
-def test_evidence_contract_binds_requirement_context_to_observation(tmp_path: Path) -> None:
-    workspace = _workspace(tmp_path)
-    task = _investigate().tasks[0]
-    attempt_id = _report(task).attempts[0].attempt_id
-    requirement = EvidenceRequirement(
-        requirement_id="req_object",
-        condition="Identify the object that is raised.",
-        kind="entity",
-        target="the raised object",
-        identity_cues=("visible shape and use",),
-        exclusion_cues=("do not confuse a book with a cup",),
-    )
-    reasoner = ScriptedReasoner(
-        (
-            ReasonerDecision(
-                action="investigate",
-                evidence_requirements=(requirement,),
-                tasks=(
-                    replace(task, requirement_ids=("req_object",)),
-                ),
-            ),
-            ReasonerDecision(
-                action="answer",
-                answer="B. A cup",
-                workspace_ops=(
-                    {
-                        "op": "add_claim",
-                        "claim_id": "claim_cup",
-                        "text": "The person raises a cup.",
-                        "source": "observation",
-                        "cites": (attempt_id,),
-                        "metadata": {"requirement_ids": ["req_object"]},
-                    },
-                ),
-                supporting_claim_ids=("claim_cup",),
-            ),
-        )
-    )
-    investigator = FakeInvestigator()
-
-    result = VirtualVideoMultiRoundDriver(
-        reasoner=reasoner,
-        investigator=investigator,
-        max_rounds=2,
-        max_investigations=4,
-        evidence_contract_policy="always",
-    ).run(workspace)
-
-    assert result.reference_valid
-    assert result.evidence_contract_required
-    assert result.evidence_requirements == (requirement,)
-    assert result.evidence_requirement_coverage[0]["answer_supported"] is True
-    assert investigator.tasks[0].requirement_ids == ("req_object",)
-    assert investigator.tasks[0].requirement_context[0]["target"] == "the raised object"
-    contract = json.loads((tmp_path / "evidence_contract.json").read_text(encoding="utf-8"))
-    assert contract["requirements"][0]["exclusion_cues"]
-
-
-def test_evidence_contract_rejects_partial_support_then_accepts_complete_support(
-    tmp_path: Path,
-) -> None:
-    workspace = _workspace(tmp_path)
-    tasks = (
-        InvestigationTask(
-            query_id="inspect_identity",
-            goal="Identify the raised object.",
-            segment_id="seg_0001",
-            time_range=(5.0, 6.0),
-            requirement_ids=("req_identity",),
-        ),
-        InvestigationTask(
-            query_id="inspect_action",
-            goal="Confirm that the object is raised.",
-            segment_id="seg_0001",
-            time_range=(5.0, 6.0),
-            requirement_ids=("req_action",),
-        ),
-    )
-    attempt_id = _report(tasks[0]).attempts[0].attempt_id
-    requirements = (
-        EvidenceRequirement("req_identity", "Identify the object.", kind="entity"),
-        EvidenceRequirement("req_action", "Confirm the raising action.", kind="event"),
-    )
-    claims = (
-        {
-            "op": "add_claim",
-            "claim_id": "claim_identity",
-            "text": "The object is a cup.",
-            "source": "observation",
-            "cites": (attempt_id,),
-            "metadata": {"requirement_ids": ["req_identity"]},
-        },
-        {
-            "op": "add_claim",
-            "claim_id": "claim_action",
-            "text": "The person raises the object.",
-            "source": "observation",
-            "cites": (attempt_id,),
-            "metadata": {"requirement_ids": ["req_action"]},
-        },
-    )
-    reasoner = ScriptedReasoner(
-        (
-            ReasonerDecision(
-                action="investigate",
-                tasks=tasks,
-                evidence_requirements=requirements,
-            ),
-            ReasonerDecision(
-                action="answer",
-                answer="B. A cup",
-                workspace_ops=claims,
-                supporting_claim_ids=("claim_identity",),
-            ),
-            ReasonerDecision(
-                action="answer",
-                answer="B. A cup",
-                supporting_claim_ids=("claim_identity", "claim_action"),
-            ),
-        )
-    )
-
-    result = VirtualVideoMultiRoundDriver(
-        reasoner=reasoner,
-        investigator=FakeInvestigator(),
-        max_rounds=1,
-        max_investigations=4,
-        evidence_contract_policy="always",
-    ).run(workspace)
-
-    assert result.reference_valid
-    assert len(reasoner.calls) == 3
-    assert "missing_answer_requirements:req_action" in reasoner.calls[2]["working_document_view"]
-    assert all(row["answer_supported"] for row in result.evidence_requirement_coverage)

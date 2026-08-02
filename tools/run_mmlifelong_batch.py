@@ -111,7 +111,6 @@ def main() -> None:
         "caption_config_digest": args.caption_config_digest,
         "caption_index_mode": args.caption_index_mode,
         "caption_query_strategy": args.caption_query_strategy,
-        "evidence_contract_policy": args.evidence_contract_policy,
         "answer_policy": args.answer_policy,
         "workers": max(1, min(int(args.workers), len(selected))),
         "question_type_counts": dict(Counter(case["question_type"] for case in selected)),
@@ -271,8 +270,6 @@ def _case_command(
         str(args.max_investigations),
         "--max-tasks-per-round",
         str(args.max_tasks_per_round),
-        "--evidence-contract-policy",
-        str(args.evidence_contract_policy),
         "--caption-index-mode",
         str(args.caption_index_mode),
         "--caption-query-strategy",
@@ -342,11 +339,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)
-    parser.add_argument(
-        "--evidence-contract-policy",
-        choices=("off", "adaptive", "always"),
-        default="off",
-    )
     parser.add_argument("--caption-index-mode", choices=("lexical", "dense", "hybrid"), default="hybrid")
     parser.add_argument(
         "--caption-query-strategy",
