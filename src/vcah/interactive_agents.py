@@ -1306,6 +1306,17 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
+    question = str(kwargs.get("question", "") or "")
+    anchored_text_rule = (
+        "This is event-anchored language recall. Treat the named trigger event and the requested spoken, sung, or displayed "
+        "text as two distinct observation targets. Use Caption retrieval to localize the trigger and its immediate continuation, "
+        "then inspect the trigger identity/order in one focused visual task and transcribe the requested post-trigger text in a "
+        "separate focused visual task. Do not combine both targets into one long observation call. Keep the combined span narrow, "
+        "use 2 fps for changing subtitles, preserve literal wording and visible uncertainty, and cite direct observations for both "
+        "the anchor and the text.\n"
+        if _is_event_anchored_language_recall(question)
+        else ""
+    )
     contract_required = bool(mechanical_status.get("evidence_contract_required"))
     contract_declared = bool(mechanical_status.get("evidence_contract_declared"))
     if contract_required and not contract_declared:
@@ -1398,6 +1409,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "or changes your answer.\n"
         f"{action_rule}\n"
         f"{contract_rule}"
+        f"{anchored_text_rule}"
         "Return one JSON object. Every action may include workspace_ops. Operation forms:\n"
         "{\"op\":\"add_claim\",\"claim\":{\"claim_id\":\"c1\",\"text\":\"...\","
         "\"source\":\"observation|derived|hypothesis\",\"cites\":[],\"derived_from\":[],"
@@ -1439,13 +1451,30 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "narrow 2 fps visual window before answering; ASR cannot resolve visual attributes.\n"
         f"{answer_schema}"
         f"{answer_rule}"
-        f"Question: {kwargs.get('question', '')}\n"
+        f"Question: {question}\n"
         f"Options: {json.dumps(options, ensure_ascii=False)}\n"
         f"Remaining investigation budget: {int(kwargs.get('remaining_budget', 0) or 0)}\n"
         f"Mechanical status: {json.dumps(mechanical_status, ensure_ascii=False)}\n"
         f"Working view:\n{kwargs.get('working_document_view', '')}\n"
         f"Workspace overview: {json.dumps(_prompt_overview(kwargs.get('workspace_overview') or {}), ensure_ascii=False)}"
     )
+
+
+def _is_event_anchored_language_recall(question: str) -> bool:
+    normalized = str(question or "").casefold()
+    has_temporal_anchor = bool(
+        re.search(r"\b(?:after|before|following|once|when|first|last)\b", normalized)
+    )
+    requests_language = bool(
+        re.search(
+            r"\b(?:say|says|said|speak|speaks|spoke|sing|sings|sang|line|lyrics?|words?|"
+            r"text|subtitles?|caption|written|displayed)\b",
+            normalized,
+        )
+    )
+    return has_temporal_anchor and requests_language
+
+
 def _observation_prompt(
     workspace: VirtualVideoWorkspace,
     task: Any,

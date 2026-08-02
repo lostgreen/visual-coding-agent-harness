@@ -152,6 +152,44 @@ def test_reasoner_prompts_short_independent_queries_for_rema_strategy(tmp_path: 
     assert "framework always includes the original question" not in prompt
 
 
+def test_reasoner_splits_event_anchor_from_language_recall(tmp_path: Path) -> None:
+    api = FakeAPI((json.dumps({"action": "answer", "answer": "A line"}),))
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    reasoner.decide(
+        question="After the player defeats the boss, what is the first line the musician sings?",
+        options={},
+        remaining_budget=4,
+        force_finalize=False,
+        mechanical_status={"caption_query_strategy": "rema"},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    prompt = api.calls[0]["prompt"]
+    assert "event-anchored language recall" in prompt
+    assert "two distinct observation targets" in prompt
+    assert "separate focused visual task" in prompt
+    assert "Do not combine both targets into one long observation call" in prompt
+
+
+def test_reasoner_does_not_split_non_language_temporal_question(tmp_path: Path) -> None:
+    api = FakeAPI((json.dumps({"action": "answer", "answer": "An item"}),))
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    reasoner.decide(
+        question="What is the first item obtained after defeating the boss?",
+        options={},
+        remaining_budget=4,
+        force_finalize=False,
+        mechanical_status={"caption_query_strategy": "rema"},
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    assert "event-anchored language recall" not in api.calls[0]["prompt"]
+
+
 def test_reasoner_parses_policy_scoped_evidence_contract(tmp_path: Path) -> None:
     api = FakeAPI(
         (
