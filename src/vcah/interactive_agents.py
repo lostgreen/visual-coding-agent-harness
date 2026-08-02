@@ -183,6 +183,7 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
+        requirement_ids=tuple(value.get("requirement_ids", ()) or ()),
     )
     if mode == "search_asr" and not task.search_terms:
         return None
@@ -217,6 +218,11 @@ def _normalize_decision(value: Mapping[str, Any], *, round_id: int) -> dict[str,
         "supporting_claim_ids": tuple(str(item) for item in payload.get("supporting_claim_ids", ()) or () if str(item).strip()),
         "residual_uncertainty": str(payload.get("residual_uncertainty", "") or ""),
         "observation_requests": tuple(dict(item) for item in payload.get("observation_requests", ()) or () if isinstance(item, Mapping)),
+        "evidence_requirements": tuple(
+            dict(item)
+            for item in payload.get("evidence_requirements", ()) or ()
+            if isinstance(item, Mapping)
+        ),
     }
 
 
@@ -1294,6 +1300,28 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     final_attempt = int(kwargs.get("final_attempt", 0) or 0)
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
+    contract_policy = str(mechanical_status.get("evidence_contract_policy", "off") or "off").casefold()
+    contract_required = bool(mechanical_status.get("evidence_contract_required"))
+    contract_declared = bool(mechanical_status.get("evidence_contract_declared"))
+    if contract_required and not contract_declared:
+        contract_rule = (
+            "This question requires an Evidence Contract. In the same Decision JSON, declare evidence_requirements as 1-4 "
+            "answer-critical observable conditions before committing an answer. Each item uses "
+            "{requirement_id,condition,kind,target,relation,occurrence,identity_cues,exclusion_cues}; kind is one of "
+            "attribute, causal, count, entity, event, order, state, or text. Keep conditions independent of any guessed answer "
+            "or option. Include only cues needed to identify the requested event instance or distinguish a confounder. If the "
+            "same action investigates, bind every task to one or more declared requirement_ids.\n"
+        )
+    elif contract_declared:
+        contract_rule = (
+            "The Evidence Contract is immutable. Drive work from unresolved_evidence_requirements and include requirement_ids "
+            "on every investigation task. Tag each resulting observation or derived claim with "
+            "metadata.requirement_ids. Before answering, ensure the selected supporting claims collectively cover every "
+            "declared requirement; investigate missing conditions or preserve uncertainty.\n"
+        )
+    else:
+        contract_rule = ""
+    requirement_schema = ',"requirement_ids":["req_1"]' if contract_policy != "off" else ""
     caption_query_strategy = str(
         mechanical_status.get("caption_query_strategy", "joint") or "joint"
     ).casefold()
@@ -1355,6 +1383,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "applies your Working Document operations, and validates references. It never judges claims, scores options, audits, "
         "or changes your answer.\n"
         f"{action_rule}\n"
+        f"{contract_rule}"
         "Return one JSON object. Every action may include workspace_ops. Operation forms:\n"
         "{\"op\":\"add_claim\",\"claim\":{\"claim_id\":\"c1\",\"text\":\"...\","
         "\"source\":\"observation|derived|hypothesis\",\"cites\":[],\"derived_from\":[],"
@@ -1388,7 +1417,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "\"search_terms\":[],\"caption_queries\":[],\"top_k\":12,\"index_mode\":\"lexical|dense|hybrid\","
         "\"expand_neighbors\":0,\"arbitration_attempt_id\":\"\",\"force_reinspect\":false,"
         "\"expected_evidence\":\"direct observation\","
-        "\"sampling_floor_fps\":0.5}],\"workspace_ops\":[]}. "
+        f"\"sampling_floor_fps\":0.5{requirement_schema}}}],\"workspace_ops\":[]}}. "
         "time_range defaults to virtual workspace seconds. segment_local requires a known segment_id and is converted with "
         "an explicit trace; a virtual range outside its named segment is rejected rather than remapped. "
         "Use 0.5 fps for persistent states, 1 fps for ordinary motion, and 2 fps for brief transitions or changing text. "
@@ -1416,6 +1445,15 @@ def _observation_prompt(
         "asr_cues": window.get("asr_cues"),
         "source_lineage": window.get("source_lineage"),
     }
+    requirement_context = tuple(getattr(task, "requirement_context", ()) or ())
+    requirement_rule = (
+        "Evidence requirement context (navigation only): "
+        f"{json.dumps(requirement_context, ensure_ascii=False)}\n"
+        "Report visible identity cues and exclusion cues explicitly, including mismatches or ambiguity; do not decide whether "
+        "the requirement is satisfied.\n"
+        if requirement_context
+        else ""
+    )
     return (
         "You are a visual Investigator. Report only what is directly visible or literally stated in the supplied local ASR. "
         "Do not select an answer option, evaluate a candidate claim, qualify an event, infer hidden intent, or decide whether "
@@ -1429,6 +1467,7 @@ def _observation_prompt(
         f"Question context (navigation only): {workspace.case.question}\n"
         f"Observation goal: {getattr(task, 'goal', '')}\n"
         f"Expected visible material: {getattr(task, 'expected_evidence', '')}\n"
+        f"{requirement_rule}"
         f"Window metadata: {json.dumps(metadata, ensure_ascii=False)}"
     )
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import json
+from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
 
@@ -22,8 +23,33 @@ from vcah.workspace import (
 
 
 _INSPECTION_MODES = {"window", "search_asr", "search_caption", "arbitrate_observation"}
+_EVIDENCE_REQUIREMENT_KINDS = {
+    "attribute",
+    "causal",
+    "count",
+    "entity",
+    "event",
+    "order",
+    "state",
+    "text",
+}
+_EVIDENCE_CONTRACT_POLICIES = {"off", "adaptive", "always"}
+_ADAPTIVE_CONTRACT_QUESTION_TYPES = {
+    "causal reasoning",
+    "counting",
+    "entity recognition",
+    "event tracking",
+    "hallucination detection",
+    "state change",
+    "temporal reasoning",
+}
+_ADAPTIVE_CONTRACT_QUESTION_RE = re.compile(
+    r"\b(?:after|before|first|last|prior|following|respectively|how many|both|each|all)\b",
+    re.IGNORECASE,
+)
 _TIME_BOUNDARY_TOLERANCE_SEC = 1.0
 RUN_ARTIFACT_NAMES = (
+    "evidence_contract.json",
     "evidence.jsonl",
     "observation_log.jsonl",
     "working_document.json",
@@ -31,6 +57,42 @@ RUN_ARTIFACT_NAMES = (
     "exploration_ledger.jsonl",
     "run_summary.json",
 )
+
+
+@dataclass(frozen=True)
+class EvidenceRequirement:
+    requirement_id: str
+    condition: str
+    kind: str = "event"
+    target: str = ""
+    relation: str = ""
+    occurrence: str = ""
+    identity_cues: tuple[str, ...] = ()
+    exclusion_cues: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        requirement_id = re.sub(r"[^a-zA-Z0-9_:\-]+", "_", str(self.requirement_id or "").strip())
+        object.__setattr__(self, "requirement_id", requirement_id[:80])
+        object.__setattr__(self, "condition", str(self.condition or "").strip()[:500])
+        kind = str(self.kind or "event").strip().casefold()
+        object.__setattr__(self, "kind", kind if kind in _EVIDENCE_REQUIREMENT_KINDS else "event")
+        object.__setattr__(self, "target", str(self.target or "").strip()[:240])
+        object.__setattr__(self, "relation", str(self.relation or "").strip()[:240])
+        object.__setattr__(self, "occurrence", str(self.occurrence or "").strip()[:160])
+        object.__setattr__(self, "identity_cues", _compact_strings(self.identity_cues, limit=6, width=160))
+        object.__setattr__(self, "exclusion_cues", _compact_strings(self.exclusion_cues, limit=6, width=160))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "requirement_id": self.requirement_id,
+            "condition": self.condition,
+            "kind": self.kind,
+            "target": self.target,
+            "relation": self.relation,
+            "occurrence": self.occurrence,
+            "identity_cues": list(self.identity_cues),
+            "exclusion_cues": list(self.exclusion_cues),
+        }
 
 
 @dataclass(frozen=True)
@@ -52,6 +114,8 @@ class InvestigationTask:
     sampling_floor_fps: float | None = None
     arbitration_attempt_id: str = ""
     force_reinspect: bool = False
+    requirement_ids: tuple[str, ...] = ()
+    requirement_context: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "query_id", str(self.query_id or "").strip())
@@ -106,6 +170,12 @@ class InvestigationTask:
         )
         object.__setattr__(self, "arbitration_attempt_id", str(self.arbitration_attempt_id or "").strip())
         object.__setattr__(self, "force_reinspect", bool(self.force_reinspect))
+        object.__setattr__(self, "requirement_ids", _compact_strings(self.requirement_ids, limit=4, width=80))
+        object.__setattr__(
+            self,
+            "requirement_context",
+            tuple(dict(item) for item in self.requirement_context if isinstance(item, Mapping))[:4],
+        )
 
 
 @dataclass(frozen=True)
@@ -118,6 +188,7 @@ class ReasonerDecision:
     supporting_claim_ids: tuple[str, ...] = ()
     residual_uncertainty: str = ""
     observation_requests: tuple[Mapping[str, Any], ...] = ()
+    evidence_requirements: tuple[EvidenceRequirement, ...] = ()
 
     def __post_init__(self) -> None:
         action = str(self.action or "").strip().casefold()
@@ -147,6 +218,19 @@ class ReasonerDecision:
             "observation_requests",
             tuple(dict(item) for item in self.observation_requests if isinstance(item, Mapping)),
         )
+        requirements: list[EvidenceRequirement] = []
+        known_requirement_ids: set[str] = set()
+        for item in self.evidence_requirements:
+            requirement = _evidence_requirement(item)
+            if (
+                not requirement.requirement_id
+                or not requirement.condition
+                or requirement.requirement_id in known_requirement_ids
+            ):
+                continue
+            requirements.append(requirement)
+            known_requirement_ids.add(requirement.requirement_id)
+        object.__setattr__(self, "evidence_requirements", tuple(requirements[:4]))
 
 
 @dataclass(frozen=True)
@@ -172,6 +256,10 @@ class MultiRoundResult:
     supporting_claim_ids: tuple[str, ...] = ()
     supporting_intervals: tuple[tuple[float, float], ...] = ()
     residual_uncertainty: str = ""
+    evidence_contract_policy: str = "off"
+    evidence_contract_required: bool = False
+    evidence_requirements: tuple[EvidenceRequirement, ...] = ()
+    evidence_requirement_coverage: tuple[Mapping[str, Any], ...] = ()
 
 
 class VirtualVideoMultiRoundDriver:
@@ -184,6 +272,7 @@ class VirtualVideoMultiRoundDriver:
         max_investigations: int = 20,
         max_tasks_per_round: int = 4,
         answer_policy: str = "strict",
+        evidence_contract_policy: str = "off",
     ) -> None:
         if reasoner is None:
             raise ValueError("VirtualVideoMultiRoundDriver requires a Reasoner")
@@ -198,6 +287,10 @@ class VirtualVideoMultiRoundDriver:
         if policy not in {"strict", "benchmark_best_effort"}:
             raise ValueError(f"unsupported answer_policy: {policy}")
         self.answer_policy = policy
+        contract_policy = str(evidence_contract_policy or "off").strip().casefold()
+        if contract_policy not in _EVIDENCE_CONTRACT_POLICIES:
+            raise ValueError(f"unsupported evidence_contract_policy: {contract_policy}")
+        self.evidence_contract_policy = contract_policy
 
     def run(self, workspace: VirtualVideoWorkspace) -> MultiRoundResult:
         existing = tuple(name for name in RUN_ARTIFACT_NAMES if (workspace.root_dir / name).exists())
@@ -210,6 +303,7 @@ class VirtualVideoMultiRoundDriver:
         observation_log = ObservationLog(workspace.root_dir / "observation_log.jsonl")
         document = WorkingDocument.with_question_premise(workspace.case.question)
         document_path = workspace.root_dir / "working_document.json"
+        contract_path = workspace.root_dir / "evidence_contract.json"
         history_path = workspace.root_dir / "workspace_ops.jsonl"
         history_path.touch(exist_ok=False)
         document.save(document_path)
@@ -223,6 +317,12 @@ class VirtualVideoMultiRoundDriver:
         final_answer: ReasonerDecision | None = None
         latest_answer_candidate: ReasonerDecision | None = None
         forced_decision_calls = 0
+        evidence_contract_required = _evidence_contract_required(
+            workspace,
+            self.evidence_contract_policy,
+        )
+        evidence_requirements: tuple[EvidenceRequirement, ...] = ()
+        task_requirement_ids: dict[str, tuple[str, ...]] = {}
 
         for round_id in range(1, self.max_rounds + 3):
             rounds_run = round_id
@@ -237,6 +337,10 @@ class VirtualVideoMultiRoundDriver:
                 document,
                 observation_log,
                 runtime_status=runtime_status,
+                evidence_contract_policy=self.evidence_contract_policy,
+                evidence_contract_required=evidence_contract_required,
+                evidence_requirements=evidence_requirements,
+                task_requirement_ids=task_requirement_ids,
             )
             force_finalize = round_id > self.max_rounds or remaining <= 0
             if force_finalize:
@@ -259,7 +363,51 @@ class VirtualVideoMultiRoundDriver:
                 answer_policy=self.answer_policy,
             ))
 
-            decision = raw_decision
+            proposed_requirements = raw_decision.evidence_requirements
+            if proposed_requirements and not evidence_requirements:
+                evidence_requirements = proposed_requirements
+                _write_evidence_contract(
+                    contract_path,
+                    policy=self.evidence_contract_policy,
+                    required=evidence_contract_required,
+                    requirements=evidence_requirements,
+                )
+                trace.append(
+                    {
+                        "type": "evidence_contract_declared",
+                        "round": round_id,
+                        "requirements": [item.to_dict() for item in evidence_requirements],
+                    }
+                )
+            elif proposed_requirements and proposed_requirements != evidence_requirements:
+                trace.append(
+                    {
+                        "type": "evidence_contract_revision_ignored",
+                        "round": round_id,
+                        "reason": "first_contract_is_immutable",
+                    }
+                )
+            if (
+                evidence_contract_required
+                and not evidence_requirements
+                and raw_decision.action == "investigate"
+                and raw_decision.tasks
+            ):
+                evidence_requirements = _requirements_from_tasks(raw_decision.tasks)
+                _write_evidence_contract(
+                    contract_path,
+                    policy=self.evidence_contract_policy,
+                    required=True,
+                    requirements=evidence_requirements,
+                )
+                trace.append(
+                    {
+                        "type": "evidence_contract_derived_from_tasks",
+                        "round": round_id,
+                        "requirements": [item.to_dict() for item in evidence_requirements],
+                    }
+                )
+            decision = _bind_decision_to_contract(raw_decision, evidence_requirements)
             if decision.action == "answer" and decision.answer:
                 latest_answer_candidate = decision
             answer_workspace_commit = bool(
@@ -322,6 +470,10 @@ class VirtualVideoMultiRoundDriver:
                     observation_log.attempt_ids,
                     workspace.case.options,
                     supporting_observation_ids=_supporting_observation_ids(observation_log),
+                    evidence_contract_required=evidence_contract_required,
+                    evidence_requirements=evidence_requirements,
+                    observations=observation_log,
+                    task_requirement_ids=task_requirement_ids,
                 )
                 trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
                 if validation.passed:
@@ -392,6 +544,11 @@ class VirtualVideoMultiRoundDriver:
                 continue
 
             batch = investigator.run_batch(tasks)
+            task_requirement_ids.update(
+                (task.query_id, task.requirement_ids)
+                for task in tasks
+                if task.requirement_ids
+            )
             completed = sum(_report_completed(report) for report in batch)
             completed_investigations += completed
             reports.extend(batch)
@@ -449,6 +606,10 @@ class VirtualVideoMultiRoundDriver:
             observation_log.attempt_ids,
             workspace.case.options,
             supporting_observation_ids=_supporting_observation_ids(observation_log),
+            evidence_contract_required=evidence_contract_required,
+            evidence_requirements=evidence_requirements,
+            observations=observation_log,
+            task_requirement_ids=task_requirement_ids,
         )
         candidate_validation = (
             validation
@@ -459,7 +620,18 @@ class VirtualVideoMultiRoundDriver:
                 observation_log.attempt_ids,
                 workspace.case.options,
                 supporting_observation_ids=_supporting_observation_ids(observation_log),
+                evidence_contract_required=evidence_contract_required,
+                evidence_requirements=evidence_requirements,
+                observations=observation_log,
+                task_requirement_ids=task_requirement_ids,
             )
+        )
+        evidence_requirement_coverage = _evidence_requirement_coverage(
+            evidence_requirements,
+            document,
+            observation_log,
+            task_requirement_ids,
+            supporting_claim_ids=selected.supporting_claim_ids,
         )
         if schema_answer_present or preserve_candidate:
             answer = selected.answer
@@ -512,6 +684,9 @@ class VirtualVideoMultiRoundDriver:
                 "framework_answer_mutation": False,
                 "answer_policy": self.answer_policy,
                 "answer_present": returned_answer_present,
+                "evidence_contract_policy": self.evidence_contract_policy,
+                "evidence_contract_required": evidence_contract_required,
+                "evidence_requirement_coverage": list(evidence_requirement_coverage),
                 "supporting_intervals": [list(item) for item in supporting_intervals],
                 "working_document_path": str(document_path),
                 "observation_log_path": str(observation_log.path),
@@ -544,7 +719,18 @@ class VirtualVideoMultiRoundDriver:
             supporting_claim_ids=selected.supporting_claim_ids,
             supporting_intervals=supporting_intervals,
             residual_uncertainty=selected.residual_uncertainty,
+            evidence_contract_policy=self.evidence_contract_policy,
+            evidence_contract_required=evidence_contract_required,
+            evidence_requirements=evidence_requirements,
+            evidence_requirement_coverage=evidence_requirement_coverage,
         )
+        if self.evidence_contract_policy != "off" and not contract_path.exists():
+            _write_evidence_contract(
+                contract_path,
+                policy=self.evidence_contract_policy,
+                required=evidence_contract_required,
+                requirements=evidence_requirements,
+            )
         _write_run_summary(workspace, result)
         return result
 
@@ -555,6 +741,10 @@ def _mechanical_status(
     observations: ObservationLog,
     *,
     runtime_status: Mapping[str, Any] | None = None,
+    evidence_contract_policy: str = "off",
+    evidence_contract_required: bool = False,
+    evidence_requirements: Sequence[EvidenceRequirement] = (),
+    task_requirement_ids: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     errors = document.validate(observation_ids=observations.attempt_ids)
     coverage = _source_coverage(workspace, observations)
@@ -678,6 +868,15 @@ def _mechanical_status(
         for claim in active_claims
     )
     runtime = dict(runtime_status or {})
+    requirement_coverage = _evidence_requirement_coverage(
+        evidence_requirements,
+        document,
+        observations,
+        task_requirement_ids or {},
+    )
+    unresolved_requirements = tuple(
+        row for row in requirement_coverage if not bool(row.get("claim_ready"))
+    )
     hints: list[str] = []
     empty_streak = int(runtime.get("empty_search_streak", 0) or 0)
     zero_queries = tuple(runtime.get("previous_zero_hit_queries", ()) or ())
@@ -732,6 +931,14 @@ def _mechanical_status(
             "Wide visual scans are locator candidates only; refine a relevant neighborhood to <=120 seconds before "
             "using it as answer support."
         )
+    if evidence_contract_required and not evidence_requirements:
+        hints.append(
+            "Declare a compact evidence contract before answering: split the question into answer-critical observable conditions."
+        )
+    elif unresolved_requirements:
+        hints.append(
+            "Continue from unresolved_evidence_requirements; bind each investigation task to requirement_ids and avoid unrelated search."
+        )
     return {
         "schema_version": "MechanicalCompletionStatusV1",
         "working_document_revision": document.revision,
@@ -751,6 +958,12 @@ def _mechanical_status(
         "unrefined_visual_attempts": list(unrefined_visual_attempts[-6:]),
         "caption_cited_claim_count": caption_cited_claim_count,
         "visual_confirmed_claim_count": visual_confirmed_claim_count,
+        "evidence_contract_policy": evidence_contract_policy,
+        "evidence_contract_required": bool(evidence_contract_required),
+        "evidence_contract_declared": bool(evidence_requirements),
+        "evidence_requirements": [item.to_dict() for item in evidence_requirements],
+        "evidence_requirement_coverage": list(requirement_coverage),
+        "unresolved_evidence_requirements": list(unresolved_requirements),
         "pending_caption_candidate_count": len(pending_caption_candidates),
         "pending_caption_candidates": list(
             pending_caption_candidates[
@@ -1075,6 +1288,10 @@ def _validate_answer(
     options: Mapping[str, str],
     *,
     supporting_observation_ids: Sequence[str] | None = None,
+    evidence_contract_required: bool = False,
+    evidence_requirements: Sequence[EvidenceRequirement] = (),
+    observations: ObservationLog | None = None,
+    task_requirement_ids: Mapping[str, Sequence[str]] | None = None,
 ) -> AnswerValidation:
     validation = document.validate_answer(
         decision.supporting_claim_ids,
@@ -1100,6 +1317,31 @@ def _validate_answer(
         )
     if not validation.passed:
         return validation
+    if evidence_contract_required:
+        if not evidence_requirements:
+            return _answer_rejected(validation, "evidence_contract_missing")
+        if observations is None:
+            return _answer_rejected(validation, "evidence_contract_coverage_unavailable")
+        coverage = _evidence_requirement_coverage(
+            evidence_requirements,
+            document,
+            observations,
+            task_requirement_ids or {},
+            supporting_claim_ids=decision.supporting_claim_ids,
+        )
+        missing = tuple(
+            str(row.get("requirement_id", ""))
+            for row in coverage
+            if not bool(row.get("answer_supported"))
+        )
+        if missing:
+            return AnswerValidation(
+                False,
+                "evidence_contract_incomplete",
+                validation.supporting_claim_ids,
+                validation.cited_attempt_ids,
+                (f"missing_answer_requirements:{','.join(missing)}",),
+            )
     if options and _material_uncertainty(decision.residual_uncertainty):
         return _answer_rejected(validation, "answer_support_uncertain")
     return validation
@@ -1212,9 +1454,279 @@ def _report_completed(report: InvestigationReport) -> int:
     return int(bool(report.evidence or report.attempts))
 
 
+def _compact_strings(
+    values: Sequence[Any] | str,
+    *,
+    limit: int,
+    width: int,
+) -> tuple[str, ...]:
+    candidates = (values,) if isinstance(values, str) else tuple(values or ())
+    return tuple(
+        dict.fromkeys(
+            str(item).strip()[:width]
+            for item in candidates
+            if str(item).strip()
+        )
+    )[:limit]
+
+
+def _evidence_requirement(value: EvidenceRequirement | Mapping[str, Any]) -> EvidenceRequirement:
+    if isinstance(value, EvidenceRequirement):
+        return value
+    if not isinstance(value, Mapping):
+        return EvidenceRequirement("", "")
+    return EvidenceRequirement(
+        requirement_id=str(value.get("requirement_id", value.get("id", "")) or ""),
+        condition=str(value.get("condition", value.get("answer_condition", "")) or ""),
+        kind=str(value.get("kind", value.get("type", "event")) or "event"),
+        target=str(value.get("target", value.get("anchor", "")) or ""),
+        relation=str(value.get("relation", "") or ""),
+        occurrence=str(value.get("occurrence", "") or ""),
+        identity_cues=tuple(value.get("identity_cues", ()) or ()),
+        exclusion_cues=tuple(
+            value.get("exclusion_cues", value.get("must_not_confuse_with", ())) or ()
+        ),
+    )
+
+
+def _evidence_contract_required(
+    workspace: VirtualVideoWorkspace,
+    policy: str,
+) -> bool:
+    normalized_policy = str(policy or "off").strip().casefold()
+    if normalized_policy == "off":
+        return False
+    if normalized_policy == "always":
+        return True
+    question_type = re.sub(
+        r"[_\-]+",
+        " ",
+        str(workspace.case.question_type or "").strip().casefold(),
+    )
+    return (
+        question_type in _ADAPTIVE_CONTRACT_QUESTION_TYPES
+        or bool(_ADAPTIVE_CONTRACT_QUESTION_RE.search(workspace.case.question))
+    )
+
+
+def _requirements_from_tasks(
+    tasks: Sequence[InvestigationTask],
+) -> tuple[EvidenceRequirement, ...]:
+    requirements: list[EvidenceRequirement] = []
+    used_ids: set[str] = set()
+    for index, task in enumerate(tasks[:4], start=1):
+        requested_id = task.requirement_ids[0] if task.requirement_ids else f"req_{index}"
+        requirement_id = requested_id
+        suffix = 2
+        while requirement_id in used_ids:
+            requirement_id = f"{requested_id}_{suffix}"
+            suffix += 1
+        used_ids.add(requirement_id)
+        condition = task.expected_evidence or task.goal
+        requirements.append(
+            EvidenceRequirement(
+                requirement_id=requirement_id,
+                condition=condition,
+                kind=_requirement_kind(condition),
+                target=task.goal,
+            )
+        )
+    return tuple(requirements)
+
+
+def _bind_decision_to_contract(
+    decision: ReasonerDecision,
+    requirements: Sequence[EvidenceRequirement],
+) -> ReasonerDecision:
+    if not decision.tasks or not requirements:
+        return decision
+    by_id = {item.requirement_id: item for item in requirements}
+    unresolved_ids = tuple(by_id)
+    bound: list[InvestigationTask] = []
+    for index, task in enumerate(decision.tasks):
+        requirement_ids = tuple(item for item in task.requirement_ids if item in by_id)
+        if not requirement_ids and len(unresolved_ids) == 1:
+            requirement_ids = unresolved_ids
+        elif not requirement_ids and len(decision.tasks) == len(unresolved_ids):
+            requirement_ids = (unresolved_ids[index],)
+        context = tuple(by_id[item].to_dict() for item in requirement_ids)
+        bound.append(
+            replace(
+                task,
+                requirement_ids=requirement_ids,
+                requirement_context=context,
+            )
+        )
+    return replace(decision, tasks=tuple(bound))
+
+
+def _evidence_requirement_coverage(
+    requirements: Sequence[EvidenceRequirement],
+    document: WorkingDocument,
+    observations: ObservationLog,
+    task_requirement_ids: Mapping[str, Sequence[str]],
+    *,
+    supporting_claim_ids: Sequence[str] = (),
+) -> tuple[Mapping[str, Any], ...]:
+    if not requirements:
+        return ()
+    attempts_by_requirement: dict[str, set[str]] = {
+        item.requirement_id: set() for item in requirements
+    }
+    supporting_attempts = set(_supporting_observation_ids(observations))
+    requirement_ids = set(attempts_by_requirement)
+    requirements_by_attempt: dict[str, set[str]] = {}
+    for row in observations.rows:
+        task_id = str(row.get("task_id", "") or "")
+        attempt_id = str(row.get("attempt_id", "") or "")
+        for requirement_id in task_requirement_ids.get(task_id, ()):
+            if requirement_id in attempts_by_requirement and attempt_id:
+                attempts_by_requirement[requirement_id].add(attempt_id)
+                requirements_by_attempt.setdefault(attempt_id, set()).add(requirement_id)
+
+    eligible_claim_ids = tuple(
+        claim_id
+        for claim_id, claim in document.claims.items()
+        if claim.status == "active"
+        and claim.source in {"observation", "derived"}
+        and claim.confidence != "low"
+    )
+    claim_requirements = {
+        claim_id: _claim_requirement_ids(
+            document,
+            claim_id,
+            requirements_by_attempt,
+            valid_requirement_ids=requirement_ids,
+        )
+        for claim_id in eligible_claim_ids
+    }
+    selected_claims = {
+        claim_id for claim_id in supporting_claim_ids if claim_id in claim_requirements
+    }
+    coverage: list[Mapping[str, Any]] = []
+    for requirement in requirements:
+        attempted = attempts_by_requirement[requirement.requirement_id]
+        observable_attempts = attempted & supporting_attempts
+        ready_claims = tuple(
+            claim_id
+            for claim_id, covered_requirement_ids in claim_requirements.items()
+            if requirement.requirement_id in covered_requirement_ids
+            and _claim_attempt_ids(document, claim_id) & observable_attempts
+        )
+        answer_claims = tuple(claim_id for claim_id in ready_claims if claim_id in selected_claims)
+        coverage.append(
+            {
+                "requirement_id": requirement.requirement_id,
+                "attempted": bool(attempted),
+                "observation_ready": bool(observable_attempts),
+                "claim_ready": bool(ready_claims),
+                "answer_supported": bool(answer_claims),
+                "attempt_ids": sorted(attempted),
+                "claim_ids": list(ready_claims),
+                "answer_claim_ids": list(answer_claims),
+            }
+        )
+    return tuple(coverage)
+
+
+def _claim_attempt_ids(
+    document: WorkingDocument,
+    claim_id: str,
+    *,
+    seen: set[str] | None = None,
+) -> set[str]:
+    visited = set(seen or ())
+    if claim_id in visited or claim_id not in document.claims:
+        return set()
+    visited.add(claim_id)
+    claim = document.claims[claim_id]
+    attempts = set(claim.cites)
+    for parent_id in claim.derived_from:
+        attempts.update(_claim_attempt_ids(document, parent_id, seen=visited))
+    return attempts
+
+
+def _claim_requirement_ids(
+    document: WorkingDocument,
+    claim_id: str,
+    requirements_by_attempt: Mapping[str, set[str]],
+    *,
+    valid_requirement_ids: set[str],
+    seen: set[str] | None = None,
+) -> set[str]:
+    visited = set(seen or ())
+    if claim_id in visited or claim_id not in document.claims:
+        return set()
+    visited.add(claim_id)
+    claim = document.claims[claim_id]
+    available: set[str] = set()
+    for attempt_id in claim.cites:
+        available.update(requirements_by_attempt.get(attempt_id, set()))
+    for parent_id in claim.derived_from:
+        available.update(
+            _claim_requirement_ids(
+                document,
+                parent_id,
+                requirements_by_attempt,
+                valid_requirement_ids=valid_requirement_ids,
+                seen=visited,
+            )
+        )
+    declared = {
+        str(item)
+        for item in tuple(claim.metadata.get("requirement_ids", ()) or ())
+        if str(item) in valid_requirement_ids
+    }
+    if declared:
+        return declared & available
+    return available if len(available) == 1 else set()
+
+
+def _requirement_kind(text: str) -> str:
+    normalized = str(text or "").casefold()
+    if re.search(r"\b(?:how many|count|number of|total)\b", normalized):
+        return "count"
+    if re.search(r"\b(?:before|after|first|last|order|sequence)\b", normalized):
+        return "order"
+    if re.search(r"\b(?:change|become|turns? into|state)\b", normalized):
+        return "state"
+    if re.search(r"\b(?:who|identity|which person|which character)\b", normalized):
+        return "entity"
+    if re.search(r"\b(?:say|said|read|text|written|language)\b", normalized):
+        return "text"
+    if re.search(r"\b(?:why|because|cause|reason)\b", normalized):
+        return "causal"
+    if re.search(r"\b(?:color|attribute|wearing|health|mana|appearance)\b", normalized):
+        return "attribute"
+    return "event"
+
+
+def _write_evidence_contract(
+    path: str | Path,
+    *,
+    policy: str,
+    required: bool,
+    requirements: Sequence[EvidenceRequirement],
+) -> None:
+    workspace_path = Path(path)
+    payload = {
+        "schema_version": "EvidenceContractV1",
+        "policy": str(policy),
+        "required": bool(required),
+        "requirements": [item.to_dict() for item in requirements],
+    }
+    temporary = workspace_path.with_suffix(f"{workspace_path.suffix}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(workspace_path)
+
+
 def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
     return {
         "query_id": task.query_id,
+        "goal": task.goal,
         "segment_id": task.segment_id,
         "time_range": list(task.time_range) if task.time_range else [],
         "coordinate_space": task.coordinate_space,
@@ -1228,6 +1740,7 @@ def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
         "sampling_floor_fps": task.sampling_floor_fps,
         "arbitration_attempt_id": task.arbitration_attempt_id,
         "force_reinspect": task.force_reinspect,
+        "requirement_ids": list(task.requirement_ids),
     }
 
 
@@ -1243,6 +1756,7 @@ def _decision(value: ReasonerDecision | Mapping[str, Any]) -> ReasonerDecision:
         supporting_claim_ids=tuple(value.get("supporting_claim_ids", ()) or ()),
         residual_uncertainty=str(value.get("residual_uncertainty", "") or ""),
         observation_requests=tuple(value.get("observation_requests", ()) or ()),
+        evidence_requirements=tuple(value.get("evidence_requirements", ()) or ()),
     )
 
 
@@ -1267,6 +1781,8 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
+        requirement_ids=tuple(value.get("requirement_ids", ()) or ()),
+        requirement_context=tuple(value.get("requirement_context", ()) or ()),
     )
 
 
@@ -1364,6 +1880,12 @@ def _write_run_summary(workspace: VirtualVideoWorkspace, result: MultiRoundResul
         "supporting_claim_ids": list(result.supporting_claim_ids),
         "supporting_intervals": [list(item) for item in result.supporting_intervals],
         "residual_uncertainty": result.residual_uncertainty,
+        "evidence_contract": {
+            "policy": result.evidence_contract_policy,
+            "required": result.evidence_contract_required,
+            "requirements": [item.to_dict() for item in result.evidence_requirements],
+            "coverage": [dict(item) for item in result.evidence_requirement_coverage],
+        },
         "rounds": result.rounds,
         "investigation_count": result.investigation_count,
         "evidence": [

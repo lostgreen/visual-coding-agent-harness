@@ -150,6 +150,58 @@ def test_reasoner_prompts_short_independent_queries_for_rema_strategy(tmp_path: 
     assert "framework always includes the original question" not in prompt
 
 
+def test_reasoner_parses_policy_scoped_evidence_contract(tmp_path: Path) -> None:
+    api = FakeAPI(
+        (
+            json.dumps(
+                {
+                    "action": "investigate",
+                    "evidence_requirements": [
+                        {
+                            "requirement_id": "req_identity",
+                            "condition": "Identify the requested event instance.",
+                            "kind": "entity",
+                            "target": "the requested encounter",
+                            "identity_cues": ["named opponent"],
+                            "exclusion_cues": ["other encounters"],
+                        }
+                    ],
+                    "tasks": [
+                        {
+                            "query_id": "inspect_identity",
+                            "goal": "Inspect the requested encounter.",
+                            "segment_id": "seg_0001",
+                            "time_range": [5, 7],
+                            "requirement_ids": ["req_identity"],
+                        }
+                    ],
+                }
+            ),
+        )
+    )
+    reasoner = WorkspaceReasoner(api, trace_path=tmp_path / "trace.jsonl")
+
+    decision = reasoner.decide(
+        question="What happens after the first encounter?",
+        options={},
+        remaining_budget=4,
+        force_finalize=False,
+        mechanical_status={
+            "evidence_contract_policy": "adaptive",
+            "evidence_contract_required": True,
+            "evidence_contract_declared": False,
+        },
+        working_document_view="",
+        workspace_overview={},
+    )
+
+    assert decision.evidence_requirements[0].requirement_id == "req_identity"
+    assert decision.tasks[0].requirement_ids == ("req_identity",)
+    prompt = api.calls[0]["prompt"]
+    assert "requires an Evidence Contract" in prompt
+    assert '"requirement_ids":["req_1"]' in prompt
+
+
 @pytest.mark.parametrize("wrapper", ("response", "responses", "items"))
 def test_reasoner_unwraps_valid_decision_wrappers(tmp_path: Path, wrapper: str) -> None:
     payload = {
@@ -376,6 +428,15 @@ def test_investigator_preserves_raw_observation_without_semantic_gates(
         segment_id="seg_0001",
         time_range=(5.0, 6.0),
         sampling_floor_fps=1.0,
+        requirement_ids=("req_object",),
+        requirement_context=(
+            {
+                "requirement_id": "req_object",
+                "target": "raised object",
+                "identity_cues": ["cup handle"],
+                "exclusion_cues": ["book pages"],
+            },
+        ),
     )
 
     report = investigator.run_batch((task,))[0]
@@ -386,6 +447,8 @@ def test_investigator_preserves_raw_observation_without_semantic_gates(
     forbidden = {"qualification", "condition_results", "option_verdicts", "claim_assessment"}
     assert forbidden.isdisjoint(report.evidence[0].operation_metadata)
     assert "Do not select an answer option" in api.calls[0]["prompt"]
+    assert "Evidence requirement context (navigation only)" in api.calls[0]["prompt"]
+    assert "book pages" in api.calls[0]["prompt"]
 
 
 def test_wide_sparse_scan_is_a_locator_not_full_coverage(

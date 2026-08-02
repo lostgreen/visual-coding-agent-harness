@@ -66,6 +66,7 @@ def main() -> None:
         max_investigations=args.max_investigations,
         max_tasks_per_round=args.max_tasks_per_round,
         answer_policy=args.answer_policy,
+        evidence_contract_policy=args.evidence_contract_policy,
     )
     result = driver.run(workspace)
     observation_rows = _read_jsonl(workspace.root_dir / "observation_log.jsonl")
@@ -100,6 +101,12 @@ def main() -> None:
             reference_valid=result.reference_valid,
             supporting_intervals=result.supporting_intervals,
         ),
+        "evidence_contract": {
+            "policy": result.evidence_contract_policy,
+            "required": result.evidence_contract_required,
+            "requirements": [item.to_dict() for item in result.evidence_requirements],
+            "coverage": [dict(item) for item in result.evidence_requirement_coverage],
+        },
         "judge": None,
     }
     judge_model = ""
@@ -130,6 +137,7 @@ def main() -> None:
         "max_rounds": args.max_rounds,
         "max_investigations": args.max_investigations,
         "max_tasks_per_round": args.max_tasks_per_round,
+        "evidence_contract_policy": args.evidence_contract_policy,
         "caption_index_mode": args.caption_index_mode,
         "caption_query_strategy": args.caption_query_strategy,
         "caption_query_policy": investigator.caption_query_policy,
@@ -272,6 +280,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rounds", type=int, default=4)
     parser.add_argument("--max-investigations", type=int, default=12)
     parser.add_argument("--max-tasks-per-round", type=int, default=4)
+    parser.add_argument(
+        "--evidence-contract-policy",
+        choices=("off", "adaptive", "always"),
+        default="off",
+    )
     parser.add_argument("--caption-index-mode", choices=("lexical", "dense", "hybrid"), default="hybrid")
     parser.add_argument(
         "--caption-query-strategy",
