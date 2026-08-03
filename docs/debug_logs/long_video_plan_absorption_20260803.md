@@ -53,5 +53,5 @@ previously measured ReMA and Evidence Contract regressions.
 - The four-case gate intentionally exited non-zero with
   `reference_non_regression` and `frame_cost_within_limit`; this is the expected
   rejection result, not an execution failure.
-- After push, repeat the full suite on the clean KML development-machine
-  checkout.
+- Full KML development-machine suite at code commit `dbaa9fb`: 244 passed,
+  88 warnings, exit code 0. The detached checkout remained clean after testing.
