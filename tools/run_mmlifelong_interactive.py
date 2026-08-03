@@ -230,6 +230,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/caption_lexical_index.py"),
         Path("src/vcah/caption_semantic_index.py"),
         Path("src/vcah/caption_hybrid_search.py"),
+        Path("src/vcah/caption_occurrence.py"),
         Path("src/vcah/embedding_adapter.py"),
         Path("src/vcah/mmlifelong_metrics.py"),
     )

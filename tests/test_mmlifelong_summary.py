@@ -107,6 +107,19 @@ def test_implementation_digest_is_content_bound_and_stable() -> None:
     assert len(first) == 64
 
 
+def test_implementation_digest_includes_caption_occurrence_logic(monkeypatch: Any) -> None:
+    hashed_paths: list[Path] = []
+    monkeypatch.setattr(
+        RUNNER,
+        "_file_sha256",
+        lambda path: hashed_paths.append(path) or "fixture-digest",
+    )
+
+    RUNNER._implementation_digest()
+
+    assert any(path.name == "caption_occurrence.py" for path in hashed_paths)
+
+
 def test_correctness_outcome_defers_free_form_to_answer_judge() -> None:
     assert RUNNER._correctness_outcome(
         has_options=True,
