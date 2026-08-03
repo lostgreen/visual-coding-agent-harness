@@ -252,11 +252,31 @@ def recorded_case_diagnostics(
     )
     caption_hits = tuple(
         hit
-        for row in source_rows.values()
+        for row in observation_rows
         if isinstance((config := row.get("sampling_config")), Mapping)
         and config.get("mode") == "search_caption"
         for hit in tuple(config.get("hits", ()) or ())
         if isinstance(hit, Mapping)
+    )
+    visual_interpretation_rows = tuple(
+        row
+        for row in observation_rows
+        if str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
+    )
+    visual_material_attempt_ids = {
+        str(row.get("attempt_id", "") or "")
+        for row in visual_interpretation_rows
+        if str(row.get("attempt_id", "") or "")
+    }
+    occurrence_candidates = caption_occurrence_candidates_from_observation_rows(
+        observation_rows
+    )
+    occurrence_ambiguous_searches = sum(
+        bool(occurrence_set.get("occurrence_ambiguous", False))
+        for row in observation_rows
+        if isinstance((config := row.get("sampling_config")), Mapping)
+        and config.get("mode") == "search_caption"
+        and isinstance((occurrence_set := config.get("occurrence_set")), Mapping)
     )
     fidelities = tuple(
         sampling_fidelity(
@@ -269,6 +289,7 @@ def recorded_case_diagnostics(
     )
     agent = evaluation.get("agent", {})
     agent_metrics = agent if isinstance(agent, Mapping) else {}
+    caption_dedup_rate = retrieval_dedup_rate(caption_hits)
     return {
         "accuracy_score": float(evaluation.get("accuracy_score") or 0.0),
         "reference_valid": int(bool(evaluation.get("reference_valid"))),
@@ -276,7 +297,16 @@ def recorded_case_diagnostics(
             agent_metrics.get("visual_frames_inspected", len(frame_times)) or 0
         ),
         "clue_frame_coverage": clue_frame_coverage(frame_times, gold_intervals),
-        "retrieval_dedup_rate": retrieval_dedup_rate(caption_hits),
+        "retrieval_dedup_rate": caption_dedup_rate,
+        "caption_result_novelty_rate": 1.0 - caption_dedup_rate if caption_hits else 0.0,
+        "caption_occurrence_candidate_count": len(occurrence_candidates),
+        "caption_occurrence_ambiguous_search_count": occurrence_ambiguous_searches,
+        "unique_visual_material_attempts": len(visual_material_attempt_ids),
+        "visual_interpretation_count": len(visual_interpretation_rows),
+        "visual_reinterpretation_count": max(
+            0,
+            len(visual_interpretation_rows) - len(visual_material_attempt_ids),
+        ),
         "sampling_fidelity_mean": mean(fidelities) if fidelities else 0.0,
         "sampling_fidelity_min": min(fidelities) if fidelities else 0.0,
         "anchor_consistency": anchor_consistency(
@@ -424,6 +454,34 @@ def caption_hits_from_observation_rows(
     return tuple(hits)
 
 
+def caption_occurrence_candidates_from_observation_rows(
+    observation_rows: Sequence[Mapping[str, Any]],
+) -> tuple[Mapping[str, Any], ...]:
+    candidates: dict[str, Mapping[str, Any]] = {}
+    for row in observation_rows:
+        config = row.get("sampling_config", {})
+        if not isinstance(config, Mapping) or config.get("mode") != "search_caption":
+            continue
+        occurrence_set = config.get("occurrence_set")
+        if not isinstance(occurrence_set, Mapping):
+            continue
+        for raw_candidate in tuple(occurrence_set.get("candidates", ()) or ()):
+            if not isinstance(raw_candidate, Mapping):
+                continue
+            occurrence_id = str(raw_candidate.get("occurrence_id", "") or "")
+            key = occurrence_id or json.dumps(
+                [
+                    list(raw_candidate.get("source_video_ids", ()) or ()),
+                    list(raw_candidate.get("time_range", ()) or ()),
+                    list(raw_candidate.get("passage_ids", ()) or ()),
+                ],
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            candidates.setdefault(key, dict(raw_candidate))
+    return tuple(candidates.values())
+
+
 def agent_run_metrics(
     trace: Sequence[Mapping[str, Any]],
     observation_rows: Sequence[Mapping[str, Any]],
@@ -439,11 +497,46 @@ def agent_run_metrics(
         source_rows.setdefault(str(row.get("attempt_id", "")), row)
     caption_rows = tuple(
         row
-        for row in source_rows.values()
+        for row in observation_rows
         if isinstance(row.get("sampling_config"), Mapping)
         and row["sampling_config"].get("mode") == "search_caption"
     )
-    candidates = caption_hits_from_observation_rows(tuple(source_rows.values()))
+    caption_material_attempt_count = len(
+        {
+            str(row.get("attempt_id", "") or "")
+            for row in caption_rows
+            if str(row.get("attempt_id", "") or "")
+        }
+    )
+    candidates = caption_hits_from_observation_rows(observation_rows)
+    raw_caption_hits = tuple(
+        hit
+        for row in caption_rows
+        for hit in tuple(row.get("sampling_config", {}).get("hits", ()) or ())
+        if isinstance(hit, Mapping)
+    )
+    caption_dedup_rate = retrieval_dedup_rate(raw_caption_hits)
+    occurrence_candidates = caption_occurrence_candidates_from_observation_rows(
+        observation_rows
+    )
+    occurrence_ambiguous_searches = sum(
+        bool(occurrence_set.get("occurrence_ambiguous", False))
+        for row in caption_rows
+        if isinstance(
+            (occurrence_set := row.get("sampling_config", {}).get("occurrence_set")),
+            Mapping,
+        )
+    )
+    visual_interpretation_rows = tuple(
+        row
+        for row in observation_rows
+        if str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
+    )
+    visual_material_attempt_ids = {
+        str(row.get("attempt_id", "") or "")
+        for row in visual_interpretation_rows
+        if str(row.get("attempt_id", "") or "")
+    }
     converted = sum(
         any(_overlap(_hit_interval(hit), interval) for interval in supporting_intervals)
         for hit in candidates
@@ -460,11 +553,26 @@ def agent_run_metrics(
         "rounds": len(decisions),
         "dedicated_read_rounds": sum(row.get("action") == "read_observations" for row in decisions),
         "caption_searches": len(caption_rows),
+        "caption_material_attempts": caption_material_attempt_count,
         "empty_search_count": sum(
             not tuple(row.get("sampling_config", {}).get("hits", ()) or ())
             for row in caption_rows
         ),
         "duplicate_search_count": sum(bool(row.get("reused")) for row in report_outcomes),
+        "caption_result_set_reuse_count": sum(
+            row.get("failure_reason") == "caption_result_set_has_no_new_material"
+            for row in report_outcomes
+        ),
+        "caption_result_novelty_rate": 1.0 - caption_dedup_rate if raw_caption_hits else 0.0,
+        "caption_result_dedup_rate": caption_dedup_rate,
+        "caption_occurrence_candidate_count": len(occurrence_candidates),
+        "caption_occurrence_ambiguous_search_count": occurrence_ambiguous_searches,
+        "unique_visual_material_attempts": len(visual_material_attempt_ids),
+        "visual_interpretation_count": len(visual_interpretation_rows),
+        "visual_reinterpretation_count": max(
+            0,
+            len(visual_interpretation_rows) - len(visual_material_attempt_ids),
+        ),
         "visual_confirmations": sum(
             str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
             for row in source_rows.values()

@@ -615,14 +615,54 @@ def _mechanical_status(
         if status["requested_fps"] > 0.0 and status["sampling_fidelity"] < 0.8
     )
     candidates_by_key: dict[tuple[str, float, float], dict[str, Any]] = {}
+    caption_occurrences_by_key: dict[str, dict[str, Any]] = {}
+    caption_occurrence_sets: list[dict[str, Any]] = []
     temporal_locators: list[dict[str, Any]] = []
-    for row in source_rows:
+    for row in observations.rows:
         config = row.get("sampling_config")
         if not isinstance(config, Mapping) or config.get("mode") != "search_caption":
             continue
         temporal_locator = config.get("temporal_locator")
         if isinstance(temporal_locator, Mapping):
             temporal_locators.append(dict(temporal_locator))
+        occurrence_set = config.get("occurrence_set")
+        if isinstance(occurrence_set, Mapping):
+            compact_candidates: list[dict[str, Any]] = []
+            for raw_candidate in tuple(occurrence_set.get("candidates", ()) or ()):
+                if not isinstance(raw_candidate, Mapping):
+                    continue
+                interval = _time_range(raw_candidate.get("time_range"))
+                if interval is None:
+                    continue
+                candidate = {
+                    "attempt_id": str(row.get("attempt_id", "")),
+                    "occurrence_id": str(raw_candidate.get("occurrence_id", "") or ""),
+                    "time_range": list(interval),
+                    "source_video_ids": list(raw_candidate.get("source_video_ids", ()) or ()),
+                    "segment_ids": list(raw_candidate.get("segment_ids", ()) or ()),
+                    "passage_ids": list(raw_candidate.get("passage_ids", ()) or ()),
+                    "max_score": float(raw_candidate.get("max_score", 0.0) or 0.0),
+                    "hit_count": int(raw_candidate.get("hit_count", 0) or 0),
+                }
+                compact_candidates.append(candidate)
+                key = candidate["occurrence_id"] or json.dumps(
+                    [candidate["source_video_ids"], candidate["time_range"]],
+                    separators=(",", ":"),
+                )
+                existing = caption_occurrences_by_key.get(key)
+                if existing is None or candidate["max_score"] > existing["max_score"]:
+                    caption_occurrences_by_key[key] = candidate
+            caption_occurrence_sets.append(
+                {
+                    "attempt_id": str(row.get("attempt_id", "")),
+                    "status": str(occurrence_set.get("status", "") or ""),
+                    "occurrence_ambiguous": bool(
+                        occurrence_set.get("occurrence_ambiguous", False)
+                    ),
+                    "candidate_count": len(compact_candidates),
+                    "candidates": compact_candidates,
+                }
+            )
         for hit in tuple(config.get("hits", ()) or ()):
             if not isinstance(hit, Mapping):
                 continue
@@ -653,6 +693,36 @@ def _mechanical_status(
         if not any(
             _ranges_overlap(tuple(candidate["time_range"]), interval)
             for interval in visual_ranges
+        )
+    )
+    caption_occurrence_candidates = tuple(
+        sorted(
+            caption_occurrences_by_key.values(),
+            key=lambda candidate: (
+                -float(candidate["max_score"]),
+                float(candidate["time_range"][0]),
+            ),
+        )
+    )
+    pending_caption_occurrences = tuple(
+        candidate
+        for candidate in caption_occurrence_candidates
+        if not any(
+            _ranges_overlap(tuple(candidate["time_range"]), interval)
+            for interval in visual_ranges
+        )
+    )
+    pending_occurrence_ids = {
+        str(candidate.get("occurrence_id", "") or "")
+        for candidate in pending_caption_occurrences
+    }
+    unresolved_competing_occurrence_sets = tuple(
+        occurrence_set
+        for occurrence_set in caption_occurrence_sets
+        if occurrence_set["occurrence_ambiguous"]
+        and any(
+            str(candidate.get("occurrence_id", "") or "") in pending_occurrence_ids
+            for candidate in occurrence_set["candidates"]
         )
     )
     temporal_status: dict[str, Any] = {}
@@ -722,6 +792,11 @@ def _mechanical_status(
             "Caption hits are locator candidates only. Inspect a top pending caption time_range with inspection_mode=window "
             "before using it as answer support."
         )
+    if unresolved_competing_occurrence_sets:
+        hints.append(
+            "Caption retrieval spans multiple source/time occurrence clusters. Treat them as competing locator "
+            "candidates and compare identity cues before promoting any interval to answer support."
+        )
     if temporal_status.get("recommended_temporal_candidate"):
         hints.append(
             "An explicit after/before/first contract produced a scoped temporal locator. "
@@ -766,6 +841,11 @@ def _mechanical_status(
                 else 8
             ]
         ),
+        "caption_occurrence_candidate_count": len(caption_occurrence_candidates),
+        "pending_caption_occurrence_count": len(pending_caption_occurrences),
+        "pending_caption_occurrences": list(pending_caption_occurrences[:8]),
+        "caption_occurrence_ambiguous": bool(unresolved_competing_occurrence_sets),
+        "caption_occurrence_sets": list(caption_occurrence_sets[-4:]),
         **temporal_status,
         "entity_count": len(document.entities),
         "candidate_interval_count": sum(note.role == "candidate" for note in document.timeline),

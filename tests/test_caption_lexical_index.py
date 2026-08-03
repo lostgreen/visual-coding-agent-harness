@@ -271,6 +271,135 @@ def test_search_caption_scope_is_forwarded_and_not_reused_across_segments(tmp_pa
     assert "p0" not in second_ids
 
 
+def test_caption_search_exposes_source_scoped_occurrence_candidates(tmp_path: Path) -> None:
+    investigator = VisionInvestigator(
+        _workspace(tmp_path),
+        api=DummyApi(),
+        trace_path=tmp_path / "trace-occurrences.jsonl",
+    )
+
+    report = investigator._investigate_task(
+        InvestigationTask(
+            query_id="caption-occurrences",
+            goal="Locate repeated red door events.",
+            inspection_mode="search_caption",
+            caption_queries=("red temple door", "红色寺庙大门"),
+            top_k=4,
+            index_mode="lexical",
+        )
+    )
+
+    occurrence_set = report.attempts[0].sampling_config["occurrence_set"]
+    assert occurrence_set["occurrence_ambiguous"] is True
+    assert occurrence_set["candidate_count"] >= 2
+    assert {tuple(candidate["source_video_ids"]) for candidate in occurrence_set["candidates"]} >= {
+        ("video-a",),
+        ("video-b",),
+    }
+    assert all(candidate["status"] == "uninspected" for candidate in occurrence_set["candidates"])
+
+
+def test_changed_query_with_same_results_is_same_material_without_budget_cost(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    investigator = VisionInvestigator(
+        workspace,
+        api=DummyApi(),
+        trace_path=tmp_path / "trace-result-novelty.jsonl",
+    )
+    calls = 0
+
+    def search(queries: Sequence[str], **_kwargs: Any) -> Mapping[str, Any]:
+        nonlocal calls
+        calls += 1
+        return {
+            "hits": [
+                {
+                    "passage_id": "same-passage",
+                    "caption_id": "caption",
+                    "rank": 1,
+                    "lexical_score": 1.0,
+                    "dense_score": None,
+                    "fused_score": 1.0,
+                    "virtual_start_sec": 10.0,
+                    "virtual_end_sec": 20.0,
+                    "wall_clock_begin": None,
+                    "wall_clock_end": None,
+                    "text": "The target appears.",
+                    "interval_precision": "anchor",
+                    "source_pointer": "caption://fixture/same-passage",
+                    "metadata": {
+                        "source_segments": ["seg_0001"],
+                        "source_video_ids": ["video-a"],
+                    },
+                }
+            ],
+            "query_fingerprint": f"query-{calls}",
+            "index_digest": "fixture-index",
+            "config_digest": "fixture",
+            "rendered": "same passage",
+            "segment_ids": [],
+            "source_video_ids": [],
+            "query_strategy": "joint",
+            "occurrence_set": {
+                "schema_version": "CaptionOccurrenceSetV1",
+                "candidate_count": 1,
+                "occurrence_ambiguous": False,
+                "status": "single_candidate",
+                "selected_occurrence_id": None,
+                "candidates": [
+                    {
+                        "occurrence_id": "occ-same",
+                        "time_range": [10.0, 20.0],
+                        "source_video_ids": ["video-a"],
+                        "segment_ids": ["seg_0001"],
+                        "passage_ids": ["same-passage"],
+                        "max_score": 1.0,
+                        "hit_count": 1,
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(investigator, "search_caption", search)
+    first = investigator._investigate_task(
+        InvestigationTask(
+            query_id="first-query",
+            goal="Locate the target.",
+            inspection_mode="search_caption",
+            caption_queries=("first wording",),
+        )
+    )
+    log = ObservationLog(workspace.root_dir / "observation_log.jsonl")
+    log.append_attempt(first.attempts[0], round_id=1)
+    second = investigator._investigate_task(
+        InvestigationTask(
+            query_id="second-query",
+            goal="Locate the target again.",
+            inspection_mode="search_caption",
+            caption_queries=("different wording",),
+        )
+    )
+    log.append_attempt(second.attempts[0], round_id=2)
+
+    assert calls == 2
+    assert first.attempts[0].attempt_id == second.attempts[0].attempt_id
+    assert first.attempts[0].prompt_digest != second.attempts[0].prompt_digest
+    assert first.attempts[0].sampling_config["source_video_ids"] == ["video-a"]
+    assert second.cost["consumes_budget"] is False
+    assert second.cost["result_set_reused"] is True
+    assert second.failure_reason == "caption_result_set_has_no_new_material"
+    assert second.attempts[0].sampling_config["result_novelty"]["novel_result_count"] == 0
+    status = investigator.mechanical_status()
+    assert status["caption_result_set_reuse_count"] == 1
+    assert status["caption_returned_result_count"] == 2
+    assert status["caption_unique_result_count"] == 1
+    assert status["caption_result_novelty_rate"] == 0.5
+    assert len(log.rows) == 2
+
+
 def test_rema_caption_queries_exclude_full_question_and_allow_refinement(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

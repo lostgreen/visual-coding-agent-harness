@@ -29,6 +29,7 @@ def test_hybrid_rrf_is_deterministic_and_keeps_component_scores() -> None:
     assert first[0].dense_score is not None
     assert first[0].metadata["lexical_rank"] == 1
     assert first[0].metadata["dense_rank"] is not None
+    assert first[0].metadata["source_segments"] == ["seg_0002"]
 
 
 def test_hybrid_query_fingerprint_includes_rank_configuration() -> None:

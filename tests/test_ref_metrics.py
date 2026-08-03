@@ -353,6 +353,21 @@ def test_caption_and_agent_metrics_are_derived_from_logged_candidates() -> None:
                     {"passage_id": "p1", "range": [100.0, 110.0], "score": 0.9},
                     {"passage_id": "p2", "range": [200.0, 210.0], "score": 0.8},
                 ],
+                "occurrence_set": {
+                    "occurrence_ambiguous": True,
+                    "candidates": [
+                        {
+                            "occurrence_id": "occ-1",
+                            "time_range": [100.0, 110.0],
+                            "passage_ids": ["p1"],
+                        },
+                        {
+                            "occurrence_id": "occ-2",
+                            "time_range": [200.0, 210.0],
+                            "passage_ids": ["p2"],
+                        },
+                    ],
+                },
             },
             "frame_times": [],
         },
@@ -362,13 +377,26 @@ def test_caption_and_agent_metrics_are_derived_from_logged_candidates() -> None:
             "sampling_config": {"mode": "window"},
             "frame_times": [101.0, 102.0],
         },
+        {
+            "attempt_id": "visual-attempt",
+            "modality": "visual",
+            "sampling_config": {"mode": "window"},
+            "frame_times": [101.0, 102.0],
+            "prompt_digest": "reinterpretation",
+        },
     )
     trace = (
         {"type": "reasoner_decision", "action": "investigate"},
         {"type": "reasoner_decision", "action": "read_observations"},
         {
             "type": "investigator_batch",
-            "outcomes": [{"query_id": "q1", "reused": True}],
+            "outcomes": [
+                {
+                    "query_id": "q1",
+                    "reused": True,
+                    "failure_reason": "caption_result_set_has_no_new_material",
+                }
+            ],
         },
     )
 
@@ -387,4 +415,11 @@ def test_caption_and_agent_metrics_are_derived_from_logged_candidates() -> None:
     assert metrics["visual_frames_inspected"] == 2
     assert metrics["dedicated_read_rounds"] == 1
     assert metrics["duplicate_search_count"] == 1
+    assert metrics["caption_result_set_reuse_count"] == 1
+    assert metrics["caption_result_novelty_rate"] == 1.0
+    assert metrics["caption_occurrence_candidate_count"] == 2
+    assert metrics["caption_occurrence_ambiguous_search_count"] == 1
+    assert metrics["unique_visual_material_attempts"] == 1
+    assert metrics["visual_interpretation_count"] == 2
+    assert metrics["visual_reinterpretation_count"] == 1
     assert metrics["candidate_to_support_conversion"] == 0.5

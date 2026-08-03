@@ -213,6 +213,17 @@ locator-only visual inspection candidate. Raw Caption excerpts remain available,
 and the candidate must still be verified visually. Use `rema` to force independent
 multi-query retrieval for ablations; `joint` remains the default.
 
+Every Caption search also emits a `CaptionOccurrenceSetV1` with query-independent
+occurrence IDs. Hits are clustered by source identity and temporal gap, so distant
+repetitions remain explicit competing locator candidates instead of collapsing
+into the first coherent chain. The runtime does not select an occurrence: the
+Reasoner must inspect identity cues before promoting one. Caption material attempts
+are identified by their returned passage set rather than query wording. A changed
+query that yields no new passages is retained as another interpretation of the same
+material but does not consume investigation budget. Case metrics and the aggregate
+report expose passage novelty, occurrence candidate count, unique visual material
+attempts, and visual interpretation/reinterpretation counts.
+
 Use explicit sections in a shared YAML file. A separate role-specific file may put
 the same fields at its root.
 

@@ -4,7 +4,7 @@ from collections import Counter
 from dataclasses import asdict
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 from vcah.caption_lexical_index import CaptionLexicalIndex, normalize_caption_query
 from vcah.caption_schema import CaptionHitV1, stable_digest
@@ -392,6 +392,7 @@ class CaptionHybridSearch:
             interval_precision=source.interval_precision,
             source_pointer=source.source_pointer,
             metadata={
+                **dict(source.metadata),
                 "index_digest": self.index_digest,
                 "index_mode": "hybrid",
                 "query_strategy": self.query_strategy,

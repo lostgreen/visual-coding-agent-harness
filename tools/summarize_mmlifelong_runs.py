@@ -53,6 +53,36 @@ def aggregate_evaluations(rows: Sequence[Mapping[str, Any]]) -> tuple[dict[str, 
                 "AllCluesRecall@5": _mean_path(evaluations, "retrieval", "AllCluesRecall@5"),
                 "avg_rounds": _mean_path(evaluations, "agent", "rounds"),
                 "avg_caption_searches": _mean_path(evaluations, "agent", "caption_searches"),
+                "avg_caption_material_attempts": _mean_path(
+                    evaluations,
+                    "agent",
+                    "caption_material_attempts",
+                ),
+                "caption_result_novelty_rate": _mean_path(
+                    evaluations,
+                    "agent",
+                    "caption_result_novelty_rate",
+                ),
+                "avg_caption_result_set_reuses": _mean_path(
+                    evaluations,
+                    "agent",
+                    "caption_result_set_reuse_count",
+                ),
+                "avg_occurrence_candidates": _mean_path(
+                    evaluations,
+                    "agent",
+                    "caption_occurrence_candidate_count",
+                ),
+                "avg_unique_visual_material_attempts": _mean_path(
+                    evaluations,
+                    "agent",
+                    "unique_visual_material_attempts",
+                ),
+                "avg_visual_interpretations": _mean_path(
+                    evaluations,
+                    "agent",
+                    "visual_interpretation_count",
+                ),
                 "avg_visual_confirmations": _mean_path(evaluations, "agent", "visual_confirmations"),
                 "avg_visual_frames": _mean_path(evaluations, "agent", "visual_frames_inspected"),
             }
@@ -71,6 +101,10 @@ def render_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
         "Ref@300",
         "Ref@600",
         "ClueRecall@5",
+        "caption_result_novelty_rate",
+        "avg_occurrence_candidates",
+        "avg_unique_visual_material_attempts",
+        "avg_visual_interpretations",
         "avg_rounds",
         "avg_visual_frames",
     )

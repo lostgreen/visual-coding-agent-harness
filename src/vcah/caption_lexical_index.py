@@ -257,7 +257,12 @@ class CaptionLexicalIndex:
             text=passage.text,
             interval_precision=str(passage.metadata.get("interval_precision", "chunk")),
             source_pointer=f"caption://{self.config_digest}/{passage.passage_id}",
-            metadata={"index_digest": self.index_digest, **dict(metadata)},
+            metadata={
+                **dict(passage.metadata),
+                "index_digest": self.index_digest,
+                "index_mode": "lexical",
+                **dict(metadata),
+            },
         )
 
     def _with_neighbors(

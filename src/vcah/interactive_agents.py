@@ -73,6 +73,16 @@ class SearchFingerprint:
         union = left | right
         return len(left & right) / len(union) if union else 1.0
 
+    def same_result_scope(self, other: "SearchFingerprint") -> bool:
+        return (
+            self.modality == other.modality
+            and self.time_range_bucket == other.time_range_bucket
+            and self.index_version == other.index_version
+            and self.segment_ids == other.segment_ids
+            and self.source_video_ids == other.source_video_ids
+            and self.expand_neighbors == other.expand_neighbors
+        )
+
 
 @dataclass(frozen=True)
 class SearchOutcome:
@@ -80,6 +90,26 @@ class SearchOutcome:
     hit_count: int
     top_ids: tuple[str, ...]
     attempt_id: str
+
+
+@dataclass(frozen=True)
+class ResultSetNovelty:
+    result_ids: tuple[str, ...]
+    novel_ids: tuple[str, ...]
+    max_jaccard: float
+
+    @property
+    def novelty_ratio(self) -> float:
+        return len(self.novel_ids) / len(self.result_ids) if self.result_ids else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "returned_result_count": len(self.result_ids),
+            "novel_result_count": len(self.novel_ids),
+            "novel_result_ids": list(self.novel_ids),
+            "novelty_ratio": self.novelty_ratio,
+            "max_prior_jaccard": self.max_jaccard,
+        }
 
 
 def _completion_budget(default: int) -> int:
@@ -328,9 +358,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
         self.caption_query_policy = requested_query_strategy
         self.caption_query_strategy = self._caption_query_strategy
         self._seen_asr_attempt_ids: set[str] = set()
-        self._seen_caption_attempt_ids: set[str] = set()
         self._search_outcomes: list[SearchOutcome] = []
         self._duplicate_search_count = 0
+        self._caption_result_set_reuse_count = 0
+        self._caption_returned_result_count = 0
+        self._caption_unique_result_ids: set[str] = set()
+        self._caption_result_history: list[dict[str, Any]] = []
         self._empty_search_streak = 0
         self._saved_visual_calls = 0
         self._saved_visual_frames = 0
@@ -339,9 +372,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
     def reset_run_state(self) -> None:
         super().reset_run_state()
         self._seen_asr_attempt_ids.clear()
-        self._seen_caption_attempt_ids.clear()
         self._search_outcomes.clear()
         self._duplicate_search_count = 0
+        self._caption_result_set_reuse_count = 0
+        self._caption_returned_result_count = 0
+        self._caption_unique_result_ids.clear()
+        self._caption_result_history.clear()
         self._empty_search_streak = 0
         self._saved_visual_calls = 0
         self._saved_visual_frames = 0
@@ -349,11 +385,22 @@ class VisionInvestigator(VirtualVideoInvestigator):
 
     def mechanical_status(self) -> Mapping[str, Any]:
         zero_hits = [outcome for outcome in self._search_outcomes if outcome.hit_count == 0]
+        novelty_rate = (
+            len(self._caption_unique_result_ids) / self._caption_returned_result_count
+            if self._caption_returned_result_count
+            else 0.0
+        )
         return {
             "caption_query_policy": self.caption_query_policy,
             "caption_query_strategy": self.caption_query_strategy,
             "empty_search_streak": self._empty_search_streak,
             "duplicate_search_count": self._duplicate_search_count,
+            "caption_result_set_reuse_count": self._caption_result_set_reuse_count,
+            "caption_returned_result_count": self._caption_returned_result_count,
+            "caption_unique_result_count": len(self._caption_unique_result_ids),
+            "caption_result_novelty_rate": novelty_rate,
+            "caption_result_dedup_rate": 1.0 - novelty_rate if self._caption_returned_result_count else 0.0,
+            "recent_caption_result_sets": list(self._caption_result_history[-6:]),
             "previous_zero_hit_queries": [
                 {
                     "modality": outcome.fingerprint.modality,
@@ -806,54 +853,89 @@ class VisionInvestigator(VirtualVideoInvestigator):
             f"caption-search://{self.workspace.workspace_id}/"
             f"{str(packet['index_digest'])[:12]}/{query_fingerprint[:20]}"
         )
-        scoped_segment_ids = set(packet.get("segment_ids", ()) or ())
-        source_video_ids = tuple(packet.get("source_video_ids", ()) or ()) or tuple(
+        top_ids = tuple(
             dict.fromkeys(
-                segment.source_video_id
-                for segment in self.workspace.manifest.segments
-                if not scoped_segment_ids or segment.segment_id in scoped_segment_ids
+                str(hit.get("passage_id", "") or "")
+                for hit in hits
+                if str(hit.get("passage_id", "") or "")
             )
         )
-        attempt_id = stable_attempt_id(
-            source_video_ids=source_video_ids,
-            frame_refs=(pointer,),
-            modality="caption_search",
-        )
-        duplicate = (
-            attempt_id in self._seen_caption_attempt_ids
-            or bool(_observation_rows(self.workspace.root_dir / "observation_log.jsonl", attempt_id))
-        )
-        self._seen_caption_attempt_ids.add(attempt_id)
-        if duplicate:
-            self._record_search_outcome(
-                SearchOutcome(
-                    fingerprint=search_fingerprint,
-                    hit_count=len(hits),
-                    top_ids=tuple(str(hit.get("passage_id", "")) for hit in hits[:8]),
-                    attempt_id=attempt_id,
+        novelty = self._result_set_novelty(search_fingerprint, top_ids)
+        novelty_payload = {
+            "query_fingerprint": query_fingerprint,
+            **novelty.to_dict(),
+        }
+        self._caption_returned_result_count += len(top_ids)
+        self._caption_unique_result_ids.update(top_ids)
+        self._caption_result_history.append(novelty_payload)
+        scoped_segment_ids = set(packet.get("segment_ids", ()) or ())
+        hit_source_video_ids = tuple(
+            dict.fromkeys(
+                source_video_id
+                for hit in hits
+                for source_video_id in _string_values(
+                    dict(hit.get("metadata") or {}).get("source_video_ids", ())
                 )
             )
-            return InvestigationReport(
-                query_id=query_id,
-                status="completed",
-                cost={
-                    "tool_trace": ("search_caption", "reuse_attempt"),
-                    "frames": 0,
-                    "vlm_calls": 0,
-                    "reused": True,
-                    "zero_hits": not hits,
-                    "consumes_budget": False,
-                },
-                failure_reason="duplicate_caption_query_reused",
+        )
+        source_video_ids = (
+            _string_values(packet.get("source_video_ids", ()))
+            or hit_source_video_ids
+            or tuple(
+                dict.fromkeys(
+                    segment.source_video_id
+                    for segment in self.workspace.manifest.segments
+                    if not scoped_segment_ids or segment.segment_id in scoped_segment_ids
+                )
             )
-        raw_path = self.workspace.root_dir / "caption_search" / f"{attempt_id}.json"
+        )
+        material_refs = tuple(
+            dict.fromkeys(
+                str(hit.get("source_pointer", "") or "").strip()
+                or f"caption://{packet.get('config_digest', 'unknown')}/{hit.get('passage_id', '')}"
+                for hit in hits
+                if str(hit.get("passage_id", "") or "")
+            )
+        ) or (pointer,)
+        attempt_id = stable_attempt_id(
+            source_video_ids=source_video_ids,
+            frame_refs=material_refs,
+            modality="caption_search",
+        )
+        query_prompt_digest = prompt_digest(json.dumps(list(queries), ensure_ascii=False))
+        existing_rows = _observation_rows(
+            self.workspace.root_dir / "observation_log.jsonl",
+            attempt_id,
+        )
+        same_prompt_already_recorded = any(
+            str(row.get("prompt_digest", "") or "") == query_prompt_digest
+            for row in existing_rows
+        )
+        raw_path = (
+            self.workspace.root_dir
+            / "caption_search"
+            / f"{attempt_id}.{query_fingerprint[:12]}.json"
+        )
         _write_json(raw_path, packet)
+        occurrence_set = (
+            dict(packet["occurrence_set"])
+            if isinstance(packet.get("occurrence_set"), Mapping)
+            else {}
+        )
+        occurrence_by_passage = {
+            str(passage_id): str(candidate.get("occurrence_id", "") or "")
+            for candidate in tuple(occurrence_set.get("candidates", ()) or ())
+            if isinstance(candidate, Mapping)
+            for passage_id in tuple(candidate.get("passage_ids", ()) or ())
+        }
         raw_output = json.dumps(
             {
                 "raw_output_pointer": str(raw_path),
                 "summary": packet["rendered"],
                 "search_queries": list(queries),
                 "hits": hits,
+                "occurrence_set": occurrence_set,
+                "result_novelty": novelty_payload,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -881,11 +963,30 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "index_digest": packet["index_digest"],
                 "query_fingerprint": query_fingerprint,
                 "expand_neighbors": expand_neighbors,
+                "material_identity": {
+                    "kind": "caption_passage_set",
+                    "passage_ids": list(top_ids),
+                    "material_refs": list(material_refs),
+                },
+                "result_novelty": novelty_payload,
                 "hits": [
                     {
                         "passage_id": hit["passage_id"],
+                        "caption_id": str(hit.get("caption_id", "") or ""),
                         "range": [hit["virtual_start_sec"], hit["virtual_end_sec"]],
                         "score": hit["fused_score"],
+                        "interval_precision": str(hit.get("interval_precision", "") or ""),
+                        "source_pointer": str(hit.get("source_pointer", "") or ""),
+                        "source_segments": list(
+                            dict(hit.get("metadata") or {}).get("source_segments", ()) or ()
+                        ),
+                        "source_video_ids": list(
+                            dict(hit.get("metadata") or {}).get("source_video_ids", ()) or ()
+                        ),
+                        "occurrence_id": occurrence_by_passage.get(
+                            str(hit.get("passage_id", "") or ""),
+                            "",
+                        ),
                         "query_matches": list(
                             dict(hit.get("metadata") or {}).get("query_matches", ())
                             or dict(hit.get("metadata") or {}).get("matched_queries", ())
@@ -894,6 +995,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
                     }
                     for hit in hits
                 ],
+                **({"occurrence_set": occurrence_set} if occurrence_set else {}),
                 **(
                     {"temporal_locator": dict(packet["temporal_locator"])}
                     if isinstance(packet.get("temporal_locator"), Mapping)
@@ -902,10 +1004,10 @@ class VisionInvestigator(VirtualVideoInvestigator):
             },
             parse_status="deterministic",
             execution_status="completed",
-            frame_refs=(pointer,),
+            frame_refs=material_refs,
             modality="caption_search",
             evidence_role="candidate",
-            prompt_digest=prompt_digest(json.dumps(list(queries), ensure_ascii=False)),
+            prompt_digest=query_prompt_digest,
             raw_output=raw_output,
             source_video_ids=source_video_ids,
         )
@@ -919,6 +1021,13 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "index_digest": packet["index_digest"],
                 "query_strategy": str(packet.get("query_strategy", self.caption_query_strategy)),
                 "hit_count": len(hits),
+                "occurrence_candidate_count": int(
+                    occurrence_set.get("candidate_count", 0) or 0
+                ),
+                "occurrence_ambiguous": bool(
+                    occurrence_set.get("occurrence_ambiguous", False)
+                ),
+                **novelty.to_dict(),
                 "segment_ids": list(packet.get("segment_ids", ()) or ()),
                 "source_video_ids": list(source_video_ids),
                 "raw_output_pointer": str(raw_path),
@@ -930,10 +1039,44 @@ class VisionInvestigator(VirtualVideoInvestigator):
             SearchOutcome(
                 fingerprint=search_fingerprint,
                 hit_count=len(hits),
-                top_ids=tuple(str(hit.get("passage_id", "")) for hit in hits[:8]),
+                top_ids=top_ids,
                 attempt_id=attempt_id,
             )
         )
+        if same_prompt_already_recorded:
+            self._duplicate_search_count += 1
+            return InvestigationReport(
+                query_id=query_id,
+                status="completed",
+                cost={
+                    "tool_trace": ("search_caption", "reuse_attempt"),
+                    "frames": 0,
+                    "vlm_calls": 0,
+                    "reused": True,
+                    "zero_hits": not hits,
+                    "consumes_budget": False,
+                },
+                failure_reason="duplicate_caption_query_reused",
+            )
+        no_new_caption_material = bool(top_ids) and not novelty.novel_ids
+        if no_new_caption_material:
+            self._duplicate_search_count += 1
+            self._caption_result_set_reuse_count += 1
+            return InvestigationReport(
+                query_id=query_id,
+                status="completed",
+                attempts=(attempt,),
+                cost={
+                    "tool_trace": ("search_caption", "reuse_result_set"),
+                    "frames": 0,
+                    "vlm_calls": 0,
+                    "reused": True,
+                    "result_set_reused": True,
+                    "zero_hits": False,
+                    "consumes_budget": False,
+                },
+                failure_reason="caption_result_set_has_no_new_material",
+            )
         return InvestigationReport(
             query_id=query_id,
             status="completed",
@@ -1091,6 +1234,30 @@ class VisionInvestigator(VirtualVideoInvestigator):
     def _record_search_outcome(self, outcome: SearchOutcome) -> None:
         self._search_outcomes.append(outcome)
         self._empty_search_streak = self._empty_search_streak + 1 if outcome.hit_count == 0 else 0
+
+    def _result_set_novelty(
+        self,
+        fingerprint: SearchFingerprint,
+        result_ids: Sequence[str],
+    ) -> ResultSetNovelty:
+        current = tuple(dict.fromkeys(str(item) for item in result_ids if str(item)))
+        current_set = set(current)
+        prior_ids: set[str] = set()
+        max_jaccard = 0.0
+        for outcome in self._search_outcomes:
+            if not fingerprint.same_result_scope(outcome.fingerprint):
+                continue
+            previous = set(outcome.top_ids)
+            prior_ids.update(previous)
+            union = current_set | previous
+            if union:
+                max_jaccard = max(max_jaccard, len(current_set & previous) / len(union))
+        novel_ids = tuple(item for item in current if item not in prior_ids)
+        return ResultSetNovelty(
+            result_ids=current,
+            novel_ids=novel_ids,
+            max_jaccard=max_jaccard,
+        )
 
     def _reused_search_report(
         self,
@@ -1371,6 +1538,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or time_range. "
         "To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and arbitration_attempt_id.\n"
         f"{caption_search_rule}"
+        "When mechanical_status marks caption_occurrence_ambiguous, compare the separate source/time clusters in "
+        "caption_occurrence_sets. A coherent caption chain from one cluster does not establish that it is the requested "
+        "occurrence; inspect identity cues for competing clusters before promotion.\n"
         "When mechanical_status lists pending_caption_candidates, select the candidate whose query_matches and "
         "caption_excerpt best cover the unresolved condition, then inspect its time_range with inspection_mode=window; "
         "rank is retrieval priority, not proof. Caption_search and search_asr attempts cannot directly support an answer.\n"
@@ -1607,6 +1777,22 @@ def _observation_rows(path: Path, attempt_id: str) -> tuple[dict[str, Any], ...]
         if isinstance(row, Mapping) and str(row.get("attempt_id", "")) == attempt_id:
             rows.append(dict(row))
     return tuple(rows)
+
+
+def _string_values(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, Sequence):
+        values = tuple(value)
+    else:
+        values = ()
+    return tuple(
+        dict.fromkeys(
+            text
+            for item in values
+            if (text := str(item or "").strip())
+        )
+    )
 
 
 def _attachment_counts(metadata: Mapping[str, Any], frame_paths: Sequence[str]) -> dict[str, int]:

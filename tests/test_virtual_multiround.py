@@ -666,6 +666,30 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
                     "candidate_groups": [temporal_candidate],
                     "recommended": temporal_candidate,
                 },
+                "occurrence_set": {
+                    "status": "competing_candidates",
+                    "occurrence_ambiguous": True,
+                    "candidates": [
+                        {
+                            "occurrence_id": "occ-1",
+                            "time_range": [5.0, 10.0],
+                            "source_video_ids": ["video-a"],
+                            "segment_ids": ["seg_0001"],
+                            "passage_ids": ["p1"],
+                            "max_score": 0.9,
+                            "hit_count": 1,
+                        },
+                        {
+                            "occurrence_id": "occ-2",
+                            "time_range": [12.0, 15.0],
+                            "source_video_ids": ["video-a"],
+                            "segment_ids": ["seg_0001"],
+                            "passage_ids": ["p2"],
+                            "max_score": 0.8,
+                            "hit_count": 1,
+                        },
+                    ],
+                },
                 "hits": [
                     {
                         "passage_id": "p1",
@@ -701,8 +725,12 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
     )
     assert status["recommended_temporal_candidate"]["inspection_range"] == [4.0, 11.0]
     assert status["temporal_candidate_groups"] == [temporal_candidate]
+    assert status["caption_occurrence_candidate_count"] == 2
+    assert status["pending_caption_occurrence_count"] == 2
+    assert status["caption_occurrence_ambiguous"] is True
     assert any("locator candidates" in hint for hint in status["prompt_hints"])
     assert any("scoped temporal locator" in hint for hint in status["prompt_hints"])
+    assert any("occurrence clusters" in hint for hint in status["prompt_hints"])
 
     visual_attempt_id = stable_attempt_id(
         source_video_ids=("video-a",),
@@ -730,6 +758,8 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
 
     assert confirmed["pending_caption_candidate_count"] == 1
     assert confirmed["pending_caption_candidates"][0]["time_range"] == [12.0, 15.0]
+    assert confirmed["pending_caption_occurrence_count"] == 1
+    assert confirmed["caption_occurrence_ambiguous"] is True
     assert "recommended_temporal_candidate" not in confirmed
 
 

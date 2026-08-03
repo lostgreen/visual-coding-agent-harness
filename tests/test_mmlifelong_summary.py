@@ -45,6 +45,12 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
                     "reference_valid_rate": 1.0,
                     "rounds": 3,
                     "caption_searches": 1,
+                    "caption_material_attempts": 1,
+                    "caption_result_novelty_rate": 1.0,
+                    "caption_result_set_reuse_count": 0,
+                    "caption_occurrence_candidate_count": 2,
+                    "unique_visual_material_attempts": 1,
+                    "visual_interpretation_count": 2,
                     "visual_confirmations": 1,
                     "visual_frames_inspected": 4,
                 },
@@ -62,6 +68,12 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
                     "reference_valid_rate": 0.0,
                     "rounds": 5,
                     "caption_searches": 2,
+                    "caption_material_attempts": 1,
+                    "caption_result_novelty_rate": 0.5,
+                    "caption_result_set_reuse_count": 1,
+                    "caption_occurrence_candidate_count": 3,
+                    "unique_visual_material_attempts": 2,
+                    "visual_interpretation_count": 3,
                     "visual_confirmations": 1,
                     "visual_frames_inspected": 8,
                 },
@@ -78,7 +90,12 @@ def test_aggregate_report_groups_by_reproducible_config() -> None:
     assert aggregates[0]["Acc"] == 0.75
     assert aggregates[0]["Ref@60"] == 50.0
     assert aggregates[0]["reference_valid_rate"] == 0.5
+    assert aggregates[0]["caption_result_novelty_rate"] == 0.75
+    assert aggregates[0]["avg_occurrence_candidates"] == 2.5
+    assert aggregates[0]["avg_unique_visual_material_attempts"] == 1.5
+    assert aggregates[0]["avg_visual_interpretations"] == 2.5
     assert "caption_index_mode" in markdown
+    assert "caption_result_novelty_rate" in markdown
     assert "hybrid" in markdown
 
 

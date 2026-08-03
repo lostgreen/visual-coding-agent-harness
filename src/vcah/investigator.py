@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import json
 from typing import Any, Mapping, Sequence
 
 from vcah.caption_hybrid_search import CaptionHybridSearch
 from vcah.caption_lexical_index import CaptionLexicalIndex, render_caption_hits
+from vcah.caption_occurrence import build_caption_occurrence_set
+from vcah.caption_schema import CaptionHitV1
 from vcah.caption_semantic_index import CaptionSemanticIndex
 from vcah.embedding_adapter import TextEmbeddingAdapter
 from vcah.types import EvidenceRecord
@@ -370,12 +372,15 @@ class VirtualVideoInvestigator:
             index = self._load_caption_index(mode)
             self._caption_indexes[mode] = index
         index.save_manifest(self.workspace.asset_root)
-        hits = index.search(
-            queries,
-            top_k=top_k,
-            time_range=time_range,
-            segment_ids=index_segment_ids,
-            expand_neighbors=expand_neighbors,
+        hits = tuple(
+            _caption_hit_with_source_identity(self.workspace, hit)
+            for hit in index.search(
+                queries,
+                top_k=top_k,
+                time_range=time_range,
+                segment_ids=index_segment_ids,
+                expand_neighbors=expand_neighbors,
+            )
         )
         fingerprint = index.query_fingerprint(
             queries,
@@ -400,6 +405,7 @@ class VirtualVideoInvestigator:
             "config_digest": index.config_digest,
             "query_fingerprint": fingerprint,
             "hits": [asdict(hit) for hit in hits],
+            "occurrence_set": build_caption_occurrence_set(hits),
             "rendered": render_caption_hits(hits),
         }
 
@@ -544,6 +550,58 @@ def _source_lineage(
             "virtual_time_range": [window.virtual_start_sec, window.virtual_end_sec],
         }
         for window in virtual_to_source_windows(workspace.manifest, start_sec, end_sec)
+    )
+
+
+def _caption_hit_with_source_identity(
+    workspace: VirtualVideoWorkspace,
+    hit: CaptionHitV1,
+) -> CaptionHitV1:
+    metadata = dict(hit.metadata)
+    raw_segment_ids = metadata.get("source_segments", ())
+    if isinstance(raw_segment_ids, str):
+        raw_segment_ids = (raw_segment_ids,)
+    segment_ids = {
+        str(value).strip()
+        for value in tuple(raw_segment_ids or ())
+        if str(value).strip()
+    }
+    segment_to_source = {
+        segment.segment_id: segment.source_video_id
+        for segment in workspace.manifest.segments
+    }
+    raw_source_video_ids = metadata.get("source_video_ids", ())
+    if isinstance(raw_source_video_ids, str):
+        raw_source_video_ids = (raw_source_video_ids,)
+    source_video_ids = {
+        str(value).strip()
+        for value in tuple(raw_source_video_ids or ())
+        if str(value).strip()
+    }
+    source_video_ids.update(
+        segment_to_source[segment_id]
+        for segment_id in segment_ids
+        if segment_id in segment_to_source
+    )
+    if not segment_ids or not source_video_ids:
+        end_sec = max(hit.virtual_end_sec, hit.virtual_start_sec + 0.001)
+        try:
+            windows = virtual_to_source_windows(
+                workspace.manifest,
+                hit.virtual_start_sec,
+                end_sec,
+            )
+        except ValueError:
+            windows = ()
+        segment_ids.update(window.segment_id for window in windows)
+        source_video_ids.update(window.source_video_id for window in windows)
+    return replace(
+        hit,
+        metadata={
+            **metadata,
+            "source_segments": sorted(segment_ids),
+            "source_video_ids": sorted(source_video_ids),
+        },
     )
 
 

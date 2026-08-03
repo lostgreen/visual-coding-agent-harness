@@ -262,7 +262,11 @@ class CaptionSemanticIndex:
             text=passage.text,
             interval_precision=str(passage.metadata.get("interval_precision", "chunk")),
             source_pointer=f"caption://{self.config_digest}/{passage.passage_id}",
-            metadata={"index_digest": self.index_digest, "index_mode": "dense"},
+            metadata={
+                **dict(passage.metadata),
+                "index_digest": self.index_digest,
+                "index_mode": "dense",
+            },
         )
 
 
@@ -356,6 +360,7 @@ def expand_passage_neighbors(
                     interval_precision=str(neighbor.metadata.get("interval_precision", "chunk")),
                     source_pointer=f"caption://{config_digest}/{neighbor.passage_id}",
                     metadata={
+                        **dict(neighbor.metadata),
                         "index_digest": index_digest,
                         "neighbor_of": hit.passage_id,
                         "candidate_only": True,
