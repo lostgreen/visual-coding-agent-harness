@@ -733,6 +733,56 @@ def test_mechanical_status_exposes_unconfirmed_caption_candidate(tmp_path: Path)
     assert "recommended_temporal_candidate" not in confirmed
 
 
+def test_mechanical_status_exposes_low_sampling_fidelity(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    from vcah.workspace import ObservationLog, WorkingDocument
+
+    log = ObservationLog(tmp_path / "sampling-observations.jsonl")
+    frame_times = (0.0, 4.0, 8.0)
+    attempt_id = stable_attempt_id(
+        source_video_ids=("video-a",),
+        frame_times=frame_times,
+        sampling_fps=2.0,
+        modality="visual",
+    )
+    log.append_attempt(
+        ObservationAttempt(
+            attempt_id=attempt_id,
+            requested_range=(0.0, 8.0),
+            inspected_ranges=((0.0, 8.0),),
+            attached_frame_times=frame_times,
+            sampling_config={
+                "mode": "window",
+                "modality": "visual",
+                "fps": 2.0,
+                "sampling_manifest": {
+                    "requested_range": [0.0, 8.0],
+                    "requested_fps": 2.0,
+                    "effective_fps": 0.25,
+                    "sampling_fidelity": 0.125,
+                    "max_gap": 4.0,
+                    "coverage_ratio": 0.2,
+                    "requires_refinement": False,
+                },
+            },
+            frame_refs=("frame-0.jpg", "frame-4.jpg", "frame-8.jpg"),
+            modality="visual",
+            source_video_ids=("video-a",),
+        ),
+        round_id=1,
+    )
+
+    status = _mechanical_status(
+        workspace,
+        WorkingDocument.with_question_premise(workspace.case.question),
+        log,
+    )
+
+    assert status["low_fidelity_visual_attempt_count"] == 1
+    assert status["low_fidelity_visual_attempts"][0]["sampling_fidelity"] == 0.125
+    assert any("sampling density" in hint for hint in status["prompt_hints"])
+
+
 def test_reasoner_can_inspect_pending_caption_candidate_within_round_budget(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     visual_attempt_id = _report(_investigate().tasks[0]).attempts[0].attempt_id

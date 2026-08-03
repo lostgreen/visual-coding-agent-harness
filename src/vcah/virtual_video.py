@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+from statistics import median
 from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 from vcah.types import Frame
@@ -18,6 +19,29 @@ SRT_TIME_RE = re.compile(
     r"(?P<start>\d{2}:\d{2}:\d{2},\d{3})\s+-->\s+(?P<end>\d{2}:\d{2}:\d{2},\d{3})"
 )
 HTML_RE = re.compile(r"<[^>]+>")
+
+
+def sampling_fidelity(
+    requested_fps: float,
+    frame_times: Sequence[float],
+    time_range: Sequence[float] | None = None,
+) -> float:
+    """Compare median observed frame density with the requested density."""
+    requested = float(requested_fps)
+    if requested <= 0.0:
+        raise ValueError("requested_fps must be positive")
+    times = tuple(sorted({float(value) for value in frame_times}))
+    if time_range is not None and len(time_range) == 2:
+        start_sec, end_sec = sorted((float(time_range[0]), float(time_range[1])))
+        times = tuple(value for value in times if start_sec <= value <= end_sec)
+    gaps = tuple(
+        right - left
+        for left, right in zip(times, times[1:])
+        if right > left
+    )
+    if not gaps:
+        return 0.0
+    return (1.0 / median(gaps)) / requested
 
 
 @dataclass(frozen=True)

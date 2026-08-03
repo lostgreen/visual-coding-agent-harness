@@ -445,6 +445,8 @@ def test_wide_sparse_scan_is_a_locator_not_full_coverage(
     assert report.coverage_delta == attempt.inspected_ranges
     assert attempt.evidence_role == "candidate"
     assert manifest["requires_refinement"] is True
+    assert manifest["requested_fps"] == 1.0
+    assert manifest["sampling_fidelity"] == round(1.0 / 120.0, 6)
     assert manifest["coverage_ratio"] < 0.01
     assert manifest["max_gap"] == 120.0
     assert report.cost["requires_refinement"] is True

@@ -309,6 +309,7 @@ src/vcah/replay.py               immutable runs and content-free reproducibility
 tools/run_virtual_videomme_interactive.py  Video-MME evaluation orchestration
 tools/run_mmlifelong_interactive.py        MM-Lifelong Day case orchestration
 tools/summarize_mmlifelong_runs.py         aggregate comparison tables
+runs/mmlifelong_net_gain_gate.py           paired replay diagnostics and promotion gate
 tools/build_virtual_trace_viewer.py        HTML/zip trace viewer
 tools/build_exploration_trace_viewer.py    presentation-oriented exploration viewer
 ```

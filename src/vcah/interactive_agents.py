@@ -15,7 +15,7 @@ from vcah.investigator import (
 from vcah.model_client import ImageAttachmentError, OpenAICompatibleClient
 from vcah.multiround import InvestigationTask, ReasonerDecision
 from vcah.types import CoverageSegment, EvidenceRecord
-from vcah.virtual_video import VirtualVideoWorkspace
+from vcah.virtual_video import VirtualVideoWorkspace, sampling_fidelity
 from vcah.workspace import prompt_digest, stable_attempt_id
 
 
@@ -1504,14 +1504,17 @@ def _sampling_manifest(
         (right - left for left, right in zip(boundary_points, boundary_points[1:])),
         default=duration_sec,
     )
+    fidelity = sampling_fidelity(fps, times, (start_sec, end_sec))
     return {
         "requested_range": [round(start_sec, 6), round(end_sec, 6)],
+        "requested_fps": round(fps, 6),
         "frame_times": [round(value, 6) for value in times],
         "observed_subranges": [
             [round(range_start, 6), round(range_end, 6)]
             for range_start, range_end in observed
         ],
         "effective_fps": round(len(times) / duration_sec, 6) if duration_sec else 0.0,
+        "sampling_fidelity": round(fidelity, 6),
         "max_gap": round(max_gap, 6),
         "coverage_ratio": round(covered_sec / duration_sec, 6) if duration_sec else 0.0,
         "requires_refinement": duration_sec > 120.0,

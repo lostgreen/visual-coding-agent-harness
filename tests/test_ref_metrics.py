@@ -4,17 +4,22 @@ import pytest
 
 from vcah.caption_schema import CaptionHitV1
 from vcah.mmlifelong_metrics import (
+    anchor_consistency,
     answer_judge_prompt,
     agent_run_metrics,
     bins_for_interval,
     caption_hits_from_observation_rows,
+    clue_frame_coverage,
     export_supporting_intervals,
     interval_iou,
     judge_free_form_answer,
     parse_answer_judge_response,
+    recorded_case_diagnostics,
     ref_score,
     ref_scores,
+    retrieval_dedup_rate,
     retrieval_metrics,
+    sampling_fidelity,
     smooth_score,
 )
 from vcah.workspace import Claim, WorkingDocument
@@ -151,6 +156,147 @@ def test_retrieval_metrics_cover_single_and_multi_clue_cases() -> None:
     assert metrics["AllCluesRecall@3"] == 1.0
     assert metrics["ClueIoU@3"] == pytest.approx(12.0 / 30.0)
     assert interval_iou(((0.0, 10.0),), ((5.0, 15.0),)) == pytest.approx(1.0 / 3.0)
+
+
+def test_offline_diagnostics_measure_coverage_dedup_and_sampling() -> None:
+    assert clue_frame_coverage(
+        (10.0, 30.0, 50.0),
+        ((9.0, 11.0), (20.0, 21.0), (49.0, 51.0)),
+    ) == pytest.approx(2.0 / 3.0)
+    assert retrieval_dedup_rate(
+        (
+            {"passage_id": "p1", "range": [0.0, 1.0]},
+            {"passage_id": "p1", "range": [0.0, 1.0]},
+            {"passage_id": "p2", "range": [2.0, 3.0]},
+        )
+    ) == pytest.approx(1.0 / 3.0)
+    assert sampling_fidelity(2.0, (0.0, 4.0 / 3.0, 8.0 / 3.0)) == pytest.approx(0.375)
+    with pytest.raises(ValueError, match="positive"):
+        sampling_fidelity(0.0, (0.0, 1.0))
+
+
+def test_anchor_consistency_uses_cited_attempt_ranges_with_sampling_tolerance() -> None:
+    document = WorkingDocument(
+        claims={
+            "near": Claim(
+                claim_id="near",
+                text="A near-boundary event.",
+                source="observation",
+                cites=("attempt_visual",),
+                time_anchor=(20.5, 21.0),
+            ),
+            "outside": Claim(
+                claim_id="outside",
+                text="An event outside the inspected range.",
+                source="observation",
+                cites=("attempt_visual",),
+                time_anchor=(30.0, 31.0),
+            ),
+        }
+    )
+    rows = (
+        {
+            "attempt_id": "attempt_visual",
+            "inspected_ranges": [[10.0, 20.0]],
+            "sampling_fps": 1.0,
+            "sampling_config": {
+                "sampling_manifest": {"effective_fps": 1.0},
+            },
+            "modality": "visual",
+        },
+    )
+
+    assert anchor_consistency(document, ("near", "outside"), rows) == 0.5
+
+
+def test_anchor_consistency_requires_all_inherited_anchors_to_be_observed() -> None:
+    document = WorkingDocument(
+        claims={
+            "inside": Claim(
+                claim_id="inside",
+                text="Observed event.",
+                source="observation",
+                cites=("attempt_visual",),
+                time_anchor=(10.0, 11.0),
+            ),
+            "outside": Claim(
+                claim_id="outside",
+                text="Unobserved event.",
+                source="observation",
+                cites=("attempt_visual",),
+                time_anchor=(30.0, 31.0),
+            ),
+            "derived": Claim(
+                claim_id="derived",
+                text="Both events occurred.",
+                source="derived",
+                derived_from=("inside", "outside"),
+            ),
+        }
+    )
+    rows = (
+        {
+            "attempt_id": "attempt_visual",
+            "inspected_ranges": [[9.0, 12.0]],
+            "sampling_fps": 1.0,
+            "modality": "visual",
+        },
+    )
+
+    assert anchor_consistency(document, ("derived",), rows) == 0.0
+
+
+def test_recorded_case_diagnostics_recomputes_gate_inputs() -> None:
+    document = WorkingDocument(
+        claims={
+            "support": Claim(
+                claim_id="support",
+                text="Observed event.",
+                source="observation",
+                cites=("visual",),
+                time_anchor=(10.0, 11.0),
+            )
+        }
+    )
+    rows = (
+        {
+            "attempt_id": "visual",
+            "modality": "visual",
+            "requested_range": [9.0, 12.0],
+            "inspected_ranges": [[9.0, 12.0]],
+            "frame_times": [9.0, 10.0, 11.0, 12.0],
+            "sampling_fps": 1.0,
+            "sampling_config": {"mode": "window"},
+        },
+        {
+            "attempt_id": "caption",
+            "modality": "caption_search",
+            "sampling_config": {
+                "mode": "search_caption",
+                "hits": [
+                    {"passage_id": "p1", "range": [9.0, 12.0]},
+                    {"passage_id": "p1", "range": [9.0, 12.0]},
+                ],
+            },
+        },
+    )
+
+    diagnostics = recorded_case_diagnostics(
+        {
+            "accuracy_score": 1.0,
+            "reference_valid": True,
+            "agent": {"visual_frames_inspected": 4},
+        },
+        document,
+        rows,
+        supporting_claim_ids=("support",),
+        gold_intervals=((9.5, 10.5),),
+    )
+
+    assert diagnostics["clue_frame_coverage"] == 1.0
+    assert diagnostics["retrieval_dedup_rate"] == 0.5
+    assert diagnostics["sampling_fidelity_min"] == 1.0
+    assert diagnostics["anchor_consistency"] == 1.0
 
 
 def test_answer_judge_result_preserves_raw_and_smoothed_scores() -> None:

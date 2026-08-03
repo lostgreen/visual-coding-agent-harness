@@ -601,18 +601,18 @@ def _mechanical_status(
         for raw in tuple(row.get("inspected_ranges", ()) or ())
         if (interval := _time_range(raw)) is not None
     )
-    unrefined_visual_attempts = tuple(
-        {
-            "attempt_id": str(row.get("attempt_id", "")),
-            "requested_range": list(row.get("requested_range", ()) or ()),
-            "max_gap": float(manifest.get("max_gap", 0.0) or 0.0),
-            "coverage_ratio": float(manifest.get("coverage_ratio", 0.0) or 0.0),
-        }
+    visual_sampling_attempts = tuple(
+        status
         for row in source_rows
-        if str(row.get("modality", "") or "").casefold() in {"visual", "ocr"}
-        and isinstance((config := row.get("sampling_config")), Mapping)
-        and isinstance((manifest := config.get("sampling_manifest")), Mapping)
-        and bool(manifest.get("requires_refinement"))
+        if (status := _visual_sampling_status(row)) is not None
+    )
+    unrefined_visual_attempts = tuple(
+        status for status in visual_sampling_attempts if status["requires_refinement"]
+    )
+    low_fidelity_visual_attempts = tuple(
+        status
+        for status in visual_sampling_attempts
+        if status["requested_fps"] > 0.0 and status["sampling_fidelity"] < 0.8
     )
     candidates_by_key: dict[tuple[str, float, float], dict[str, Any]] = {}
     temporal_locators: list[dict[str, Any]] = []
@@ -732,6 +732,11 @@ def _mechanical_status(
             "Wide visual scans are locator candidates only; refine a relevant neighborhood to <=120 seconds before "
             "using it as answer support."
         )
+    if low_fidelity_visual_attempts:
+        hints.append(
+            "Observed sampling density fell below 80% of the requested fps. Do not assume the requested temporal "
+            "resolution; narrow the relevant time_range before judging a brief transition or exact moment."
+        )
     return {
         "schema_version": "MechanicalCompletionStatusV1",
         "working_document_revision": document.revision,
@@ -749,6 +754,8 @@ def _mechanical_status(
         "visual_window_attempt_count": visual_window_attempt_count,
         "unrefined_visual_attempt_count": len(unrefined_visual_attempts),
         "unrefined_visual_attempts": list(unrefined_visual_attempts[-6:]),
+        "low_fidelity_visual_attempt_count": len(low_fidelity_visual_attempts),
+        "low_fidelity_visual_attempts": list(low_fidelity_visual_attempts[-6:]),
         "caption_cited_claim_count": caption_cited_claim_count,
         "visual_confirmed_claim_count": visual_confirmed_claim_count,
         "pending_caption_candidate_count": len(pending_caption_candidates),
@@ -783,6 +790,40 @@ def _mechanical_status(
         ],
         "answer_owner": "reasoner",
         **runtime,
+    }
+
+
+def _visual_sampling_status(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    if str(row.get("modality", "") or "").casefold() not in {"visual", "ocr"}:
+        return None
+    config = row.get("sampling_config")
+    if not isinstance(config, Mapping):
+        return None
+    manifest = config.get("sampling_manifest")
+    if not isinstance(manifest, Mapping):
+        return None
+    requested_fps = float(
+        manifest.get("requested_fps", row.get("sampling_fps", 0.0)) or 0.0
+    )
+    effective_fps = float(manifest.get("effective_fps", 0.0) or 0.0)
+    fidelity = float(
+        manifest.get(
+            "sampling_fidelity",
+            effective_fps / requested_fps if requested_fps > 0.0 else 0.0,
+        )
+        or 0.0
+    )
+    return {
+        "attempt_id": str(row.get("attempt_id", "")),
+        "requested_range": list(
+            manifest.get("requested_range", row.get("requested_range", ())) or ()
+        ),
+        "requested_fps": requested_fps,
+        "effective_fps": effective_fps,
+        "sampling_fidelity": fidelity,
+        "max_gap": float(manifest.get("max_gap", 0.0) or 0.0),
+        "coverage_ratio": float(manifest.get("coverage_ratio", 0.0) or 0.0),
+        "requires_refinement": bool(manifest.get("requires_refinement")),
     }
 
 
