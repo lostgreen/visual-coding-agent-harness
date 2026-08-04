@@ -7,9 +7,16 @@ from evaluate.mmlifelong.metrics import (
     candidate_clue_recall,
     occurrence_candidate_recall,
 )
+from vcah.evidence_state import EvidenceObligation, EvidenceObligationState
 from vcah.interactive_agents import _candidate_binding_for_task
-from vcah.multiround import InvestigationTask, validate_occurrence_material_binding
+from vcah.multiround import (
+    InvestigationTask,
+    _temporal_scope_summary,
+    validate_occurrence_material_binding,
+)
 from vcah.runtime_metrics import agent_run_metrics
+from vcah.temporal_scope import TemporalScope
+from vcah.workspace import ObservationLog, WorkingDocument
 
 
 def _locator_row() -> dict[str, object]:
@@ -160,3 +167,78 @@ def test_occurrence_and_temporal_runtime_metrics_use_logged_bindings() -> None:
     )
     assert metrics["occurrence_binding_rate"] == 1.0
     assert metrics["temporal_scope_resolved_rate"] == 1.0
+
+
+def test_temporal_scope_resolves_bound_visual_material(tmp_path: Path) -> None:
+    document = WorkingDocument(
+        obligations={
+            "req_anchor": EvidenceObligation(
+                requirement_id="req_anchor",
+                observable_goal="Observe the anchor event.",
+                evidence_kind="transient_event",
+            ),
+            "req_target": EvidenceObligation(
+                requirement_id="req_target",
+                observable_goal="Observe the first target after the anchor.",
+                evidence_kind="transient_event",
+                depends_on=("req_anchor",),
+            ),
+        },
+        obligation_states={
+            "req_anchor": EvidenceObligationState(
+                requirement_id="req_anchor",
+                status="satisfied",
+                supporting_claim_ids=("c_anchor",),
+                supporting_attempt_ids=("attempt_anchor",),
+            ),
+            "req_target": EvidenceObligationState(
+                requirement_id="req_target",
+                status="satisfied",
+                supporting_claim_ids=("c_target",),
+                supporting_attempt_ids=("attempt_target",),
+            ),
+        },
+        temporal_scopes={
+            "scope_1": TemporalScope(
+                scope_id="scope_1",
+                relation="after",
+                selection="first",
+                anchor_requirement_id="req_anchor",
+                target_requirement_id="req_target",
+            )
+        },
+    )
+    observations = ObservationLog(tmp_path / "observation_log.jsonl")
+    observations.rows.extend(
+        (
+            {
+                "attempt_id": "attempt_anchor",
+                "modality": "visual",
+                "inspected_ranges": [[90.0, 95.0]],
+                "sampling_config": {"mode": "window"},
+            },
+            _locator_row(),
+            {
+                "attempt_id": "attempt_target",
+                "modality": "visual",
+                "inspected_ranges": [[100.0, 110.0]],
+                "sampling_config": {
+                    "mode": "window",
+                    "candidate_binding": {
+                        "locator_attempt_id": "attempt_locator",
+                        "occurrence_id": "occ_1",
+                        "candidate_range": [100.0, 110.0],
+                        "source_video_ids": ["video_1"],
+                        "segment_ids": ["seg_1"],
+                    },
+                },
+            },
+        )
+    )
+
+    summary = _temporal_scope_summary(document, observations)
+
+    assert summary["resolved_temporal_scope_count"] == 1
+    assert summary["temporal_scope_statuses"][0]["selected_occurrence_ids"] == [
+        "occ_1"
+    ]

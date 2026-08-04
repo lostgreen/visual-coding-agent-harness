@@ -1783,6 +1783,26 @@ def _occurrence_candidates(
                         "attempt_id": str(row.get("attempt_id", "") or ""),
                     }
                 )
+    for row in observation_rows:
+        config = row.get("sampling_config")
+        if not isinstance(config, Mapping):
+            continue
+        binding = config.get("candidate_binding")
+        if not isinstance(binding, Mapping):
+            continue
+        candidate_range = _time_range(binding.get("candidate_range", ()))
+        occurrence_id = str(binding.get("occurrence_id", "") or "")
+        attempt_id = str(row.get("attempt_id", "") or "")
+        if not candidate_range or not occurrence_id or not attempt_id:
+            continue
+        candidates.append(
+            {
+                **dict(binding),
+                "attempt_id": attempt_id,
+                "material_attempt_id": attempt_id,
+                "time_range": list(candidate_range),
+            }
+        )
     return tuple(candidates)
 
 
