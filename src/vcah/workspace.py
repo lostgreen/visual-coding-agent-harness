@@ -250,6 +250,14 @@ class AnswerValidation:
     supporting_claim_ids: tuple[str, ...] = ()
     cited_attempt_ids: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
+    reference_integrity_ok: bool = False
+    material_support_ok: bool = False
+    provenance_binding_ok: bool = False
+    temporal_consistency_ok: bool = False
+    occurrence_binding_ok: bool = False
+    obligation_coverage_ok: bool = False
+    observation_consumption_ok: bool = False
+    evidence_kind_requirements_ok: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -673,15 +681,35 @@ class WorkingDocument:
         require_obligation_coverage: bool = False,
         observation_rows: Sequence[Mapping[str, Any]] = (),
         require_item_provenance: bool = False,
+        temporal_scope_resolutions: Mapping[str, Mapping[str, Any]] | None = None,
+        unconsumed_observation_ids: Sequence[str] = (),
+        require_evidence_kind_requirements: bool = False,
     ) -> AnswerValidation:
         support = _ids(supporting_claim_ids)
+        dimension_errors: dict[str, list[str]] = {
+            "reference_integrity": [],
+            "material_support": [],
+            "provenance_binding": [],
+            "temporal_consistency": [],
+            "occurrence_binding": [],
+            "obligation_coverage": [],
+            "observation_consumption": [],
+            "evidence_kind_requirements": [],
+        }
+
+        def add(dimension: str, error: str) -> None:
+            if error not in dimension_errors[dimension]:
+                dimension_errors[dimension].append(error)
+
         if not support:
-            return AnswerValidation(False, "supporting_claims_missing")
+            add("reference_integrity", "supporting_claims_missing")
         document_errors = self.validate(
             observation_ids=observation_ids,
             observation_rows=observation_rows,
             require_item_provenance=require_item_provenance,
         )
+        for error in document_errors:
+            add(_closure_dimension_for_error(error), error)
         missing = tuple(claim_id for claim_id in support if claim_id not in self.claims)
         inactive = tuple(
             claim_id
@@ -712,17 +740,16 @@ class WorkingDocument:
                 for other in self.claims[claim_id].conflicts_with
             )
         )
-        errors = [*document_errors]
         if missing:
-            errors.append(f"supporting_claim_missing:{','.join(missing)}")
+            add("reference_integrity", f"supporting_claim_missing:{','.join(missing)}")
         if inactive:
-            errors.append(f"supporting_claim_inactive:{','.join(inactive)}")
+            add("reference_integrity", f"supporting_claim_inactive:{','.join(inactive)}")
         if hypothetical:
-            errors.append(f"supporting_claim_hypothetical:{','.join(hypothetical)}")
+            add("reference_integrity", f"supporting_claim_hypothetical:{','.join(hypothetical)}")
         if uncertain:
-            errors.append(f"supporting_claim_uncertain:{','.join(uncertain)}")
+            add("reference_integrity", f"supporting_claim_uncertain:{','.join(uncertain)}")
         if conflicted:
-            errors.append(f"supporting_claim_conflicted:{','.join(conflicted)}")
+            add("reference_integrity", f"supporting_claim_conflicted:{','.join(conflicted)}")
         cited_attempts = tuple(
             dict.fromkeys(
                 cite
@@ -732,7 +759,7 @@ class WorkingDocument:
             )
         )
         if not cited_attempts:
-            errors.append("supporting_claims_require_observation")
+            add("material_support", "supporting_claims_require_observation")
         eligible_attempts = (
             {str(item) for item in supporting_observation_ids}
             if supporting_observation_ids is not None
@@ -742,9 +769,62 @@ class WorkingDocument:
             attempt_id for attempt_id in cited_attempts if attempt_id not in eligible_attempts
         )
         if ineligible_attempts:
-            errors.append(
+            add(
+                "material_support",
                 f"supporting_claims_cite_candidate_or_negative:{','.join(ineligible_attempts)}"
             )
+
+        rows_by_attempt: dict[str, list[Mapping[str, Any]]] = {}
+        for row in observation_rows:
+            attempt_id = str(row.get("attempt_id", "") or "")
+            if attempt_id:
+                rows_by_attempt.setdefault(attempt_id, []).append(row)
+        for claim_id in support:
+            claim = self.claims.get(claim_id)
+            if claim is None or claim.time_anchor is None:
+                continue
+            material_ranges = tuple(
+                interval
+                for attempt_id in self._claim_attempts(claim_id)
+                for row in rows_by_attempt.get(attempt_id, ())
+                for interval in _observation_row_ranges(row)
+            )
+            if material_ranges and not any(
+                _anchors_overlap(claim.time_anchor, interval)
+                for interval in material_ranges
+            ):
+                add(
+                    "temporal_consistency",
+                    f"supporting_claim_time_outside_material:{claim_id}",
+                )
+
+            occurrence_id = str(claim.metadata.get("occurrence_id", "") or "")
+            if occurrence_id:
+                for attempt_id in self._claim_attempts(claim_id):
+                    bindings = tuple(
+                        row.get("sampling_config", {}).get("candidate_binding")
+                        for row in rows_by_attempt.get(attempt_id, ())
+                        if isinstance(row.get("sampling_config"), Mapping)
+                        and isinstance(
+                            row.get("sampling_config", {}).get("candidate_binding"),
+                            Mapping,
+                        )
+                    )
+                    if not bindings or any(
+                        str(binding.get("occurrence_id", "") or "") != occurrence_id
+                        for binding in bindings
+                    ):
+                        add(
+                            "occurrence_binding",
+                            f"supporting_claim_occurrence_mismatch:{claim_id}:{occurrence_id}",
+                        )
+
+        scope_resolutions = temporal_scope_resolutions or {}
+        for scope_id in self.temporal_scopes:
+            status = scope_resolutions.get(scope_id)
+            if not isinstance(status, Mapping) or not bool(status.get("resolved")):
+                add("temporal_consistency", f"temporal_scope_unresolved:{scope_id}")
+
         if require_obligation_coverage:
             answer_bearing = tuple(
                 obligation
@@ -752,11 +832,12 @@ class WorkingDocument:
                 if obligation.answer_bearing
             )
             if not answer_bearing:
-                errors.append("answer_bearing_obligations_missing")
+                add("obligation_coverage", "answer_bearing_obligations_missing")
             for obligation in answer_bearing:
                 state = self.obligation_states.get(obligation.requirement_id)
                 if state is None:
-                    errors.append(
+                    add(
+                        "obligation_coverage",
                         f"answer_bearing_obligation_state_missing:{obligation.requirement_id}"
                     )
                     continue
@@ -767,21 +848,174 @@ class WorkingDocument:
                         for claim_id in support
                     )
                     if not closed_by_answer:
-                        errors.append(
+                        add(
+                            "obligation_coverage",
                             f"answer_support_does_not_close_obligation:{obligation.requirement_id}"
                         )
                 elif state.status == "unresolved":
                     if not state.residual_uncertainty:
-                        errors.append(
+                        add(
+                            "obligation_coverage",
                             f"unresolved_obligation_requires_uncertainty:{obligation.requirement_id}"
                         )
                 else:
-                    errors.append(
+                    add(
+                        "obligation_coverage",
                         f"open_answer_bearing_obligation:{obligation.requirement_id}:{state.status}"
                     )
-        if errors:
-            return AnswerValidation(False, errors[0].split(":", 1)[0], support, cited_attempts, tuple(errors))
-        return AnswerValidation(True, "reference_integrity_verified", support, cited_attempts, ())
+
+        unconsumed = _ids(unconsumed_observation_ids)
+        if unconsumed:
+            add(
+                "observation_consumption",
+                f"unconsumed_observations:{','.join(unconsumed)}",
+            )
+
+        if require_evidence_kind_requirements:
+            for error in self._evidence_kind_requirement_errors(
+                support,
+                observation_rows,
+            ):
+                add("evidence_kind_requirements", error)
+
+        ordered_dimensions = tuple(dimension_errors)
+        errors = tuple(
+            error
+            for dimension in ordered_dimensions
+            for error in dimension_errors[dimension]
+        )
+        passed = not errors
+        return AnswerValidation(
+            passed=passed,
+            reason=(
+                "reference_integrity_verified"
+                if passed
+                else errors[0].split(":", 1)[0]
+            ),
+            supporting_claim_ids=support,
+            cited_attempt_ids=cited_attempts,
+            errors=errors,
+            reference_integrity_ok=not dimension_errors["reference_integrity"],
+            material_support_ok=not dimension_errors["material_support"],
+            provenance_binding_ok=not dimension_errors["provenance_binding"],
+            temporal_consistency_ok=not dimension_errors["temporal_consistency"],
+            occurrence_binding_ok=not dimension_errors["occurrence_binding"],
+            obligation_coverage_ok=not dimension_errors["obligation_coverage"],
+            observation_consumption_ok=not dimension_errors["observation_consumption"],
+            evidence_kind_requirements_ok=not dimension_errors[
+                "evidence_kind_requirements"
+            ],
+        )
+
+    def _evidence_kind_requirement_errors(
+        self,
+        supporting_claim_ids: Sequence[str],
+        observation_rows: Sequence[Mapping[str, Any]],
+    ) -> tuple[str, ...]:
+        rows_by_attempt: dict[str, list[Mapping[str, Any]]] = {}
+        for row in observation_rows:
+            attempt_id = str(row.get("attempt_id", "") or "")
+            if attempt_id:
+                rows_by_attempt.setdefault(attempt_id, []).append(row)
+        answer_lineage = set(supporting_claim_ids)
+        for claim_id in supporting_claim_ids:
+            answer_lineage.update(self._claim_lineage_ids(claim_id))
+        errors: list[str] = []
+        for requirement_id, obligation in self.obligations.items():
+            state = self.obligation_states.get(requirement_id)
+            if state is None or state.status != "satisfied":
+                continue
+            if not answer_lineage.intersection(state.supporting_claim_ids):
+                continue
+            attempt_ids = tuple(
+                dict.fromkeys(
+                    (
+                        *state.supporting_attempt_ids,
+                        *(
+                            attempt_id
+                            for claim_id in state.supporting_claim_ids
+                            for attempt_id in self._claim_attempts(claim_id)
+                        ),
+                    )
+                )
+            )
+            rows = tuple(
+                row
+                for attempt_id in attempt_ids
+                for row in rows_by_attempt.get(attempt_id, ())
+            )
+            kind = obligation.evidence_kind
+            if kind == "generic":
+                continue
+            if kind == "text_exact":
+                reread_ok = any(
+                    len(attempt_rows) >= 2
+                    and any(
+                        str(row.get("interpretation_purpose", "") or "")
+                        == "manual_reread"
+                        for row in attempt_rows
+                    )
+                    for attempt_rows in (
+                        rows_by_attempt.get(attempt_id, ())
+                        for attempt_id in attempt_ids
+                    )
+                )
+                if not reread_ok:
+                    errors.append(f"text_exact_same_material_reread_missing:{requirement_id}")
+            elif kind == "ui_text":
+                item_kinds = {
+                    str(item.get("item_kind", "") or "").casefold()
+                    for row in rows
+                    for item in tuple(row.get("interpretation_items", ()) or ())
+                    if isinstance(item, Mapping)
+                }
+                profile_ok = any(
+                    str(row.get("sampling_config", {}).get("evidence_kind", "") or "")
+                    == "ui_text"
+                    for row in rows
+                    if isinstance(row.get("sampling_config"), Mapping)
+                )
+                if not profile_ok or not {"ui_label", "ui_description"}.issubset(item_kinds):
+                    errors.append(f"ui_text_typed_items_missing:{requirement_id}")
+            elif kind == "persistent_state":
+                if not any(
+                    bool(row.get("sampling_config", {}).get("probe_coverage_satisfied"))
+                    for row in rows
+                    if isinstance(row.get("sampling_config"), Mapping)
+                    and row.get("sampling_config", {}).get("evidence_kind")
+                    == "persistent_state"
+                ):
+                    errors.append(f"persistent_state_probe_coverage_missing:{requirement_id}")
+            elif kind == "transient_event":
+                if not any(
+                    str(
+                        row.get("sampling_config", {})
+                        .get("refinement_binding", {})
+                        .get("stage", "")
+                        or ""
+                    )
+                    == "child_refinement"
+                    for row in rows
+                    if isinstance(row.get("sampling_config"), Mapping)
+                    and isinstance(
+                        row.get("sampling_config", {}).get("refinement_binding"),
+                        Mapping,
+                    )
+                ):
+                    errors.append(f"transient_event_child_refinement_missing:{requirement_id}")
+            elif kind == "relation":
+                anchors = {
+                    tuple(float(value) for value in item.get("time_anchor", ()))
+                    for row in rows
+                    for item in tuple(row.get("interpretation_items", ()) or ())
+                    if isinstance(item, Mapping)
+                    and isinstance(item.get("time_anchor"), Sequence)
+                    and not isinstance(item.get("time_anchor"), (str, bytes))
+                    and len(item.get("time_anchor", ())) == 2
+                }
+                if len(anchors) < 2:
+                    errors.append(f"relation_material_sides_missing:{requirement_id}")
+        return tuple(errors)
 
     def _apply_one(self, operation: Mapping[str, Any]) -> None:
         op_type = str(operation.get("op", operation.get("type", "")) or "").strip().casefold()
@@ -1376,6 +1610,37 @@ def _observation_item_index(
                 **item.to_dict(),
             }
     return items
+
+
+def _closure_dimension_for_error(error: str) -> str:
+    code = str(error or "").split(":", 1)[0]
+    if code in {
+        "observation_claim_time_anchor_mismatch",
+        "cue_verification_time_mismatch",
+        "temporal_scope_anchor_obligation_missing",
+        "temporal_scope_target_obligation_missing",
+    }:
+        return "temporal_consistency"
+    if code.startswith("observation_claim_") or code.startswith("cue_"):
+        return "provenance_binding"
+    if code.startswith("obligation_") or code.startswith("satisfied_obligation_"):
+        return "obligation_coverage"
+    if code.startswith("unresolved_obligation_"):
+        return "obligation_coverage"
+    return "reference_integrity"
+
+
+def _observation_row_ranges(
+    row: Mapping[str, Any],
+) -> tuple[tuple[float, float], ...]:
+    ranges = tuple(row.get("inspected_ranges", ()) or ())
+    if not ranges and row.get("requested_range"):
+        ranges = (row["requested_range"],)
+    return tuple(
+        interval
+        for value in ranges
+        if (interval := _time_range(value)) is not None
+    )
 
 
 def _observation_cue_index(

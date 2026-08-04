@@ -189,6 +189,7 @@ def agent_run_metrics(
         if row.get("status") in {"executed", "explicit_resolution_error"}
     }
     control_retries = tuple(row for row in trace if row.get("type") == "control_retry")
+    closure_repairs = tuple(row for row in trace if row.get("type") == "closure_repair")
     answer_outcomes = tuple(row for row in trace if row.get("type") == "answer_outcome")
     obligation_summary = dict(
         answer_outcomes[-1].get("obligation_summary", {})
@@ -212,6 +213,12 @@ def agent_run_metrics(
         answer_outcomes[-1].get("cue_summary", {})
         if answer_outcomes
         and isinstance(answer_outcomes[-1].get("cue_summary"), Mapping)
+        else {}
+    )
+    closure_validation = dict(
+        answer_outcomes[-1].get("closure_validation", {})
+        if answer_outcomes
+        and isinstance(answer_outcomes[-1].get("closure_validation"), Mapping)
         else {}
     )
     executed_ledger_ids = {
@@ -352,6 +359,33 @@ def agent_run_metrics(
         ),
         "decision_repair_count": sum(
             max(0, int(row.get("count", 1) or 0)) for row in control_retries
+        ),
+        "closure_repair_count": sum(
+            max(0, int(row.get("count", 1) or 0)) for row in closure_repairs
+        ),
+        "reference_integrity_ok": float(
+            bool(closure_validation.get("reference_integrity_ok", False))
+        ),
+        "material_support_ok": float(
+            bool(closure_validation.get("material_support_ok", False))
+        ),
+        "provenance_binding_ok": float(
+            bool(closure_validation.get("provenance_binding_ok", False))
+        ),
+        "temporal_consistency_ok": float(
+            bool(closure_validation.get("temporal_consistency_ok", False))
+        ),
+        "occurrence_binding_ok": float(
+            bool(closure_validation.get("occurrence_binding_ok", False))
+        ),
+        "obligation_coverage_ok": float(
+            bool(closure_validation.get("obligation_coverage_ok", False))
+        ),
+        "observation_consumption_ok": float(
+            bool(closure_validation.get("observation_consumption_ok", False))
+        ),
+        "evidence_kind_requirements_ok": float(
+            bool(closure_validation.get("evidence_kind_requirements_ok", False))
         ),
         "requested_acquisition_count": len(task_requests),
         "executed_acquisition_count": sum(

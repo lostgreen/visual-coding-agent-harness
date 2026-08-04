@@ -233,6 +233,8 @@ class VirtualVideoMultiRoundDriver:
         control_retry_budget: int = 2,
         require_obligation_coverage: bool = False,
         require_item_provenance: bool = False,
+        require_evidence_kind_requirements: bool = False,
+        closure_repair_budget: int = 0,
         answer_policy: str = "strict",
     ) -> None:
         if reasoner is None:
@@ -247,6 +249,10 @@ class VirtualVideoMultiRoundDriver:
         self.control_retry_budget = max(0, int(control_retry_budget))
         self.require_obligation_coverage = bool(require_obligation_coverage)
         self.require_item_provenance = bool(require_item_provenance)
+        self.require_evidence_kind_requirements = bool(
+            require_evidence_kind_requirements
+        )
+        self.closure_repair_budget = min(1, max(0, int(closure_repair_budget)))
         self.max_investigations = max(1, int(max_investigations))
         self.max_tasks_per_round = max(1, int(max_tasks_per_round))
         policy = str(answer_policy or "strict").strip().casefold()
@@ -279,9 +285,30 @@ class VirtualVideoMultiRoundDriver:
         latest_answer_candidate: ReasonerDecision | None = None
         forced_decision_calls = 0
         protocol_exhausted = False
+        surfaced_observation_ids: set[str] = set()
+        closure_repair_pending = False
+        closure_repair_count = 0
 
-        for round_id in range(1, self.semantic_round_budget + 3):
+        for round_id in range(
+            1,
+            self.semantic_round_budget + self.closure_repair_budget + 3,
+        ):
             remaining = max(0, self.max_investigations - completed_investigations)
+            closure_repair_active = bool(
+                closure_repair_pending
+                and closure_repair_count < self.closure_repair_budget
+            )
+            closure_repair_pending = False
+            if closure_repair_active:
+                closure_repair_count += 1
+                trace.append(
+                    {
+                        "type": "closure_repair",
+                        "round": round_id,
+                        "count": 1,
+                        "repair_index": closure_repair_count,
+                    }
+                )
             runtime_status = (
                 dict(investigator.mechanical_status())
                 if callable(getattr(investigator, "mechanical_status", None))
@@ -293,8 +320,13 @@ class VirtualVideoMultiRoundDriver:
                 observation_log,
                 runtime_status=runtime_status,
                 require_item_provenance=self.require_item_provenance,
+                surfaced_observation_ids=surfaced_observation_ids,
             )
-            force_finalize = round_id > self.semantic_round_budget or remaining <= 0
+            force_finalize = (
+                round_id > self.semantic_round_budget or remaining <= 0
+            ) and not closure_repair_active
+            status["closure_repair_active"] = closure_repair_active
+            status["closure_repair_count"] = closure_repair_count
             if force_finalize:
                 forced_decision_calls += 1
             final_retry_available = force_finalize and forced_decision_calls < 2
@@ -304,16 +336,18 @@ class VirtualVideoMultiRoundDriver:
             decision: ReasonerDecision | None = None
             requested_rows: tuple[Mapping[str, Any], ...] = ()
             while True:
+                working_view = render_working_view(
+                    document,
+                    observation_log,
+                    requested_observations=requested_observations,
+                    feedback=feedback,
+                )
+                surfaced_observation_ids.update(observation_log.attempt_ids)
                 raw_decision = self.reasoner.decide(
                     question=workspace.case.question,
                     options=dict(workspace.case.options),
                     workspace_overview=overview,
-                    working_document_view=render_working_view(
-                        document,
-                        observation_log,
-                        requested_observations=requested_observations,
-                        feedback=feedback,
-                    ),
+                    working_document_view=working_view,
                     mechanical_status=status,
                     remaining_budget=remaining,
                     force_finalize=force_finalize,
@@ -322,6 +356,7 @@ class VirtualVideoMultiRoundDriver:
                     semantic_round=round_id,
                     control_attempt=control_attempt,
                     control_retry=control_attempt > 0,
+                    closure_repair=closure_repair_active,
                     control_retries_remaining=max(
                         0,
                         self.control_retry_budget - control_retries_used,
@@ -362,7 +397,12 @@ class VirtualVideoMultiRoundDriver:
                         {"code": "invalid_decision_payload", "detail": str(exc)}
                     )
                 if parsed_decision is not None:
-                    schema_errors.extend(_decision_preflight(parsed_decision))
+                    schema_errors.extend(
+                        _decision_preflight(
+                            parsed_decision,
+                            closure_repair=closure_repair_active,
+                        )
+                    )
                     if parsed_decision.action == "answer" and parsed_decision.answer:
                         latest_answer_candidate = parsed_decision
                 if schema_errors:
@@ -457,6 +497,7 @@ class VirtualVideoMultiRoundDriver:
                         "force_finalize": force_finalize,
                         "final_attempt": forced_decision_calls if force_finalize else 0,
                         "answer_workspace_commit": answer_workspace_commit,
+                        "closure_repair": closure_repair_active,
                     }
                 )
                 if apply_result.accepted:
@@ -529,6 +570,14 @@ class VirtualVideoMultiRoundDriver:
                     require_obligation_coverage=self.require_obligation_coverage,
                     observation_rows=observation_log.rows,
                     require_item_provenance=self.require_item_provenance,
+                    temporal_scope_resolutions=_temporal_scope_resolution_map(
+                        document,
+                        observation_log,
+                    ),
+                    unconsumed_observation_ids=tuple(
+                        set(observation_log.attempt_ids) - surfaced_observation_ids
+                    ),
+                    require_evidence_kind_requirements=self.require_evidence_kind_requirements,
                 )
                 trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
                 if validation.passed:
@@ -543,7 +592,15 @@ class VirtualVideoMultiRoundDriver:
                     "residual_uncertainty": candidate.residual_uncertainty,
                 }
                 requested_observations = requested_rows
+                if (
+                    force_finalize
+                    and closure_repair_count < self.closure_repair_budget
+                    and _closure_repairable(validation)
+                ):
+                    closure_repair_pending = True
                 if force_finalize and not final_retry_available:
+                    if closure_repair_pending:
+                        continue
                     break
                 continue
 
@@ -713,6 +770,14 @@ class VirtualVideoMultiRoundDriver:
             require_obligation_coverage=self.require_obligation_coverage,
             observation_rows=observation_log.rows,
             require_item_provenance=self.require_item_provenance,
+            temporal_scope_resolutions=_temporal_scope_resolution_map(
+                document,
+                observation_log,
+            ),
+            unconsumed_observation_ids=tuple(
+                set(observation_log.attempt_ids) - surfaced_observation_ids
+            ),
+            require_evidence_kind_requirements=self.require_evidence_kind_requirements,
         )
         candidate_validation = (
             validation
@@ -726,6 +791,14 @@ class VirtualVideoMultiRoundDriver:
                 require_obligation_coverage=self.require_obligation_coverage,
                 observation_rows=observation_log.rows,
                 require_item_provenance=self.require_item_provenance,
+                temporal_scope_resolutions=_temporal_scope_resolution_map(
+                    document,
+                    observation_log,
+                ),
+                unconsumed_observation_ids=tuple(
+                    set(observation_log.attempt_ids) - surfaced_observation_ids
+                ),
+                require_evidence_kind_requirements=self.require_evidence_kind_requirements,
             )
         )
         if schema_answer_present or preserve_candidate:
@@ -784,6 +857,8 @@ class VirtualVideoMultiRoundDriver:
                 "temporal_scope_summary": _temporal_scope_summary(document, observation_log),
                 "provenance_summary": document.provenance_summary(observation_log.rows),
                 "cue_summary": document.cue_summary(observation_log.rows),
+                "closure_validation": validation.to_dict(),
+                "closure_repair_count": closure_repair_count,
                 "working_document_path": str(document_path),
                 "observation_log_path": str(observation_log.path),
                 "workspace_history_path": str(history_path),
@@ -848,7 +923,11 @@ def _schema_error_rows(value: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def _decision_preflight(decision: ReasonerDecision) -> list[dict[str, Any]]:
+def _decision_preflight(
+    decision: ReasonerDecision,
+    *,
+    closure_repair: bool = False,
+) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
     action_names = {"investigate", "read_observations", "update_workspace", "answer"}
     for index, operation in enumerate(decision.workspace_ops):
@@ -884,7 +963,37 @@ def _decision_preflight(decision: ReasonerDecision) -> list[dict[str, Any]]:
         )
     if decision.action == "investigate" and not decision.tasks:
         errors.append({"code": "investigate_action_requires_tasks"})
+    if closure_repair:
+        for task in decision.tasks:
+            code = _closure_repair_task_error(task)
+            if code:
+                errors.append(
+                    {
+                        "code": code,
+                        "requested_task_ids": [task.query_id],
+                    }
+                )
     return errors
+
+
+def _closure_repair_task_error(task: InvestigationTask) -> str:
+    if task.inspection_mode in {"search_asr", "search_caption"}:
+        return "closure_repair_global_search_forbidden"
+    if task.inspection_mode == "arbitrate_observation":
+        return ""
+    if task.inspection_mode != "window":
+        return "closure_repair_mode_forbidden"
+    cue_bound = bool(task.parent_attempt_id and task.cue_id)
+    occurrence_bound = bool(task.locator_attempt_id and task.occurrence_id)
+    if not cue_bound and not occurrence_bound:
+        return "closure_repair_unbound_window_forbidden"
+    if task.time_range is not None and task.time_range[1] - task.time_range[0] > 120.0:
+        return "closure_repair_wide_window_forbidden"
+    return ""
+
+
+def _closure_repairable(validation: AnswerValidation) -> bool:
+    return bool(validation.errors)
 
 
 def _control_retry_feedback(
@@ -1173,6 +1282,7 @@ def _mechanical_status(
     *,
     runtime_status: Mapping[str, Any] | None = None,
     require_item_provenance: bool = False,
+    surfaced_observation_ids: Sequence[str] = (),
 ) -> dict[str, Any]:
     errors = document.validate(
         observation_ids=observations.attempt_ids,
@@ -1234,7 +1344,9 @@ def _mechanical_status(
     low_fidelity_visual_attempts = tuple(
         status
         for status in visual_sampling_attempts
-        if status["requested_fps"] > 0.0 and status["sampling_fidelity"] < 0.8
+        if status["evidence_kind"] != "persistent_state"
+        and status["requested_fps"] > 0.0
+        and status["sampling_fidelity"] < 0.8
     )
     candidates_by_key: dict[tuple[str, float, float], dict[str, Any]] = {}
     caption_occurrences_by_key: dict[str, dict[str, Any]] = {}
@@ -1448,6 +1560,11 @@ def _mechanical_status(
     obligation_summary = document.obligation_summary()
     provenance_summary = document.provenance_summary(observations.rows)
     cue_summary = document.cue_summary(observations.rows)
+    unconsumed_observation_ids = tuple(
+        attempt_id
+        for attempt_id in observations.attempt_ids
+        if attempt_id not in set(surfaced_observation_ids)
+    )
     if not obligation_summary["answer_bearing_obligation_count"]:
         hints.append(
             "No answer-bearing evidence obligations exist. Decompose the observable requirements before finalizing."
@@ -1536,6 +1653,8 @@ def _mechanical_status(
         **obligation_summary,
         **provenance_summary,
         **cue_summary,
+        "unconsumed_observation_count": len(unconsumed_observation_ids),
+        "unconsumed_observation_ids": list(unconsumed_observation_ids),
         **runtime,
     }
 
@@ -1593,6 +1712,23 @@ def _temporal_scope_summary(
     }
 
 
+def _temporal_scope_resolution_map(
+    document: WorkingDocument,
+    observations: ObservationLog,
+) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(status.get("scope_id", "") or ""): status
+        for status in tuple(
+            _temporal_scope_summary(document, observations).get(
+                "temporal_scope_statuses",
+                (),
+            )
+            or ()
+        )
+        if isinstance(status, Mapping) and str(status.get("scope_id", "") or "")
+    }
+
+
 def _occurrence_candidates(
     observation_rows: Sequence[Mapping[str, Any]],
 ) -> tuple[dict[str, Any], ...]:
@@ -1645,7 +1781,17 @@ def _visual_sampling_status(row: Mapping[str, Any]) -> dict[str, Any] | None:
         "sampling_fidelity": fidelity,
         "max_gap": float(manifest.get("max_gap", 0.0) or 0.0),
         "coverage_ratio": float(manifest.get("coverage_ratio", 0.0) or 0.0),
-        "requires_refinement": bool(manifest.get("requires_refinement")),
+        "requires_refinement": bool(
+            config.get("requires_refinement", manifest.get("requires_refinement"))
+        ),
+        "evidence_kind": str(config.get("evidence_kind", "generic") or "generic"),
+        "probe_count": int(config.get("probe_count", 0) or 0),
+        "probe_coverage_requirement": int(
+            config.get("probe_coverage_requirement", 0) or 0
+        ),
+        "probe_coverage_satisfied": bool(
+            config.get("probe_coverage_satisfied", True)
+        ),
     }
 
 
@@ -2271,6 +2417,9 @@ def _validate_answer(
     require_obligation_coverage: bool = False,
     observation_rows: Sequence[Mapping[str, Any]] = (),
     require_item_provenance: bool = False,
+    temporal_scope_resolutions: Mapping[str, Mapping[str, Any]] | None = None,
+    unconsumed_observation_ids: Sequence[str] = (),
+    require_evidence_kind_requirements: bool = False,
 ) -> AnswerValidation:
     validation = document.validate_answer(
         decision.supporting_claim_ids,
@@ -2279,23 +2428,26 @@ def _validate_answer(
         require_obligation_coverage=require_obligation_coverage,
         observation_rows=observation_rows,
         require_item_provenance=require_item_provenance,
+        temporal_scope_resolutions=temporal_scope_resolutions,
+        unconsumed_observation_ids=unconsumed_observation_ids,
+        require_evidence_kind_requirements=require_evidence_kind_requirements,
     )
     if not decision.answer:
-        return AnswerValidation(
-            False,
-            "answer_missing",
-            validation.supporting_claim_ids,
-            validation.cited_attempt_ids,
-            ("answer_is_required",),
+        return replace(
+            validation,
+            passed=False,
+            reason="answer_missing",
+            errors=("answer_is_required", *validation.errors),
+            reference_integrity_ok=False,
         )
     if options and not (_letter(decision.answer) or _option_letter_from_answer(decision.answer, options)):
         reason = "answer_missing" if not decision.answer else "invalid_option_answer"
-        return AnswerValidation(
-            False,
-            reason,
-            validation.supporting_claim_ids,
-            validation.cited_attempt_ids,
-            ("answer_must_select_exactly_one_option",),
+        return replace(
+            validation,
+            passed=False,
+            reason=reason,
+            errors=("answer_must_select_exactly_one_option", *validation.errors),
+            reference_integrity_ok=False,
         )
     if not validation.passed:
         return validation
@@ -2315,12 +2467,12 @@ def _supporting_observation_ids(observations: ObservationLog) -> tuple[str, ...]
 
 
 def _answer_rejected(validation: AnswerValidation, reason: str) -> AnswerValidation:
-    return AnswerValidation(
-        False,
-        reason,
-        validation.supporting_claim_ids,
-        validation.cited_attempt_ids,
-        (reason,),
+    return replace(
+        validation,
+        passed=False,
+        reason=reason,
+        errors=(reason, *validation.errors),
+        material_support_ok=False,
     )
 
 

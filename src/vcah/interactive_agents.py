@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import re
@@ -15,6 +15,11 @@ from vcah.investigator import (
 )
 from vcah.model_client import ImageAttachmentError, OpenAICompatibleClient
 from vcah.multiround import InvestigationTask, ReasonerDecision
+from vcah.sampling import (
+    bounded_profile_range,
+    evidence_sampling_profile,
+    probe_coverage_requirement,
+)
 from vcah.types import CoverageSegment, EvidenceRecord
 from vcah.virtual_video import VirtualVideoWorkspace, sampling_fidelity
 from vcah.workspace import prompt_digest, stable_attempt_id
@@ -543,13 +548,26 @@ class VisionInvestigator(VirtualVideoInvestigator):
             segment = self.workspace.manifest.segments[0]
             segment_packet = self.open_segment(segment.segment_id)
         requested = getattr(task, "time_range", None)
-        start_sec, end_sec = (
+        raw_start_sec, raw_end_sec = (
             (float(requested[0]), float(requested[1]))
             if requested is not None
             else tuple(float(value) for value in segment_packet["virtual_time_range"])
         )
-        fps = float(getattr(task, "sampling_floor_fps", 0.5) or 0.5)
-        frame_limit = min(96, max(1, int((end_sec - start_sec) * fps + 0.999)))
+        evidence_kind = str(getattr(task, "evidence_kind", "generic") or "generic")
+        profile = evidence_sampling_profile(
+            evidence_kind,
+            requested_fps=float(getattr(task, "sampling_floor_fps", 0.5) or 0.5),
+        )
+        start_sec, end_sec = bounded_profile_range(
+            raw_start_sec,
+            raw_end_sec,
+            profile,
+        )
+        fps = profile.fps
+        frame_limit = min(
+            profile.max_frames,
+            max(1, int((end_sec - start_sec) * fps + 0.999)),
+        )
         window = self.inspect_window(
             start_sec,
             end_sec,
@@ -564,6 +582,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
             (start_sec, end_sec),
             frame_times,
             requested_fps=fps,
+        )
+        required_probe_count = probe_coverage_requirement(frame_limit, profile)
+        probe_coverage_satisfied = (
+            len(frame_times) >= required_probe_count
+            if required_probe_count
+            else True
         )
         candidate_binding = _candidate_binding_for_task(
             task,
@@ -597,7 +621,19 @@ class VisionInvestigator(VirtualVideoInvestigator):
             sampling_fps=fps,
             modality="visual",
         )
-        prompt = _observation_prompt(self.workspace, task, window)
+        perception_profile = {
+            **profile.to_dict(),
+            "original_requested_range": [raw_start_sec, raw_end_sec],
+            "effective_range": [start_sec, end_sec],
+            "range_was_bounded": (start_sec, end_sec) != (raw_start_sec, raw_end_sec),
+            "required_probe_count": required_probe_count,
+        }
+        prompt = _observation_prompt(
+            self.workspace,
+            task,
+            window,
+            perception_profile=perception_profile,
+        )
         cache_key = prompt_digest(
             json.dumps(
                 {
@@ -610,16 +646,17 @@ class VisionInvestigator(VirtualVideoInvestigator):
         )
         cached_report = self._visual_attempt_cache.get(cache_key)
         if cached_report is not None and not bool(getattr(task, "force_reinspect", False)):
-            self._saved_visual_calls += 1
-            self._saved_visual_frames += len(frame_paths)
+            cached_calls = max(1, len(cached_report.attempts))
+            self._saved_visual_calls += cached_calls
+            self._saved_visual_frames += len(frame_paths) * cached_calls
             _append_jsonl(
                 self.trace_path,
                 {
                     "type": "investigator_observation_reused",
                     "query_id": query_id,
                     "attempt_ids": [attempt.attempt_id for attempt in cached_report.attempts],
-                    "saved_frames": len(frame_paths),
-                    "saved_calls": 1,
+                    "saved_frames": len(frame_paths) * cached_calls,
+                    "saved_calls": cached_calls,
                     "time": time.time(),
                 },
             )
@@ -630,8 +667,8 @@ class VisionInvestigator(VirtualVideoInvestigator):
                     "tool_trace": ("inspect_window", "reuse_visual_attempt"),
                     "frames": 0,
                     "vlm_calls": 0,
-                    "saved_frames": len(frame_paths),
-                    "saved_calls": 1,
+                    "saved_frames": len(frame_paths) * cached_calls,
+                    "saved_calls": cached_calls,
                     "reused": True,
                     "consumes_budget": False,
                 },
@@ -661,23 +698,34 @@ class VisionInvestigator(VirtualVideoInvestigator):
             model=self.api.model,
             sampling_manifest=sampling_manifest,
         )
+        effective_requires_refinement = bool(sampling_manifest["requires_refinement"])
+        if profile.evidence_kind == "persistent_state":
+            effective_requires_refinement = not probe_coverage_satisfied
+        elif profile.evidence_kind == "transient_event":
+            effective_requires_refinement = cue_stage != "child_refinement"
+        sampling_config = {
+            "fps": fps,
+            "max_frames": frame_limit,
+            "mode": "window",
+            "modality": "visual",
+            "sampling_manifest": sampling_manifest,
+            "evidence_kind": evidence_kind,
+            "perception_profile": perception_profile,
+            "requires_refinement": effective_requires_refinement,
+            "probe_count": len(frame_times) if required_probe_count else 0,
+            "probe_coverage_requirement": required_probe_count,
+            "probe_coverage_satisfied": probe_coverage_satisfied,
+            "temporal_scope_id": str(getattr(task, "temporal_scope_id", "") or ""),
+            **({"candidate_binding": candidate_binding} if candidate_binding else {}),
+            **({"refinement_binding": refinement_binding} if refinement_binding else {}),
+        }
         attempt = ObservationAttempt(
             attempt_id=attempt_id,
             task_id=query_id,
             requested_range=(start_sec, end_sec),
             inspected_ranges=observed_subranges if counts["attached"] else (),
             attached_frame_times=frame_times if counts["attached"] else (),
-            sampling_config={
-                "fps": fps,
-                "max_frames": frame_limit,
-                "mode": "window",
-                "modality": "visual",
-                "sampling_manifest": sampling_manifest,
-                "evidence_kind": str(getattr(task, "evidence_kind", "generic") or "generic"),
-                "temporal_scope_id": str(getattr(task, "temporal_scope_id", "") or ""),
-                **({"candidate_binding": candidate_binding} if candidate_binding else {}),
-                **({"refinement_binding": refinement_binding} if refinement_binding else {}),
-            },
+            sampling_config=sampling_config,
             images_requested=counts["requested"],
             images_attached=counts["attached"],
             images_dropped=counts["dropped"],
@@ -687,7 +735,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
             modality="visual",
             evidence_role=(
                 "candidate"
-                if sampling_manifest["requires_refinement"] or cue_stage == "cue_verification"
+                if effective_requires_refinement or cue_stage == "cue_verification"
                 else "unclassified"
             ),
             prompt_digest=prompt_digest(prompt),
@@ -710,27 +758,83 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "raw": raw,
                 "parsed": parsed,
                 "api_response": metadata,
+                "perception_profile": perception_profile,
                 "time": time.time(),
             },
         )
+        attempts = [attempt]
+        if frame_paths and profile.same_material_second_read:
+            reread_prompt = (
+                prompt
+                + "\nThis is an independent same-material second read. Reinspect the exact same frames. "
+                "Do not copy or vote on a prior interpretation; return direct observation items only."
+            )
+            reread_raw = self.api.chat(
+                reread_prompt,
+                image_paths=frame_paths,
+                max_tokens=_completion_budget(1800),
+            )
+            reread_parsed = _parse_json(reread_raw)
+            reread_metadata = dict(self.api.last_response_metadata)
+            reread_counts = _attachment_counts(reread_metadata, frame_paths)
+            reread_attempt = replace(
+                attempt,
+                images_requested=reread_counts["requested"],
+                images_attached=reread_counts["attached"],
+                images_dropped=reread_counts["dropped"],
+                parse_status="parsed" if reread_parsed else "failed",
+                execution_status="completed" if reread_counts["attached"] else "failed",
+                prompt_digest=prompt_digest(reread_prompt),
+                raw_output=reread_raw,
+                interpretation_purpose="manual_reread",
+                interpretation_items=_interpretation_items(
+                    attempt_id,
+                    reread_parsed,
+                    frame_times=frame_times,
+                    requested_range=(start_sec, end_sec),
+                ),
+            )
+            attempts.append(reread_attempt)
+            _append_jsonl(
+                self.trace_path,
+                {
+                    "type": "investigator_same_material_reread",
+                    "query_id": query_id,
+                    "attempt_id": attempt_id,
+                    "model": self.api.model,
+                    "prompt": reread_prompt,
+                    "frame_paths": list(frame_paths),
+                    "raw": reread_raw,
+                    "parsed": reread_parsed,
+                    "api_response": reread_metadata,
+                    "perception_profile": perception_profile,
+                    "time": time.time(),
+                },
+            )
         if frame_paths:
             self._record_visit(
                 task,
                 evidence,
-                status="candidate_locator" if sampling_manifest["requires_refinement"] else "completed",
+                status="candidate_locator" if effective_requires_refinement else "completed",
             )
         report = InvestigationReport(
             query_id=query_id,
             status="completed" if frame_paths else "failed",
             evidence=(evidence,) if frame_paths else (),
-            attempts=(attempt,),
+            attempts=tuple(attempts),
             cost={
-                "tool_trace": ("open_segment", f"inspect_window:{fps:.1f}"),
+                "tool_trace": (
+                    "open_segment",
+                    f"inspect_window:{fps:.1f}",
+                    *(("same_material_reread",) if len(attempts) > 1 else ()),
+                ),
                 "frames": len(frame_paths),
-                "vlm_calls": int(bool(frame_paths)),
+                "vlm_calls": len(attempts) if frame_paths else 0,
                 "reused": False,
                 "consumes_budget": bool(frame_paths),
-                "requires_refinement": sampling_manifest["requires_refinement"],
+                "requires_refinement": effective_requires_refinement,
+                "evidence_kind": profile.evidence_kind,
+                "probe_coverage_satisfied": probe_coverage_satisfied,
             },
             failure_reason="no frames materialized" if not frame_paths else "",
             coverage_delta=observed_subranges if frame_paths else (),
@@ -1597,6 +1701,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
     options = dict(kwargs.get("options") or {})
     mechanical_status = dict(kwargs.get("mechanical_status") or {})
     control_retry = bool(kwargs.get("control_retry"))
+    closure_repair = bool(kwargs.get("closure_repair"))
     control_retry_rule = ""
     if control_retry:
         control_retry_rule = (
@@ -1648,7 +1753,14 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
             "Return a short direct answer grounded in the supporting observation lineage. Free-form answers may retain a "
             "concise residual_uncertainty; do not invent details absent from the cited observations.\n"
         )
-    if not final:
+    if closure_repair:
+        action_rule = (
+            "This is the single closure-repair round. Choose exactly one action: read_observations, update_workspace, "
+            "investigate existing material, or answer. You may fix existing claim/attempt/interpretation/item IDs, read "
+            "logged observations, use arbitrate_observation on an existing attempt, or refine an existing occurrence/cue. "
+            "Do not issue search_caption, search_asr, an unbound window, or a window wider than 120 seconds."
+        )
+    elif not final:
         action_rule = "Choose exactly one action: investigate, read_observations, update_workspace, or answer."
     elif final_attempt <= 1:
         action_rule = (
@@ -1755,6 +1867,8 @@ def _observation_prompt(
     workspace: VirtualVideoWorkspace,
     task: Any,
     window: Mapping[str, Any],
+    *,
+    perception_profile: Mapping[str, Any] | None = None,
 ) -> str:
     frame_times = [float(row["virtual_time_sec"]) for row in window.get("frames", ())]
     metadata = {
@@ -1763,7 +1877,11 @@ def _observation_prompt(
         "sampling": window.get("sampling"),
         "asr_cues": window.get("asr_cues"),
         "source_lineage": window.get("source_lineage"),
+        "perception_profile": dict(perception_profile or {}),
     }
+    typed_instruction = _typed_perception_instruction(
+        str(getattr(task, "evidence_kind", "generic") or "generic")
+    )
     return (
         "You are a visual Investigator. Report only what is directly visible or literally stated in the supplied local ASR. "
         "Do not select an answer option, evaluate a candidate claim, qualify an event, infer hidden intent, or decide whether "
@@ -1776,12 +1894,36 @@ def _observation_prompt(
         "\"description\":\"visible change\"}],\"uncertainties\":[\"...\"]}.\n"
         "Use the supplied virtual timestamps. Keep relational context in full sentences; do not flatten ordering or roles into "
         "isolated labels. Every point timestamp must be copied from frame_times_sec; never invent a more precise float. "
-        "Empty arrays are valid.\n"
+        f"Empty arrays are valid. {typed_instruction}\n"
         f"Question context (navigation only): {workspace.case.question}\n"
         f"Observation goal: {getattr(task, 'goal', '')}\n"
         f"Expected visible material: {getattr(task, 'expected_evidence', '')}\n"
         f"Window metadata: {json.dumps(metadata, ensure_ascii=False)}"
     )
+
+
+def _typed_perception_instruction(evidence_kind: str) -> str:
+    instructions = {
+        "generic": "",
+        "text_exact": (
+            "Transcribe exact visible text without paraphrase; preserve uncertainty for unreadable characters."
+        ),
+        "ui_text": (
+            "Report each visible UI label as item_kind=ui_label and its visual/function description separately as "
+            "item_kind=ui_description."
+        ),
+        "persistent_state": (
+            "Treat frames as sparse state probes; report only state that is directly visible at the listed probe times."
+        ),
+        "transient_event": (
+            "Report point cues only at supplied frame times and describe the visible transition without inferring causality."
+        ),
+        "relation": (
+            "Create separate observation items for both relation sides, with distinct time anchors when they occur at "
+            "different moments."
+        ),
+    }
+    return instructions.get(str(evidence_kind or "generic").casefold(), "")
 
 
 def _interpretation_items(

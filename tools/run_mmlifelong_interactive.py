@@ -76,6 +76,8 @@ def main() -> None:
         control_retry_budget=args.control_retry_budget,
         require_obligation_coverage=True,
         require_item_provenance=True,
+        require_evidence_kind_requirements=True,
+        closure_repair_budget=1,
         answer_policy=args.answer_policy,
     )
     result = driver.run(workspace)
@@ -97,6 +99,8 @@ def main() -> None:
         "control_retry_budget": args.control_retry_budget,
         "require_obligation_coverage": True,
         "require_item_provenance": True,
+        "require_evidence_kind_requirements": True,
+        "closure_repair_budget": 1,
         "max_investigations": args.max_investigations,
         "max_tasks_per_round": args.max_tasks_per_round,
         "caption_index_mode": args.caption_index_mode,
@@ -205,6 +209,7 @@ def _implementation_digest() -> str:
         Path("src/vcah/embedding_adapter.py"),
         Path("src/vcah/runtime_metrics.py"),
         Path("src/vcah/evidence_state.py"),
+        Path("src/vcah/sampling.py"),
         Path("src/vcah/temporal_scope.py"),
         Path("benchmarks/schema.py"),
         Path("benchmarks/mmlifelong/runner.py"),
