@@ -202,6 +202,18 @@ def agent_run_metrics(
         and isinstance(answer_outcomes[-1].get("temporal_scope_summary"), Mapping)
         else {}
     )
+    provenance_summary = dict(
+        answer_outcomes[-1].get("provenance_summary", {})
+        if answer_outcomes
+        and isinstance(answer_outcomes[-1].get("provenance_summary"), Mapping)
+        else {}
+    )
+    cue_summary = dict(
+        answer_outcomes[-1].get("cue_summary", {})
+        if answer_outcomes
+        and isinstance(answer_outcomes[-1].get("cue_summary"), Mapping)
+        else {}
+    )
     executed_ledger_ids = {
         str(row.get("ledger_id", "") or "")
         for row in task_outcomes
@@ -294,6 +306,28 @@ def agent_run_metrics(
             "manual_reread",
         )
     }
+    refinement_rows = tuple(
+        row
+        for row in visual_interpretation_rows
+        if isinstance(row.get("sampling_config"), Mapping)
+        and isinstance(row["sampling_config"].get("refinement_binding"), Mapping)
+    )
+    child_refinement_rows = tuple(
+        row
+        for row in refinement_rows
+        if str(row["sampling_config"]["refinement_binding"].get("stage", "") or "")
+        == "child_refinement"
+    )
+    refined_cue_ids = {
+        str(row["sampling_config"]["refinement_binding"].get("cue_id", "") or "")
+        for row in child_refinement_rows
+        if str(row["sampling_config"]["refinement_binding"].get("cue_id", "") or "")
+    }
+    false_refinements = sum(
+        str(row["sampling_config"]["refinement_binding"].get("cue_status", "") or "")
+        != "verified"
+        for row in child_refinement_rows
+    )
     converted = sum(
         any(_overlap(_hit_interval(hit), interval) for interval in supporting_intervals)
         for hit in candidates
@@ -344,6 +378,38 @@ def agent_run_metrics(
         ),
         "obligation_coverage_rate": float(
             obligation_summary.get("obligation_coverage_rate", 0.0) or 0.0
+        ),
+        "observation_claim_count": int(
+            provenance_summary.get("observation_claim_count", 0) or 0
+        ),
+        "item_bound_observation_claim_count": int(
+            provenance_summary.get("item_bound_observation_claim_count", 0) or 0
+        ),
+        "observation_claim_item_binding_rate": float(
+            provenance_summary.get("observation_claim_item_binding_rate", 0.0) or 0.0
+        ),
+        "dangling_interpretation_item_count": int(
+            provenance_summary.get("dangling_interpretation_item_count", 0) or 0
+        ),
+        "dangling_interpretation_item_rate": float(
+            provenance_summary.get("dangling_interpretation_item_rate", 0.0) or 0.0
+        ),
+        "observation_cue_count": int(cue_summary.get("observation_cue_count", 0) or 0),
+        "verified_cue_count": int(cue_summary.get("verified_cue_count", 0) or 0),
+        "rejected_cue_count": int(cue_summary.get("rejected_cue_count", 0) or 0),
+        "unverified_cue_count": int(cue_summary.get("unverified_cue_count", 0) or 0),
+        "cue_verification_rate": float(cue_summary.get("cue_verification_rate", 0.0) or 0.0),
+        "cue_rejection_rate": float(cue_summary.get("cue_rejection_rate", 0.0) or 0.0),
+        "candidate_to_refined_material_rate": (
+            len(refined_cue_ids)
+            / int(cue_summary.get("observation_cue_count", 0) or 0)
+            if int(cue_summary.get("observation_cue_count", 0) or 0)
+            else 0.0
+        ),
+        "false_refinement_rate": (
+            false_refinements / len(child_refinement_rows)
+            if child_refinement_rows
+            else 0.0
         ),
         "occurrence_bound_material_count": len(bound_visual_attempt_ids),
         "occurrence_binding_rate": (

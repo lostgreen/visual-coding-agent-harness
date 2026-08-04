@@ -60,6 +60,11 @@ class InvestigationTask:
     occurrence_id: str = ""
     temporal_scope_id: str = ""
     evidence_kind: str = "generic"
+    parent_attempt_id: str = ""
+    cue_id: str = ""
+    window_radius_sec: float = 5.0
+    cue_stage: str = ""
+    cue_virtual_time: float | None = None
     sampling_floor_fps: float | None = None
     arbitration_attempt_id: str = ""
     force_reinspect: bool = False
@@ -118,6 +123,22 @@ class InvestigationTask:
         if evidence_kind not in EVIDENCE_KINDS:
             raise ValueError(f"unsupported evidence_kind: {evidence_kind}")
         object.__setattr__(self, "evidence_kind", evidence_kind)
+        object.__setattr__(self, "parent_attempt_id", str(self.parent_attempt_id or "").strip())
+        object.__setattr__(self, "cue_id", str(self.cue_id or "").strip())
+        object.__setattr__(
+            self,
+            "window_radius_sec",
+            min(30.0, max(0.5, float(self.window_radius_sec or 5.0))),
+        )
+        cue_stage = str(self.cue_stage or "").strip().casefold()
+        if cue_stage not in {"", "cue_verification", "child_refinement"}:
+            raise ValueError(f"unsupported cue_stage: {cue_stage}")
+        object.__setattr__(self, "cue_stage", cue_stage)
+        object.__setattr__(
+            self,
+            "cue_virtual_time",
+            float(self.cue_virtual_time) if self.cue_virtual_time is not None else None,
+        )
         object.__setattr__(
             self,
             "sampling_floor_fps",
@@ -211,6 +232,7 @@ class VirtualVideoMultiRoundDriver:
         semantic_round_budget: int | None = None,
         control_retry_budget: int = 2,
         require_obligation_coverage: bool = False,
+        require_item_provenance: bool = False,
         answer_policy: str = "strict",
     ) -> None:
         if reasoner is None:
@@ -224,6 +246,7 @@ class VirtualVideoMultiRoundDriver:
         self.max_rounds = self.semantic_round_budget
         self.control_retry_budget = max(0, int(control_retry_budget))
         self.require_obligation_coverage = bool(require_obligation_coverage)
+        self.require_item_provenance = bool(require_item_provenance)
         self.max_investigations = max(1, int(max_investigations))
         self.max_tasks_per_round = max(1, int(max_tasks_per_round))
         policy = str(answer_policy or "strict").strip().casefold()
@@ -269,6 +292,7 @@ class VirtualVideoMultiRoundDriver:
                 document,
                 observation_log,
                 runtime_status=runtime_status,
+                require_item_provenance=self.require_item_provenance,
             )
             force_finalize = round_id > self.semantic_round_budget or remaining <= 0
             if force_finalize:
@@ -403,6 +427,8 @@ class VirtualVideoMultiRoundDriver:
                 apply_result = document.apply_ops(
                     decision.workspace_ops,
                     observation_ids=observation_log.attempt_ids,
+                    observation_rows=observation_log.rows,
+                    require_item_provenance=self.require_item_provenance,
                 )
                 if decision.workspace_ops:
                     append_workspace_history(
@@ -501,6 +527,8 @@ class VirtualVideoMultiRoundDriver:
                     workspace.case.options,
                     supporting_observation_ids=_supporting_observation_ids(observation_log),
                     require_obligation_coverage=self.require_obligation_coverage,
+                    observation_rows=observation_log.rows,
+                    require_item_provenance=self.require_item_provenance,
                 )
                 trace.append({"type": "reference_integrity_check", "round": round_id, **validation.to_dict()})
                 if validation.passed:
@@ -576,6 +604,10 @@ class VirtualVideoMultiRoundDriver:
                     for row in tuple(status.get("temporal_scope_statuses", ()) or ())
                     if isinstance(row, Mapping)
                     and str(row.get("scope_id", "") or "")
+                },
+                cue_states={
+                    cue_id: state.to_dict()
+                    for cue_id, state in document.cue_states.items()
                 },
             )
             if resolution_errors:
@@ -679,6 +711,8 @@ class VirtualVideoMultiRoundDriver:
             workspace.case.options,
             supporting_observation_ids=_supporting_observation_ids(observation_log),
             require_obligation_coverage=self.require_obligation_coverage,
+            observation_rows=observation_log.rows,
+            require_item_provenance=self.require_item_provenance,
         )
         candidate_validation = (
             validation
@@ -690,6 +724,8 @@ class VirtualVideoMultiRoundDriver:
                 workspace.case.options,
                 supporting_observation_ids=_supporting_observation_ids(observation_log),
                 require_obligation_coverage=self.require_obligation_coverage,
+                observation_rows=observation_log.rows,
+                require_item_provenance=self.require_item_provenance,
             )
         )
         if schema_answer_present or preserve_candidate:
@@ -746,6 +782,8 @@ class VirtualVideoMultiRoundDriver:
                 "supporting_intervals": [list(item) for item in supporting_intervals],
                 "obligation_summary": document.obligation_summary(),
                 "temporal_scope_summary": _temporal_scope_summary(document, observation_log),
+                "provenance_summary": document.provenance_summary(observation_log.rows),
+                "cue_summary": document.cue_summary(observation_log.rows),
                 "working_document_path": str(document_path),
                 "observation_log_path": str(observation_log.path),
                 "workspace_history_path": str(history_path),
@@ -1134,8 +1172,13 @@ def _mechanical_status(
     observations: ObservationLog,
     *,
     runtime_status: Mapping[str, Any] | None = None,
+    require_item_provenance: bool = False,
 ) -> dict[str, Any]:
-    errors = document.validate(observation_ids=observations.attempt_ids)
+    errors = document.validate(
+        observation_ids=observations.attempt_ids,
+        observation_rows=observations.rows,
+        require_item_provenance=require_item_provenance,
+    )
     coverage = _source_coverage(workspace, observations)
     known_attempts = set(observations.attempt_ids)
     supporting_attempts = set(_supporting_observation_ids(observations))
@@ -1403,6 +1446,8 @@ def _mechanical_status(
             "resolution; narrow the relevant time_range before judging a brief transition or exact moment."
         )
     obligation_summary = document.obligation_summary()
+    provenance_summary = document.provenance_summary(observations.rows)
+    cue_summary = document.cue_summary(observations.rows)
     if not obligation_summary["answer_bearing_obligation_count"]:
         hints.append(
             "No answer-bearing evidence obligations exist. Decompose the observable requirements before finalizing."
@@ -1411,6 +1456,17 @@ def _mechanical_status(
         hints.append(
             "Answer-bearing obligations remain open. Satisfy them with claim/material lineage or mark them unresolved "
             "with explicit residual uncertainty before finalizing."
+        )
+    if provenance_summary["observation_claim_count"] and provenance_summary[
+        "observation_claim_item_binding_rate"
+    ] < 1.0:
+        hints.append(
+            "Observation claims must copy an exact attempt_id, interpretation_id, and item_id triple from the catalog."
+        )
+    if cue_summary["unverified_cue_count"]:
+        hints.append(
+            "Point cues remain unverified. Bind parent_attempt_id and cue_id to replay the exact sampled frame before "
+            "requesting a child refinement window."
         )
     return {
         "schema_version": "MechanicalCompletionStatusV1",
@@ -1478,6 +1534,8 @@ def _mechanical_status(
             for requirement_id, obligation in document.obligations.items()
         ],
         **obligation_summary,
+        **provenance_summary,
+        **cue_summary,
         **runtime,
     }
 
@@ -1654,6 +1712,7 @@ def _resolve_tasks(
     observation_rows: Sequence[Mapping[str, Any]] = (),
     temporal_scope_ids: Sequence[str] = (),
     temporal_scope_resolutions: Mapping[str, Mapping[str, Any]] | None = None,
+    cue_states: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[InvestigationTask, ...]:
     limit = max(0, int(limit))
     segments = tuple(workspace.manifest.segments)
@@ -1664,9 +1723,26 @@ def _resolve_tasks(
     groups: list[dict[str, Any]] = []
     for requested_task in tasks:
         error_start = len(resolution_errors)
-        task_error = _task_executability_error(requested_task)
+        cue_task, cue_error = _resolve_cue_bound_task(
+            workspace,
+            requested_task,
+            observation_rows,
+            cue_states=cue_states or {},
+        )
+        if cue_error is not None:
+            resolution_errors.append(cue_error)
+            groups.append(
+                {
+                    "requested_task": requested_task,
+                    "tasks": (),
+                    "error_start": error_start,
+                }
+            )
+            continue
+        task = cue_task or requested_task
+        task_error = _task_executability_error(task)
         if task_error:
-            resolution_errors.append(_task_resolution_error(requested_task, task_error))
+            resolution_errors.append(_task_resolution_error(task, task_error))
             groups.append(
                 {
                     "requested_task": requested_task,
@@ -1676,7 +1752,7 @@ def _resolve_tasks(
             )
             continue
         binding_error = validate_occurrence_material_binding(
-            requested_task,
+            task,
             observation_rows,
             temporal_scope_ids=temporal_scope_ids,
             temporal_scope_resolutions=temporal_scope_resolutions,
@@ -1692,7 +1768,7 @@ def _resolve_tasks(
             )
             continue
         task = _resolve_task_coordinates(
-            requested_task,
+            task,
             by_id,
             global_aliases=global_aliases,
             errors=resolution_errors,
@@ -2083,9 +2159,98 @@ def _task_executability_error(task: InvestigationTask) -> str:
         return "caption_queries_missing"
     if task.inspection_mode == "arbitrate_observation" and not task.arbitration_attempt_id:
         return "arbitration_attempt_id_missing"
-    if task.inspection_mode == "window" and not (task.segment_id or task.time_range):
+    if task.inspection_mode == "window" and not (
+        task.segment_id
+        or task.time_range
+        or (task.parent_attempt_id and task.cue_id)
+    ):
         return "target_missing"
     return ""
+
+
+def _resolve_cue_bound_task(
+    workspace: VirtualVideoWorkspace,
+    task: InvestigationTask,
+    observation_rows: Sequence[Mapping[str, Any]],
+    *,
+    cue_states: Mapping[str, Mapping[str, Any]],
+) -> tuple[InvestigationTask | None, dict[str, Any] | None]:
+    if not task.parent_attempt_id and not task.cue_id:
+        return task, None
+    if not task.parent_attempt_id or not task.cue_id:
+        return None, _task_resolution_error(task, "cue_binding_incomplete")
+    if task.inspection_mode != "window":
+        return None, _task_resolution_error(task, "cue_binding_requires_visual_window")
+
+    cue: Mapping[str, Any] | None = None
+    for row in observation_rows:
+        if str(row.get("attempt_id", "") or "") != task.parent_attempt_id:
+            continue
+        for raw_cue in tuple(row.get("observation_cues", ()) or ()):
+            if isinstance(raw_cue, Mapping) and str(raw_cue.get("cue_id", "") or "") == task.cue_id:
+                cue = raw_cue
+                break
+        if cue is not None:
+            break
+    if cue is None:
+        return None, _task_resolution_error(
+            task,
+            "cue_not_found_on_parent_attempt",
+            parent_attempt_id=task.parent_attempt_id,
+            cue_id=task.cue_id,
+        )
+
+    state = cue_states.get(task.cue_id, {})
+    status = str(state.get("status", "unverified") or "unverified").casefold()
+    if status == "rejected":
+        return None, _task_resolution_error(task, "cue_rejected", cue_id=task.cue_id)
+    if status not in {"unverified", "verified"}:
+        return None, _task_resolution_error(task, "cue_status_invalid", cue_id=task.cue_id)
+
+    cue_time = float(cue.get("virtual_time", 0.0) or 0.0)
+    segment = next(
+        (
+            item
+            for item in workspace.manifest.segments
+            if item.virtual_start_sec - 1e-6 <= cue_time <= item.virtual_end_sec + 1e-6
+        ),
+        None,
+    )
+    if segment is None:
+        return None, _task_resolution_error(
+            task,
+            "cue_time_outside_workspace",
+            cue_id=task.cue_id,
+            cue_virtual_time=cue_time,
+        )
+
+    if status == "unverified":
+        time_range = (cue_time, cue_time)
+        stage = "cue_verification"
+        purpose = "cue_verification"
+    else:
+        radius = task.window_radius_sec
+        time_range = (
+            max(float(segment.virtual_start_sec), cue_time - radius),
+            min(float(segment.virtual_end_sec), cue_time + radius),
+        )
+        stage = "child_refinement"
+        purpose = "manual_reread"
+    return (
+        replace(
+            task,
+            segment_id=segment.segment_id,
+            time_range=time_range,
+            coordinate_space="virtual",
+            source_video_ids=(segment.source_video_id,),
+            cue_stage=stage,
+            cue_virtual_time=cue_time,
+            sampling_floor_fps=2.0,
+            interpretation_purpose=purpose,
+            force_reinspect=True,
+        ),
+        None,
+    )
 
 
 def _ranges_overlap(left: tuple[float, float], right: tuple[float, float]) -> bool:
@@ -2104,12 +2269,16 @@ def _validate_answer(
     *,
     supporting_observation_ids: Sequence[str] | None = None,
     require_obligation_coverage: bool = False,
+    observation_rows: Sequence[Mapping[str, Any]] = (),
+    require_item_provenance: bool = False,
 ) -> AnswerValidation:
     validation = document.validate_answer(
         decision.supporting_claim_ids,
         observation_ids=observation_ids,
         supporting_observation_ids=supporting_observation_ids,
         require_obligation_coverage=require_obligation_coverage,
+        observation_rows=observation_rows,
+        require_item_provenance=require_item_provenance,
     )
     if not decision.answer:
         return AnswerValidation(
@@ -2259,6 +2428,11 @@ def _task_descriptor(task: InvestigationTask) -> dict[str, Any]:
         "occurrence_id": task.occurrence_id,
         "temporal_scope_id": task.temporal_scope_id,
         "evidence_kind": task.evidence_kind,
+        "parent_attempt_id": task.parent_attempt_id,
+        "cue_id": task.cue_id,
+        "window_radius_sec": task.window_radius_sec,
+        "cue_stage": task.cue_stage,
+        "cue_virtual_time": task.cue_virtual_time,
         "sampling_floor_fps": task.sampling_floor_fps,
         "arbitration_attempt_id": task.arbitration_attempt_id,
         "force_reinspect": task.force_reinspect,
@@ -2303,6 +2477,11 @@ def _task(value: InvestigationTask | Mapping[str, Any]) -> InvestigationTask:
         occurrence_id=str(value.get("occurrence_id", "") or ""),
         temporal_scope_id=str(value.get("temporal_scope_id", "") or ""),
         evidence_kind=str(value.get("evidence_kind", "generic") or "generic"),
+        parent_attempt_id=str(value.get("parent_attempt_id", "") or ""),
+        cue_id=str(value.get("cue_id", "") or ""),
+        window_radius_sec=float(value.get("window_radius_sec", 5.0) or 5.0),
+        cue_stage=str(value.get("cue_stage", "") or ""),
+        cue_virtual_time=value.get("cue_virtual_time"),
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),

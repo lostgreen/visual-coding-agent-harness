@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field, replace
 import json
 from typing import Any, Mapping, Sequence
 
+from vcah.evidence_state import InterpretationItem
 from vcah.caption_hybrid_search import CaptionHybridSearch
 from vcah.caption_lexical_index import CaptionLexicalIndex, render_caption_hits
 from vcah.caption_occurrence import build_caption_occurrence_set
@@ -54,6 +55,7 @@ class ObservationAttempt:
     round_id: str = ""
     source_video_ids: tuple[str, ...] = ()
     interpretation_purpose: str = "primary"
+    interpretation_items: tuple[InterpretationItem, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "attempt_id", str(self.attempt_id or "").strip())
@@ -103,6 +105,17 @@ class ObservationAttempt:
             self,
             "source_video_ids",
             tuple(dict.fromkeys(str(item).strip() for item in self.source_video_ids if str(item).strip())),
+        )
+        object.__setattr__(
+            self,
+            "interpretation_items",
+            tuple(
+                item
+                if isinstance(item, InterpretationItem)
+                else InterpretationItem.from_mapping(item)
+                for item in self.interpretation_items
+                if isinstance(item, (InterpretationItem, Mapping))
+            ),
         )
 
     @property

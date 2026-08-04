@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
-from vcah.evidence_state import EvidenceObligation, EvidenceObligationState
+from vcah.evidence_state import (
+    EvidenceObligation,
+    EvidenceObligationState,
+    InterpretationItem,
+    ObservationCue,
+    ObservationCueState,
+)
 from vcah.temporal_scope import TemporalScope
 
 
@@ -27,6 +33,7 @@ _OP_TYPES = {
     "add_obligation",
     "set_obligation_status",
     "add_temporal_scope",
+    "set_cue_status",
 }
 
 
@@ -106,6 +113,8 @@ class Claim:
     confidence: ClaimConfidence = "medium"
     entity_ids: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    interpretation_id: str = ""
+    interpretation_item_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "claim_id", str(self.claim_id or "").strip())
@@ -130,6 +139,12 @@ class Claim:
         object.__setattr__(self, "confidence", confidence)
         object.__setattr__(self, "entity_ids", _ids(self.entity_ids))
         object.__setattr__(self, "metadata", dict(self.metadata or {}))
+        object.__setattr__(self, "interpretation_id", str(self.interpretation_id or "").strip())
+        object.__setattr__(
+            self,
+            "interpretation_item_id",
+            str(self.interpretation_item_id or "").strip(),
+        )
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> "Claim":
@@ -146,6 +161,17 @@ class Claim:
             confidence=str(value.get("confidence", "medium") or "medium"),  # type: ignore[arg-type]
             entity_ids=tuple(value.get("entity_ids", ()) or ()),
             metadata=dict(value.get("metadata", {}) or {}),
+            interpretation_id=str(
+                value.get("interpretation_id", dict(value.get("metadata", {}) or {}).get("interpretation_id", ""))
+                or ""
+            ),
+            interpretation_item_id=str(
+                value.get(
+                    "interpretation_item_id",
+                    value.get("item_id", dict(value.get("metadata", {}) or {}).get("item_id", "")),
+                )
+                or ""
+            ),
         )
 
 
@@ -237,6 +263,7 @@ class WorkingDocument:
     obligations: dict[str, EvidenceObligation] = field(default_factory=dict)
     obligation_states: dict[str, EvidenceObligationState] = field(default_factory=dict)
     temporal_scopes: dict[str, TemporalScope] = field(default_factory=dict)
+    cue_states: dict[str, ObservationCueState] = field(default_factory=dict)
     revision: int = 0
     active_claim_limit: int = 60
 
@@ -297,13 +324,19 @@ class WorkingDocument:
                 if isinstance(item, Mapping)
                 and (scope := TemporalScope.from_mapping(item)).scope_id
             },
+            cue_states={
+                state.cue_id: state
+                for item in _mapping_values(value.get("cue_states"))
+                if isinstance(item, Mapping)
+                and (state := ObservationCueState.from_mapping(item)).cue_id
+            },
             revision=max(0, int(value.get("revision", 0) or 0)),
             active_claim_limit=max(1, int(value.get("active_claim_limit", 60) or 60)),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema_version": "WorkingDocumentV4",
+            "schema_version": "WorkingDocumentV5",
             "revision": self.revision,
             "active_claim_limit": self.active_claim_limit,
             "claims": {claim_id: asdict(claim) for claim_id, claim in sorted(self.claims.items())},
@@ -320,6 +353,10 @@ class WorkingDocument:
             "temporal_scopes": {
                 scope_id: scope.to_dict()
                 for scope_id, scope in sorted(self.temporal_scopes.items())
+            },
+            "cue_states": {
+                cue_id: state.to_dict()
+                for cue_id, state in sorted(self.cue_states.items())
             },
         }
 
@@ -338,6 +375,8 @@ class WorkingDocument:
         operations: Sequence[Mapping[str, Any]],
         *,
         observation_ids: Sequence[str],
+        observation_rows: Sequence[Mapping[str, Any]] = (),
+        require_item_provenance: bool = False,
     ) -> WorkspaceApplyResult:
         ops = tuple(dict(item) for item in operations if isinstance(item, Mapping))
         if not ops:
@@ -351,7 +390,13 @@ class WorkingDocument:
                 errors.append(f"op[{index}]: {exc}")
                 break
         if not errors:
-            errors.extend(staged.validate(observation_ids=observation_ids))
+            errors.extend(
+                staged.validate(
+                    observation_ids=observation_ids,
+                    observation_rows=observation_rows,
+                    require_item_provenance=require_item_provenance,
+                )
+            )
         if errors:
             return WorkspaceApplyResult(False, self.revision, 0, tuple(errors))
         self.claims = staged.claims
@@ -360,11 +405,20 @@ class WorkingDocument:
         self.obligations = staged.obligations
         self.obligation_states = staged.obligation_states
         self.temporal_scopes = staged.temporal_scopes
+        self.cue_states = staged.cue_states
         self.revision += 1
         return WorkspaceApplyResult(True, self.revision, len(ops), ())
 
-    def validate(self, *, observation_ids: Sequence[str]) -> tuple[str, ...]:
+    def validate(
+        self,
+        *,
+        observation_ids: Sequence[str],
+        observation_rows: Sequence[Mapping[str, Any]] = (),
+        require_item_provenance: bool = False,
+    ) -> tuple[str, ...]:
         known_observations = {str(item) for item in observation_ids if str(item)}
+        item_index = _observation_item_index(observation_rows)
+        cue_index = _observation_cue_index(observation_rows)
         errors: list[str] = []
         active_count = sum(claim.status in {"active", "contested"} for claim in self.claims.values())
         if active_count > self.active_claim_limit:
@@ -380,6 +434,8 @@ class WorkingDocument:
                 errors.append(f"claim_cites_unknown_attempt:{claim_id}:{','.join(missing_cites)}")
             if claim.source == "observation" and not claim.cites:
                 errors.append(f"observation_claim_requires_cites:{claim_id}")
+            if claim.source == "observation" and require_item_provenance:
+                errors.extend(_observation_claim_binding_errors(claim, item_index))
             if claim.source == "derived" and not claim.derived_from:
                 errors.append(f"derived_claim_requires_parents:{claim_id}")
             missing_parents = tuple(parent for parent in claim.derived_from if parent not in self.claims)
@@ -476,6 +532,32 @@ class WorkingDocument:
                 errors.append(
                     f"temporal_scope_target_obligation_missing:{scope_id}:{scope.target_requirement_id}"
                 )
+        for cue_id, state in self.cue_states.items():
+            if cue_id not in cue_index:
+                errors.append(f"cue_definition_missing:{cue_id}")
+                continue
+            if state.status in {"verified", "rejected"}:
+                if not (
+                    state.verification_attempt_id
+                    and state.verification_interpretation_id
+                    and state.verification_item_id
+                ):
+                    errors.append(f"cue_verification_item_missing:{cue_id}")
+                    continue
+                item = item_index.get(
+                    (
+                        state.verification_attempt_id,
+                        state.verification_interpretation_id,
+                        state.verification_item_id,
+                    )
+                )
+                if item is None:
+                    errors.append(f"cue_verification_item_unknown:{cue_id}")
+                elif not _anchors_overlap(
+                    tuple(item["time_anchor"]),
+                    (float(cue_index[cue_id]["virtual_time"]),) * 2,
+                ):
+                    errors.append(f"cue_verification_time_mismatch:{cue_id}")
         return tuple(dict.fromkeys(errors))
 
     def obligation_summary(self) -> dict[str, Any]:
@@ -516,6 +598,72 @@ class WorkingDocument:
             "unresolved_requirement_ids": list(unresolved),
         }
 
+    def provenance_summary(
+        self,
+        observation_rows: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        item_index = _observation_item_index(observation_rows)
+        claims = tuple(
+            claim
+            for claim in self.claims.values()
+            if claim.source == "observation"
+            and claim.status in {"active", "contested"}
+        )
+        bound = tuple(
+            claim
+            for claim in claims
+            if not _observation_claim_binding_errors(claim, item_index)
+        )
+        known_item_ids = {key[2] for key in item_index}
+        dangling = sum(
+            bool(claim.interpretation_item_id)
+            and claim.interpretation_item_id not in known_item_ids
+            for claim in claims
+        )
+        return {
+            "observation_claim_count": len(claims),
+            "item_bound_observation_claim_count": len(bound),
+            "observation_claim_item_binding_rate": (
+                len(bound) / len(claims) if claims else 0.0
+            ),
+            "dangling_interpretation_item_count": dangling,
+            "dangling_interpretation_item_rate": (
+                dangling / len(claims) if claims else 0.0
+            ),
+        }
+
+    def cue_summary(
+        self,
+        observation_rows: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        cue_ids = tuple(_observation_cue_index(observation_rows))
+        verified = tuple(
+            cue_id
+            for cue_id in cue_ids
+            if self.cue_states.get(cue_id)
+            and self.cue_states[cue_id].status == "verified"
+        )
+        rejected = tuple(
+            cue_id
+            for cue_id in cue_ids
+            if self.cue_states.get(cue_id)
+            and self.cue_states[cue_id].status == "rejected"
+        )
+        unverified = tuple(
+            cue_id for cue_id in cue_ids if cue_id not in {*verified, *rejected}
+        )
+        decided = len(verified) + len(rejected)
+        return {
+            "observation_cue_count": len(cue_ids),
+            "verified_cue_count": len(verified),
+            "rejected_cue_count": len(rejected),
+            "unverified_cue_count": len(unverified),
+            "cue_verification_rate": len(verified) / decided if decided else 0.0,
+            "cue_rejection_rate": len(rejected) / decided if decided else 0.0,
+            "verified_cue_ids": list(verified),
+            "rejected_cue_ids": list(rejected),
+        }
+
     def validate_answer(
         self,
         supporting_claim_ids: Sequence[str],
@@ -523,11 +671,17 @@ class WorkingDocument:
         observation_ids: Sequence[str],
         supporting_observation_ids: Sequence[str] | None = None,
         require_obligation_coverage: bool = False,
+        observation_rows: Sequence[Mapping[str, Any]] = (),
+        require_item_provenance: bool = False,
     ) -> AnswerValidation:
         support = _ids(supporting_claim_ids)
         if not support:
             return AnswerValidation(False, "supporting_claims_missing")
-        document_errors = self.validate(observation_ids=observation_ids)
+        document_errors = self.validate(
+            observation_ids=observation_ids,
+            observation_rows=observation_rows,
+            require_item_provenance=require_item_provenance,
+        )
         missing = tuple(claim_id for claim_id in support if claim_id not in self.claims)
         inactive = tuple(
             claim_id
@@ -722,6 +876,22 @@ class WorkingDocument:
                 raise ValueError(f"temporal_scope_already_exists:{scope.scope_id}")
             self.temporal_scopes[scope.scope_id] = scope
             return
+        if op_type == "set_cue_status":
+            cue_id = _required_id(operation, "cue_id")
+            self.cue_states[cue_id] = ObservationCueState(
+                cue_id=cue_id,
+                status=str(operation.get("status", "unverified") or "unverified"),  # type: ignore[arg-type]
+                verification_attempt_id=str(
+                    operation.get("verification_attempt_id", "") or ""
+                ),
+                verification_interpretation_id=str(
+                    operation.get("verification_interpretation_id", "") or ""
+                ),
+                verification_item_id=str(
+                    operation.get("verification_item_id", "") or ""
+                ),
+            )
+            return
         entity_payload = operation.get("entity") if isinstance(operation.get("entity"), Mapping) else operation
         entity = Entity.from_mapping(entity_payload)
         if not entity.entity_id:
@@ -834,6 +1004,28 @@ class ObservationLog:
     def attempt_ids(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(str(row["attempt_id"]) for row in self.rows))
 
+    @property
+    def interpretation_item_ids(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                str(item.get("item_id", "") or "")
+                for row in self.rows
+                for item in tuple(row.get("interpretation_items", ()) or ())
+                if isinstance(item, Mapping) and str(item.get("item_id", "") or "")
+            )
+        )
+
+    @property
+    def cue_ids(self) -> tuple[str, ...]:
+        return tuple(
+            dict.fromkeys(
+                str(cue.get("cue_id", "") or "")
+                for row in self.rows
+                for cue in tuple(row.get("observation_cues", ()) or ())
+                if isinstance(cue, Mapping) and str(cue.get("cue_id", "") or "")
+            )
+        )
+
     def append_attempt(
         self,
         attempt: Any,
@@ -882,10 +1074,28 @@ class ObservationLog:
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        interpretation_id = (
+            "interpretation_"
+            + hashlib.sha256(interpretation_material.encode("utf-8")).hexdigest()[:20]
+        )
+        interpretation_items = tuple(
+            item
+            if isinstance(item, InterpretationItem)
+            else InterpretationItem.from_mapping(item)
+            for item in tuple(getattr(attempt, "interpretation_items", ()) or ())
+            if isinstance(item, (InterpretationItem, Mapping))
+        )
+        observation_cues = _bound_observation_cues(
+            attempt_id=attempt_id,
+            interpretation_id=interpretation_id,
+            items=interpretation_items,
+            frame_refs=frame_refs,
+            frame_times=frame_times,
+        )
         row = {
             "schema_version": "ObservationInterpretationV1",
             "attempt_id": attempt_id,
-            "interpretation_id": f"interpretation_{hashlib.sha256(interpretation_material.encode('utf-8')).hexdigest()[:20]}",
+            "interpretation_id": interpretation_id,
             "task_id": str(getattr(attempt, "task_id", "") or ""),
             "round_id": str(round_id),
             "requested_range": list(getattr(attempt, "requested_range", ()) or ()),
@@ -907,6 +1117,8 @@ class ObservationLog:
             ),
             "source_video_ids": [item for item in source_video_ids if item],
             "source_lineage": [dict(item) for item in source_lineage],
+            "interpretation_items": [item.to_dict() for item in interpretation_items],
+            "observation_cues": [cue.to_dict() for cue in observation_cues],
         }
         self.rows.append(row)
         with self.path.open("a", encoding="utf-8") as handle:
@@ -934,6 +1146,32 @@ class ObservationLog:
                     ],
                     "frame_count": len(tuple(first.get("frame_refs", ()) or ())),
                     "interpretation_count": len(rows),
+                    "interpretation_item_count": sum(
+                        len(tuple(row.get("interpretation_items", ()) or ()))
+                        for row in rows
+                    ),
+                    "observation_cue_count": sum(
+                        len(tuple(row.get("observation_cues", ()) or ()))
+                        for row in rows
+                    ),
+                    "interpretation_item_previews": [
+                        {
+                            "interpretation_id": row.get("interpretation_id", ""),
+                            "item_id": item.get("item_id", ""),
+                            "time_anchor": item.get("time_anchor", ()),
+                            "item_kind": item.get("item_kind", ""),
+                            "text": _compact_text(str(item.get("text", "") or ""), 180),
+                        }
+                        for row in rows
+                        for item in tuple(row.get("interpretation_items", ()) or ())[:8]
+                        if isinstance(item, Mapping)
+                    ][:12],
+                    "observation_cues": [
+                        dict(cue)
+                        for row in rows
+                        for cue in tuple(row.get("observation_cues", ()) or ())
+                        if isinstance(cue, Mapping)
+                    ][:12],
                     "interpretation_previews": [_compact_text(text, 320) for text in raw_outputs if text][:3],
                     "source_video_ids": list(first.get("source_video_ids", ()) or ()),
                 }
@@ -1037,6 +1275,17 @@ def render_working_view(
                 separators=(",", ":"),
             )
         )
+    lines.append("OBSERVATION CUE STATES")
+    lines.append(
+        json.dumps(
+            {
+                cue_id: state.to_dict()
+                for cue_id, state in sorted(document.cue_states.items())
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    )
     lines.append("COVERAGE LEDGER")
     coverage = observations.coverage_ledger()
     lines.append(json.dumps(coverage, ensure_ascii=False, separators=(",", ":")))
@@ -1104,6 +1353,161 @@ def _required_id(value: Mapping[str, Any], *keys: str) -> str:
     raise ValueError(f"missing_id:{'/'.join(keys)}")
 
 
+def _observation_item_index(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    items: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        attempt_id = str(row.get("attempt_id", "") or "").strip()
+        interpretation_id = str(row.get("interpretation_id", "") or "").strip()
+        if not attempt_id or not interpretation_id:
+            continue
+        for raw_item in tuple(row.get("interpretation_items", ()) or ()):
+            if not isinstance(raw_item, Mapping):
+                continue
+            try:
+                item = InterpretationItem.from_mapping(raw_item)
+            except (TypeError, ValueError):
+                continue
+            key = (attempt_id, interpretation_id, item.item_id)
+            items[key] = {
+                "attempt_id": attempt_id,
+                "interpretation_id": interpretation_id,
+                **item.to_dict(),
+            }
+    return items
+
+
+def _observation_cue_index(
+    rows: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    cues: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        for raw_cue in tuple(row.get("observation_cues", ()) or ()):
+            if not isinstance(raw_cue, Mapping):
+                continue
+            try:
+                cue = ObservationCue.from_mapping(raw_cue)
+            except (TypeError, ValueError):
+                continue
+            cues[cue.cue_id] = cue.to_dict()
+    return cues
+
+
+def _observation_claim_binding_errors(
+    claim: Claim,
+    item_index: Mapping[tuple[str, str, str], Mapping[str, Any]],
+) -> tuple[str, ...]:
+    errors: list[str] = []
+    if not claim.interpretation_id:
+        errors.append(f"observation_claim_requires_interpretation_id:{claim.claim_id}")
+    if not claim.interpretation_item_id:
+        errors.append(f"observation_claim_requires_interpretation_item_id:{claim.claim_id}")
+    if errors:
+        return tuple(errors)
+
+    matches = tuple(
+        item
+        for (attempt_id, interpretation_id, item_id), item in item_index.items()
+        if item_id == claim.interpretation_item_id
+        and interpretation_id == claim.interpretation_id
+        and attempt_id in claim.cites
+    )
+    if not matches:
+        same_item = tuple(
+            key
+            for key in item_index
+            if key[2] == claim.interpretation_item_id
+        )
+        if not same_item:
+            errors.append(
+                f"observation_claim_item_unknown:{claim.claim_id}:{claim.interpretation_item_id}"
+            )
+        elif not any(key[1] == claim.interpretation_id for key in same_item):
+            errors.append(
+                f"observation_claim_interpretation_mismatch:{claim.claim_id}:{claim.interpretation_id}"
+            )
+        else:
+            errors.append(
+                f"observation_claim_attempt_mismatch:{claim.claim_id}:{','.join(claim.cites)}"
+            )
+        return tuple(errors)
+
+    if claim.time_anchor is not None and not any(
+        _anchors_overlap(claim.time_anchor, tuple(item["time_anchor"]))
+        for item in matches
+    ):
+        errors.append(f"observation_claim_time_anchor_mismatch:{claim.claim_id}")
+    return tuple(errors)
+
+
+def _bound_observation_cues(
+    *,
+    attempt_id: str,
+    interpretation_id: str,
+    items: Sequence[InterpretationItem],
+    frame_refs: Sequence[str],
+    frame_times: Sequence[float],
+) -> tuple[ObservationCue, ...]:
+    sampled_frames = tuple(
+        (str(frame_ref), float(frame_time))
+        for frame_ref, frame_time in zip(frame_refs, frame_times)
+        if str(frame_ref).strip()
+    )
+    cues: list[ObservationCue] = []
+    seen: set[str] = set()
+    for item in items:
+        start, end = item.time_anchor
+        if abs(start - end) > 1e-6:
+            continue
+        matched = next(
+            (
+                (frame_ref, sampled_time)
+                for frame_ref, sampled_time in sampled_frames
+                if abs(sampled_time - start) <= 1e-6
+            ),
+            None,
+        )
+        if matched is None:
+            continue
+        frame_ref, sampled_time = matched
+        cue_id = "cue_" + hashlib.sha256(
+            json.dumps(
+                [
+                    attempt_id,
+                    interpretation_id,
+                    item.item_id,
+                    frame_ref,
+                    round(sampled_time, 6),
+                ],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+        if cue_id in seen:
+            continue
+        seen.add(cue_id)
+        cues.append(
+            ObservationCue(
+                cue_id=cue_id,
+                attempt_id=attempt_id,
+                interpretation_id=interpretation_id,
+                item_id=item.item_id,
+                source_frame_ref=frame_ref,
+                virtual_time=sampled_time,
+                cue_kind=item.item_kind,
+            )
+        )
+    return tuple(cues)
+
+
+def _anchors_overlap(
+    left: tuple[float, float],
+    right: tuple[float, float],
+) -> bool:
+    return min(left[1], right[1]) + 1e-6 >= max(left[0], right[0])
+
+
 def _compact_text(value: str, limit: int) -> str:
     text = " ".join(str(value or "").split())
     return text if len(text) <= limit else text[: max(0, limit - 3)] + "..."
@@ -1120,10 +1524,15 @@ def _render_claim(claim: Claim) -> str:
     parents = f" derived_from={list(claim.derived_from)}" if claim.derived_from else ""
     conflicts = f" conflicts={list(claim.conflicts_with)}" if claim.conflicts_with else ""
     entities = f" entities={list(claim.entity_ids)}" if claim.entity_ids else ""
+    interpretation = (
+        f" interpretation={claim.interpretation_id}/{claim.interpretation_item_id}"
+        if claim.interpretation_id or claim.interpretation_item_id
+        else ""
+    )
     metadata = f" metadata={json.dumps(dict(claim.metadata), ensure_ascii=False, separators=(',', ':'))}" if claim.metadata else ""
     return (
         f"- [{claim.claim_id}] source={claim.source} status={claim.status} confidence={claim.confidence}"
-        f"{anchor}{citations}{parents}{conflicts}{entities}{metadata}: {claim.text}"
+        f"{anchor}{citations}{parents}{conflicts}{entities}{interpretation}{metadata}: {claim.text}"
     )
 
 

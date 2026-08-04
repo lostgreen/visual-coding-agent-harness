@@ -7,6 +7,7 @@ import re
 import time
 from typing import Any, Mapping, Sequence
 
+from vcah.evidence_state import InterpretationItem
 from vcah.investigator import (
     InvestigationReport,
     ObservationAttempt,
@@ -214,6 +215,9 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         occurrence_id=str(value.get("occurrence_id", "") or ""),
         temporal_scope_id=str(value.get("temporal_scope_id", "") or ""),
         evidence_kind=str(value.get("evidence_kind", "generic") or "generic"),
+        parent_attempt_id=str(value.get("parent_attempt_id", "") or ""),
+        cue_id=str(value.get("cue_id", "") or ""),
+        window_radius_sec=float(value.get("window_radius_sec", 5.0) or 5.0),
         sampling_floor_fps=value.get("sampling_floor_fps"),
         arbitration_attempt_id=str(value.get("arbitration_attempt_id", "") or ""),
         force_reinspect=bool(value.get("force_reinspect", False)),
@@ -225,7 +229,11 @@ def _task(value: Mapping[str, Any], *, round_id: int, index: int) -> Investigati
         return None
     if mode == "arbitrate_observation" and not task.arbitration_attempt_id:
         return None
-    if mode == "window" and not (task.segment_id or task.time_range):
+    if mode == "window" and not (
+        task.segment_id
+        or task.time_range
+        or (task.parent_attempt_id and task.cue_id)
+    ):
         return None
     return task
 
@@ -561,6 +569,19 @@ class VisionInvestigator(VirtualVideoInvestigator):
             task,
             self.workspace.root_dir / "observation_log.jsonl",
         )
+        cue_stage = str(getattr(task, "cue_stage", "") or "")
+        refinement_binding = (
+            {
+                "parent_attempt_id": str(getattr(task, "parent_attempt_id", "") or ""),
+                "cue_id": str(getattr(task, "cue_id", "") or ""),
+                "cue_virtual_time": float(getattr(task, "cue_virtual_time", 0.0) or 0.0),
+                "stage": cue_stage,
+                "cue_status": "verified" if cue_stage == "child_refinement" else "unverified",
+                "window_radius_sec": float(getattr(task, "window_radius_sec", 5.0) or 5.0),
+            }
+            if cue_stage
+            else None
+        )
         observed_subranges = tuple(
             tuple(float(value) for value in interval)
             for interval in sampling_manifest["observed_subranges"]
@@ -619,6 +640,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
         raw = self.api.chat(prompt, image_paths=frame_paths, max_tokens=_completion_budget(1800)) if frame_paths else ""
         parsed = _parse_json(raw)
         parse_status = "parsed" if parsed else "failed"
+        interpretation_items = _interpretation_items(
+            attempt_id,
+            parsed,
+            frame_times=frame_times,
+            requested_range=(start_sec, end_sec),
+        )
         metadata = self.api.last_response_metadata if frame_paths else {}
         counts = _attachment_counts(metadata, frame_paths)
         evidence = _visual_evidence(
@@ -649,6 +676,7 @@ class VisionInvestigator(VirtualVideoInvestigator):
                 "evidence_kind": str(getattr(task, "evidence_kind", "generic") or "generic"),
                 "temporal_scope_id": str(getattr(task, "temporal_scope_id", "") or ""),
                 **({"candidate_binding": candidate_binding} if candidate_binding else {}),
+                **({"refinement_binding": refinement_binding} if refinement_binding else {}),
             },
             images_requested=counts["requested"],
             images_attached=counts["attached"],
@@ -657,10 +685,18 @@ class VisionInvestigator(VirtualVideoInvestigator):
             execution_status="completed" if frame_paths else "failed",
             frame_refs=frame_paths,
             modality="visual",
-            evidence_role="candidate" if sampling_manifest["requires_refinement"] else "unclassified",
+            evidence_role=(
+                "candidate"
+                if sampling_manifest["requires_refinement"] or cue_stage == "cue_verification"
+                else "unclassified"
+            ),
             prompt_digest=prompt_digest(prompt),
             raw_output=raw,
             source_video_ids=source_video_ids,
+            interpretation_purpose=str(
+                getattr(task, "interpretation_purpose", "primary") or "primary"
+            ),
+            interpretation_items=interpretation_items,
         )
         _append_jsonl(
             self.trace_path,
@@ -1484,6 +1520,12 @@ class VisionInvestigator(VirtualVideoInvestigator):
             raw_output=raw,
             source_video_ids=source_video_ids,
             interpretation_purpose="deliberate_arbitration",
+            interpretation_items=_interpretation_items(
+                attempt_id,
+                parsed,
+                frame_times=frame_times,
+                requested_range=(float(start_sec), float(end_sec)),
+            ),
         )
         _append_jsonl(
             self.trace_path,
@@ -1629,7 +1671,7 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "{\"op\":\"add_claim\",\"claim\":{\"claim_id\":\"c1\",\"text\":\"...\","
         "\"source\":\"observation|derived|hypothesis\",\"cites\":[],\"derived_from\":[],"
         "\"time_anchor\":[0,1],\"status\":\"active|contested\",\"confidence\":\"high|medium|low\","
-        "\"entity_ids\":[],\"metadata\":{}}}; "
+        "\"entity_ids\":[],\"interpretation_id\":\"\",\"interpretation_item_id\":\"\",\"metadata\":{}}}; "
         "{\"op\":\"supersede\",\"claim_id\":\"c1\",\"superseded_by\":\"c2\"}; "
         "{\"op\":\"set_status\",\"claim_id\":\"c1\",\"status\":\"active|contested|retracted\"}; "
         "{\"op\":\"link_conflict\",\"claim_id\":\"c1\",\"other_claim_id\":\"c2\"}; "
@@ -1650,9 +1692,15 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "\"scope_id\":\"scope_1\",\"relation\":\"before|after|within|between\","
         "\"selection\":\"first|next|last|all|unspecified\",\"anchor_requirement_id\":\"req_anchor\","
         "\"target_requirement_id\":\"req_target\"}}. Do not encode first/next semantics only in prose.\n"
+        "Update an ObservationCue only after inspecting its verification material with "
+        "{\"op\":\"set_cue_status\",\"cue_id\":\"cue_...\",\"status\":\"verified|rejected\","
+        "\"verification_attempt_id\":\"attempt_...\",\"verification_interpretation_id\":\"interpretation_...\","
+        "\"verification_item_id\":\"item_...\"}. The framework validates these references but does not decide whether the "
+        "cue is semantically correct.\n"
         "Never put investigate, read_observations, update_workspace, answer, or tasks inside workspace_ops; these belong at "
         "the top level of the Decision object.\n"
-        "An observation claim must cite an attempt_id; a derived claim must name "
+        "An observation claim must cite an attempt_id and copy the exact interpretation_id and item_id from that "
+        "attempt's Observation Catalog; a derived claim must name "
         "derived_from claim_ids. Keep uncertain interpretations as contested/hypothesis claims instead of deleting them.\n"
         "To fetch raw Investigator output, use action=read_observations and observation_requests with attempt_ids or time_range. "
         "To revisit exactly the same pixels, investigate with inspection_mode=arbitrate_observation and arbitration_attempt_id.\n"
@@ -1666,6 +1714,9 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "When inspecting a caption occurrence, copy its locator attempt_id and occurrence_id into locator_attempt_id and "
         "occurrence_id. If a TemporalScope applies, also provide temporal_scope_id. The framework validates only source, "
         "range, and ordering foreign keys; it does not decide which occurrence is semantically correct.\n"
+        "To refine a point ObservationCue, submit a window task with both parent_attempt_id and cue_id plus optional "
+        "window_radius_sec. The framework ignores free-form task timestamps: an unverified cue is first replayed at its exact "
+        "sampled frame, and only a verified cue can open a narrow child-refinement window.\n"
         "When recommended_temporal_candidate is present, it is a locator-only join for an explicit after/before/first "
         "condition. Inspect its full inspection_range before unrelated Caption candidates; do not replace it with only "
         "the last seconds adjacent to the target event. Then visually verify the target identity, ordering, and requested "
@@ -1681,7 +1732,8 @@ def _reasoner_prompt(kwargs: Mapping[str, Any]) -> str:
         "\"inspection_mode\":\"window|search_asr|search_caption|arbitrate_observation\","
         "\"search_terms\":[],\"caption_queries\":[],\"top_k\":12,\"index_mode\":\"lexical|dense|hybrid\","
         "\"expand_neighbors\":0,\"locator_attempt_id\":\"\",\"occurrence_id\":\"\","
-        "\"temporal_scope_id\":\"\",\"evidence_kind\":\"generic\","
+        "\"temporal_scope_id\":\"\",\"evidence_kind\":\"generic\",\"parent_attempt_id\":\"\","
+        "\"cue_id\":\"\",\"window_radius_sec\":5.0,"
         "\"arbitration_attempt_id\":\"\",\"force_reinspect\":false,"
         "\"expected_evidence\":\"direct observation\","
         "\"sampling_floor_fps\":0.5}],\"workspace_ops\":[]}. "
@@ -1716,17 +1768,102 @@ def _observation_prompt(
         "You are a visual Investigator. Report only what is directly visible or literally stated in the supplied local ASR. "
         "Do not select an answer option, evaluate a candidate claim, qualify an event, infer hidden intent, or decide whether "
         "the investigation succeeded. Preserve ambiguity explicitly. Return compact JSON only:\n"
-        "{\"summary\":\"faithful overall description\",\"observations\":[{\"time_sec\":0.0,"
+        "{\"summary\":\"faithful overall description\",\"items\":[{\"time_anchor\":[0.0,0.0],"
+        "\"text\":\"one directly observed atom\",\"item_kind\":\"observation|event|ui_label|ui_description|text\"}],"
+        "\"observations\":[{\"time_sec\":0.0,"
         "\"description\":\"direct observation\"}],\"entities\":[{\"name\":\"local label\","
         "\"description\":\"visible attributes\"}],\"events\":[{\"time_range\":[0.0,1.0],"
         "\"description\":\"visible change\"}],\"uncertainties\":[\"...\"]}.\n"
         "Use the supplied virtual timestamps. Keep relational context in full sentences; do not flatten ordering or roles into "
-        "isolated labels. Empty arrays are valid.\n"
+        "isolated labels. Every point timestamp must be copied from frame_times_sec; never invent a more precise float. "
+        "Empty arrays are valid.\n"
         f"Question context (navigation only): {workspace.case.question}\n"
         f"Observation goal: {getattr(task, 'goal', '')}\n"
         f"Expected visible material: {getattr(task, 'expected_evidence', '')}\n"
         f"Window metadata: {json.dumps(metadata, ensure_ascii=False)}"
     )
+
+
+def _interpretation_items(
+    attempt_id: str,
+    parsed: Mapping[str, Any],
+    *,
+    frame_times: Sequence[float],
+    requested_range: tuple[float, float],
+) -> tuple[InterpretationItem, ...]:
+    raw_items: list[tuple[str, tuple[float, float], str]] = []
+    for value in tuple(parsed.get("items", ()) or ()):
+        if not isinstance(value, Mapping):
+            continue
+        text = str(value.get("text", value.get("description", "")) or "").strip()
+        anchor = _item_time_anchor(value.get("time_anchor"), requested_range)
+        if text:
+            raw_items.append(
+                (str(value.get("item_kind", "observation") or "observation"), anchor, text)
+            )
+    for value in tuple(parsed.get("observations", ()) or ()):
+        if not isinstance(value, Mapping):
+            continue
+        text = str(value.get("description", value.get("text", "")) or "").strip()
+        try:
+            point = float(value.get("time_sec"))
+        except (TypeError, ValueError):
+            anchor = requested_range
+        else:
+            anchor = (point, point)
+        if text:
+            raw_items.append(("observation", anchor, text))
+    for value in tuple(parsed.get("events", ()) or ()):
+        if not isinstance(value, Mapping):
+            continue
+        text = str(value.get("description", value.get("text", "")) or "").strip()
+        anchor = _item_time_anchor(value.get("time_range"), requested_range)
+        if text:
+            raw_items.append(("event", anchor, text))
+    if not raw_items and str(parsed.get("summary", "") or "").strip():
+        raw_items.append(("summary", requested_range, str(parsed["summary"]).strip()))
+
+    items: list[InterpretationItem] = []
+    seen: set[tuple[str, tuple[float, float], str]] = set()
+    for index, (kind, raw_anchor, text) in enumerate(raw_items[:64], start=1):
+        anchor = (
+            max(requested_range[0], min(requested_range[1], float(raw_anchor[0]))),
+            max(requested_range[0], min(requested_range[1], float(raw_anchor[1]))),
+        )
+        anchor = tuple(sorted(anchor))
+        key = (str(kind).casefold(), anchor, text)
+        if key in seen:
+            continue
+        seen.add(key)
+        item_id = "item_" + prompt_digest(
+            json.dumps(
+                [attempt_id, index, kind, list(anchor), text],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        items.append(
+            InterpretationItem(
+                item_id=item_id,
+                time_anchor=anchor,
+                text=text,
+                item_kind=kind,
+            )
+        )
+    return tuple(items)
+
+
+def _item_time_anchor(
+    value: object,
+    fallback: tuple[float, float],
+) -> tuple[float, float]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) != 2:
+        return fallback
+    try:
+        start, end = sorted((float(value[0]), float(value[1])))
+    except (TypeError, ValueError):
+        return fallback
+    return start, end
 
 
 def _prompt_overview(value: Mapping[str, Any]) -> dict[str, Any]:
